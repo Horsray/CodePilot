@@ -6,7 +6,7 @@ export function DownloadButton({ label = 'Download Latest Release' }: { label?: 
       href={`${siteConfig.repo.releases}/latest`}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-4 mb-6 inline-flex items-center gap-2 rounded-full bg-foreground px-6 py-3 text-sm font-semibold text-background transition-opacity hover:opacity-80"
+      className="mt-4 mb-6 inline-flex items-center gap-2 rounded-full bg-foreground px-6 py-3 text-sm font-semibold text-background transition-opacity hover:opacity-80 dark:bg-white dark:text-black"
     >
       {label}
       <span aria-hidden="true">→</span>

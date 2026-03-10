@@ -5,7 +5,8 @@
  */
 export const siteConfig = {
   name: 'CodePilot',
-  description: 'A native desktop GUI client for Claude Code',
+  description: 'Desktop workspace for Claude Code — conversations, providers, MCP, and project context in one place.',
+  url: 'https://www.codepilot.sh',
 
   // Canonical repository
   repo: {
