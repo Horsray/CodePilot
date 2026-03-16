@@ -142,7 +142,6 @@ export const FileTreeFolder = ({
         <div
           className={cn("", className)}
           role="treeitem"
-          tabIndex={0}
           {...props}
         >
           <CollapsibleTrigger asChild>

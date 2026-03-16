@@ -97,6 +97,10 @@ export function resolveProvider(opts: ResolveOptions = {}): ResolvedProvider {
     // No provider specified — use global default
     const defaultId = getDefaultProviderId();
     if (defaultId) provider = getProvider(defaultId);
+    // Note: stale default (provider deleted but setting remains) is NOT
+    // auto-healed here — resolver is a read path that may run during
+    // diagnostics. Auto-heal happens in: DELETE /api/providers/[id],
+    // POST /api/doctor/repair, and startup migration in chat/page.tsx.
   }
   // effectiveProviderId === 'env' → provider stays undefined
 

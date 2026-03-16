@@ -111,12 +111,28 @@ export async function POST(request: NextRequest) {
 
       case 'apply-provider-to-session': {
         // Apply the default (or specified) provider to a session
-        const providerId = params?.providerId || getDefaultProviderId();
+        let providerId = params?.providerId || getDefaultProviderId();
         if (!providerId) {
           return NextResponse.json(
             { error: 'No default provider configured and no providerId specified' },
             { status: 400 },
           );
+        }
+        // Validate the provider actually exists — stale default IDs are a known issue
+        const targetProvider = getProvider(providerId);
+        if (!targetProvider) {
+          // Try first available provider instead
+          const { getAllProviders } = await import('@/lib/db');
+          const all = getAllProviders();
+          if (all.length > 0) {
+            providerId = all[0].id;
+            setDefaultProviderId(providerId); // also fix the stale default
+          } else {
+            return NextResponse.json(
+              { error: `Provider "${providerId}" not found and no alternatives available` },
+              { status: 404 },
+            );
+          }
         }
         if (params?.sessionId) {
           updateSessionProviderId(params.sessionId, providerId);

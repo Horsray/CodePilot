@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getAllProviders, getDefaultProviderId, getModelsForProvider, getSetting } from '@/lib/db';
+import { getAllProviders, getDefaultProviderId, setDefaultProviderId, getProvider, getModelsForProvider, getSetting } from '@/lib/db';
 import { getContextWindow } from '@/lib/model-context';
 import { getDefaultModelsForProvider, inferProtocolFromLegacy, findPresetForLegacy } from '@/lib/provider-catalog';
 import type { Protocol } from '@/lib/provider-catalog';
@@ -188,8 +188,15 @@ export async function GET() {
       });
     }
 
-    // Determine default provider
-    const defaultProviderId = getDefaultProviderId() || groups[0].provider_id;
+    // Determine default provider — auto-heal stale references on read
+    let defaultProviderId = getDefaultProviderId();
+    if (defaultProviderId && !getProvider(defaultProviderId)) {
+      // Stale default (provider was deleted). Fix it now.
+      const firstValid = groups.find(g => g.provider_id !== 'env');
+      defaultProviderId = firstValid?.provider_id || '';
+      setDefaultProviderId(defaultProviderId);
+    }
+    defaultProviderId = defaultProviderId || groups[0]?.provider_id || '';
 
     return NextResponse.json({
       groups,

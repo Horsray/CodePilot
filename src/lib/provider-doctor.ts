@@ -237,10 +237,12 @@ async function runAuthProbe(): Promise<ProbeResult> {
       findings.push({
         severity: 'warn',
         code: 'auth.resolved-no-creds',
-        message: 'Resolved provider reports no usable credentials',
+        message: resolved.provider
+          ? `Provider "${resolved.provider.name}" is selected but has no usable credentials`
+          : 'Resolver fell back to environment variables — no configured provider is active',
         detail: resolved.provider
-          ? `Provider "${resolved.provider.name}" (${resolved.protocol})`
-          : 'Environment mode',
+          ? `Check the API key for "${resolved.provider.name}" in Settings → Providers`
+          : 'This usually means the default provider was deleted or never set. Check the Provider/Model probe for details.',
       });
     }
     // Check for provider-level auth style conflict
@@ -310,14 +312,17 @@ async function runProviderProbe(): Promise<ProbeResult> {
       findings.push({
         severity: 'error',
         code: 'provider.default-missing',
-        message: `Default provider ID "${defaultId}" not found in database`,
+        message: `Default provider points to a deleted record — resolver falls back to environment variables, bypassing your configured provider`,
+        detail: providers.length > 0
+          ? `${providers.length} valid provider(s) exist but none is selected as default. Click "Fix" to set the first one.`
+          : 'No providers configured. Add a provider in Settings → Providers.',
       });
     }
   } else if (providers.length > 0) {
     findings.push({
       severity: 'warn',
       code: 'provider.no-default',
-      message: 'Providers exist but no default is set',
+      message: 'Providers exist but no default is set — new conversations will use environment variables',
     });
   }
 
@@ -503,8 +508,14 @@ async function runNetworkProbe(): Promise<ProbeResult> {
   // Collect unique base URLs to check
   const urlsToCheck = new Map<string, string>(); // url -> label
 
-  // Default Anthropic API
-  urlsToCheck.set('https://api.anthropic.com', 'Anthropic API');
+  // Only check Anthropic API if the current resolution actually uses it
+  // (env mode with no providers, or provider with anthropic base_url).
+  // Avoid showing "Anthropic API unreachable" noise when user is on Kimi/GLM etc.
+  const resolved = resolveProvider();
+  const isEnvMode = !resolved.provider;
+  if (isEnvMode) {
+    urlsToCheck.set('https://api.anthropic.com', 'Anthropic API');
+  }
 
   // Provider-specific URLs
   const providers = getAllProviders();
@@ -570,9 +581,9 @@ async function runNetworkProbe(): Promise<ProbeResult> {
 const REPAIR_ACTIONS: RepairAction[] = [
   {
     type: 'set-default-provider',
-    label: 'Set default provider',
-    description: 'Configure a default provider so sessions have a clear auth path',
-    addresses: ['provider.no-default', 'auth.no-credentials'],
+    label: 'Set first valid provider as default',
+    description: 'Fix the stale default by pointing to an existing provider',
+    addresses: ['provider.no-default', 'provider.default-missing', 'auth.no-credentials'],
   },
   {
     type: 'apply-provider-to-session',
