@@ -440,17 +440,17 @@ export function AssistantWorkspaceSection() {
           onStartCheckIn={handleStartCheckIn}
           onAutoTriggerChange={async (enabled) => {
             try {
-              await fetch('/api/settings/workspace', {
+              const res = await fetch('/api/settings/workspace', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ dailyCheckInEnabled: enabled }),
               });
-              // Update local state
+              if (!res.ok) return; // don't flip UI on failure
               setWorkspace((prev) => prev && prev.state ? {
                 ...prev,
                 state: { ...prev.state, dailyCheckInEnabled: enabled },
               } : prev);
-            } catch { /* best effort */ }
+            } catch { /* network error — leave UI unchanged */ }
           }}
         />
       )}
