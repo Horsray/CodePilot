@@ -120,6 +120,30 @@ export function CliToolDetailDialog({
             </div>
           </section>
 
+          {/* Agent compatibility */}
+          {(tool.agentFriendly || tool.supportsJson) && (
+            <section>
+              <h3 className="text-sm font-medium mb-2">{t('cliTools.agentCompat' as TranslationKey)}</h3>
+              <div className="flex flex-wrap gap-1.5">
+                {tool.agentFriendly && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary font-medium">
+                    {t('cliTools.agentNative' as TranslationKey)}
+                  </span>
+                )}
+                {tool.supportsJson && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                    JSON {t('cliTools.output' as TranslationKey)}
+                  </span>
+                )}
+                {tool.setupType === 'needs_auth' && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                    {t('cliTools.needsAuth' as TranslationKey)}
+                  </span>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* Links */}
           {(tool.homepage || tool.repoUrl || tool.officialDocsUrl) && (
             <section className="flex flex-wrap gap-2 pt-2 border-t">

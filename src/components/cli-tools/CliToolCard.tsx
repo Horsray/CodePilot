@@ -73,6 +73,12 @@ export function CliToolCard({
               {t(`cliTools.category.${cat}` as TranslationKey)}
             </span>
           ))}
+          {/* Agent-friendly badge */}
+          {tool.agentFriendly && (
+            <span className="inline-block rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary font-medium shrink-0">
+              Agent
+            </span>
+          )}
           {/* Version for installed */}
           {variant === 'installed' && runtimeInfo?.version && (
             <span className="text-xs text-muted-foreground shrink-0">
