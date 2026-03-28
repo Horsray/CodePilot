@@ -205,7 +205,7 @@ export function SkillsManager() {
       <div className="flex flex-1 min-h-0">
         {/* Left: skill list */}
         <div className="w-64 shrink-0 flex flex-col overflow-hidden pl-4">
-          <div className="p-2">
+          <div className="px-2 pt-4 pb-2">
             <div className="relative">
               <MagnifyingGlass size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input

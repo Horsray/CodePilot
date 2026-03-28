@@ -69,7 +69,7 @@ export function MarketplaceBrowser({ onInstalled }: MarketplaceBrowserProps) {
     <div className="flex flex-1 min-h-0">
       {/* Left: search + results */}
       <div className="w-64 shrink-0 flex flex-col overflow-hidden pl-4">
-        <div className="p-2">
+        <div className="px-2 pt-4 pb-2">
           <div className="relative">
             <MagnifyingGlass
               size={14}
