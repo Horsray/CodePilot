@@ -235,11 +235,12 @@ export async function POST(request: NextRequest) {
     }, 60_000);
 
     // Save assistant message in background, with cleanup callback to release lock
+    const isHeartbeatTurn = !!autoTrigger && content.includes('心跳检查');
     collectStreamResponse(streamForCollect, session_id, telegramNotifyOpts, () => {
       clearInterval(lockRenewalInterval);
       releaseSessionLock(session_id, lockId);
       setSessionRuntimeStatus(session_id, 'idle');
-    });
+    }, { isHeartbeatTurn });
 
     return new Response(streamForClient, {
       headers: {
@@ -270,6 +271,7 @@ async function collectStreamResponse(
   sessionId: string,
   telegramOpts: { sessionId?: string; sessionTitle?: string; workingDirectory?: string },
   onComplete?: () => void,
+  opts?: { isHeartbeatTurn?: boolean },
 ) {
   const reader = stream.getReader();
   const contentBlocks: MessageContentBlock[] = [];
@@ -491,26 +493,38 @@ async function collectStreamResponse(
         }
       }
 
-      // 2. Check for heartbeat HEARTBEAT_OK — update state + clear lock
-      try {
-        const workspacePath = getSetting('assistant_workspace_path');
-        const session = getSession(sessionId);
-        if (workspacePath && session && session.working_directory === workspacePath) {
-          const { stripHeartbeatToken } = await import('@/lib/heartbeat');
-          const { shouldSkip } = stripHeartbeatToken(fullText);
-          // If the reply contains HEARTBEAT_OK (or is a heartbeat turn),
-          // update lastHeartbeatDate so it doesn't re-trigger today.
-          // We detect heartbeat turns by checking if the trigger message was a heartbeat.
-          if (shouldSkip || fullText.includes('HEARTBEAT_OK')) {
+      // 2. Heartbeat state update — ONLY for actual heartbeat turns (autoTrigger + heartbeat content)
+      if (opts?.isHeartbeatTurn) {
+        try {
+          const workspacePath = getSetting('assistant_workspace_path');
+          const session = getSession(sessionId);
+          if (workspacePath && session && session.working_directory === workspacePath) {
+            const { stripHeartbeatToken } = await import('@/lib/heartbeat');
             const { loadState, saveState } = await import('@/lib/assistant-workspace');
             const { getLocalDateString } = await import('@/lib/utils');
+            const { updateMessageHeartbeatAck } = await import('@/lib/db');
+            const stripped = stripHeartbeatToken(fullText);
+
+            // Always update lastHeartbeatDate for heartbeat turns (prevents re-trigger today)
             const st = loadState(workspacePath);
             st.lastHeartbeatDate = getLocalDateString();
-            if (!shouldSkip) {
-              // Has real content alongside HEARTBEAT_OK — record for dedup
-              st.lastHeartbeatText = fullText.replace(/HEARTBEAT_OK/g, '').trim();
+
+            if (stripped.shouldSkip) {
+              // Pure HEARTBEAT_OK — mark persisted messages as ack so they're excluded
+              // from fallback history and hidden in UI
+              try {
+                const { getMessages: getMsgs } = await import('@/lib/db');
+                const { messages: recent } = getMsgs(sessionId, { limit: 2 });
+                for (const msg of recent) {
+                  updateMessageHeartbeatAck(msg.id, true);
+                }
+              } catch { /* best effort */ }
+            } else {
+              // Has real content — record for dedup
+              st.lastHeartbeatText = stripped.text;
               st.lastHeartbeatSentAt = Date.now();
             }
+
             // Clear hookTriggeredSessionId
             if (st.hookTriggeredSessionId === sessionId || !st.hookTriggeredSessionId) {
               st.hookTriggeredSessionId = undefined;
@@ -518,9 +532,9 @@ async function collectStreamResponse(
             }
             saveState(workspacePath, st);
           }
+        } catch {
+          // best effort heartbeat state update
         }
-      } catch {
-        // best effort heartbeat state update
       }
     } catch (e) {
       console.error('[chat API] Server-side completion detection failed:', e);

@@ -115,9 +115,12 @@ export function createMemorySearchMcpServer(workspacePath: string) {
           line_end: z.number().optional().describe('End line number (inclusive)'),
         },
         async ({ file_path, line_start, line_end }) => {
-          const resolvedWorkspace = path.resolve(workspacePath) + path.sep;
+          const resolvedWorkspace = path.resolve(workspacePath);
           const resolved = path.resolve(workspacePath, file_path);
-          if (!resolved.startsWith(resolvedWorkspace) && resolved !== path.resolve(workspacePath)) {
+          // Path must be the workspace itself or a child of it.
+          // Use path.relative to check: if relative path starts with '..' it's outside.
+          const rel = path.relative(resolvedWorkspace, resolved);
+          if (rel.startsWith('..') || path.isAbsolute(rel)) {
             return { content: [{ type: 'text' as const, text: 'Access denied: path is outside workspace.' }] };
           }
 
