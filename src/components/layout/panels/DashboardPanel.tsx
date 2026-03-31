@@ -514,11 +514,7 @@ function AssistantStatusCard({ summary, t }: {
               {SPECIES_LABEL[buddy.species]?.zh || buddy.species}
             </div>
           )}
-          {!buddy && summary.styleHint && (
-            <div className="text-[10px] text-muted-foreground italic truncate">
-              {summary.styleHint}
-            </div>
-          )}
+          {/* styleHint only shown after buddy is hatched */}
           {buddy?.hatchedAt && (
             <div className="text-[10px] text-muted-foreground/60 truncate">
               {t('buddy.hatchedOn' as TranslationKey, { date: new Date(buddy.hatchedAt).toLocaleDateString() })}
