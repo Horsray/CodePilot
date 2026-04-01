@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { AssistantAvatar } from '@/components/ui/AssistantAvatar';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
-import { SPECIES_LABEL, RARITY_DISPLAY, STAT_LABEL, rarityColor, type BuddyData } from '@/lib/buddy';
+import { SPECIES_LABEL, SPECIES_IMAGE_URL, RARITY_DISPLAY, RARITY_BG_GRADIENT, STAT_LABEL, rarityColor, type BuddyData, type Species, type Rarity } from '@/lib/buddy';
 
 // ── Types ──
 
@@ -286,25 +286,45 @@ export function OnboardingWizard({ workspacePath, onComplete }: OnboardingWizard
           {/* ── Step 3: Completion / Buddy Reveal ── */}
           {step === 2 && buddy && (
             <div className="text-center space-y-4 py-6">
-              <span className="text-6xl block">{buddy.emoji}</span>
+              {/* 3D Species Image with rarity gradient background */}
+              <div className="flex justify-center">
+                <div
+                  className="w-20 h-20 rounded-2xl flex items-center justify-center"
+                  style={{ background: RARITY_BG_GRADIENT[buddy.rarity as Rarity] || '' }}
+                >
+                  <img
+                    src={SPECIES_IMAGE_URL[buddy.species as Species] || ''}
+                    alt={buddy.species}
+                    width={64} height={64}
+                    className="drop-shadow-md"
+                  />
+                </div>
+              </div>
               <div>
                 <h3 className="text-lg font-semibold">{t('buddy.reveal' as TranslationKey)}</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {buddy.emoji} {SPECIES_LABEL[buddy.species]?.zh || buddy.species}
+                  {SPECIES_LABEL[buddy.species]?.zh || buddy.species}
                 </p>
-                <span className={cn('text-xs font-medium mt-1 inline-block', rarityColor(buddy.rarity))}>
+                {/* Pill-style rarity badge */}
+                <span
+                  className={cn('inline-flex items-center gap-1 text-xs font-medium mt-2 px-2.5 py-0.5 rounded-full', rarityColor(buddy.rarity))}
+                  style={{ background: RARITY_BG_GRADIENT[buddy.rarity as Rarity] || '' }}
+                >
                   {RARITY_DISPLAY[buddy.rarity]?.stars} {RARITY_DISPLAY[buddy.rarity]?.label.zh}
                 </span>
               </div>
-              {/* Stats */}
+              {/* Stats with gradient bars */}
               <div className="space-y-1.5 max-w-xs mx-auto text-left">
                 {Object.entries(buddy.stats).map(([stat, value]) => (
                   <div key={stat} className="flex items-center gap-2 text-xs">
                     <span className="w-10 text-muted-foreground">{STAT_LABEL[stat]?.zh || stat}</span>
                     <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                      <div className={cn('h-full rounded-full', stat === buddy.peakStat ? 'bg-primary' : 'bg-muted-foreground/40')} style={{ width: `${value}%` }} />
+                      <div
+                        className={cn('h-full rounded-full transition-all', stat === buddy.peakStat ? 'bg-primary' : 'bg-muted-foreground/40')}
+                        style={{ width: `${value}%` }}
+                      />
                     </div>
-                    <span className="w-5 text-right text-muted-foreground text-[10px]">{value}</span>
+                    <span className={cn('w-5 text-right text-[10px]', stat === buddy.peakStat ? 'text-primary font-semibold' : 'text-muted-foreground')}>{value}</span>
                   </div>
                 ))}
               </div>

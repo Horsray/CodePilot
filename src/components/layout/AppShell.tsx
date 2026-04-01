@@ -22,6 +22,7 @@ import { getActiveSessionIds, getSnapshot } from "@/lib/stream-session-manager";
 import { useGitStatus } from "@/hooks/useGitStatus";
 import { SetupCenter } from '@/components/setup/SetupCenter';
 import { Toaster } from '@/components/ui/toast';
+import { useNotificationPoll } from '@/hooks/useNotificationPoll';
 
 const SPLIT_SESSIONS_KEY = "codepilot:split-sessions";
 const SPLIT_ACTIVE_COLUMN_KEY = "codepilot:split-active-column";
@@ -73,6 +74,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [chatListOpenRaw, setChatListOpenRaw] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupInitialCard, setSetupInitialCard] = useState<'claude' | 'provider' | 'project' | undefined>();
+
+  // Poll server-side notification queue and display as toasts
+  useNotificationPoll();
 
   // Check if setup is needed
   useEffect(() => {

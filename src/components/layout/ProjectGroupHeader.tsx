@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from "@/i18n";
 import { useState } from "react";
+import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, type Species } from "@/lib/buddy";
 
 interface ProjectGroupHeaderProps {
   workingDirectory: string;
@@ -40,6 +41,7 @@ interface ProjectGroupHeaderProps {
   lastHeartbeatDate?: string;
   buddyEmoji?: string;
   buddyName?: string;
+  buddySpecies?: string;
 }
 
 export function ProjectGroupHeader({
@@ -58,6 +60,7 @@ export function ProjectGroupHeader({
   lastHeartbeatDate,
   buddyEmoji,
   buddyName,
+  buddySpecies,
 }: ProjectGroupHeaderProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -158,7 +161,15 @@ export function ProjectGroupHeader({
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
       >
-        <span className="text-base shrink-0">{buddyEmoji || '🥚'}</span>
+        {buddySpecies ? (
+          <img
+            src={SPECIES_IMAGE_URL[buddySpecies as Species] || ''}
+            alt="" width={24} height={24}
+            className="shrink-0 rounded"
+          />
+        ) : (
+          <img src={EGG_IMAGE_URL} alt="egg" width={24} height={24} className="shrink-0" />
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1">
             <span className="truncate text-[13px] font-medium text-sidebar-foreground">

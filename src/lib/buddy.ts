@@ -32,6 +32,36 @@ export const RARITY_AVATAR_COLORS: Record<Rarity, string[]> = {
   legendary: ['#F6AD55', '#FBD38D', '#FEFCBF', '#F6E05E', '#ECC94B'],
 };
 
+export const SPECIES_IMAGE_URL: Record<Species, string> = {
+  cat: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Cat/3D/cat_3d.png',
+  duck: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Duck/3D/duck_3d.png',
+  dragon: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Dragon/3D/dragon_3d.png',
+  owl: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Owl/3D/owl_3d.png',
+  penguin: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Penguin/3D/penguin_3d.png',
+  turtle: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Turtle/3D/turtle_3d.png',
+  octopus: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Octopus/3D/octopus_3d.png',
+  ghost: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Ghost/3D/ghost_3d.png',
+  axolotl: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Lizard/3D/lizard_3d.png',
+  capybara: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Beaver/3D/beaver_3d.png',
+  robot: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Robot/3D/robot_3d.png',
+  rabbit: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Rabbit/3D/rabbit_3d.png',
+  mushroom: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Mushroom/3D/mushroom_3d.png',
+  fox: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Fox/3D/fox_3d.png',
+  panda: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Panda/3D/panda_3d.png',
+  whale: 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Whale/3D/whale_3d.png',
+};
+
+// Egg image for unhatched state
+export const EGG_IMAGE_URL = 'https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji/assets/Egg/3D/egg_3d.png';
+
+export const RARITY_BG_GRADIENT: Record<Rarity, string> = {
+  common: 'linear-gradient(135deg, #e2e8f0, #f1f5f9)',
+  uncommon: 'linear-gradient(135deg, #dcfce7, #f0fdf4)',
+  rare: 'linear-gradient(135deg, #dbeafe, #eff6ff)',
+  epic: 'linear-gradient(135deg, #ede9fe, #f5f3ff)',
+  legendary: 'linear-gradient(135deg, #fef3c7, #fffbeb)',
+};
+
 export const SPECIES_EMOJI: Record<Species, string> = {
   cat: '🐱', duck: '🦆', dragon: '🐉', owl: '🦉', penguin: '🐧',
   turtle: '🐢', octopus: '🐙', ghost: '👻', axolotl: '🦎', capybara: '🦫',

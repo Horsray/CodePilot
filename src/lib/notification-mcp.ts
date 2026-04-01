@@ -13,6 +13,12 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
+/** Resolve base URL from PORT env, supporting worktree dev servers and Electron builds. */
+function getBaseUrl(): string {
+  const port = process.env.PORT || '3000';
+  return `http://localhost:${port}`;
+}
+
 export const NOTIFICATION_MCP_SYSTEM_PROMPT = `## 通知与定时任务
 
 你可以发送通知和创建定时任务：
@@ -21,12 +27,15 @@ export const NOTIFICATION_MCP_SYSTEM_PROMPT = `## 通知与定时任务
 - codepilot_schedule_task: 创建定时任务（支持 cron 表达式、固定间隔、一次性定时）
 - codepilot_list_tasks: 查看已有的定时任务
 - codepilot_cancel_task: 取消定时任务
+- codepilot_hatch_buddy: 孵化或命名用户的助理伙伴
 
 使用场景：
 - 用户说"提醒我..."或"X 分钟后..." → 用 codepilot_schedule_task（schedule_type: "once"）
 - 用户说"每天/每小时..." → 用 codepilot_schedule_task（schedule_type: "cron" 或 "interval"）
 - 任务完成需要告知用户 → 用 codepilot_notify
-- 用户问"有哪些定时任务" → 用 codepilot_list_tasks`;
+- 用户问"有哪些定时任务" → 用 codepilot_list_tasks
+- 用户说"孵化"、"领养"、"hatch" → 用 codepilot_hatch_buddy
+- 用户给伙伴起名字 → 用 codepilot_hatch_buddy(buddyName: 名字)`;
 
 export function createNotificationMcpServer() {
   return createSdkMcpServer({
@@ -45,12 +54,8 @@ export function createNotificationMcpServer() {
         },
         async ({ title, body, priority }) => {
           try {
-            const res = await fetch('http://localhost:3000/api/tasks/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ title, body, priority }),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const { sendNotification } = await import('@/lib/notification-manager');
+            await sendNotification({ title, body, priority });
             return { content: [{ type: 'text' as const, text: `Notification sent: "${title}"` }] };
           } catch (err) {
             return { content: [{ type: 'text' as const, text: `Failed to send notification: ${err instanceof Error ? err.message : 'unknown'}` }] };
@@ -88,7 +93,11 @@ export function createNotificationMcpServer() {
                 next_run = new Date(now.getTime() + parseInterval(schedule_value)).toISOString();
               } else {
                 const { getNextCronTime } = await import('@/lib/task-scheduler');
-                next_run = getNextCronTime(schedule_value).toISOString();
+                const cronNext = getNextCronTime(schedule_value);
+                if (!cronNext) {
+                  return { content: [{ type: 'text' as const, text: `Cron expression "${schedule_value}" has no valid occurrence within 4 years. Task not created.` }] };
+                }
+                next_run = cronNext.toISOString();
               }
 
               const task = {
@@ -110,7 +119,7 @@ export function createNotificationMcpServer() {
               return { content: [{ type: 'text' as const, text: `Session task "${name}" scheduled (non-durable). ID: ${id}, next run: ${next_run}` }] };
             }
 
-            const res = await fetch('http://localhost:3000/api/tasks/schedule', {
+            const res = await fetch(`${getBaseUrl()}/api/tasks/schedule`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ name, prompt, schedule_type, schedule_value, priority, notify_on_complete: notify_on_complete ? 1 : 0 }),
@@ -137,18 +146,38 @@ export function createNotificationMcpServer() {
         },
         async ({ status }) => {
           try {
+            // Fetch durable tasks from SQLite
             const url = status && status !== 'all'
-              ? `http://localhost:3000/api/tasks/list?status=${status}`
-              : 'http://localhost:3000/api/tasks/list';
+              ? `${getBaseUrl()}/api/tasks/list?status=${status}`
+              : `${getBaseUrl()}/api/tasks/list`;
             const res = await fetch(url);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
-            const tasks = data.tasks || [];
+            const tasks: Array<{ id: string; name: string; schedule_type: string; schedule_value: string; status: string; next_run: string; last_status?: string; durable?: boolean }> = (data.tasks || []).map((t: Record<string, unknown>) => ({ ...t, durable: true }));
+
+            // Merge session-only tasks from memory
+            try {
+              const { getSessionTasks } = await import('@/lib/task-scheduler');
+              for (const [, task] of getSessionTasks()) {
+                if (status && status !== 'all' && task.status !== status) continue;
+                tasks.push({
+                  id: task.id,
+                  name: task.name + ' (session)',
+                  schedule_type: task.schedule_type,
+                  schedule_value: task.schedule_value,
+                  status: task.status,
+                  next_run: task.next_run,
+                  last_status: task.last_status,
+                  durable: false,
+                });
+              }
+            } catch { /* best effort */ }
+
             if (tasks.length === 0) {
               return { content: [{ type: 'text' as const, text: 'No scheduled tasks found.' }] };
             }
-            const formatted = tasks.map((t: { id: string; name: string; schedule_type: string; schedule_value: string; status: string; next_run: string; last_status?: string }, i: number) =>
-              `${i + 1}. [${t.id}] ${t.name}\n   Type: ${t.schedule_type} (${t.schedule_value})\n   Status: ${t.status} | Next: ${t.next_run}${t.last_status ? ` | Last: ${t.last_status}` : ''}`
+            const formatted = tasks.map((t, i) =>
+              `${i + 1}. [${t.id}] ${t.name}\n   Type: ${t.schedule_type} (${t.schedule_value})\n   Status: ${t.status} | Next: ${t.next_run}${t.last_status ? ` | Last: ${t.last_status}` : ''}${t.durable === false ? ' | Session-only' : ''}`
             ).join('\n\n');
             return { content: [{ type: 'text' as const, text: formatted }] };
           } catch (err) {
@@ -166,7 +195,16 @@ export function createNotificationMcpServer() {
         },
         async ({ task_id }) => {
           try {
-            const res = await fetch(`http://localhost:3000/api/tasks/${task_id}`, { method: 'DELETE' });
+            // Try session-only tasks first
+            const { removeSessionTask, getSessionTasks } = await import('@/lib/task-scheduler');
+            const sessionTasks = getSessionTasks();
+            if (sessionTasks.has(task_id)) {
+              removeSessionTask(task_id);
+              return { content: [{ type: 'text' as const, text: `Session task ${task_id} cancelled.` }] };
+            }
+
+            // Fall back to durable task deletion via API
+            const res = await fetch(`${getBaseUrl()}/api/tasks/${task_id}`, { method: 'DELETE' });
             if (!res.ok) {
               const err = await res.json().catch(() => ({}));
               throw new Error(err.error || `HTTP ${res.status}`);
@@ -174,6 +212,52 @@ export function createNotificationMcpServer() {
             return { content: [{ type: 'text' as const, text: `Task ${task_id} cancelled.` }] };
           } catch (err) {
             return { content: [{ type: 'text' as const, text: `Failed to cancel task: ${err instanceof Error ? err.message : 'unknown'}` }] };
+          }
+        },
+      ),
+
+      // Tool 5: Hatch / name buddy
+      tool(
+        'codepilot_hatch_buddy',
+        'Hatch a new buddy companion for the user, or update the buddy name. Call this when the user wants to adopt/hatch their buddy or give it a name.',
+        {
+          buddyName: z.string().optional().describe('Name for the buddy (user-given)'),
+        },
+        async ({ buddyName }) => {
+          try {
+            const res = await fetch(`${getBaseUrl()}/api/workspace/hatch-buddy`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ buddyName: buddyName || '' }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            if (!data.buddy) throw new Error('No buddy data');
+
+            const b = data.buddy;
+            const { SPECIES_LABEL, RARITY_DISPLAY, STAT_LABEL, SPECIES_IMAGE_URL, getBuddyTitle } = await import('@/lib/buddy');
+            const speciesName = SPECIES_LABEL[b.species as keyof typeof SPECIES_LABEL]?.zh || b.species;
+            const rarityInfo = RARITY_DISPLAY[b.rarity as keyof typeof RARITY_DISPLAY];
+            const title = getBuddyTitle(b);
+            const imageUrl = SPECIES_IMAGE_URL[b.species as keyof typeof SPECIES_IMAGE_URL] || '';
+            const statsText = Object.entries(b.stats)
+              .map(([stat, val]) => `${STAT_LABEL[stat as keyof typeof STAT_LABEL]?.zh || stat}: ${val}`)
+              .join(' · ');
+
+            const result = [
+              data.alreadyHatched ? `Updated buddy name to "${buddyName}"` : `Hatched a new buddy!`,
+              `Species: ${b.emoji} ${speciesName}`,
+              `Rarity: ${rarityInfo?.stars || ''} ${rarityInfo?.label.zh || b.rarity}`,
+              title ? `Title: "${title}"` : '',
+              `Stats: ${statsText}`,
+              `Peak: ${b.peakStat}`,
+              imageUrl ? `Image: ${imageUrl}` : '',
+              buddyName ? `Name: ${buddyName}` : '',
+            ].filter(Boolean).join('\n');
+
+            return { content: [{ type: 'text' as const, text: result }] };
+          } catch (err) {
+            return { content: [{ type: 'text' as const, text: `Failed to hatch buddy: ${err instanceof Error ? err.message : 'unknown'}` }] };
           }
         },
       ),

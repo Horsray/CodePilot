@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { AssistantAvatar } from "@/components/ui/AssistantAvatar";
 import { usePathname } from "next/navigation";
 import {
   GitBranch,
@@ -22,6 +21,7 @@ import { usePanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useClientPlatform } from '@/hooks/useClientPlatform';
 import { showToast } from '@/hooks/useToast';
+import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, type Species } from '@/lib/buddy';
 
 export function UnifiedTopBar() {
   const {
@@ -45,13 +45,14 @@ export function UnifiedTopBar() {
   const { isWindows } = useClientPlatform();
   const [assistantName, setAssistantName] = useState('');
   const [buddyEmoji, setBuddyEmoji] = useState('');
+  const [buddySpecies, setBuddySpecies] = useState('');
 
   useEffect(() => {
     if (!isAssistantWorkspace) return;
     let cancelled = false;
     fetch('/api/workspace/summary')
       .then(r => r.ok ? r.json() : null)
-      .then(data => { if (!cancelled) { setAssistantName(data?.name || ''); setBuddyEmoji(data?.buddy?.emoji || ''); } })
+      .then(data => { if (!cancelled) { setAssistantName(data?.name || ''); setBuddyEmoji(data?.buddy?.emoji || ''); setBuddySpecies(data?.buddy?.species || ''); } })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [isAssistantWorkspace]);
@@ -255,7 +256,10 @@ export function UnifiedTopBar() {
                     onClick={() => setDashboardPanelOpen(!dashboardPanelOpen)}
                   >
                     {isAssistantWorkspace
-                      ? <span className="text-sm">{buddyEmoji || '🥚'}</span>
+                      ? <img
+                          src={buddySpecies ? (SPECIES_IMAGE_URL[buddySpecies as Species] || '') : EGG_IMAGE_URL}
+                          alt="" width={16} height={16} className="rounded-sm"
+                        />
                       : <ChartBar size={16} />}
                     <span className="sr-only">{t('topBar.dashboard')}</span>
                   </Button>

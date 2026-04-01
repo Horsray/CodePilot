@@ -169,12 +169,16 @@ export function useAssistantTrigger({
       // Onboarding is now handled by the frontend Wizard component (OnboardingWizard.tsx).
       if (needsOnboarding) return;
 
-      // Only auto-trigger for buddy welcome (no buddy + empty session).
-      // Heartbeat no longer auto-triggers — it's guidance in the system prompt,
-      // the AI acts on it when the user opens a conversation naturally.
+      // Auto-trigger for:
+      // 1. Buddy welcome: no buddy + empty session → adoption prompt (takes priority)
+      // 2. Heartbeat: server says overdue + has buddy + empty session → full HEARTBEAT.md check
+      // Buddy welcome takes priority: heartbeat defers until buddy exists.
+      // Once buddy is hatched and user opens a new empty session, heartbeat fires.
       const needsBuddyWelcome = state.onboardingComplete && !state.buddy && initialMessages.length === 0;
+      // Only trigger heartbeat when buddy exists — avoids collision with buddy-welcome
+      const needsHeartbeat = !!data.needsHeartbeat && !!state.buddy && initialMessages.length === 0;
 
-      if (!needsBuddyWelcome) return;
+      if (!needsBuddyWelcome && !needsHeartbeat) return;
 
       // Mark fired so we don't re-trigger on focus/re-render
       assistantTriggerFiredRef.current = true;
@@ -218,7 +222,9 @@ export function useAssistantTrigger({
       }
 
       // Use autoTrigger: the message is invisible (no user bubble, no title update)
-      const triggerMsg = '请做自我介绍并引导用户领养伙伴。';
+      const triggerMsg = needsBuddyWelcome
+        ? '请做自我介绍并引导用户领养伙伴。'
+        : '心跳检查';
       startStream({
         sessionId,
         content: triggerMsg,

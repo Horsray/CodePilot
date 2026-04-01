@@ -9,7 +9,15 @@
  */
 
 const DEFAULT_EXTRACTION_INTERVAL = 3; // Extract every 3 turns
-const GLOBAL_KEY = '__memory_extraction_counter__';
+const GLOBAL_KEY = '__memory_extraction_counters__';
+
+/** Per-session counter map (survives HMR via globalThis). */
+function getCounterMap(): Map<string, number> {
+  if (!(globalThis as Record<string, unknown>)[GLOBAL_KEY]) {
+    (globalThis as Record<string, unknown>)[GLOBAL_KEY] = new Map<string, number>();
+  }
+  return (globalThis as Record<string, unknown>)[GLOBAL_KEY] as Map<string, number>;
+}
 
 /**
  * Get extraction interval based on buddy rarity.
@@ -23,20 +31,27 @@ export function getExtractionInterval(buddyRarity?: string): number {
 /**
  * Check if memory extraction should run for this turn.
  * Returns true every N assistant turns (interval depends on buddy rarity).
+ * Counter is scoped per sessionId so sessions don't interfere with each other.
  */
-export function shouldExtractMemory(buddyRarity?: string): boolean {
+export function shouldExtractMemory(buddyRarity?: string, sessionId?: string): boolean {
   const interval = getExtractionInterval(buddyRarity);
-  const counter = ((globalThis as Record<string, unknown>)[GLOBAL_KEY] as number) || 0;
-  const next = counter + 1;
-  (globalThis as Record<string, unknown>)[GLOBAL_KEY] = next;
-  return next % interval === 0;
+  const key = sessionId || '__default__';
+  const counters = getCounterMap();
+  const counter = (counters.get(key) || 0) + 1;
+  counters.set(key, counter);
+  return counter % interval === 0;
 }
 
 /**
- * Reset the extraction counter (e.g., on session change).
+ * Reset the extraction counter for a specific session (e.g., on session change).
  */
-export function resetExtractionCounter(): void {
-  (globalThis as Record<string, unknown>)[GLOBAL_KEY] = 0;
+export function resetExtractionCounter(sessionId?: string): void {
+  const counters = getCounterMap();
+  if (sessionId) {
+    counters.delete(sessionId);
+  } else {
+    counters.clear();
+  }
 }
 
 /**

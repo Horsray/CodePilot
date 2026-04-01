@@ -123,8 +123,7 @@ export function createMemorySearchMcpServer(workspacePath: string) {
         async ({ file_path, line_start, line_end }) => {
           const resolvedWorkspace = path.resolve(workspacePath);
           const resolved = path.resolve(workspacePath, file_path);
-          // Path must be the workspace itself or a child of it.
-          // Use path.relative to check: if relative path starts with '..' it's outside.
+          // Lexical check first: reject obvious ../traversal
           const rel = path.relative(resolvedWorkspace, resolved);
           if (rel.startsWith('..') || path.isAbsolute(rel)) {
             return { content: [{ type: 'text' as const, text: 'Access denied: path is outside workspace.' }] };
@@ -133,6 +132,15 @@ export function createMemorySearchMcpServer(workspacePath: string) {
           try {
             if (!fs.existsSync(resolved)) {
               return { content: [{ type: 'text' as const, text: `File not found: ${file_path}` }] };
+            }
+
+            // Resolve symlinks and verify the real path is still inside the workspace.
+            // This prevents symlink escape (e.g., workspace/link -> /etc/passwd).
+            const realPath = fs.realpathSync(resolved);
+            const realWorkspace = fs.realpathSync(resolvedWorkspace);
+            const realRel = path.relative(realWorkspace, realPath);
+            if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+              return { content: [{ type: 'text' as const, text: 'Access denied: path resolves outside workspace (symlink).' }] };
             }
 
             let content = fs.readFileSync(resolved, 'utf-8');

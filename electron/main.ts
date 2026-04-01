@@ -34,6 +34,7 @@ let serverExitCode: number | null = null;
 let userShellEnv: Record<string, string> = {};
 let isQuitting = false;
 let tray: Tray | null = null;
+let bgNotifyTimer: ReturnType<typeof setInterval> | null = null;
 
 // --- Install orchestrator ---
 interface InstallStep {
@@ -222,6 +223,79 @@ function destroyTray(): void {
   if (tray) {
     tray.destroy();
     tray = null;
+  }
+  stopBgNotifyPoll();
+}
+
+/**
+ * Parse notification API response. Canonical version: src/lib/bg-notify-parser.ts
+ */
+function parseBgNotifications(json: string): Array<{ title: string; body: string; priority: string }> {
+  try {
+    const parsed = JSON.parse(json);
+    const notifications: Array<{ title: string; body: string; priority: string }> = parsed.notifications || [];
+    return notifications.filter((n: { title: string }) => n.title);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Background notification poller — runs in main process when no renderer window
+ * is open (tray-only mode). Drains the server-side notification queue and shows
+ * native Notification directly, bypassing the renderer's useNotificationPoll.
+ */
+function startBgNotifyPoll(): void {
+  if (bgNotifyTimer) return;
+  const port = serverPort || 3000;
+
+  bgNotifyTimer = setInterval(async () => {
+    // Stop polling if a renderer window exists (frontend will handle it)
+    if (BrowserWindow.getAllWindows().length > 0) {
+      stopBgNotifyPoll();
+      return;
+    }
+
+    try {
+      const http = await import('http');
+      const data = await new Promise<string>((resolve, reject) => {
+        const req = http.get(`http://127.0.0.1:${port}/api/tasks/notify`, (res) => {
+          let body = '';
+          res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+          res.on('end', () => resolve(body));
+        });
+        req.on('error', reject);
+        req.setTimeout(3000, () => { req.destroy(); reject(new Error('timeout')); });
+      });
+
+      const notifications = parseBgNotifications(data);
+      for (const notif of notifications) {
+        try {
+          const notification = new Notification({
+            title: notif.title,
+            body: notif.body || '',
+          });
+          notification.on('click', () => {
+            // Re-open the main window when user clicks the notification
+            if (BrowserWindow.getAllWindows().length === 0) {
+              createWindow(`http://127.0.0.1:${port}`);
+            }
+            mainWindow?.show();
+            mainWindow?.focus();
+          });
+          notification.show();
+        } catch { /* best effort */ }
+      }
+    } catch {
+      // Server may not be reachable — ignore
+    }
+  }, 5000);
+}
+
+function stopBgNotifyPoll(): void {
+  if (bgNotifyTimer) {
+    clearInterval(bgNotifyTimer);
+    bgNotifyTimer = null;
   }
 }
 
@@ -1182,6 +1256,8 @@ app.on('window-all-closed', async () => {
   if (bridgeActive) {
     console.log('Bridge is active — keeping server alive in background with tray icon');
     createTray();
+    // Start background notification polling since no renderer will be available
+    startBgNotifyPoll();
     return;
   }
 

@@ -186,6 +186,7 @@ export async function POST(request: NextRequest) {
       systemPromptAppend,
       conversationHistory: historyMsgs,
       imageAgentMode: isImageAgentMode,
+      autoTrigger: !!autoTrigger,
     });
     const finalSystemPrompt = assembled.systemPrompt;
     const generativeUIEnabled = assembled.generativeUIEnabled;
@@ -436,14 +437,20 @@ async function collectStreamResponse(
     if (contentBlocks.length > 0) {
       // If the message is text-only (no tool calls), store as plain text
       // for backward compatibility with existing message rendering.
+      // Strip soft-heartbeat marker from text blocks before persisting (both paths)
+      const heartbeatMarkerRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
+      const cleanedBlocks = contentBlocks.map(b =>
+        b.type === 'text' ? { ...b, text: b.text.replace(heartbeatMarkerRe, '') } : b
+      );
+
       // If it contains tool calls, store as structured JSON.
-      const hasToolBlocks = contentBlocks.some(
+      const hasToolBlocks = cleanedBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result'
       );
 
       const content = hasToolBlocks
-        ? JSON.stringify(contentBlocks)
-        : contentBlocks
+        ? JSON.stringify(cleanedBlocks)
+        : cleanedBlocks
             .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
             .map((b) => b.text)
             .join('')
@@ -467,12 +474,16 @@ async function collectStreamResponse(
       contentBlocks.push({ type: 'text', text: currentText });
     }
     if (contentBlocks.length > 0) {
-      const hasToolBlocks = contentBlocks.some(
+      const hbRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
+      const errCleanedBlocks = contentBlocks.map(b =>
+        b.type === 'text' ? { ...b, text: b.text.replace(hbRe, '') } : b
+      );
+      const hasToolBlocks = errCleanedBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result'
       );
       const content = hasToolBlocks
-        ? JSON.stringify(contentBlocks)
-        : contentBlocks
+        ? JSON.stringify(errCleanedBlocks)
+        : errCleanedBlocks
             .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
             .map((b) => b.text)
             .join('')
@@ -502,7 +513,30 @@ async function collectStreamResponse(
         }
       }
 
-      // 2. Heartbeat state update — ONLY for actual heartbeat turns, and ONLY on success
+      // 2a. Soft heartbeat: for normal turns in assistant projects, mark heartbeat done
+      // only if the AI's response actually mentions heartbeat-related content.
+      if (!opts?.isHeartbeatTurn && !hasError && fullText.trim().length > 0) {
+        try {
+          const workspacePath = getSetting('assistant_workspace_path');
+          const session = getSession(sessionId);
+          if (workspacePath && session && session.working_directory === workspacePath) {
+            const { loadState, saveState, shouldRunHeartbeat } = await import('@/lib/assistant-workspace');
+            const { getLocalDateString } = await import('@/lib/utils');
+            const st = loadState(workspacePath);
+            if (shouldRunHeartbeat(st)) {
+              // Only mark done if the AI included the heartbeat-done marker.
+              // The soft hint instructs the AI to append <!-- heartbeat-done --> when it checks in.
+              const didCheck = fullText.includes('<!-- heartbeat-done -->');
+              if (didCheck) {
+                st.lastHeartbeatDate = getLocalDateString();
+                saveState(workspacePath, st);
+              }
+            }
+          }
+        } catch { /* best effort */ }
+      }
+
+      // 2b. Heartbeat state update — ONLY for actual heartbeat turns, and ONLY on success
       if (opts?.isHeartbeatTurn && !hasError && fullText.trim().length > 0) {
         try {
           const workspacePath = getSetting('assistant_workspace_path');
@@ -557,6 +591,10 @@ async function collectStreamResponse(
             .map((b) => b.text)
             .join('');
 
+          // For memory-write detection, serialize ALL blocks (including tool_use/tool_result)
+          // so that hasMemoryWritesInResponse can see memory file paths in tool calls.
+          const fullResponseForWriteCheck = JSON.stringify(contentBlocks);
+
           // Load buddy rarity for extraction interval
           let buddyRarity: string | undefined;
           try {
@@ -566,7 +604,7 @@ async function collectStreamResponse(
           } catch { /* ignore */ }
 
           // Only extract if: interval met + AI didn't already write memory this turn
-          if (shouldExtractMemory(buddyRarity) && !hasMemoryWritesInResponse(fullTextForMemory)) {
+          if (shouldExtractMemory(buddyRarity, sessionId) && !hasMemoryWritesInResponse(fullResponseForWriteCheck)) {
             const { getMessages: getMsgs } = await import('@/lib/db');
             const { messages: recent } = getMsgs(sessionId, { limit: 6, excludeHeartbeatAck: true });
             const recentForExtraction = recent.map(m => ({ role: m.role, content: m.content }));

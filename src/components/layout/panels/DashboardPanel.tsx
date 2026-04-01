@@ -12,7 +12,7 @@ import { WidgetRenderer } from "@/components/chat/WidgetRenderer";
 import type { DashboardConfig, DashboardWidget } from "@/types/dashboard";
 import type { TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
-import { RARITY_DISPLAY, STAT_LABEL, SPECIES_LABEL, rarityColor, getBuddyTitle, type BuddyData } from "@/lib/buddy";
+import { RARITY_DISPLAY, STAT_LABEL, SPECIES_LABEL, rarityColor, getBuddyTitle, SPECIES_IMAGE_URL, EGG_IMAGE_URL, RARITY_BG_GRADIENT, type BuddyData, type Species, type Rarity } from "@/lib/buddy";
 
 const DASHBOARD_MIN_WIDTH = 320;
 const DASHBOARD_MAX_WIDTH = 800;
@@ -268,7 +268,16 @@ export function DashboardPanel() {
         <div className="flex h-10 shrink-0 items-center justify-between px-3">
           <div className="flex items-center gap-2">
             {isAssistantWorkspace ? (
-              <span className="text-base">{assistantSummary?.buddy?.emoji || '🥚'}</span>
+              assistantSummary?.buddy ? (
+                <img
+                  src={SPECIES_IMAGE_URL[assistantSummary.buddy.species as Species] || ''}
+                  alt={assistantSummary.buddy.species}
+                  width={24} height={24}
+                  className="rounded"
+                />
+              ) : (
+                <img src={EGG_IMAGE_URL} alt="egg" width={24} height={24} />
+              )
             ) : null}
             <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               {isAssistantWorkspace
@@ -506,9 +515,19 @@ function AssistantStatusCard({ summary, t }: {
 
   return (
     <div className={cn('rounded-lg border bg-primary/[0.03] p-3 space-y-3', cardBorder)}>
-      {/* Header: Emoji + Name + Species + Rarity (when buddy exists) or plain avatar */}
+      {/* Header: 3D image + Name + Species + Rarity + Settings gear */}
       <div className="flex items-center gap-2">
-        <span className="text-2xl">{buddy?.emoji || '🥚'}</span>
+        {buddy ? (
+          <img
+            src={SPECIES_IMAGE_URL[buddy.species as Species] || ''}
+            alt={buddy.species}
+            width={40} height={40}
+            className="rounded-lg"
+            style={{ background: RARITY_BG_GRADIENT[buddy.rarity as Rarity] || '' }}
+          />
+        ) : (
+          <img src={EGG_IMAGE_URL} alt="egg" width={40} height={40} />
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">
@@ -517,70 +536,71 @@ function AssistantStatusCard({ summary, t }: {
                 : t('buddy.adoptPrompt' as TranslationKey)}
             </span>
             {buddy && (
-              <span className={cn('text-[10px] font-medium', rarityColor(buddy.rarity))}>
+              <span
+                className={cn('inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0', rarityColor(buddy.rarity))}
+                style={{ background: RARITY_BG_GRADIENT[buddy.rarity as Rarity] || '' }}
+              >
                 {RARITY_DISPLAY[buddy.rarity]?.stars} {RARITY_DISPLAY[buddy.rarity]?.label.zh}
               </span>
             )}
           </div>
-          {buddy && getBuddyTitle(buddy as BuddyData) && (
-            <span className="text-[10px] text-muted-foreground italic">
-              &ldquo;{getBuddyTitle(buddy as BuddyData)}&rdquo;
-            </span>
-          )}
           {buddy && (
             <div className="text-[10px] text-muted-foreground truncate">
-              {SPECIES_LABEL[buddy.species]?.zh || buddy.species}
-            </div>
-          )}
-          {/* styleHint only shown after buddy is hatched */}
-          {buddy?.hatchedAt && (
-            <div className="text-[10px] text-muted-foreground/60 truncate">
-              {t('buddy.hatchedOn' as TranslationKey, { date: new Date(buddy.hatchedAt).toLocaleDateString() })}
+              {getBuddyTitle(buddy as BuddyData)
+                ? `${getBuddyTitle(buddy as BuddyData)} · ${SPECIES_LABEL[buddy.species]?.zh || buddy.species}`
+                : SPECIES_LABEL[buddy.species]?.zh || buddy.species}
             </div>
           )}
         </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0 text-muted-foreground text-[10px] gap-1 h-6 px-1.5"
+          onClick={() => router?.push('/settings#assistant')}
+        >
+          <Gear size={12} />
+          {t('settings.title' as TranslationKey)}
+        </Button>
       </div>
 
       {/* Stats bars (when buddy exists) */}
       {buddy && (
         <div className="space-y-1.5 mt-3">
-          {Object.entries(buddy.stats).map(([stat, value]) => (
-            <div key={stat} className="flex items-center gap-2 text-[11px]">
-              <span className="w-8 text-muted-foreground truncate">
-                {t(`buddy.${stat}` as TranslationKey) || STAT_LABEL[stat]?.zh || stat}
-              </span>
-              <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                <div
-                  className={cn('h-full rounded-full', stat === buddy.peakStat ? 'bg-primary' : 'bg-muted-foreground/40')}
-                  style={{ width: `${value}%` }}
-                />
+          {Object.entries(buddy.stats).map(([stat, value]) => {
+            const isPeak = stat === buddy.peakStat;
+            return (
+              <div key={stat} className="flex items-center gap-2 text-[11px]">
+                <span className={cn('w-8 truncate', isPeak ? 'text-primary font-medium' : 'text-muted-foreground')}>
+                  {t(`buddy.${stat}` as TranslationKey) || STAT_LABEL[stat]?.zh || stat}
+                </span>
+                <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={cn('h-full rounded-full transition-all', isPeak ? 'bg-primary' : 'bg-muted-foreground/40')}
+                    style={{ width: `${value}%` }}
+                  />
+                </div>
+                <span className={cn('w-5 text-right', isPeak ? 'text-primary font-semibold' : 'text-muted-foreground')}>{value}</span>
               </div>
-              <span className="w-5 text-right text-muted-foreground">{value}</span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      {/* Status rows */}
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2 text-xs">
-          <Heart size={12} className="text-muted-foreground" />
-          <span className="flex-1 text-muted-foreground">{t('assistant.panel.heartbeat' as TranslationKey)}</span>
+      {/* Status row — compact single line */}
+      <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-1">
+          <Heart size={11} />
           <span className={`h-1.5 w-1.5 rounded-full ${summary.heartbeatEnabled ? 'bg-status-success' : 'bg-muted-foreground/30'}`} />
-          <span className="text-foreground">
-            {summary.heartbeatEnabled
-              ? summary.lastHeartbeatDate || t('assistant.panel.enabled' as TranslationKey)
-              : t('assistant.panel.disabled' as TranslationKey)}
-          </span>
+          <span>{t('assistant.panel.heartbeat' as TranslationKey)}</span>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <Brain size={12} className="text-muted-foreground" />
-          <span className="flex-1 text-muted-foreground">{t('assistant.panel.memories' as TranslationKey)}</span>
+        <div className="flex items-center gap-1">
+          <Brain size={11} />
+          <span>{t('assistant.panel.memories' as TranslationKey)}</span>
           <span className="text-foreground">{summary.memoryCount}</span>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <Clock size={12} className="text-muted-foreground" />
-          <span className="flex-1 text-muted-foreground">{t('tasks.title' as TranslationKey)}</span>
+        <div className="flex items-center gap-1">
+          <Clock size={11} />
+          <span>{t('tasks.title' as TranslationKey)}</span>
           <span className="text-foreground">{summary.taskCount || 0}</span>
         </div>
       </div>
@@ -620,12 +640,24 @@ function AssistantStatusCard({ summary, t }: {
             size="sm"
             className="w-full mt-1.5 gap-1 text-[10px] h-6 text-muted-foreground"
             onClick={async () => {
-              const res = await fetch('/api/workspace/evolve-buddy', { method: 'POST' });
-              if (res.ok) {
-                const data = await res.json();
-                if (data.evolved) {
-                  window.location.reload();
+              try {
+                const res = await fetch('/api/workspace/evolve-buddy', { method: 'POST' });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.evolved) {
+                    showToast({ type: 'success', message: `🌟 ${t('buddy.evolutionSuccess' as TranslationKey)}` });
+                    // Refresh summary to show new rarity
+                    window.location.reload();
+                  } else if (data.check) {
+                    const c = data.check;
+                    const parts: string[] = [];
+                    if (c.memoryCount < c.requiredMemories) parts.push(`${t('assistant.panel.memories' as TranslationKey)} ${c.memoryCount}/${c.requiredMemories}`);
+                    if (c.daysActive < c.requiredDays) parts.push(`${t('buddy.daysActive' as TranslationKey)} ${c.daysActive}/${c.requiredDays}`);
+                    showToast({ type: 'info', message: `${t('buddy.evolutionNotReady' as TranslationKey)}: ${parts.join(', ')}` });
+                  }
                 }
+              } catch {
+                showToast({ type: 'error', message: t('buddy.evolutionFailed' as TranslationKey) });
               }
             }}
           >
@@ -654,16 +686,6 @@ function AssistantStatusCard({ summary, t }: {
         </Button>
       )}
 
-      {/* Settings link */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="w-full justify-start gap-2 text-xs h-7 text-muted-foreground"
-        onClick={() => router?.push('/settings#assistant')}
-      >
-        <Gear size={12} />
-        {t('assistant.panel.assistantSettings' as TranslationKey)}
-      </Button>
     </div>
   );
 }

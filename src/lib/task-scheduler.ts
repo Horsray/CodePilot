@@ -21,7 +21,7 @@ const RECURRING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // ── Session-only tasks (in-memory, not persisted) ────────────────
 const SESSION_TASKS_KEY = '__codepilot_session_tasks__';
 
-function getSessionTasks(): Map<string, ScheduledTask> {
+export function getSessionTasks(): Map<string, ScheduledTask> {
   if (!(globalThis as Record<string, unknown>)[SESSION_TASKS_KEY]) {
     (globalThis as Record<string, unknown>)[SESSION_TASKS_KEY] = new Map();
   }
@@ -69,12 +69,51 @@ export function ensureSchedulerRunning(): void {
       const sessionTasks = getSessionTasks();
       for (const [id, task] of sessionTasks) {
         if (task.status === 'active' && new Date(task.next_run) <= new Date()) {
-          executeDueTask(task).catch(err =>
-            console.error(`[scheduler] Session task ${id} failed:`, err)
-          );
-          // One-shot session tasks: remove after fire
+          // Execute and handle errors in-memory (session tasks aren't in SQLite)
+          try {
+            await executeDueTask(task, true);
+            // Reset error count on success
+            task.consecutive_errors = 0;
+          } catch (err) {
+            task.consecutive_errors = (task.consecutive_errors || 0) + 1;
+            console.error(`[scheduler] Session task ${id} failed (${task.consecutive_errors}x):`, err);
+
+            // Auto-disable after too many consecutive failures
+            if (task.consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
+              task.status = 'disabled' as ScheduledTask['status'];
+              console.warn(`[scheduler] Session task ${id} auto-disabled after ${task.consecutive_errors} failures`);
+              continue;
+            }
+
+            // Exponential backoff: push next_run forward
+            const backoffMs = BACKOFF_DELAYS[Math.min(task.consecutive_errors - 1, BACKOFF_DELAYS.length - 1)];
+            task.next_run = new Date(Date.now() + backoffMs).toISOString();
+            continue; // Skip normal next_run advancement
+          }
+
           if (task.schedule_type === 'once') {
+            // One-shot session tasks: remove after fire
             sessionTasks.delete(id);
+          } else {
+            // Recurring session tasks: advance next_run in memory
+            const now = new Date();
+            if (task.schedule_type === 'interval') {
+              const ms = parseInterval(task.schedule_value);
+              let nextRun = new Date(now.getTime() + ms);
+              while (nextRun <= now) nextRun = new Date(nextRun.getTime() + ms);
+              task.next_run = nextRun.toISOString();
+            } else if (task.schedule_type === 'cron') {
+              const cronNext = getNextCronTime(task.schedule_value);
+              if (cronNext) {
+                task.next_run = cronNext.toISOString();
+              } else {
+                // No valid next occurrence — pause this session task
+                task.status = 'paused' as ScheduledTask['status'];
+                console.warn(`[scheduler] Session cron task ${id} paused: no match within 4 years`);
+                continue;
+              }
+            }
+            task.last_run = now.toISOString();
           }
         }
       }
@@ -101,13 +140,16 @@ export function stopScheduler(): void {
 
 /**
  * Execute a single due task.
+ * @param isSessionTask If true, skip SQLite writes and re-throw errors for caller handling.
  */
-async function executeDueTask(task: ScheduledTask): Promise<void> {
+async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promise<void> {
   const { updateScheduledTask, insertTaskRunLog } = await import('@/lib/db');
   const startTime = Date.now();
 
-  // Mark as running
-  updateScheduledTask(task.id, { last_status: 'running' });
+  // Mark as running (skip for session tasks — they're not in SQLite)
+  if (!isSessionTask) {
+    updateScheduledTask(task.id, { last_status: 'running' });
+  }
 
   try {
     // Lightweight execution via text generation (no streaming UI needed)
@@ -127,22 +169,22 @@ async function executeDueTask(task: ScheduledTask): Promise<void> {
       maxTokens: 1000,
     });
 
-    // Success
-    updateScheduledTask(task.id, {
-      last_status: 'success',
-      last_result: result.slice(0, 2000),
-      last_run: new Date().toISOString(),
-      last_error: undefined,
-      consecutive_errors: 0,
-    });
+    // Success — update SQLite (skip for session tasks)
+    if (!isSessionTask) {
+      updateScheduledTask(task.id, {
+        last_status: 'success',
+        last_result: result.slice(0, 2000),
+        last_run: new Date().toISOString(),
+        last_error: undefined,
+        consecutive_errors: 0,
+      });
 
-    // Log successful execution
-    try {
-      insertTaskRunLog({ task_id: task.id, status: 'success', result: result.slice(0, 2000), duration_ms: Date.now() - startTime });
-    } catch { /* best effort logging */ }
+      try {
+        insertTaskRunLog({ task_id: task.id, status: 'success', result: result.slice(0, 2000), duration_ms: Date.now() - startTime });
+      } catch { /* best effort logging */ }
 
-    // Compute next run (for recurring tasks) or mark completed (for once)
-    computeNextRun(task);
+      computeNextRun(task);
+    }
 
     // Notify on completion
     if (task.notify_on_complete) {
@@ -184,6 +226,16 @@ async function executeDueTask(task: ScheduledTask): Promise<void> {
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     const errors = task.consecutive_errors + 1;
+
+    // For session tasks: skip SQLite writes and re-throw so the poll loop handles backoff
+    if (isSessionTask) {
+      // Notify on failure (best effort)
+      if (task.notify_on_complete) {
+        await sendTaskNotification(`❌ ${task.name}`, errorMsg.slice(0, 200), 'urgent').catch(() => {});
+      }
+      console.error(`[scheduler] Session task ${task.id} (${task.name}) error:`, errorMsg);
+      throw err;
+    }
 
     updateScheduledTask(task.id, {
       last_status: 'error',
@@ -276,7 +328,13 @@ async function computeNextRun(task: ScheduledTask): Promise<void> {
 
     case 'cron': {
       const nextRun = getNextCronTime(task.schedule_value);
-      updateScheduledTask(task.id, { next_run: nextRun.toISOString() });
+      if (nextRun) {
+        updateScheduledTask(task.id, { next_run: nextRun.toISOString() });
+      } else {
+        // No valid next occurrence within 4 years — pause the task
+        updateScheduledTask(task.id, { status: 'paused', last_error: 'No valid cron match within 4 years' });
+        console.warn(`[scheduler] Task ${task.id} paused: cron "${task.schedule_value}" has no match within 4 years`);
+      }
       break;
     }
   }
@@ -303,11 +361,8 @@ async function applyBackoff(taskId: string, errors: number): Promise<void> {
  */
 async function sendTaskNotification(title: string, body: string, priority: 'low' | 'normal' | 'urgent'): Promise<void> {
   try {
-    await fetch('http://localhost:3000/api/tasks/notify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, body, priority }),
-    });
+    const { sendNotification } = await import('@/lib/notification-manager');
+    await sendNotification({ title, body, priority });
   } catch {
     // Best effort — don't let notification failure affect task execution
   }
@@ -395,20 +450,51 @@ export function parseInterval(value: string): number {
 
 /**
  * Simple 5-field cron expression parser.
- * Finds the next matching minute within the next 48 hours.
+ * Day-level scan over 4 years (1461 days) to cover all valid schedules
+ * including leap-year-only dates like `0 9 29 2 *`.
  */
-export function getNextCronTime(expression: string): Date {
+export function getNextCronTime(expression: string): Date | null {
   const parts = expression.trim().split(/\s+/);
-  if (parts.length !== 5) return new Date(Date.now() + 3600000); // fallback 1h
+  if (parts.length !== 5) {
+    console.warn(`[scheduler] Invalid cron expression: "${expression}"`);
+    return null;
+  }
 
   const now = new Date();
-  // Check up to 2880 minutes (48h)
-  for (let i = 1; i <= 2880; i++) {
-    const candidate = new Date(now.getTime() + i * 60000);
-    candidate.setSeconds(0, 0); // align to minute boundary
-    if (matchesCron(candidate, parts)) return candidate;
+
+  // Scan each day for up to 4 years, testing all 1440 minutes per day.
+  // For common expressions this returns on day 0-1; sparse ones (monthly, yearly)
+  // may scan further but the day-level outer loop keeps it bounded.
+  for (let day = 0; day <= 1461; day++) {
+    const baseDate = new Date(now.getTime() + day * 86400000);
+    const y = baseDate.getFullYear();
+    const mo = baseDate.getMonth();
+    const d = baseDate.getDate();
+
+    // Quick pre-check: skip this day entirely if dom/month/dow can't match
+    const testDate = new Date(y, mo, d, 0, 0, 0, 0);
+    if (!matchField(testDate.getDate(), parts[2]) ||
+        !matchField(testDate.getMonth() + 1, parts[3]) ||
+        !matchField(testDate.getDay(), parts[4])) {
+      continue;
+    }
+
+    // Day matches — scan minutes
+    for (let m = 0; m < 1440; m++) {
+      const candidate = new Date(y, mo, d, Math.floor(m / 60), m % 60, 0, 0);
+      if (candidate <= now) continue;
+      if (matchField(candidate.getMinutes(), parts[0]) &&
+          matchField(candidate.getHours(), parts[1])) {
+        return candidate;
+      }
+    }
   }
-  return new Date(now.getTime() + 3600000); // fallback
+
+  // No match found within 4 years — expression is either impossible (e.g. Feb 30)
+  // or extremely sparse (e.g. Feb 29 on a specific weekday). Return null so
+  // callers can pause the task instead of scheduling a fake execution time.
+  console.warn(`[scheduler] No cron match for "${expression}" within 4 years`);
+  return null;
 }
 
 function matchesCron(date: Date, parts: string[]): boolean {

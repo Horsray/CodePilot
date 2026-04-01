@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { FolderOpen, Brain, X } from '@/components/ui/icon';
 import { useTranslation } from '@/hooks/useTranslation';
+import { EGG_IMAGE_URL } from '@/lib/buddy';
 
 interface ChatEmptyStateProps {
   hasDirectory: boolean;
@@ -61,7 +62,7 @@ export function ChatEmptyState({
           <Card className="flex-1 cursor-pointer transition-colors hover:border-primary/40">
             <CardHeader>
               <div className="flex items-center gap-2">
-                <Brain size={20} className="text-primary" />
+                <img src={EGG_IMAGE_URL} alt="" width={24} height={24} className="shrink-0" />
                 <CardTitle className="text-base">{t('chat.empty.assistant.title')}</CardTitle>
               </div>
               <CardDescription>{t('chat.empty.assistant.description')}</CardDescription>
@@ -69,12 +70,12 @@ export function ChatEmptyState({
             <CardFooter>
               {assistantConfigured ? (
                 <Button size="sm" className="gap-1.5" onClick={onOpenAssistant}>
-                  <Brain size={14} />
+                  <img src={EGG_IMAGE_URL} alt="" width={14} height={14} />
                   {t('chat.empty.assistant.open')}
                 </Button>
               ) : (
                 <Button size="sm" variant="outline" className="gap-1.5" onClick={onOpenAssistant}>
-                  <Brain size={14} />
+                  <img src={EGG_IMAGE_URL} alt="" width={14} height={14} />
                   {t('chat.empty.assistant.setup')}
                 </Button>
               )}
@@ -162,7 +163,7 @@ export function AssistantPromoCard({ onSetup, onDismiss }: AssistantPromoCardPro
           <X size={12} />
         </button>
         <div className="flex items-start gap-2 pr-4">
-          <Brain size={16} className="text-primary mt-0.5 shrink-0" />
+          <img src={EGG_IMAGE_URL} alt="" width={20} height={20} className="shrink-0 mt-0.5" />
           <div className="space-y-1.5">
             <p className="text-xs font-medium leading-snug">
               {t('chat.empty.assistant.promo')}

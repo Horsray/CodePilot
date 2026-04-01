@@ -12,6 +12,7 @@
 
 import type { ChatSession } from '@/types';
 import { getSetting } from '@/lib/db';
+import { EGG_IMAGE_URL } from '@/lib/buddy';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -28,6 +29,8 @@ export interface ContextAssemblyConfig {
   conversationHistory?: Array<{ role: string; content: string }>;
   /** Whether this is an image agent mode call */
   imageAgentMode?: boolean;
+  /** Whether this is an auto-trigger turn (heartbeat, onboarding hook, etc.) */
+  autoTrigger?: boolean;
 }
 
 export interface AssembledContext {
@@ -46,7 +49,7 @@ export interface AssembledContext {
 // ── Main function ────────────────────────────────────────────────────
 
 export async function assembleContext(config: ContextAssemblyConfig): Promise<AssembledContext> {
-  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode } = config;
+  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger } = config;
   const t0 = Date.now();
 
   let workspacePrompt = '';
@@ -100,13 +103,26 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
 
         const state = loadState(workspacePath);
 
+        // Detect heartbeat auto-trigger by checking the actual prompt content,
+        // not just the autoTrigger flag (which is also true for buddy-welcome).
+        const isHeartbeatTrigger = autoTrigger && userPrompt.includes('心跳检查');
+
         if (!state.onboardingComplete) {
           assistantProjectInstructions = buildOnboardingInstructions();
-        } else if (shouldRunHeartbeat(state)) {
+        } else if (isHeartbeatTrigger && shouldRunHeartbeat(state)) {
+          // Full heartbeat task mode — only for explicit heartbeat auto-trigger
           assistantProjectInstructions = buildHeartbeatInstructions();
         } else {
           // Progressive file update guidance for completed onboarding
           assistantProjectInstructions = buildProgressiveUpdateInstructions();
+
+          // Soft heartbeat hint for normal conversations when overdue.
+          // The AI naturally incorporates a brief check-in; the backend
+          // updates lastHeartbeatDate when it detects heartbeat keywords
+          // in the assistant response (no HEARTBEAT_OK token needed).
+          if (!autoTrigger && shouldRunHeartbeat(state)) {
+            assistantProjectInstructions += '\n\n' + buildSoftHeartbeatHint();
+          }
 
           // If no buddy yet, prepend a welcome + adoption prompt
           if (!state.buddy) {
@@ -274,6 +290,16 @@ function buildOnboardingInstructions(): string {
 </assistant-project-task>`;
 }
 
+function buildSoftHeartbeatHint(): string {
+  return `<heartbeat-hint>
+今天还没有做过日常检查。在回答用户问题的同时，可以自然地：
+- 简短提及 HEARTBEAT.md 中你觉得值得关注的事项
+- 回顾最近记忆，看有没有需要跟进的
+不要让检查主导对话，优先回答用户的问题。
+如果你确实做了检查（哪怕只是简短一提），请在回复末尾加上 <!-- heartbeat-done -->
+</heartbeat-hint>`;
+}
+
 function buildHeartbeatInstructions(): string {
   return `<assistant-project-task type="tick">
 这是一次自主检查。你可以做以下任何事情：
@@ -295,26 +321,27 @@ function buildHeartbeatInstructions(): string {
 
 function buildNoBuddyWelcome(): string {
   return `<assistant-buddy-welcome>
-这是一次特殊的欢迎对话。用户的助理伙伴还没有孵化。请用游戏化、温暖的方式做以下事情：
+这是用户的助理伙伴还没有孵化的状态。请用游戏化的方式引导用户：
 
-1. 开场用一段有画面感的描述：
-   "嗨！我注意到你身边有一颗蛋 🥚 在微微晃动…它似乎在等待被领养呢！"
-
-2. 简要介绍你是什么：
-   "我是你的个人助理，我可以帮你记住重要的事、设置定时提醒、整理笔记，还会主动关心你的待办事项。"
-
-3. 用 show-widget 输出一个孵化卡片，让用户点击按钮领养伙伴：
+1. 开场白：用温暖有画面感的方式描述一颗蛋在等待孵化
+2. 输出一个简单的蛋 Widget（只用于展示，不需要交互按钮）：
 
 \`\`\`show-widget
-{"title":"hatch_buddy","widget_code":"<div style=\\"text-align:center;padding:32px 20px;font-family:system-ui;background:linear-gradient(135deg,#f8f6ff 0%,#fff5f5 50%,#f0f7ff 100%);border-radius:16px;border:1px solid rgba(108,92,231,0.1)\\"><div id=\\"egg-zone\\" style=\\"position:relative;display:inline-block\\"><div style=\\"font-size:72px;animation:bounce 0.6s ease-in-out infinite alternate;filter:drop-shadow(0 8px 16px rgba(0,0,0,0.1))\\">🥚</div><div style=\\"font-size:10px;color:#a78bfa;animation:pulse 2s ease-in-out infinite;margin-top:4px\\">✨ 在动了在动了...</div></div><style>@keyframes bounce{0%{transform:translateY(0) rotate(-3deg)}100%{transform:translateY(-8px) rotate(3deg)}}@keyframes pulse{0%,100%{opacity:0.4}50%{opacity:1}}@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}@keyframes shimmer{0%{background-position:-200% center}100%{background-position:200% center}}</style><p style=\\"font-size:16px;font-weight:600;margin:16px 0 4px;color:#4c1d95\\">你的伙伴正在等待孵化！</p><p style=\\"font-size:12px;color:#888;margin:0 0 24px;line-height:1.6\\">每个助理都有一个专属伙伴<br/>16 种物种 · 5 级稀有度 · 独特属性</p><button id=\\"hatch-btn\\" onclick=\\"window.parent.postMessage({type:'widget:hatch-buddy'},'*');this.textContent='🐣 孵化中...';this.disabled=true;this.style.opacity='0.7'\\" style=\\"background:linear-gradient(135deg,#6C5CE7,#a78bfa);color:white;border:none;padding:12px 40px;border-radius:24px;font-size:15px;cursor:pointer;font-weight:600;box-shadow:0 4px 12px rgba(108,92,231,0.3);transition:transform 0.2s\\" onmouseover=\\"this.style.transform='scale(1.05)'\\" onmouseout=\\"this.style.transform='scale(1)'\\">🐣 孵化伙伴</button><div id=\\"result-zone\\"></div><script>window.addEventListener('message',function(e){if(e.data&&e.data.type==='hatch-buddy:result'&&e.data.buddy){var b=e.data.buddy;var colors={common:'#94a3b8',uncommon:'#22c55e',rare:'#3b82f6',epic:'#a855f7',legendary:'#f59e0b'};var labels={common:'★ 普通',uncommon:'★★ 稀有',rare:'★★★ 精良',epic:'★★★★ 史诗',legendary:'★★★★★ 传说'};var c=colors[b.rarity]||'#888';document.getElementById('egg-zone').innerHTML='<div style=\\"font-size:72px;animation:fadeIn 0.5s ease-out\\">'+b.emoji+'</div>';document.getElementById('hatch-btn').style.display='none';document.getElementById('result-zone').innerHTML='<div style=\\"animation:fadeIn 0.8s ease-out;margin-top:16px\\"><p style=\\"font-size:18px;font-weight:700;margin:0;color:#1e1b4b\\">🎉 孵化成功！</p><div style=\\"display:inline-block;padding:4px 16px;border-radius:20px;background:'+c+'22;color:'+c+';font-size:12px;font-weight:600;margin:8px 0\\">'+labels[b.rarity]+'</div><p style=\\"font-size:13px;color:#555;margin:8px 0 0\\">快去看板面板查看你的新伙伴吧！</p></div>'}})</script></div>"}
+{"title":"egg_waiting","widget_code":"<div style='text-align:center;padding:32px;font-family:system-ui;background:linear-gradient(135deg,#f8f6ff,#fff5f5,#f0f7ff);border-radius:16px'><img src='${EGG_IMAGE_URL}' width='80' height='80' style='animation:bounce 0.6s ease-in-out infinite alternate;filter:drop-shadow(0 8px 16px rgba(0,0,0,0.1))'/><style>@keyframes bounce{0%{transform:translateY(0) rotate(-3deg)}100%{transform:translateY(-8px) rotate(3deg)}}</style><p style='font-size:14px;color:#6C5CE7;margin:12px 0 4px;font-weight:600'>✨ 在动了在动了...</p><p style='font-size:12px;color:#888'>对我说"孵化"就可以领养你的伙伴啦！</p></div>"}
 \`\`\`
 
-4. 在 widget 之后，补一句鼓励：
-   "点击孵化按钮，看看你会遇到什么样的伙伴吧！不同的伙伴有不同的物种和稀有度（从普通到传说），还有独特的属性。"
+3. 简要介绍助理能力：记忆、定时提醒、笔记整理
+4. 等用户说"孵化"、"领养"、"hatch"等关键词
+5. 收到后调用 codepilot_hatch_buddy 工具（不带 buddyName）
+6. 拿到结果后，用 show-widget 展示孵化结果卡片。Widget 中使用 Fluent UI 3D 图片：
+   - 图片 URL 在工具返回的 Image 字段中
+   - 展示：3D 物种图片（大号）+ 名字 + 稀有度胶囊标签 + 性格概括 + 属性条
+   - 稀有度背景色：普通灰/稀有绿/精良蓝/史诗紫/传说金
+7. 然后问用户："给你的新伙伴起个名字吧！"
+8. 用户说名字后，调用 codepilot_hatch_buddy(buddyName: 用户说的名字)
+9. 确认名字保存成功，欢迎用户开始使用
 
-5. 如果用户直接提问而不是领养伙伴，优先回答问题，但在回答末尾提一句蛋的事。
-
-重要：必须输出上面的 show-widget 代码块，这是用户点击孵化的入口。
+重要：整个过程通过对话完成，不需要用户离开聊天界面。
 </assistant-buddy-welcome>`;
 }
 
