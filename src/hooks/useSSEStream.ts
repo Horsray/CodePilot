@@ -211,6 +211,16 @@ function handleSSEEvent(
           if (parsed.details) {
             errorDisplay += `\n\nDetails: ${parsed.details}`;
           }
+          // Render recovery actions as markdown links
+          if (parsed.recoveryActions && parsed.recoveryActions.length > 0) {
+            const actionLinks = parsed.recoveryActions
+              .filter((a: { url?: string; label: string }) => a.url)
+              .map((a: { url: string; label: string }) => `[${a.label}](${a.url})`)
+              .join(' · ');
+            if (actionLinks) {
+              errorDisplay += '\n\n' + actionLinks;
+            }
+          }
           // Add diagnostic guidance for provider/auth related errors
           const diagCategories = new Set([
             'AUTH_REJECTED', 'AUTH_FORBIDDEN', 'AUTH_STYLE_MISMATCH',
@@ -219,7 +229,7 @@ function handleSSEEvent(
             'CLI_NOT_FOUND', 'UNSUPPORTED_FEATURE',
           ]);
           if (diagCategories.has(parsed.category)) {
-            errorDisplay += '\n\n💡 [Run Provider Diagnostics](/settings#providers) to troubleshoot, or check the [Provider Setup Guide](https://www.codepilot.sh/docs/providers).';
+            errorDisplay += '\n\n[Run Provider Diagnostics](/settings#providers)';
           }
         } else {
           errorDisplay = event.data;

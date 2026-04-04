@@ -20,7 +20,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { SpinnerGap, CaretDown, CaretUp } from "@/components/ui/icon";
+import { SpinnerGap, CaretDown, CaretUp, ArrowSquareOut, CheckCircle, XCircle, Warning, Lightning } from "@/components/ui/icon";
 import type { ProviderFormData } from "./ProviderForm";
 import type { QuickPreset } from "./provider-presets";
 import { QUICK_PRESETS } from "./provider-presets";
@@ -84,8 +84,41 @@ export function PresetConnectDialog({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; error?: { code: string; message: string; suggestion: string; recoveryActions?: Array<{ label: string; url?: string; action?: string }> } } | null>(null);
   const { t } = useTranslation();
   const isZh = t('nav.chats') === '对话';
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const envOverrides: Record<string, string> = {};
+      try {
+        const parsed = JSON.parse(extraEnv || '{}');
+        Object.assign(envOverrides, parsed);
+      } catch { /* ignore */ }
+      const res = await fetch('/api/providers/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          presetKey: preset?.key,
+          apiKey: apiKey || undefined,
+          baseUrl: baseUrl || preset?.base_url || '',
+          protocol: preset?.protocol || 'anthropic',
+          authStyle,
+          envOverrides,
+          providerName: name || preset?.name,
+        }),
+      });
+      const data = await res.json();
+      setTestResult(data);
+    } catch (err) {
+      setTestResult({ success: false, error: { code: 'NETWORK_ERROR', message: 'Failed to reach test endpoint', suggestion: 'Check if the app is running' } });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   // Reset form when dialog opens
   useEffect(() => {
@@ -313,6 +346,48 @@ export function PresetConnectDialog({
             {isZh ? preset.descriptionZh : preset.description}
           </DialogDescription>
         </DialogHeader>
+
+        {/* Meta info panel — API key link, billing badge, notes */}
+        {preset.meta && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {preset.meta.billingModel && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                  {preset.meta.billingModel === 'pay_as_you_go' ? (isZh ? '按量付费' : 'Pay-as-you-go')
+                    : preset.meta.billingModel === 'coding_plan' ? 'Coding Plan'
+                    : preset.meta.billingModel === 'token_plan' ? 'Token Plan'
+                    : preset.meta.billingModel === 'free' ? (isZh ? '免费' : 'Free')
+                    : preset.meta.billingModel === 'self_hosted' ? (isZh ? '自托管' : 'Self-hosted')
+                    : preset.meta.billingModel}
+                </span>
+              )}
+              {preset.meta.apiKeyUrl && (
+                <a href={preset.meta.apiKeyUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline">
+                  <ArrowSquareOut size={12} />
+                  {isZh ? '获取 API Key' : 'Get API Key'}
+                </a>
+              )}
+              {preset.meta.docsUrl && (
+                <a href={preset.meta.docsUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline">
+                  <ArrowSquareOut size={12} />
+                  {isZh ? '配置文档' : 'Docs'}
+                </a>
+              )}
+            </div>
+            {preset.meta.notes && preset.meta.notes.length > 0 && (
+              <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 space-y-1">
+                {preset.meta.notes.map((note, i) => (
+                  <p key={i} className="text-[11px] text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                    <Warning size={12} className="shrink-0 mt-0.5" />
+                    {note}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4 min-w-0">
           {/* Name field — custom/thirdparty */}
@@ -546,16 +621,52 @@ export function PresetConnectDialog({
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 
-          <DialogFooter>
+          {/* Connection test result */}
+          {testResult && (
+            <div className={`rounded-md px-3 py-2 text-sm ${testResult.success ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-destructive/10 border border-destructive/20'}`}>{/* lint-allow-raw-color */}
+              <div className="flex items-center gap-2">
+                {testResult.success
+                  ? <><CheckCircle size={16} className="text-emerald-500 shrink-0" />{/* lint-allow-raw-color */}<span className="text-emerald-600 dark:text-emerald-400">{/* lint-allow-raw-color */}{isZh ? '连接成功' : 'Connection successful'}</span></>
+                  : <><XCircle size={16} className="text-destructive shrink-0" /><span className="text-destructive">{testResult.error?.message || 'Connection failed'}</span></>
+                }
+              </div>
+              {!testResult.success && testResult.error?.suggestion && (
+                <p className="text-xs text-muted-foreground mt-1">{testResult.error.suggestion}</p>
+              )}
+              {!testResult.success && testResult.error?.recoveryActions && testResult.error.recoveryActions.length > 0 && (
+                <div className="flex gap-2 mt-2 flex-wrap">
+                  {testResult.error.recoveryActions.filter(a => a.url).map((action, i) => (
+                    <a key={i} href={action.url} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                      <ArrowSquareOut size={10} />
+                      {action.label}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              disabled={saving}
+              disabled={saving || testing}
             >
               {t('common.cancel')}
             </Button>
-            <Button type="submit" disabled={saving} className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleTestConnection}
+              disabled={saving || testing || (!apiKey && preset.fields.includes("api_key"))}
+              className="gap-1.5"
+            >
+              {testing ? <SpinnerGap size={14} className="animate-spin" /> : <Lightning size={14} />}
+              {testing ? (isZh ? '测试中...' : 'Testing...') : (isZh ? '测试连接' : 'Test')}
+            </Button>
+            <Button type="submit" disabled={saving || testing} className="gap-2">
               {saving && <SpinnerGap size={16} className="animate-spin" />}
               {saving ? t('provider.saving') : isEdit ? t('provider.update') : t('provider.connect')}
             </Button>

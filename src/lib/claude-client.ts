@@ -1341,6 +1341,11 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
           code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         });
 
+        // Look up preset meta for recovery action URLs
+        const presetForMeta = resolved.provider?.base_url
+          ? (await import('./provider-catalog')).findPresetForLegacy(resolved.provider.base_url, resolved.provider.provider_type, resolved.protocol)
+          : undefined;
+
         // Classify the error using structured pattern matching
         const classified = classifyError({
           error,
@@ -1351,6 +1356,11 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
           thinkingEnabled: !!thinking,
           context1mEnabled: !!context1m,
           effortSet: !!effort,
+          providerMeta: presetForMeta?.meta ? {
+            apiKeyUrl: presetForMeta.meta.apiKeyUrl,
+            docsUrl: presetForMeta.meta.docsUrl,
+            pricingUrl: presetForMeta.meta.pricingUrl,
+          } : undefined,
         });
 
         // ── Reactive compact: auto-compress and retry on CONTEXT_TOO_LONG ──
@@ -1528,6 +1538,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
             providerName: classified.providerName,
             details: classified.details,
             rawMessage: classified.rawMessage,
+            recoveryActions: classified.recoveryActions,
             // Include formatted text for backward compatibility
             _formattedMessage: errorMessage,
           }),
