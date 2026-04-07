@@ -232,8 +232,9 @@ export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialog
         });
       }
       
-      onConfigured();
       onClose();
+      // Delay onConfigured to allow dialog to close and state to update
+      setTimeout(() => onConfigured(), 100);
     } catch (err) {
       showToast({ type: "error", message: t('git.cloneFailed') });
     } finally {
@@ -281,8 +282,9 @@ export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialog
       }
 
       showToast({ type: "success", message: t('git.linkSuccess') });
-      onConfigured();
       onClose();
+      // Delay onConfigured to allow dialog to close and state to update
+      setTimeout(() => onConfigured(), 100);
     } catch (err) {
       showToast({ type: "error", message: err instanceof Error ? err.message : t('git.linkFailed') });
     } finally {

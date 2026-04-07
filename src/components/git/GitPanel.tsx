@@ -65,8 +65,13 @@ export function GitPanel() {
           open={showConfigDialog}
           onClose={() => setShowConfigDialog(false)}
           onConfigured={() => {
-            refresh();
-            window.dispatchEvent(new CustomEvent('git-refresh'));
+            // Close dialog first
+            setShowConfigDialog(false);
+            // Force refresh after a short delay to allow filesystem changes to settle
+            setTimeout(() => {
+              refresh();
+              window.dispatchEvent(new CustomEvent('git-refresh'));
+            }, 500);
           }}
         />
       </div>

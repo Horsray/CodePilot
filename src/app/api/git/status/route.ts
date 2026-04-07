@@ -3,14 +3,17 @@ import * as gitService from '@/lib/git/service';
 
 export async function GET(req: NextRequest) {
   const cwd = req.nextUrl.searchParams.get('cwd');
+  console.log('Git status check for cwd:', cwd);
   if (!cwd) {
     return NextResponse.json({ error: 'cwd is required' }, { status: 400 });
   }
 
   try {
     const status = await gitService.getStatus(cwd);
+    console.log('Git status result:', { isRepo: status.isRepo, repoRoot: status.repoRoot });
     return NextResponse.json(status);
   } catch (err) {
+    console.error('Git status error:', err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to get git status' },
       { status: 500 }

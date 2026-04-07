@@ -25,12 +25,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log('Initializing git repo in:', workingDir);
+    
     // Initialize git repository
-    execSync('git init', {
+    const initOutput = execSync('git init', {
       cwd: workingDir,
       stdio: 'pipe',
       timeout: 10000,
     });
+    
+    console.log('Git init output:', initOutput.toString());
 
     // Create initial commit if there are files
     try {
