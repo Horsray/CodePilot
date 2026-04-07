@@ -11,7 +11,12 @@ function runGit(args: string[], opts: { cwd: string; timeoutMs?: number }): Prom
       cwd: opts.cwd,
       timeout: opts.timeoutMs ?? 10000,
       maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        // Ensure SSH agent is available for push/pull/fetch
+        SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK || '',
+      },
     }, (err, stdout, stderr) => {
       if (err) {
         const msg = stderr?.trim() || err.message;
@@ -247,17 +252,36 @@ export async function commit(cwd: string, message: string): Promise<string> {
 }
 
 export async function push(cwd: string): Promise<void> {
+  const PUSH_TIMEOUT = 120000; // 2 minutes for large pushes
   // Try regular push first
   try {
-    await runGit(['push'], { cwd, timeoutMs: 30000 });
+    await runGit(['push'], { cwd, timeoutMs: PUSH_TIMEOUT });
   } catch (err) {
-    // If no upstream, set it
-    if (err instanceof Error && (err.message.includes('no upstream') || err.message.includes('has no upstream'))) {
+    if (!(err instanceof Error)) throw err;
+    const msg = err.message;
+
+    // If no upstream, set it automatically
+    if (msg.includes('no upstream') || msg.includes('has no upstream')) {
       const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
-      await runGit(['push', '-u', 'origin', branch], { cwd, timeoutMs: 30000 });
-    } else {
-      throw err;
+      await runGit(['push', '-u', 'origin', branch], { cwd, timeoutMs: PUSH_TIMEOUT });
+      return;
     }
+
+    // Provide clearer error messages for common failures
+    if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
+      throw new Error('无法连接到远程仓库，请检查网络连接');
+    }
+    if (msg.includes('Authentication failed') || msg.includes('Permission denied') || msg.includes('could not read Username')) {
+      throw new Error('认证失败，请检查 SSH key 或登录凭证是否配置正确');
+    }
+    if (msg.includes('rejected') || msg.includes('non-fast-forward')) {
+      throw new Error('远程有新的提交，请先拉取合并再推送');
+    }
+    if (msg.includes('timed out') || msg.includes('SIGTERM')) {
+      throw new Error('推送超时，请检查网络或稍后重试');
+    }
+
+    throw err;
   }
 }
 
@@ -503,12 +527,12 @@ export async function getDiffSummary(cwd: string, staged: boolean): Promise<stri
 // ---------------------------------------------------------------------------
 
 export async function pull(cwd: string): Promise<string> {
-  const output = await runGit(['pull'], { cwd, timeoutMs: 30000 });
+  const output = await runGit(['pull'], { cwd, timeoutMs: 120000 });
   return output;
 }
 
 export async function fetch(cwd: string): Promise<string> {
-  const output = await runGit(['fetch', '--all', '--prune'], { cwd, timeoutMs: 30000 });
+  const output = await runGit(['fetch', '--all', '--prune'], { cwd, timeoutMs: 120000 });
   return output;
 }
 
