@@ -338,7 +338,7 @@ export async function generateTextViaSdk(params: {
     if (gitBashPath) sdkEnv.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
   }
 
-  const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved);
+  const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved, resolved.model);
   Object.assign(sdkEnv, resolvedEnv);
 
   const abortController = new AbortController();
@@ -484,7 +484,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
         }
 
         // Build env from resolved provider
-        const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved);
+        const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved, resolved.model);
         // toClaudeCodeEnv returns a full env — merge back into sdkEnv
         // (preserves HOME, USERPROFILE, PATH, Git Bash detection set above)
         Object.assign(sdkEnv, resolvedEnv);

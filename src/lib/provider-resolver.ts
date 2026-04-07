@@ -22,9 +22,17 @@ import {
   getDefaultProviderId,
   getActiveProvider,
   getSetting,
+  setSetting,
   getModelsForProvider,
   getProviderOptions,
 } from './db';
+import {
+  readCCSwitchConfig,
+  readCCSwitchClaudeSettings,
+  isCCSwitchEnabled,
+  type CCSwitchConfig,
+  type CCSwitchResolvedConfig,
+} from './cc-switch';
 
 // ── Resolution result ───────────────────────────────────────────
 
@@ -145,11 +153,13 @@ export function resolveForClaudeCode(
  *
  * @param baseEnv - Process environment (usually { ...process.env })
  * @param resolved - Output from resolveProvider/resolveForClaudeCode
+ * @param model - Model to use (for cc-switch resolution)
  * @returns Clean env suitable for the SDK subprocess
  */
 export function toClaudeCodeEnv(
   baseEnv: Record<string, string>,
   resolved: ResolvedProvider,
+  model?: string,
 ): Record<string, string> {
   const env = { ...baseEnv };
 
@@ -248,18 +258,63 @@ export function toClaudeCodeEnv(
       }
     }
   } else if (!resolved.provider) {
-    // No provider — check legacy DB settings, then fall back to existing env
-    const appToken = getSetting('anthropic_auth_token');
-    const appBaseUrl = getSetting('anthropic_base_url');
-    if (appToken) env.ANTHROPIC_AUTH_TOKEN = appToken;
-    if (appBaseUrl) env.ANTHROPIC_BASE_URL = appBaseUrl;
+    // No provider — check cc-switch config (auto-detect if config files exist)
+    const ccConfig = readCCSwitchConfig();
+    const ccSettings = readCCSwitchClaudeSettings();
+    
+    let modelConfig: CCSwitchConfig[string] | undefined;
+    let ccResolvedConfig: CCSwitchResolvedConfig | null = null;
+    
+    if (ccConfig && Object.keys(ccConfig).length > 0) {
+      // Legacy format
+      const modelName = model || 'sonnet';
+      modelConfig = ccConfig[modelName] || ccConfig['claude-sonnet-4-20250514'] || Object.values(ccConfig)[0];
+    } else if (ccSettings && typeof ccSettings === 'object' && 'models' in ccSettings) {
+      // New resolved format
+      ccResolvedConfig = ccSettings as CCSwitchResolvedConfig;
+    }
+    
+    if (ccResolvedConfig) {
+      // Use new resolved config format
+      if (ccResolvedConfig.apiKey) env.ANTHROPIC_AUTH_TOKEN = ccResolvedConfig.apiKey;
+      if (ccResolvedConfig.baseUrl) env.ANTHROPIC_BASE_URL = ccResolvedConfig.baseUrl;
+      if (model && ccResolvedConfig.models.includes(model)) {
+        env.ANTHROPIC_MODEL = model;
+      } else if (ccResolvedConfig.currentModel) {
+        env.ANTHROPIC_MODEL = ccResolvedConfig.currentModel;
+      }
+    } else if (modelConfig) {
+      // Legacy format
+      if (modelConfig.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = modelConfig.ANTHROPIC_API_KEY;
+      if (modelConfig.ANTHROPIC_AUTH_TOKEN) env.ANTHROPIC_AUTH_TOKEN = modelConfig.ANTHROPIC_AUTH_TOKEN;
+      if (modelConfig.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = modelConfig.ANTHROPIC_BASE_URL;
+      if (modelConfig.ANTHROPIC_MODEL) env.ANTHROPIC_MODEL = modelConfig.ANTHROPIC_MODEL;
+      if (modelConfig.ANTHROPIC_DEFAULT_HAIKU_MODEL) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = modelConfig.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+      if (modelConfig.ANTHROPIC_DEFAULT_SONNET_MODEL) env.ANTHROPIC_DEFAULT_SONNET_MODEL = modelConfig.ANTHROPIC_DEFAULT_SONNET_MODEL;
+      if (modelConfig.ANTHROPIC_DEFAULT_OPUS_MODEL) env.ANTHROPIC_DEFAULT_OPUS_MODEL = modelConfig.ANTHROPIC_DEFAULT_OPUS_MODEL;
+      if (modelConfig.ANTHROPIC_REASONING_MODEL) env.ANTHROPIC_REASONING_MODEL = modelConfig.ANTHROPIC_REASONING_MODEL;
+      if (modelConfig.ANTHROPIC_SMALL_FAST_MODEL) env.ANTHROPIC_SMALL_FAST_MODEL = modelConfig.ANTHROPIC_SMALL_FAST_MODEL;
+      
+      // Add other env vars from cc-switch config
+      for (const [key, value] of Object.entries(modelConfig)) {
+        if (key.startsWith('CLAUDE_CODE_') && value) {
+          env[key] = value;
+        }
+      }
+    } else {
+      // Legacy DB settings, then fall back to existing env
+      const appToken = getSetting('anthropic_auth_token');
+      const appBaseUrl = getSetting('anthropic_base_url');
+      if (appToken) env.ANTHROPIC_AUTH_TOKEN = appToken;
+      if (appBaseUrl) env.ANTHROPIC_BASE_URL = appBaseUrl;
+      
+      // Prevent ~/.claude/settings.json from overriding CodePilot's provider configuration.
+      env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+    }
+  } else {
+    // Has provider - prevent ~/.claude/settings.json from overriding
+    env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   }
-
-  // Prevent ~/.claude/settings.json from overriding CodePilot's provider configuration.
-  // When set, Claude Code CLI's withoutHostManagedProviderVars() strips all provider-routing
-  // variables from the user's settings file (see upstream managedEnv.ts / managedEnvConstants.ts).
-  // Placed AFTER all env cleanup to ensure it's never accidentally deleted.
-  env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
 
   return env;
 }
@@ -466,30 +521,66 @@ function buildResolution(
   opts: ResolveOptions,
 ): ResolvedProvider {
   if (!provider) {
+  // Check cc-switch config first (auto-detect if config files exist)
+  const ccSwitchConfig = readCCSwitchConfig();
+  const ccSwitchSettingsRaw = readCCSwitchClaudeSettings();
+  
+  let ccSwitchModels: CatalogModel[] = [];
+  let ccSwitchHasCredentials = false;
+  let ccSwitchBaseUrl = '';
+  let ccSwitchCurrentModel = '';
+  
+  // Handle new resolved config format
+  if (ccSwitchSettingsRaw && typeof ccSwitchSettingsRaw === 'object' && 'models' in ccSwitchSettingsRaw) {
+    const settings = ccSwitchSettingsRaw as CCSwitchResolvedConfig;
+    ccSwitchHasCredentials = !!settings.apiKey;
+    ccSwitchBaseUrl = settings.baseUrl;
+    ccSwitchCurrentModel = settings.currentModel;
+    ccSwitchModels = settings.models.map(modelName => ({
+      modelId: modelName,
+      upstreamModelId: modelName,
+      displayName: modelName,
+    }));
+  } else if (ccSwitchConfig !== null) {
+    // Legacy format
+    if (ccSwitchConfig) {
+      ccSwitchHasCredentials = Object.values(ccSwitchConfig).some((c: unknown) => {
+        const conf = c as Record<string, string>;
+        return conf.ANTHROPIC_API_KEY || conf.ANTHROPIC_AUTH_TOKEN;
+      });
+      ccSwitchModels = Object.keys(ccSwitchConfig).map(modelName => ({
+        modelId: modelName,
+        upstreamModelId: modelName,
+        displayName: modelName,
+      }));
+    }
+  }
+    
     // Environment-based provider (no DB record) — credentials come from shell env or legacy DB settings
     const envHasCredentials = !!(
       process.env.ANTHROPIC_API_KEY ||
       process.env.ANTHROPIC_AUTH_TOKEN ||
       getSetting('anthropic_auth_token')
     );
-    // Read user-configured global default model — only use it if it's an env-provider model
-    const globalDefaultModel = getSetting('global_default_model') || undefined;
-    const globalDefaultProvider = getSetting('global_default_model_provider') || undefined;
-    // Only apply global default when it belongs to the env provider (or no provider is specified)
-    const applicableGlobalDefault = (globalDefaultModel && (!globalDefaultProvider || globalDefaultProvider === 'env'))
-      ? globalDefaultModel : undefined;
-    const model = opts.model || opts.sessionModel || applicableGlobalDefault || getSetting('default_model') || undefined;
-
-    // Env mode uses short aliases (sonnet/opus/haiku) in the UI.
-    // Map them to full Anthropic model IDs so toAiSdkConfig can resolve correctly.
-    const envModels: CatalogModel[] = [
+    
+    // Use cc-switch models if available, otherwise fall back to env models
+    const useCCSwitch = ccSwitchModels.length > 0;
+    const availableModels = useCCSwitch ? ccSwitchModels : [
       { modelId: 'sonnet', upstreamModelId: 'claude-sonnet-4-20250514', displayName: 'Sonnet 4.6' },
       { modelId: 'opus', upstreamModelId: 'claude-opus-4-20250514', displayName: 'Opus 4.6' },
       { modelId: 'haiku', upstreamModelId: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5' },
     ];
+    
+    // Read user-configured global default model — only use it if it's an env-provider model
+    const globalDefaultModel = getSetting('global_default_model') || undefined;
+    const globalDefaultProvider = getSetting('global_default_model_provider') || undefined;
+    // Only apply global default when it belongs to the env provider (or no provider is specified)
+    const applicableGlobalDefault = (globalDefaultModel && (!globalDefaultProvider || globalDefaultProvider === 'env' || globalDefaultProvider === 'cc-switch' || globalDefaultProvider === ''))
+      ? globalDefaultModel : undefined;
+    const model = opts.model || opts.sessionModel || applicableGlobalDefault || getSetting('default_model') || undefined;
 
-    // Resolve upstream model from the alias table
-    const catalogEntry = model ? envModels.find(m => m.modelId === model) : undefined;
+    // Resolve upstream model from the available models
+    const catalogEntry = model ? availableModels.find(m => m.modelId === model) : undefined;
 
     return {
       provider: undefined,
@@ -501,8 +592,8 @@ function buildResolution(
       headers: {},
       envOverrides: {},
       roleModels: {},
-      hasCredentials: envHasCredentials,
-      availableModels: envModels,
+      hasCredentials: envHasCredentials || ccSwitchHasCredentials,
+      availableModels,
       settingSources: ['user', 'project', 'local'],
     };
   }

@@ -95,6 +95,10 @@ export function PresetConnectDialog({
         const parsed = JSON.parse(extraEnv || '{}');
         Object.assign(envOverrides, parsed);
       } catch { /* ignore */ }
+      
+      // Check if we should use cc-switch config (when apiKey is empty and preset is custom)
+      const useCCSwitch = !apiKey && (preset?.key === 'custom-anthropic' || preset?.key === 'custom-openai');
+      
       const res = await fetch('/api/providers/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -107,6 +111,7 @@ export function PresetConnectDialog({
           envOverrides,
           modelName: modelName || undefined,
           providerName: name || preset?.name,
+          useCCSwitch,
         }),
       });
       const data = await res.json();
@@ -672,7 +677,7 @@ export function PresetConnectDialog({
                 type="button"
                 variant="outline"
                 onClick={handleTestConnection}
-                disabled={saving || testing || (!apiKey && preset.fields.includes("api_key"))}
+                disabled={saving || testing || (!apiKey && preset.fields.includes("api_key") && preset.key !== 'custom-anthropic' && preset.key !== 'custom-openai')}
                 className="gap-1.5"
               >
                 {testing ? <SpinnerGap size={14} className="animate-spin" /> : <Lightning size={14} />}

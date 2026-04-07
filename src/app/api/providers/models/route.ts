@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getAllProviders, getDefaultProviderId, setDefaultProviderId, getProvider, getModelsForProvider, getSetting } from '@/lib/db';
 import { getContextWindow } from '@/lib/model-context';
 import { getDefaultModelsForProvider, inferProtocolFromLegacy, findPresetForLegacy } from '@/lib/provider-catalog';
+import { readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 import type { Protocol } from '@/lib/provider-catalog';
 import type { ErrorResponse, ProviderModelGroup } from '@/types';
 
@@ -11,6 +12,39 @@ const DEFAULT_MODELS = [
   { value: 'opus', label: 'Opus 4.6' },
   { value: 'haiku', label: 'Haiku 4.5' },
 ];
+
+// CC-Switch model mapping
+interface CCSwitchMapping {
+  sonnet?: string;
+  opus?: string;
+  haiku?: string;
+  default?: string;
+}
+
+function getCCSwitchModelMapping(): CCSwitchMapping | null {
+  const settings = readCCSwitchClaudeSettings();
+  if (!settings) return null;
+  
+  // Read the raw settings.json to get the actual model names
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    const content = fs.readFileSync(settingsPath, 'utf-8');
+    const rawSettings = JSON.parse(content);
+    const env = rawSettings.env || {};
+    
+    return {
+      sonnet: env.ANTHROPIC_DEFAULT_SONNET_MODEL,
+      opus: env.ANTHROPIC_DEFAULT_OPUS_MODEL,
+      haiku: env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
+      default: env.ANTHROPIC_MODEL,
+    };
+  } catch {
+    return null;
+  }
+}
 
 interface ModelEntry {
   value: string;
@@ -53,6 +87,10 @@ export async function GET() {
       process.env.ANTHROPIC_AUTH_TOKEN ||
       getSetting('anthropic_auth_token')
     );
+    
+    // Get cc-switch model mapping
+    const ccSwitchMapping = getCCSwitchModelMapping();
+    
     groups.push({
       provider_id: 'env',
       provider_name: 'Claude Code',
@@ -60,26 +98,58 @@ export async function GET() {
       ...(!envHasDirectCredentials ? { sdkProxyOnly: true } : {}),
       models: DEFAULT_MODELS.map(m => {
         const cw = getContextWindow(m.value);
-        return cw != null ? { ...m, contextWindow: cw } : m;
+        // Add cc-switch mapping info to label if available
+        let label = m.label;
+        if (ccSwitchMapping) {
+          const mappedModel = ccSwitchMapping[m.value as keyof CCSwitchMapping];
+          if (mappedModel) {
+            label = `${m.label} → ${mappedModel}`;
+          }
+        }
+        const result: ModelEntry = { ...m, label };
+        if (cw != null) {
+          (result as ModelEntry & { contextWindow: number }).contextWindow = cw;
+        }
+        return result;
       }),
     });
 
-    // If SDK has discovered models, use them for the env group
+    // If SDK has discovered models, only use the mapped models from cc-switch
+    // Skip SDK models to avoid duplicates and confusion
     try {
       const { getCachedModels } = await import('@/lib/agent-sdk-capabilities');
       const sdkModels = getCachedModels('env');
       if (sdkModels.length > 0) {
-        groups[0].models = sdkModels.map(m => {
+        // Create a map of SDK models by value for quick lookup
+        const sdkModelMap = new Map(sdkModels.map(m => [m.value, m]));
+        
+        // Only show DEFAULT_MODELS with cc-switch mapping, skip all SDK-only models
+        groups[0].models = DEFAULT_MODELS.map(m => {
           const cw = getContextWindow(m.value);
-          return {
+          const sdkModel = sdkModelMap.get(m.value);
+          
+          // Add cc-switch mapping info to label if available
+          let label = m.label;
+          if (ccSwitchMapping) {
+            const mappedModel = ccSwitchMapping[m.value as keyof CCSwitchMapping];
+            if (mappedModel) {
+              // Shorten the model name for display
+              const shortName = mappedModel.length > 25 ? mappedModel.slice(0, 22) + '...' : mappedModel;
+              label = `${m.label} → ${shortName}`;
+            }
+          }
+          
+          const result: ModelEntry = {
             value: m.value,
-            label: m.displayName,
-            description: m.description,
-            supportsEffort: m.supportsEffort,
-            supportedEffortLevels: m.supportedEffortLevels,
-            supportsAdaptiveThinking: m.supportsAdaptiveThinking,
+            label,
+            ...(sdkModel ? {
+              supportsEffort: sdkModel.supportsEffort,
+              supportedEffortLevels: sdkModel.supportedEffortLevels,
+              supportsAdaptiveThinking: sdkModel.supportsAdaptiveThinking,
+            } : {}),
             ...(cw != null ? { contextWindow: cw } : {}),
           };
+          return result;
         });
       }
     } catch {

@@ -40,6 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -50,6 +51,7 @@ export function ProviderManager() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [envDetected, setEnvDetected] = useState<Record<string, string>>({});
+  const [ccSwitchModels, setCCSwitchModels] = useState<Record<string, unknown>>({});
   const { t } = useTranslation();
   const isZh = t('nav.chats') === '对话';
 
@@ -73,6 +75,7 @@ export function ProviderManager() {
   const [providerGroups, setProviderGroups] = useState<ProviderModelGroup[]>([]);
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [globalDefaultProvider, setGlobalDefaultProvider] = useState('');
+  const [ccSwitchEnabled, setCCSwitchEnabled] = useState(false);
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -82,6 +85,13 @@ export function ProviderManager() {
       const data = await res.json();
       setProviders(data.providers || []);
       setEnvDetected(data.env_detected || {});
+      setCCSwitchModels(data.cc_switch_models || {});
+      
+      // Check cc-switch enabled status
+      const ccEnabled = data.cc_switch_models && Object.keys(data.cc_switch_models).length > 0;
+      if (ccEnabled !== ccSwitchEnabled) {
+        setCCSwitchEnabled(ccEnabled);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load providers");
     } finally {
@@ -91,12 +101,52 @@ export function ProviderManager() {
 
   useEffect(() => { fetchProviders(); }, [fetchProviders]);
 
+  // Sync cc-switch models to model selector when they change
+  useEffect(() => {
+    if (ccSwitchEnabled && Object.keys(ccSwitchModels).length > 0) {
+      const ccSwitchModelOptions = Object.keys(ccSwitchModels).map(modelName => ({
+        value: modelName,
+        label: modelName,
+      }));
+      const ccSwitchGroup = {
+        provider_id: 'cc-switch',
+        provider_name: 'CC-Switch',
+        models: ccSwitchModelOptions,
+        provider_type: 'custom',
+      };
+      // Add CC-Switch group at the beginning
+      setProviderGroups(prev => {
+        const filtered = prev.filter(g => g.provider_id !== 'cc-switch');
+        return [ccSwitchGroup, ...filtered];
+      });
+    }
+  }, [ccSwitchEnabled, ccSwitchModels]);
+
   // Fetch all provider models for the global default model selector
   const fetchModels = useCallback(() => {
     fetch('/api/providers/models')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
-        if (data?.groups) setProviderGroups(data.groups);
+        if (data?.groups) {
+          // If cc-switch is enabled and has models, add them as a special group
+          if (ccSwitchEnabled && Object.keys(ccSwitchModels).length > 0) {
+            const ccSwitchModelOptions = Object.keys(ccSwitchModels).map(modelName => ({
+              value: modelName,
+              label: modelName,
+            }));
+            const updatedGroups = [
+              ...data.groups,
+              {
+                provider_id: 'cc-switch',
+                provider_name: 'CC-Switch',
+                models: ccSwitchModelOptions,
+              },
+            ];
+            setProviderGroups(updatedGroups);
+          } else {
+            setProviderGroups(data.groups);
+          }
+        }
       })
       .catch(() => {});
     // Load current global default model
@@ -109,7 +159,7 @@ export function ProviderManager() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [ccSwitchEnabled, ccSwitchModels]);
 
   useEffect(() => {
     fetchModels();
@@ -171,7 +221,37 @@ export function ProviderManager() {
 
   const handleOpenPresetDialog = (preset: QuickPreset) => {
     setConnectPreset(preset);
-    setPresetEditProvider(null); // ensure create mode
+    setPresetEditProvider(null);
+    
+    // If cc-switch is enabled and this is a custom preset, pre-fill with cc-switch config
+    if (ccSwitchEnabled && (preset.key === 'custom-anthropic' || preset.key === 'custom-openai') && Object.keys(ccSwitchModels).length > 0) {
+      // Get first model's config as default
+      const firstModelName = Object.keys(ccSwitchModels)[0];
+      const modelConfig = ccSwitchModels[firstModelName] as Record<string, string>;
+      
+      if (modelConfig) {
+        const prefillProvider: ApiProvider = {
+          id: '',
+          name: preset.name,
+          provider_type: preset.key,
+          protocol: preset.key === 'custom-anthropic' ? 'anthropic' : 'openai-compatible',
+          base_url: modelConfig.ANTHROPIC_BASE_URL || '',
+          api_key: modelConfig.ANTHROPIC_API_KEY || modelConfig.ANTHROPIC_AUTH_TOKEN || '',
+          is_active: 0,
+          sort_order: 0,
+          extra_env: '',
+          headers_json: '',
+          env_overrides_json: JSON.stringify({ model_names: Object.keys(ccSwitchModels).join(',') }),
+          role_models_json: '',
+          options_json: '',
+          notes: '',
+          created_at: '',
+          updated_at: '',
+        };
+        setPresetEditProvider(prefillProvider);
+      }
+    }
+    
     setConnectDialogOpen(true);
   };
 
@@ -355,10 +435,53 @@ export function ProviderManager() {
                   )}
                 </div>
               </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[11px] text-muted-foreground">{isZh ? '使用 cc-switch' : 'Use cc-switch'}</span>
+                <Switch
+                  checked={ccSwitchEnabled}
+                  onCheckedChange={async (checked) => {
+                    setCCSwitchEnabled(checked);
+                    try {
+                      await fetch('/api/settings/app', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ settings: { cc_switch_enabled: checked ? 'true' : '' } }),
+                      });
+                      // Refresh provider list to get cc-switch models
+                      fetchProviders();
+                    } catch (e) {
+                      console.error('Failed to save cc-switch setting:', e);
+                    }
+                  }}
+                  size="sm"
+                />
+              </div>
             </div>
-            <p className="text-[11px] text-muted-foreground ml-[34px] leading-relaxed">
-              {t('provider.ccSwitchHint')}
-            </p>
+            {ccSwitchEnabled && (
+              <>
+                <p className="text-[11px] text-muted-foreground ml-[34px] leading-relaxed">
+                  {isZh ? '已启用 cc-switch 配置接管，配置来源：~/.cc-switch/config.json 或 ~/.claude/settings.json' : 'cc-switch config enabled, reading from ~/.cc-switch/config.json or ~/.claude/settings.json'}
+                </p>
+                {Object.keys(ccSwitchModels).length > 0 && (
+                  <div className="ml-[34px] mt-2 space-y-1">
+                    <p className="text-[11px] font-medium">{isZh ? '可用模型：' : 'Available Models:'}</p>
+                    {Object.entries(ccSwitchModels).map(([modelName, config]) => (
+                      <div key={modelName} className="text-[10px] text-muted-foreground bg-muted/50 rounded px-2 py-1 flex justify-between items-center">
+                        <span className="font-mono">{modelName}</span>
+                        <span className="truncate max-w-[200px]">
+                          {(config as Record<string, string>).ANTHROPIC_BASE_URL || (config as Record<string, string>).ANTHROPIC_BASE_URL || 'N/A'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            {!ccSwitchEnabled && (
+              <p className="text-[11px] text-muted-foreground ml-[34px] leading-relaxed">
+                {t('provider.ccSwitchHint')}
+              </p>
+            )}
             <ProviderOptionsSection providerId="env" showThinkingOptions />
           </div>
 

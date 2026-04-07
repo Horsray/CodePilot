@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { CaretDown, CaretRight } from "@/components/ui/icon";
+import { CaretDown, CaretRight, Plus } from "@/components/ui/icon";
+import { Button } from "@/components/ui/button";
 import { usePanel } from "@/hooks/usePanel";
 import { useGitStatus } from "@/hooks/useGitStatus";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -11,6 +12,7 @@ import { GitHistorySection } from "./GitHistorySection";
 import { GitWorktreeSection } from "./GitWorktreeSection";
 import { GitCommitDetailDialog } from "./GitCommitDetailDialog";
 import { DeriveWorktreeDialog } from "./DeriveWorktreeDialog";
+import { GitConfigDialog } from "./GitConfigDialog";
 
 export function GitPanel() {
   const { workingDirectory, sessionId } = usePanel();
@@ -26,6 +28,7 @@ export function GitPanel() {
   // Dialogs
   const [commitDetailSha, setCommitDetailSha] = useState<string | null>(null);
   const [showDeriveDialog, setShowDeriveDialog] = useState(false);
+  const [showConfigDialog, setShowConfigDialog] = useState(false);
 
   const handleCheckout = useCallback(async (branch: string) => {
     const res = await fetch('/api/git/checkout', {
@@ -44,8 +47,28 @@ export function GitPanel() {
 
   if (!status?.isRepo) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-4">
-        {t('git.notARepo')}
+      <div className="flex flex-col flex-1 items-center justify-center p-6 space-y-4">
+        <div className="text-center space-y-2">
+          <h3 className="text-lg font-semibold">{t('git.notARepo')}</h3>
+          <p className="text-sm text-muted-foreground max-w-[280px]">
+            {t('git.notARepoDesc')}
+          </p>
+        </div>
+        <Button
+          onClick={() => setShowConfigDialog(true)}
+          className="gap-2"
+        >
+          <Plus size={16} />
+          {t('git.configureGit')}
+        </Button>
+        <GitConfigDialog
+          open={showConfigDialog}
+          onClose={() => setShowConfigDialog(false)}
+          onConfigured={() => {
+            refresh();
+            window.dispatchEvent(new CustomEvent('git-refresh'));
+          }}
+        />
       </div>
     );
   }

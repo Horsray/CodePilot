@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllProviders, createProvider, getSetting } from '@/lib/db';
 import type { ProviderResponse, ErrorResponse, CreateProviderRequest, ApiProvider } from '@/types';
+import { readCCSwitchConfig, readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 
 function maskApiKey(provider: ApiProvider): ApiProvider {
   let maskedKey = provider.api_key;
@@ -38,10 +39,34 @@ export async function GET() {
   try {
     const providers = getAllProviders().map(maskApiKey);
     const envDetected = detectEnvVars();
+    const ccSwitchEnabled = getSetting('cc_switch_enabled') === 'true';
+    
+    let ccSwitchModels: Record<string, unknown> = {};
+    if (ccSwitchEnabled) {
+      const ccConfig = readCCSwitchConfig();
+      const ccSettings = readCCSwitchClaudeSettings();
+      
+      // Convert to UI-friendly format
+      if (ccSettings && typeof ccSettings === 'object' && 'models' in ccSettings) {
+        const settings = ccSettings as { baseUrl: string; apiKey: string; models: string[]; currentModel: string };
+        ccSwitchModels = {};
+        for (const modelName of settings.models) {
+          ccSwitchModels[modelName] = {
+            ANTHROPIC_BASE_URL: settings.baseUrl,
+            ANTHROPIC_AUTH_TOKEN: settings.apiKey,
+            ANTHROPIC_MODEL: modelName,
+          };
+        }
+      } else if (ccConfig) {
+        ccSwitchModels = ccConfig as Record<string, unknown>;
+      }
+    }
+    
     return NextResponse.json({
       providers,
       env_detected: envDetected,
       default_provider_id: getSetting('default_provider_id') || '',
+      cc_switch_models: ccSwitchModels,
     });
   } catch (error) {
     return NextResponse.json<ErrorResponse>(

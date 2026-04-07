@@ -16,6 +16,7 @@ const ALLOWED_KEYS = [
   'theme_mode',
   'theme_family',
   'default_panel',
+  'cc_switch_enabled',
 ];
 
 export async function GET() {

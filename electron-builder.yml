@@ -4,6 +4,7 @@ publish:
   provider: github
   owner: op7418
   repo: CodePilot
+npmRebuild: false
 directories:
   output: release
 files:

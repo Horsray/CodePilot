@@ -14,6 +14,7 @@ import {
   getExpandedPath,
 } from '@/lib/platform';
 import { resolveProvider, resolveForClaudeCode, toClaudeCodeEnv } from '@/lib/provider-resolver';
+import { readCCSwitchConfig, readCCSwitchClaudeSettings } from './cc-switch';
 import {
   getAllProviders,
   getDefaultProviderId,
@@ -177,6 +178,32 @@ async function runAuthProbe(): Promise<ProbeResult> {
   const envApiKey = process.env.ANTHROPIC_API_KEY;
   const envAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const dbAuthToken = getSetting('anthropic_auth_token');
+  
+  // Check cc-switch config
+  const ccSwitchConfig = readCCSwitchConfig();
+  const ccSwitchSettings = readCCSwitchClaudeSettings();
+  const ccSwitchEnabled = ccSwitchConfig !== null || ccSwitchSettings !== null;
+  const hasCCSwitchCreds = (() => {
+    if (ccSwitchConfig) {
+      return Object.values(ccSwitchConfig).some(c => c.ANTHROPIC_API_KEY || c.ANTHROPIC_AUTH_TOKEN);
+    }
+    if (ccSwitchSettings) {
+      return Object.values(ccSwitchSettings).some((c: unknown) => {
+        const config = c as Record<string, string>;
+        return config.ANTHROPIC_API_KEY || config.ANTHROPIC_AUTH_TOKEN;
+      });
+    }
+    return false;
+  })();
+
+  if (ccSwitchEnabled && hasCCSwitchCreds) {
+    findings.push({
+      severity: 'ok',
+      code: 'auth.cc-switch',
+      message: 'CC-Switch credentials detected',
+      detail: 'Credentials found in ~/.cc-switch/config.json or ~/.claude/settings.json',
+    });
+  }
 
   if (envApiKey) {
     findings.push({
@@ -213,7 +240,7 @@ async function runAuthProbe(): Promise<ProbeResult> {
     });
   }
 
-  if (!envApiKey && !envAuthToken && !dbAuthToken) {
+  if (!envApiKey && !envAuthToken && !dbAuthToken && !hasCCSwitchCreds) {
     // Check if there are any configured providers with keys
     const providers = getAllProviders();
     const withKeys = providers.filter(p => !!p.api_key);
@@ -221,7 +248,7 @@ async function runAuthProbe(): Promise<ProbeResult> {
       findings.push({
         severity: 'error',
         code: 'auth.no-credentials',
-        message: 'No API credentials found (environment, DB settings, or providers)',
+        message: 'No API credentials found (environment, DB settings, cc-switch config, or providers)',
       });
     } else {
       findings.push({
@@ -230,16 +257,41 @@ async function runAuthProbe(): Promise<ProbeResult> {
         message: `No environment credentials, but ${withKeys.length} provider(s) have API keys configured`,
       });
     }
+  } else if (!envApiKey && !envAuthToken && !dbAuthToken && hasCCSwitchCreds) {
+    // cc-switch has credentials
+    findings.push({
+      severity: 'ok',
+      code: 'auth.cc-switch-only',
+      message: 'Using CC-Switch credentials from config files',
+    });
   }
 
   // Check resolved provider auth
   try {
     const resolved = resolveProvider();
-    if (resolved.hasCredentials) {
+    
+    // Check if cc-switch has credentials
+    const ccSwitchConfig = readCCSwitchConfig();
+    const ccSwitchSettings = readCCSwitchClaudeSettings();
+    const hasCCSwitchCreds = (() => {
+      if (ccSwitchConfig) {
+        return Object.values(ccSwitchConfig).some(c => c.ANTHROPIC_API_KEY || c.ANTHROPIC_AUTH_TOKEN);
+      }
+      if (ccSwitchSettings) {
+        return Object.values(ccSwitchSettings).some((c: unknown) => {
+          const config = c as Record<string, string>;
+          return config.ANTHROPIC_API_KEY || config.ANTHROPIC_AUTH_TOKEN;
+        });
+      }
+      return false;
+    })();
+    
+    if (resolved.hasCredentials || hasCCSwitchCreds) {
+      const credSource = hasCCSwitchCreds ? 'CC-Switch' : resolved.authStyle;
       findings.push({
         severity: 'ok',
         code: 'auth.resolved-ok',
-        message: `Resolved provider has usable credentials (authStyle: ${resolved.authStyle})`,
+        message: `Resolved provider has usable credentials (authStyle: ${credSource})`,
       });
     } else {
       findings.push({
@@ -745,7 +797,7 @@ async function runLiveProbe(): Promise<ProbeResult> {
     if (gitBashPath) sdkEnv.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
   }
 
-  const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved);
+  const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved, resolved.model);
   Object.assign(sdkEnv, resolvedEnv);
 
   // 5. Build query options

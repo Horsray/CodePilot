@@ -575,44 +575,39 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
-  // ── Ollama ──
+  // ── Custom Anthropic Compatible ──
   {
-    key: 'ollama',
-    name: 'Ollama',
-    description: 'Ollama — run local models with Anthropic-compatible API',
-    descriptionZh: 'Ollama — 本地运行模型，Anthropic 兼容 API',
+    key: 'custom-anthropic',
+    name: 'Custom Anthropic',
+    description: 'Custom Anthropic-compatible API — fully configurable',
+    descriptionZh: '自定义 Anthropic 兼容 API — 完全自定义配置',
     protocol: 'anthropic',
-    authStyle: 'auth_token',
-    baseUrl: 'http://localhost:11434',
-    defaultEnvOverrides: {
-      ANTHROPIC_AUTH_TOKEN: 'ollama',  // Fixed pseudo-token for Ollama (no real auth needed)
-    },
-    defaultModels: [],  // User must specify — depends on pulled models
-    fields: ['base_url', 'model_names'],
-    iconKey: 'ollama',
+    authStyle: 'api_key',
+    baseUrl: '',
+    defaultEnvOverrides: {},
+    defaultModels: [],
+    fields: ['name', 'api_key', 'base_url', 'model_names'],
+    iconKey: 'server',
     sdkProxyOnly: true,
     meta: {
-      docsUrl: 'https://docs.ollama.com/integrations/claude-code',
-      billingModel: 'free',
-      notes: ['需要本地安装 Ollama 并拉取模型'],
+      billingModel: 'self_hosted',
     },
   },
 
-  // ── LiteLLM ──
+  // ── Custom OpenAI Compatible ──
   {
-    key: 'litellm',
-    name: 'LiteLLM',
-    description: 'LiteLLM proxy — local or remote',
-    descriptionZh: 'LiteLLM 代理 — 本地或远程',
-    protocol: 'anthropic',
+    key: 'custom-openai',
+    name: 'Custom OpenAI',
+    description: 'Custom OpenAI-compatible API — fully configurable',
+    descriptionZh: '自定义 OpenAI 兼容 API — 完全自定义配置',
+    protocol: 'openai-compatible',
     authStyle: 'api_key',
-    baseUrl: 'http://localhost:4000',
+    baseUrl: '',
     defaultEnvOverrides: {},
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
-    fields: ['api_key', 'base_url'],
+    defaultModels: [],
+    fields: ['name', 'api_key', 'base_url', 'model_names'],
     iconKey: 'server',
     meta: {
-      docsUrl: 'https://docs.litellm.ai/docs/',
       billingModel: 'self_hosted',
     },
   },
@@ -686,7 +681,6 @@ export function inferProtocolFromLegacy(
       'volces.com', 'volcengine.com',   // Volcengine
       'dashscope.aliyuncs.com',         // Bailian
       'xiaomimimo.com',                 // Xiaomi MiMo
-      'localhost:11434',                // Ollama
     ];
     const urlLower = baseUrl.toLowerCase();
     if (anthropicUrls.some(u => urlLower.includes(u))) {
