@@ -48,27 +48,16 @@ export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialog
   // Get current project path on mount
   useEffect(() => {
     if (open) {
-      // Try /api/settings/app first, then fallback to /api/settings
-      fetch("/api/settings/app")
+      // Use /api/settings/workspace to get working directory
+      fetch("/api/settings/workspace")
         .then(res => res.json())
         .then(data => {
-          const path = data.working_directory || data.workingDirectory;
+          const path = data.working_directory;
           if (path) {
             setProjectPath(path);
           }
         })
-        .catch(() => {
-          // Fallback to old API
-          fetch("/api/settings")
-            .then(res => res.json())
-            .then(data => {
-              const path = data.working_directory || data.workingDirectory;
-              if (path) {
-                setProjectPath(path);
-              }
-            })
-            .catch(() => {});
-        });
+        .catch(() => {});
     }
   }, [open]);
 
@@ -217,18 +206,11 @@ export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialog
       
       // If clone returned a new path, update the working directory
       if (result.path) {
-        // Get current settings first
-        const settingsRes = await fetch("/api/settings");
-        const settingsData = await settingsRes.json();
-        const currentSettings = settingsData.settings || {};
-        
-        // Update settings with new path
-        await fetch("/api/settings", {
+        // Update workspace settings with new path
+        await fetch("/api/settings/workspace", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            settings: { ...currentSettings, working_directory: result.path }
-          }),
+          body: JSON.stringify({ working_directory: result.path }),
         });
       }
       
