@@ -1336,6 +1336,7 @@ const en = {
   'git.aiNoChanges': 'No changes to review',
   'git.aiError': 'AI review failed',
   'git.aiCopied': 'Copied to clipboard',
+  'git.aiCopy': 'Copy',
   'git.aiUseMessage': 'Use this message',
   'git.aiRegenerate': 'Regenerate',
 

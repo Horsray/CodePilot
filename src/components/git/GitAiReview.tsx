@@ -62,6 +62,13 @@ export function GitAiReview({ cwd, dirty, onUseCommitMessage }: GitAiReviewProps
 
   return (
     <div className="space-y-2 px-3">
+      {/* No changes hint */}
+      {!dirty && (
+        <p className="text-[11px] text-muted-foreground py-1">
+          {t("git.aiNoChanges")}
+        </p>
+      )}
+
       {/* Action buttons */}
       <div className="flex items-center gap-1.5">
         <Button
@@ -107,7 +114,7 @@ export function GitAiReview({ cwd, dirty, onUseCommitMessage }: GitAiReviewProps
               onClick={handleCopy}
             >
               {copied ? <Check size={12} /> : <Copy size={12} />}
-              {copied ? t("git.aiCopied") : "Copy"}
+              {copied ? t("git.aiCopied") : t("git.aiCopy")}
             </Button>
             {action === "summary" && onUseCommitMessage && (
               <Button
