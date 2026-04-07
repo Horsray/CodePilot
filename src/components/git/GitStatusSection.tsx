@@ -7,6 +7,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
 import { showToast } from "@/hooks/useToast";
 import { CommitDialog } from "./CommitDialog";
+import { PushDialog } from "./PushDialog";
 import { GitDiffViewer } from "./GitDiffViewer";
 import type { GitStatus, GitChangedFile } from "@/types";
 
@@ -18,33 +19,15 @@ export function GitStatusSection({ status }: GitStatusSectionProps) {
   const { t } = useTranslation();
   const { workingDirectory } = usePanel();
   const [commitDialogOpen, setCommitDialogOpen] = useState(false);
-  const [pushing, setPushing] = useState(false);
+  const [pushDialogOpen, setPushDialogOpen] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [diffFile, setDiffFile] = useState<{ path: string; staged: boolean } | null>(null);
 
-  const handlePush = useCallback(async () => {
-    if (!workingDirectory || pushing) return;
-    setPushing(true);
-    try {
-      const res = await fetch('/api/git/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd: workingDirectory }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: 'Push failed' }));
-        showToast({ type: 'error', message: data.error || 'Push failed' });
-        return;
-      }
-      showToast({ type: 'success', message: t('git.pushSuccess') });
-      window.dispatchEvent(new CustomEvent('git-refresh'));
-    } catch (err) {
-      showToast({ type: 'error', message: err instanceof Error ? err.message : 'Push failed' });
-    } finally {
-      setPushing(false);
-    }
-  }, [workingDirectory, pushing, t]);
+  const handlePushSuccess = useCallback(() => {
+    showToast({ type: 'success', message: t('git.pushSuccess') });
+    window.dispatchEvent(new CustomEvent('git-refresh'));
+  }, [t]);
 
   const handlePull = useCallback(async () => {
     if (!workingDirectory || pulling) return;
@@ -258,11 +241,10 @@ export function GitStatusSection({ status }: GitStatusSectionProps) {
           size="sm"
           variant="outline"
           className="h-7 text-xs gap-1.5"
-          onClick={handlePush}
-          disabled={pushing}
+          onClick={() => setPushDialogOpen(true)}
         >
           <CloudArrowUp size={14} />
-          {pushing ? t('git.loading') : t('topBar.push')}
+          {t('topBar.push')}
         </Button>
         <Button
           size="sm"
