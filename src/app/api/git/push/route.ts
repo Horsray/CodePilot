@@ -3,12 +3,16 @@ import * as gitService from '@/lib/git/service';
 
 export async function POST(req: NextRequest) {
   try {
-    const { cwd } = await req.json();
+    const { cwd, targetBranch } = await req.json();
     if (!cwd) {
       return NextResponse.json({ error: 'cwd is required' }, { status: 400 });
     }
 
-    await gitService.push(cwd);
+    if (targetBranch) {
+      await gitService.pushToBranch(cwd, targetBranch);
+    } else {
+      await gitService.push(cwd);
+    }
     return NextResponse.json({ success: true });
   } catch (err) {
     return NextResponse.json(

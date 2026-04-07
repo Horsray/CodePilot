@@ -253,35 +253,95 @@ export async function commit(cwd: string, message: string): Promise<string> {
 
 export async function push(cwd: string): Promise<void> {
   const PUSH_TIMEOUT = 120000; // 2 minutes for large pushes
-  // Try regular push first
-  try {
-    await runGit(['push'], { cwd, timeoutMs: PUSH_TIMEOUT });
-  } catch (err) {
-    if (!(err instanceof Error)) throw err;
-    const msg = err.message;
+  const MAX_RETRIES = 2;
 
-    // If no upstream, set it automatically
-    if (msg.includes('no upstream') || msg.includes('has no upstream')) {
-      const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
-      await runGit(['push', '-u', 'origin', branch], { cwd, timeoutMs: PUSH_TIMEOUT });
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Use http.version=HTTP/1.1 to avoid HTTP2 framing issues with GitHub
+      await runGit(['-c', 'http.version=HTTP/1.1', 'push'], { cwd, timeoutMs: PUSH_TIMEOUT });
       return;
-    }
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      const msg = err.message;
 
-    // Provide clearer error messages for common failures
-    if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
-      throw new Error('无法连接到远程仓库，请检查网络连接');
-    }
-    if (msg.includes('Authentication failed') || msg.includes('Permission denied') || msg.includes('could not read Username')) {
-      throw new Error('认证失败，请检查 SSH key 或登录凭证是否配置正确');
-    }
-    if (msg.includes('rejected') || msg.includes('non-fast-forward')) {
-      throw new Error('远程有新的提交，请先拉取合并再推送');
-    }
-    if (msg.includes('timed out') || msg.includes('SIGTERM')) {
-      throw new Error('推送超时，请检查网络或稍后重试');
-    }
+      // If no upstream, set it automatically
+      if (msg.includes('no upstream') || msg.includes('has no upstream')) {
+        const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
+        await runGit(['-c', 'http.version=HTTP/1.1', 'push', '-u', 'origin', branch], { cwd, timeoutMs: PUSH_TIMEOUT });
+        return;
+      }
 
-    throw err;
+      // HTTP2 / network flake — retry
+      if (attempt < MAX_RETRIES && (msg.includes('HTTP2') || msg.includes('HTTP/2') || msg.includes('framing layer') || msg.includes('unexpected disconnect'))) {
+        continue;
+      }
+
+      // Provide clearer error messages for common failures
+      if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
+        throw new Error('无法连接到远程仓库，请检查网络连接');
+      }
+      if (msg.includes('Authentication failed') || msg.includes('Permission denied') || msg.includes('could not read Username')) {
+        throw new Error('认证失败，请检查 SSH key 或登录凭证是否配置正确');
+      }
+      if (msg.includes('rejected') || msg.includes('non-fast-forward')) {
+        throw new Error('远程有新的提交，请先拉取合并再推送');
+      }
+      if (msg.includes('timed out') || msg.includes('SIGTERM')) {
+        throw new Error('推送超时，请检查网络或稍后重试');
+      }
+
+      throw err;
+    }
+  }
+}
+
+/**
+ * Push current HEAD to a specific remote branch.
+ * If targetBranch differs from current branch, creates/updates the remote branch.
+ * Workflow: local HEAD -> origin/<targetBranch>
+ */
+export async function pushToBranch(cwd: string, targetBranch: string): Promise<void> {
+  // Validate branch name
+  if (!/^[\w.\-/]+$/.test(targetBranch)) {
+    throw new Error(`Invalid branch name: ${targetBranch}`);
+  }
+
+  const PUSH_TIMEOUT = 120000;
+  const MAX_RETRIES = 2;
+  const localBranch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Push local branch to the specified remote branch: git push origin localBranch:targetBranch
+      await runGit(
+        ['-c', 'http.version=HTTP/1.1', 'push', '-u', 'origin', `${localBranch}:${targetBranch}`],
+        { cwd, timeoutMs: PUSH_TIMEOUT },
+      );
+      return;
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      const msg = err.message;
+
+      // HTTP2 / network flake — retry
+      if (attempt < MAX_RETRIES && (msg.includes('HTTP2') || msg.includes('HTTP/2') || msg.includes('framing layer') || msg.includes('unexpected disconnect'))) {
+        continue;
+      }
+
+      if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
+        throw new Error('无法连接到远程仓库，请检查网络连接');
+      }
+      if (msg.includes('Authentication failed') || msg.includes('Permission denied') || msg.includes('could not read Username')) {
+        throw new Error('认证失败，请检查 SSH key 或登录凭证是否配置正确');
+      }
+      if (msg.includes('rejected') || msg.includes('non-fast-forward')) {
+        throw new Error('远程有新的提交，请先拉取合并再推送');
+      }
+      if (msg.includes('timed out') || msg.includes('SIGTERM')) {
+        throw new Error('推送超时，请检查网络或稍后重试');
+      }
+
+      throw err;
+    }
   }
 }
 
