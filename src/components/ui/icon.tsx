@@ -93,6 +93,11 @@ export {
   CloudArrowUp,
   ArrowsInLineVertical,
   PushPin,
+  ArrowDown,
+  ArrowLineDown,
+  Package,
+  FileDiff,
+  Robot,
 } from "@phosphor-icons/react";
 
 export type { Icon, IconProps } from "@phosphor-icons/react";

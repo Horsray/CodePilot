@@ -383,3 +383,174 @@ export async function deriveWorktree(cwd: string, branch: string, targetPath: st
 
   return targetPath;
 }
+
+// ---------------------------------------------------------------------------
+// Path validation helper
+// ---------------------------------------------------------------------------
+
+function validatePaths(paths: string[]): void {
+  for (const p of paths) {
+    if (!p || p.startsWith('-') || /[\x00]/.test(p)) {
+      throw new Error(`Invalid path: ${p}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage / Unstage / Discard
+// ---------------------------------------------------------------------------
+
+export async function stageFiles(cwd: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  validatePaths(paths);
+  await runGit(['add', '--', ...paths], { cwd, timeoutMs: 10000 });
+}
+
+export async function unstageFiles(cwd: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  validatePaths(paths);
+  await runGit(['reset', 'HEAD', '--', ...paths], { cwd, timeoutMs: 10000 });
+}
+
+export async function discardFiles(cwd: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  validatePaths(paths);
+
+  // Separate tracked vs untracked files
+  const statusOutput = await runGit(
+    ['status', '--porcelain', '--untracked-files=normal'],
+    { cwd, timeoutMs: 10000 },
+  );
+
+  const untrackedSet = new Set<string>();
+  for (const line of statusOutput.split('\n')) {
+    if (line.startsWith('? ')) {
+      untrackedSet.add(line.substring(2).trim());
+    }
+  }
+
+  const tracked = paths.filter((p) => !untrackedSet.has(p));
+  const untracked = paths.filter((p) => untrackedSet.has(p));
+
+  if (tracked.length > 0) {
+    await runGit(['checkout', '--', ...tracked], { cwd, timeoutMs: 10000 });
+  }
+  if (untracked.length > 0) {
+    await runGit(['clean', '-f', '--', ...untracked], { cwd, timeoutMs: 10000 });
+  }
+}
+
+export async function stageAll(cwd: string): Promise<void> {
+  await runGit(['add', '-A'], { cwd, timeoutMs: 10000 });
+}
+
+export async function unstageAll(cwd: string): Promise<void> {
+  await runGit(['reset', 'HEAD'], { cwd, timeoutMs: 10000 });
+}
+
+// ---------------------------------------------------------------------------
+// Diffs
+// ---------------------------------------------------------------------------
+
+export async function getFileDiff(cwd: string, filePath: string, staged: boolean): Promise<string> {
+  validatePaths([filePath]);
+
+  // Check if the file is untracked
+  const statusOutput = await runGit(
+    ['status', '--porcelain', '--untracked-files=normal', '--', filePath],
+    { cwd, timeoutMs: 10000 },
+  );
+
+  const isUntracked = statusOutput.split('\n').some((l) => l.startsWith('? '));
+
+  if (isUntracked) {
+    // git diff --no-index exits with code 1 when files differ, which runGit
+    // treats as an error. Use execFile directly and ignore the exit code.
+    return new Promise<string>((resolve) => {
+      execFile('git', ['diff', '--no-index', '--', '/dev/null', filePath], {
+        cwd,
+        timeout: 10000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      }, (_err, stdout) => {
+        resolve(stdout || '');
+      });
+    });
+  }
+
+  const args = staged
+    ? ['diff', '--cached', '--', filePath]
+    : ['diff', '--', filePath];
+  return runGit(args, { cwd, timeoutMs: 10000 });
+}
+
+export async function getDiffSummary(cwd: string, staged: boolean): Promise<string> {
+  const args = staged
+    ? ['diff', '--cached', '--stat', '-p']
+    : ['diff', '--stat', '-p'];
+
+  const output = await runGit(args, { cwd, timeoutMs: 10000 });
+
+  // Limit output to ~50000 chars for AI consumption
+  if (output.length > 50000) {
+    return output.substring(0, 50000) + '\n\n... [truncated]';
+  }
+  return output;
+}
+
+// ---------------------------------------------------------------------------
+// Network operations
+// ---------------------------------------------------------------------------
+
+export async function pull(cwd: string): Promise<string> {
+  const output = await runGit(['pull'], { cwd, timeoutMs: 30000 });
+  return output;
+}
+
+export async function fetch(cwd: string): Promise<string> {
+  const output = await runGit(['fetch', '--all', '--prune'], { cwd, timeoutMs: 30000 });
+  return output;
+}
+
+// ---------------------------------------------------------------------------
+// Stash
+// ---------------------------------------------------------------------------
+
+export async function stashSave(cwd: string, message?: string): Promise<string> {
+  const args = ['stash', 'push'];
+  if (message) {
+    args.push('-m', message);
+  }
+  const output = await runGit(args, { cwd, timeoutMs: 10000 });
+  return output;
+}
+
+export async function stashPop(cwd: string): Promise<string> {
+  const output = await runGit(['stash', 'pop'], { cwd, timeoutMs: 10000 });
+  return output;
+}
+
+export async function stashList(cwd: string): Promise<Array<{ index: number; message: string }>> {
+  const output = await runGit(['stash', 'list'], { cwd, timeoutMs: 10000 });
+
+  const entries: Array<{ index: number; message: string }> = [];
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+    // Format: stash@{0}: WIP on main: abc1234 some message
+    const match = line.match(/^stash@\{(\d+)\}:\s*(.+)$/);
+    if (match) {
+      entries.push({
+        index: parseInt(match[1], 10),
+        message: match[2],
+      });
+    }
+  }
+  return entries;
+}
+
+export async function stashDrop(cwd: string, index: number): Promise<void> {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`Invalid stash index: ${index}`);
+  }
+  await runGit(['stash', 'drop', `stash@{${index}}`], { cwd, timeoutMs: 10000 });
+}

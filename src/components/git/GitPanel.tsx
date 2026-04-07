@@ -10,6 +10,8 @@ import { GitStatusSection } from "./GitStatusSection";
 import { GitBranchSelector } from "./GitBranchSelector";
 import { GitHistorySection } from "./GitHistorySection";
 import { GitWorktreeSection } from "./GitWorktreeSection";
+import { GitStashSection } from "./GitStashSection";
+import { GitAiReview } from "./GitAiReview";
 import { GitCommitDetailDialog } from "./GitCommitDetailDialog";
 import { DeriveWorktreeDialog } from "./DeriveWorktreeDialog";
 import { GitConfigDialog } from "./GitConfigDialog";
@@ -24,6 +26,8 @@ export function GitPanel() {
   const [branchOpen, setBranchOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [worktreeOpen, setWorktreeOpen] = useState(false);
+  const [stashOpen, setStashOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
 
   // Dialogs
   const [commitDetailSha, setCommitDetailSha] = useState<string | null>(null);
@@ -65,13 +69,10 @@ export function GitPanel() {
           open={showConfigDialog}
           onClose={() => setShowConfigDialog(false)}
           onConfigured={(newPath) => {
-            // Close dialog first
             setShowConfigDialog(false);
-            // Update working directory if a new path was provided (e.g. after clone)
             if (newPath) {
               setWorkingDirectory(newPath);
             }
-            // Force refresh after a short delay to allow filesystem changes to settle
             setTimeout(() => {
               refresh();
               window.dispatchEvent(new CustomEvent('git-refresh'));
@@ -91,6 +92,27 @@ export function GitPanel() {
         onToggle={() => setStatusOpen(!statusOpen)}
       >
         <GitStatusSection status={status} />
+      </CollapsibleSection>
+
+      {/* AI Review section */}
+      <CollapsibleSection
+        title={t('git.aiReview')}
+        open={aiOpen}
+        onToggle={() => setAiOpen(!aiOpen)}
+      >
+        <GitAiReview
+          cwd={workingDirectory}
+          dirty={status.dirty}
+        />
+      </CollapsibleSection>
+
+      {/* Stash section */}
+      <CollapsibleSection
+        title={t('git.stashSection')}
+        open={stashOpen}
+        onToggle={() => setStashOpen(!stashOpen)}
+      >
+        <GitStashSection cwd={workingDirectory} onRefresh={refresh} />
       </CollapsibleSection>
 
       {/* Branch section */}

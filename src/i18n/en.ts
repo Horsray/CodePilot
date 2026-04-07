@@ -1285,6 +1285,60 @@ const en = {
   'git.commitSuccess': 'Committed successfully',
   'git.commitEmpty': 'Nothing to commit',
 
+  // Stage / Unstage / Discard
+  'git.stageFile': 'Stage',
+  'git.unstageFile': 'Unstage',
+  'git.discardFile': 'Discard',
+  'git.stageAll': 'Stage All',
+  'git.unstageAll': 'Unstage All',
+  'git.discardAll': 'Discard All',
+  'git.discardConfirm': 'Are you sure? This cannot be undone.',
+  'git.stagedChanges': 'Staged Changes',
+  'git.unstagedChanges': 'Unstaged Changes',
+  'git.untrackedFiles': 'Untracked Files',
+
+  // Pull / Fetch
+  'git.pull': 'Pull',
+  'git.pulling': 'Pulling...',
+  'git.pullSuccess': 'Pulled successfully',
+  'git.pullFailed': 'Pull failed',
+  'git.fetchRemote': 'Fetch',
+  'git.fetching': 'Fetching...',
+  'git.fetchSuccess': 'Fetched successfully',
+  'git.fetchFailed': 'Fetch failed',
+
+  // Stash
+  'git.stash': 'Stash',
+  'git.stashSection': 'Stash',
+  'git.stashSave': 'Stash Changes',
+  'git.stashPop': 'Pop',
+  'git.stashDrop': 'Drop',
+  'git.stashEmpty': 'No stashes',
+  'git.stashMessage': 'Stash message (optional)',
+  'git.stashSaving': 'Stashing...',
+  'git.stashSuccess': 'Changes stashed',
+  'git.stashPopSuccess': 'Stash applied',
+  'git.stashDropSuccess': 'Stash dropped',
+  'git.stashFailed': 'Stash operation failed',
+
+  // Diff viewer
+  'git.viewDiff': 'View Diff',
+  'git.noDiff': 'No diff available',
+  'git.diffViewer': 'Diff Viewer',
+  'git.additions': 'additions',
+  'git.deletions': 'deletions',
+
+  // AI Review
+  'git.aiReview': 'AI Review',
+  'git.aiSummary': 'AI Commit Message',
+  'git.aiGenerating': 'Generating...',
+  'git.aiReviewResult': 'Review Result',
+  'git.aiNoChanges': 'No changes to review',
+  'git.aiError': 'AI review failed',
+  'git.aiCopied': 'Copied to clipboard',
+  'git.aiUseMessage': 'Use this message',
+  'git.aiRegenerate': 'Regenerate',
+
   // ── Terminal ──────────────────────────────────────────────────
   'terminal.title': 'Terminal',
   'terminal.close': 'Close terminal',

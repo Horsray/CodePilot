@@ -1282,6 +1282,60 @@ const zh: Record<TranslationKey, string> = {
   'git.commitSuccess': '提交成功',
   'git.commitEmpty': '没有可提交的内容',
 
+  // Stage / Unstage / Discard
+  'git.stageFile': '暂存',
+  'git.unstageFile': '取消暂存',
+  'git.discardFile': '放弃更改',
+  'git.stageAll': '全部暂存',
+  'git.unstageAll': '全部取消暂存',
+  'git.discardAll': '放弃所有更改',
+  'git.discardConfirm': '确定要放弃更改吗？此操作不可撤销。',
+  'git.stagedChanges': '已暂存的更改',
+  'git.unstagedChanges': '未暂存的更改',
+  'git.untrackedFiles': '未跟踪的文件',
+
+  // Pull / Fetch
+  'git.pull': '拉取',
+  'git.pulling': '拉取中...',
+  'git.pullSuccess': '拉取成功',
+  'git.pullFailed': '拉取失败',
+  'git.fetchRemote': '获取',
+  'git.fetching': '获取中...',
+  'git.fetchSuccess': '获取成功',
+  'git.fetchFailed': '获取失败',
+
+  // Stash
+  'git.stash': '贮藏',
+  'git.stashSection': '贮藏',
+  'git.stashSave': '贮藏更改',
+  'git.stashPop': '弹出',
+  'git.stashDrop': '删除',
+  'git.stashEmpty': '没有贮藏',
+  'git.stashMessage': '贮藏说明（可选）',
+  'git.stashSaving': '贮藏中...',
+  'git.stashSuccess': '更改已贮藏',
+  'git.stashPopSuccess': '贮藏已应用',
+  'git.stashDropSuccess': '贮藏已删除',
+  'git.stashFailed': '贮藏操作失败',
+
+  // Diff viewer
+  'git.viewDiff': '查看差异',
+  'git.noDiff': '没有差异',
+  'git.diffViewer': '差异查看器',
+  'git.additions': '新增',
+  'git.deletions': '删除',
+
+  // AI Review
+  'git.aiReview': 'AI 审查',
+  'git.aiSummary': 'AI 提交信息',
+  'git.aiGenerating': '生成中...',
+  'git.aiReviewResult': '审查结果',
+  'git.aiNoChanges': '没有可审查的更改',
+  'git.aiError': 'AI 审查失败',
+  'git.aiCopied': '已复制到剪贴板',
+  'git.aiUseMessage': '使用此信息',
+  'git.aiRegenerate': '重新生成',
+
   // ── Terminal ──────────────────────────────────────────────────
   'terminal.title': '终端',
   'terminal.close': '关闭终端',
