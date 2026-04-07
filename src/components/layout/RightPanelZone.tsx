@@ -8,7 +8,7 @@ const GitPanelContainer = dynamic(() => import("./panels/GitPanel").then(m => ({
 const DashboardPanel = dynamic(() => import("./panels/DashboardPanel").then(m => ({ default: m.DashboardPanel })), { ssr: false });
 const AssistantPanel = dynamic(() => import("./panels/AssistantPanel").then(m => ({ default: m.AssistantPanel })), { ssr: false });
 
-export function PanelZone() {
+export function RightPanelZone() {
   const { previewOpen, previewFile, gitPanelOpen, dashboardPanelOpen, assistantPanelOpen } = usePanel();
 
   const anyOpen = (previewOpen && !!previewFile) || gitPanelOpen || dashboardPanelOpen || assistantPanelOpen;

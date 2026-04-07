@@ -4,11 +4,12 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import {
   GitBranch,
-  TreeStructure,
   PencilSimple,
   DotOutline,
   ChartBar,
   Brain,
+  Terminal,
+  Globe,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +41,12 @@ export function UnifiedTopBar() {
     isAssistantWorkspace,
     currentBranch,
     gitDirtyCount,
+    bottomPanelOpen,
+    setBottomPanelOpen,
+    bottomPanelTab,
+    setBottomPanelTab,
+    browserTabOpen,
+    setBrowserTabOpen,
   } = usePanel();
   const { t } = useTranslation();
   const { isWindows } = useClientPlatform();
@@ -235,21 +242,6 @@ export function UnifiedTopBar() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    variant={fileTreeOpen ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    className={fileTreeOpen ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => setFileTreeOpen(!fileTreeOpen)}
-                  >
-                    <TreeStructure size={16} />
-                    <span className="sr-only">{t('topBar.fileTree')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t('topBar.fileTree')}</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
                     variant={dashboardPanelOpen ? "secondary" : "ghost"}
                     size="icon-sm"
                     className={dashboardPanelOpen ? "" : "text-muted-foreground hover:text-foreground"}
@@ -267,6 +259,43 @@ export function UnifiedTopBar() {
                 <TooltipContent side="bottom">
                   {isAssistantWorkspace ? 'Assistant' : t('topBar.dashboard')}
                 </TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={bottomPanelOpen && bottomPanelTab === "terminal" ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    className={bottomPanelOpen && bottomPanelTab === "terminal" ? "" : "text-muted-foreground hover:text-foreground"}
+                    onClick={() => {
+                      if (bottomPanelOpen && bottomPanelTab === "terminal") {
+                        setBottomPanelOpen(false);
+                      } else {
+                        setBottomPanelTab("terminal");
+                        setBottomPanelOpen(true);
+                      }
+                    }}
+                  >
+                    <Terminal size={16} />
+                    <span className="sr-only">{t('bottomPanel.terminal')}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t('bottomPanel.terminal')}</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={browserTabOpen ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    className={browserTabOpen ? "" : "text-muted-foreground hover:text-foreground"}
+                    onClick={() => setBrowserTabOpen(!browserTabOpen)}
+                  >
+                    <Globe size={16} />
+                    <span className="sr-only">{t('bottomPanel.browser')}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t('bottomPanel.browser')}</TooltipContent>
               </Tooltip>
             </>
           )}

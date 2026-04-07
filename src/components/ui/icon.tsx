@@ -96,8 +96,10 @@ export {
   ArrowDown,
   ArrowLineDown,
   Package,
-  FileDiff,
+  // FileDiff not available in this version of phosphor-icons
   Robot,
+  DeviceMobile,
+  ListBullets,
 } from "@phosphor-icons/react";
 
 export type { Icon, IconProps } from "@phosphor-icons/react";

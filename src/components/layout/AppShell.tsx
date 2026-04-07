@@ -10,6 +10,8 @@ import { UpdateDialog } from "./UpdateDialog";
 import { UpdateBanner } from "./UpdateBanner";
 import { UnifiedTopBar } from "./UnifiedTopBar";
 import { PanelZone } from "./PanelZone";
+import { FileTreePanel } from "./panels/FileTreePanel";
+import { RightPanelZone } from "./RightPanelZone";
 import { PanelContext, type PreviewViewMode } from "@/hooks/usePanel";
 import { UpdateContext } from "@/hooks/useUpdate";
 import { useUpdateChecker } from "@/hooks/useUpdateChecker";
@@ -24,6 +26,8 @@ import { useGitStatus } from "@/hooks/useGitStatus";
 import { SetupCenter } from '@/components/setup/SetupCenter';
 import { Toaster } from '@/components/ui/toast';
 import { useNotificationPoll } from '@/hooks/useNotificationPoll';
+import { BottomPanelContainer } from './BottomPanelContainer';
+import { BrowserTabView } from './BrowserTabView';
 
 const SPLIT_SESSIONS_KEY = "codepilot:split-sessions";
 const SPLIT_ACTIVE_COLUMN_KEY = "codepilot:split-active-column";
@@ -146,6 +150,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [dashboardPanelOpen, setDashboardPanelOpen] = useState(false);
   const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
   const [isAssistantWorkspace, setIsAssistantWorkspace] = useState(false);
+
+  // --- Bottom panel (Terminal / Console) ---
+  const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
+  const [bottomPanelTab, setBottomPanelTab] = useState<import("@/hooks/usePanel").BottomPanelTab>("terminal");
+
+  // --- Browser tab (shown in main content area) ---
+  const [browserTabOpen, setBrowserTabOpen] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState("");
 
   // --- Git summary (derived from polling hook, no setState needed) ---
   const [currentWorktreeLabel, setCurrentWorktreeLabel] = useState("");
@@ -395,6 +407,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setAssistantPanelOpen,
       isAssistantWorkspace,
       setIsAssistantWorkspace,
+      bottomPanelOpen,
+      setBottomPanelOpen,
+      bottomPanelTab,
+      setBottomPanelTab,
+      browserTabOpen,
+      setBrowserTabOpen,
+      browserUrl,
+      setBrowserUrl,
       currentBranch,
       gitDirtyCount,
       currentWorktreeLabel,
@@ -416,7 +436,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       previewViewMode,
       setPreviewViewMode,
     }),
-    [fileTreeOpen, gitPanelOpen, previewOpen, terminalOpen, dashboardPanelOpen, assistantPanelOpen, isAssistantWorkspace, currentBranch, gitDirtyCount, currentWorktreeLabel, workingDirectory, sessionId, sessionTitle, streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, previewFile, setPreviewFile, previewViewMode]
+    [fileTreeOpen, gitPanelOpen, previewOpen, terminalOpen, dashboardPanelOpen, assistantPanelOpen, isAssistantWorkspace, bottomPanelOpen, bottomPanelTab, browserTabOpen, browserUrl, currentBranch, gitDirtyCount, currentWorktreeLabel, workingDirectory, sessionId, sessionTitle, streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, previewFile, setPreviewFile, previewViewMode]
   );
 
   const imageGenValue = useImageGenState();
@@ -442,20 +462,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {chatListOpen && (
               <ResizeHandle side="left" onResize={handleChatListResize} onResizeEnd={handleChatListResizeEnd} />
             )}
+            {/* Left Panel Zone - File Tree */}
+            {isChatDetailRoute && fileTreeOpen && (
+              <>
+                <div className="flex h-full shrink-0 border-r border-border/40 overflow-hidden w-64">
+                  <FileTreePanel />
+                </div>
+                <ResizeHandle side="right" onResize={() => {}} onResizeEnd={() => {}} />
+              </>
+            )}
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
               <UnifiedTopBar />
               <UpdateBanner />
               <div className="flex flex-1 min-h-0 overflow-hidden">
                 <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                   <main className="relative flex-1 overflow-hidden">
-                    {isSplitActive ? (
+                    {browserTabOpen ? (
+                      <BrowserTabView />
+                    ) : isSplitActive ? (
                       <SplitChatContainer />
                     ) : (
                       <ErrorBoundary>{children}</ErrorBoundary>
                     )}
                   </main>
+                  <BottomPanelContainer />
                 </div>
-                {isChatDetailRoute && <PanelZone />}
+                {isChatDetailRoute && <RightPanelZone />}
               </div>
             </div>
           </div>

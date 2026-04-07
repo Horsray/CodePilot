@@ -15,6 +15,9 @@ import {
   Image,
   WifiHigh,
   Gear,
+  NotePencil,
+  Copy,
+  Package,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,7 +64,7 @@ interface ChatListPanelProps {
 export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatListPanelProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, workingDirectory } = usePanel();
+  const { streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, workingDirectory, fileTreeOpen, setFileTreeOpen } = usePanel();
   const { splitSessions, isSplitActive, activeColumnId, addToSplit, removeFromSplit, setActiveColumn, isInSplit } = useSplit();
   const { t } = useTranslation();
   const { isElectron, openNativePicker } = useNativeFolderPicker();
@@ -443,6 +446,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     { href: "/skills", label: t('nav.skills' as TranslationKey), icon: Lightning },
     { href: "/mcp", label: t('nav.mcp' as TranslationKey), icon: Plug },
     { href: "/cli-tools", label: t('nav.cliTools' as TranslationKey), icon: Terminal },
+    { href: "/plugins", label: t('nav.plugins' as TranslationKey), icon: Package },
     { href: "/gallery", label: t('nav.gallery' as TranslationKey), icon: Image },
     { href: "/bridge", label: t('nav.bridge' as TranslationKey), icon: WifiHigh },
   ];
@@ -452,37 +456,63 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       className="hidden h-full shrink-0 flex-col overflow-hidden bg-sidebar/80 backdrop-blur-xl lg:flex"
       style={{ width: width ?? 240 }}
     >
-      {/* Header - extra top padding for macOS traffic lights */}
-      <div className="flex h-12 shrink-0 items-center justify-between px-3 mt-5">
-        <ConnectionStatus />
+      {/* Logo */}
+      <div className="flex h-20 shrink-0 items-center justify-center px-3 pt-4">
+        <img
+          src="/icons/toplogo.png"
+          alt="Logo"
+          className="h-14 w-auto object-contain"
+        />
       </div>
 
-      {/* Top action bar: New Chat + Search */}
-      <div className="flex items-center gap-2 px-3 pb-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="flex-1 justify-center gap-1.5 h-8 text-xs"
-          disabled={creatingChat}
-          onClick={handleNewChat}
-        >
-          <Plus size={14} />
-          {t('chatList.newConversation')}
-        </Button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              className="h-8 w-8 shrink-0"
-              onClick={() => setSearchDialogOpen(true)}
-            >
-              <MagnifyingGlass size={14} />
-              <span className="sr-only">{t('chatList.searchSessions')}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{t('chatList.searchSessions')}</TooltipContent>
-        </Tooltip>
+      {/* Header row: Connection + New Chat + Search + File Tree */}
+      <div className="flex h-12 shrink-0 items-center justify-between px-3 mt-2">
+        <ConnectionStatus />
+        <div className="flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9"
+                disabled={creatingChat}
+                onClick={handleNewChat}
+              >
+                <NotePencil size={20} />
+                <span className="sr-only">{t('chatList.newConversation')}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t('chatList.newConversation')}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9"
+                onClick={() => setSearchDialogOpen(true)}
+              >
+                <MagnifyingGlass size={20} />
+                <span className="sr-only">{t('chatList.searchSessions')}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t('chatList.searchSessions')}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={fileTreeOpen ? "secondary" : "ghost"}
+                size="icon"
+                className="h-9 w-9"
+                onClick={() => setFileTreeOpen(!fileTreeOpen)}
+              >
+                <Copy size={20} />
+                <span className="sr-only">{t('topBar.fileTree')}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t('topBar.fileTree')}</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
 
       {/* Feature nav items */}

@@ -6,6 +6,8 @@ export type PanelContent = "files" | "tasks";
 
 export type PreviewViewMode = "source" | "rendered";
 
+export type BottomPanelTab = "terminal" | "console";
+
 export interface PanelContextValue {
   // --- New independent panel states ---
   fileTreeOpen: boolean;
@@ -22,6 +24,18 @@ export interface PanelContextValue {
   setAssistantPanelOpen: (open: boolean) => void;
   isAssistantWorkspace: boolean;
   setIsAssistantWorkspace: (is: boolean) => void;
+
+  // --- Bottom panel (Terminal / Console) ---
+  bottomPanelOpen: boolean;
+  setBottomPanelOpen: (open: boolean) => void;
+  bottomPanelTab: BottomPanelTab;
+  setBottomPanelTab: (tab: BottomPanelTab) => void;
+
+  // --- Browser tab (shown in main content area) ---
+  browserTabOpen: boolean;
+  setBrowserTabOpen: (open: boolean) => void;
+  browserUrl: string;
+  setBrowserUrl: (url: string) => void;
 
   // --- Git summary (for top bar, derived — no setters) ---
   currentBranch: string;

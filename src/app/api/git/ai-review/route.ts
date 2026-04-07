@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { execSync } from 'child_process';
 import { getSetting } from '@/lib/db';
+import { generateTextViaSdk } from '@/lib/claude-client';
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,7 +23,6 @@ export async function POST(request: NextRequest) {
     // Get git diff for staged and unstaged changes
     let diff = '';
     try {
-      // Try to get staged diff first
       diff = execSync('git diff --cached', {
         cwd: workingDir,
         encoding: 'utf-8',
@@ -32,7 +32,6 @@ export async function POST(request: NextRequest) {
       // Ignore error
     }
 
-    // If no staged changes, get unstaged diff
     if (!diff) {
       try {
         diff = execSync('git diff', {
@@ -52,39 +51,48 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // For now, return a simple summary based on the diff
-    // In a real implementation, you would call an AI service here
-    const filesChanged = diff
-      .split('\n')
-      .filter(line => line.startsWith('diff --git'))
-      .map(line => {
-        const match = line.match(/b\/(.*)$/);
-        return match ? match[1] : '';
-      })
-      .filter(Boolean);
-
-    const additions = (diff.match(/^\+[^+]/gm) || []).length;
-    const deletions = (diff.match(/^-[^-]/gm) || []).length;
+    // Truncate diff if too large to avoid token limits
+    const maxDiffLength = 8000;
+    const truncatedDiff = diff.length > maxDiffLength
+      ? diff.slice(0, maxDiffLength) + '\n... (diff truncated)'
+      : diff;
 
     let result = '';
+
     if (action === 'summary') {
-      // Generate a commit message based on the changes
-      const fileCount = filesChanged.length;
-      const fileList = filesChanged.slice(0, 3).join(', ');
-      const moreFiles = fileCount > 3 ? `等${fileCount}个文件` : '';
-      
-      if (additions > deletions * 2) {
-        result = `新增功能：修改了 ${fileList}${moreFiles}`;
-      } else if (deletions > additions * 2) {
-        result = `删除代码：修改了 ${fileList}${moreFiles}`;
-      } else if (filesChanged.some(f => f.includes('fix') || f.includes('bug'))) {
-        result = `修复问题：修改了 ${fileList}${moreFiles}`;
-      } else {
-        result = `代码更新：修改了 ${fileList}${moreFiles}`;
+      // Generate commit message via AI
+      try {
+        result = await generateTextViaSdk({
+          system: `You are a commit message generator. Based on the git diff provided, generate a concise and descriptive commit message following conventional commits format (e.g. feat:, fix:, refactor:, docs:, chore:, style:, test:).
+Rules:
+- Output ONLY the commit message, nothing else
+- First line should be a short summary (max 72 chars)
+- If needed, add a blank line followed by bullet points for details
+- Use English by default unless the diff clearly shows a Chinese project context
+- Be specific about what changed, not generic`,
+          prompt: `Generate a commit message for this diff:\n\n${truncatedDiff}`,
+        });
+      } catch (err) {
+        console.error('AI commit message generation failed, falling back:', err);
+        // Fallback to simple heuristic
+        result = generateFallbackMessage(diff);
       }
     } else {
-      // Review mode
-      result = `代码审查结果：\n- 修改了 ${filesChanged.length} 个文件\n- 新增 ${additions} 行，删除 ${deletions} 行\n- 建议检查代码风格和潜在问题`;
+      // Review mode via AI
+      try {
+        result = await generateTextViaSdk({
+          system: `You are a code reviewer. Review the git diff and provide concise, actionable feedback. Focus on:
+- Potential bugs or issues
+- Code quality concerns
+- Security considerations
+- Performance implications
+Keep the review brief and practical.`,
+          prompt: `Review this diff:\n\n${truncatedDiff}`,
+        });
+      } catch (err) {
+        console.error('AI review failed, falling back:', err);
+        result = generateFallbackReview(diff);
+      }
     }
 
     return NextResponse.json({ result });
@@ -96,4 +104,45 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+function generateFallbackMessage(diff: string): string {
+  const filesChanged = diff
+    .split('\n')
+    .filter(line => line.startsWith('diff --git'))
+    .map(line => {
+      const match = line.match(/b\/(.*)$/);
+      return match ? match[1] : '';
+    })
+    .filter(Boolean);
+
+  const additions = (diff.match(/^\+[^+]/gm) || []).length;
+  const deletions = (diff.match(/^-[^-]/gm) || []).length;
+  const fileCount = filesChanged.length;
+  const fileList = filesChanged.slice(0, 3).join(', ');
+  const moreFiles = fileCount > 3 ? ` and ${fileCount - 3} more` : '';
+
+  if (additions > deletions * 2) {
+    return `feat: update ${fileList}${moreFiles}`;
+  } else if (deletions > additions * 2) {
+    return `refactor: remove code in ${fileList}${moreFiles}`;
+  } else {
+    return `chore: update ${fileList}${moreFiles}`;
+  }
+}
+
+function generateFallbackReview(diff: string): string {
+  const filesChanged = diff
+    .split('\n')
+    .filter(line => line.startsWith('diff --git'))
+    .map(line => {
+      const match = line.match(/b\/(.*)$/);
+      return match ? match[1] : '';
+    })
+    .filter(Boolean);
+
+  const additions = (diff.match(/^\+[^+]/gm) || []).length;
+  const deletions = (diff.match(/^-[^-]/gm) || []).length;
+
+  return `Code Review Summary:\n- ${filesChanged.length} file(s) changed\n- +${additions} / -${deletions} lines\n- Please review code style and potential issues manually`;
 }

@@ -13,6 +13,7 @@ const zh: Record<TranslationKey, string> = {
   'nav.cliTools': 'CLI 工具',
   'nav.skills': 'Skills',
   'nav.mcp': 'MCP',
+  'nav.plugins': '插件',
   'nav.gallery': '素材库',
 
   // ── Chat list panel ─────────────────────────────────────────
@@ -1140,7 +1141,7 @@ const zh: Record<TranslationKey, string> = {
   'topBar.fileTree': '文件树',
   'topBar.git': 'Git',
   'topBar.dashboard': '看板',
-  'topBar.commit': '提交全部',
+  'topBar.commit': '提交',
   'topBar.push': '推送',
   'topBar.terminal': '终端',
 
@@ -1236,7 +1237,7 @@ const zh: Record<TranslationKey, string> = {
   'git.history': '历史',
   'git.worktrees': '工作树',
   'git.commit': '提交',
-  'git.commitAll': '提交全部',
+  'git.commitAll': '提交',
   'git.commitAndPush': '提交并推送',
   'git.push': '推送',
   'git.pushToCurrentBranch': '推送到当前分支',
@@ -1296,33 +1297,38 @@ const zh: Record<TranslationKey, string> = {
   'git.unstageAll': '全部移出',
   'git.discardAll': '放弃所有更改',
   'git.discardConfirm': '确定要放弃更改吗？此操作不可撤销。',
-  'git.stagedChanges': '待提交',
+  'git.stagedChanges': '暂存更改',
   'git.unstagedChanges': '已修改',
   'git.untrackedFiles': '新文件',
 
   // Pull / Fetch
-  'git.pull': '拉取并合并',
+  'git.pull': '拉取合并',
   'git.pulling': '拉取中...',
   'git.pullSuccess': '拉取成功',
   'git.pullFailed': '拉取失败',
-  'git.fetchRemote': '仅检查更新',
+  'git.fetchRemote': '检查更新',
   'git.fetching': '检查中...',
   'git.fetchSuccess': '检查完成',
   'git.fetchFailed': '检查失败',
 
+  // AI Commit Message
+  'git.generateCommitMsg': 'AI 生成',
+  'git.generatingCommitMsg': '生成中...',
+  'git.generateFailed': '生成提交信息失败',
+
   // Stash
-  'git.stash': '暂存箱',
-  'git.stashSection': '暂存箱',
+  'git.stash': '暂存更改',
+  'git.stashSection': '暂存更改',
   'git.stashSave': '存入',
   'git.stashPop': '取出并应用',
   'git.stashDrop': '删除',
-  'git.stashEmpty': '暂存箱为空，可以把未提交的更改临时存放在这里',
+  'git.stashEmpty': '暂存为空，可以把未提交的更改临时存放在这里',
   'git.stashMessage': '备注（可选）',
   'git.stashSaving': '存入中...',
-  'git.stashSuccess': '更改已存入暂存箱',
-  'git.stashPopSuccess': '已从暂存箱取出并应用',
-  'git.stashDropSuccess': '已从暂存箱删除',
-  'git.stashFailed': '暂存箱操作失败',
+  'git.stashSuccess': '更改已暂存',
+  'git.stashPopSuccess': '已从暂存取出并应用',
+  'git.stashDropSuccess': '已从暂存删除',
+  'git.stashFailed': '暂存操作失败',
 
   // Diff viewer
   'git.viewDiff': '查看差异',
@@ -1511,6 +1517,30 @@ const zh: Record<TranslationKey, string> = {
   'buddy.namePlaceholder': '给你的伙伴起个名字...',
   'buddy.nameHint': '这将是你的伙伴的名字',
   'buddy.reset': '重置伙伴',
+
+  // Bottom panel
+  'bottomPanel.terminal': '终端',
+  'bottomPanel.browser': '浏览器',
+  'bottomPanel.console': '控制台',
+  'bottomPanel.urlPlaceholder': '输入网址...',
+  'bottomPanel.noLogs': '暂无控制台输出。',
+  'bottomPanel.close': '关闭面板',
+
+  // Browser panel
+  'browser.title': '浏览器',
+  'browser.close': '关闭浏览器标签',
+  'browser.urlPlaceholder': '输入网址...',
+  'browser.preview': '预览',
+  'browser.empty': '暂无预览',
+  'browser.emptyHint': '在上方输入网址以预览页面',
+
+  // Console panel
+  'console.all': '全部',
+  'console.clear': '清除',
+  'console.empty': '暂无控制台输出。',
+
+  // Git (additional)
+  'git.initFailed': '初始化仓库失败',
 };
 
 export default zh;

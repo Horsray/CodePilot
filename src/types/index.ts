@@ -370,10 +370,13 @@ export interface MarketplaceSkill {
   id: string;
   skillId: string;      // e.g. "git-commit"
   name: string;
+  description?: string;
   installs: number;
   source: string;       // e.g. "owner/repo"
   isInstalled?: boolean;
   installedAt?: string;
+  rating?: number;
+  tags?: string[];
 }
 
 export interface SkillLockFile {

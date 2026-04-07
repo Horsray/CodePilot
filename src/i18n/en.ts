@@ -16,6 +16,7 @@ const en = {
   'nav.cliTools': 'CLI Tools',
   'nav.skills': 'Skills',
   'nav.mcp': 'MCP',
+  'nav.plugins': 'Plugins',
   'nav.gallery': 'Gallery',
 
   // ── Chat list panel ─────────────────────────────────────────
@@ -1313,6 +1314,11 @@ const en = {
   'git.fetchSuccess': 'Fetched successfully',
   'git.fetchFailed': 'Fetch failed',
 
+  // AI Commit Message
+  'git.generateCommitMsg': 'Generate with AI',
+  'git.generatingCommitMsg': 'Generating...',
+  'git.generateFailed': 'Failed to generate commit message',
+
   // Stash
   'git.stash': 'Stash',
   'git.stashSection': 'Stash',
@@ -1514,6 +1520,30 @@ const en = {
   'buddy.namePlaceholder': 'Give your buddy a name...',
   'buddy.nameHint': 'This will be your buddy\'s name',
   'buddy.reset': 'Reset buddy',
+
+  // Bottom panel
+  'bottomPanel.terminal': 'Terminal',
+  'bottomPanel.browser': 'Browser',
+  'bottomPanel.console': 'Console',
+  'bottomPanel.urlPlaceholder': 'Enter URL...',
+  'bottomPanel.noLogs': 'No console output yet.',
+  'bottomPanel.close': 'Close panel',
+
+  // Browser panel
+  'browser.title': 'Browser',
+  'browser.close': 'Close browser tab',
+  'browser.urlPlaceholder': 'Enter URL...',
+  'browser.preview': 'Preview',
+  'browser.empty': 'No preview available',
+  'browser.emptyHint': 'Enter a URL above to preview a page',
+
+  // Console panel
+  'console.all': 'All',
+  'console.clear': 'Clear',
+  'console.empty': 'No console output yet.',
+
+  // Git (additional)
+  'git.initFailed': 'Failed to initialize repository',
 } as const;
 
 export type TranslationKey = keyof typeof en;

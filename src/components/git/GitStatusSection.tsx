@@ -276,6 +276,14 @@ export function GitStatusSection({ status }: GitStatusSectionProps) {
         onSuccess={handleCommitSuccess}
       />
 
+      {/* Push dialog */}
+      <PushDialog
+        cwd={workingDirectory}
+        open={pushDialogOpen}
+        onClose={() => setPushDialogOpen(false)}
+        onSuccess={handlePushSuccess}
+      />
+
       {/* Diff viewer */}
       {diffFile && (
         <GitDiffViewer
