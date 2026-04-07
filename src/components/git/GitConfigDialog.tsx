@@ -19,7 +19,7 @@ import { Globe, Lock, Plus, ArrowRight, FolderOpen } from "@/components/ui/icon"
 interface GitConfigDialogProps {
   open: boolean;
   onClose: () => void;
-  onConfigured: () => void;
+  onConfigured: (newPath?: string) => void;
 }
 
 interface Repo {
@@ -204,19 +204,22 @@ export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialog
       const result = await res.json();
       showToast({ type: "success", message: t('git.cloneSuccess') });
       
-      // If clone returned a new path, update the working directory
+      // If clone returned a new path, update the working directory everywhere
+      const newPath = result.path || projectPath;
       if (result.path) {
-        // Update workspace settings with new path
         await fetch("/api/settings/workspace", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ working_directory: result.path }),
         });
       }
-      
+      // Sync localStorage and notify all listeners
+      localStorage.setItem('codepilot:last-working-directory', newPath);
+      window.dispatchEvent(new CustomEvent('project-directory-changed', { detail: { path: newPath } }));
+
       onClose();
       // Delay onConfigured to allow dialog to close and state to update
-      setTimeout(() => onConfigured(), 100);
+      setTimeout(() => onConfigured(newPath), 100);
     } catch (err) {
       showToast({ type: "error", message: t('git.cloneFailed') });
     } finally {
@@ -264,9 +267,13 @@ export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialog
       }
 
       showToast({ type: "success", message: t('git.linkSuccess') });
+      // Sync localStorage and notify all listeners
+      localStorage.setItem('codepilot:last-working-directory', projectPath);
+      window.dispatchEvent(new CustomEvent('project-directory-changed', { detail: { path: projectPath } }));
+
       onClose();
       // Delay onConfigured to allow dialog to close and state to update
-      setTimeout(() => onConfigured(), 100);
+      setTimeout(() => onConfigured(projectPath), 100);
     } catch (err) {
       showToast({ type: "error", message: err instanceof Error ? err.message : t('git.linkFailed') });
     } finally {

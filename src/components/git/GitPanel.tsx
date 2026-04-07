@@ -15,7 +15,7 @@ import { DeriveWorktreeDialog } from "./DeriveWorktreeDialog";
 import { GitConfigDialog } from "./GitConfigDialog";
 
 export function GitPanel() {
-  const { workingDirectory, sessionId } = usePanel();
+  const { workingDirectory, sessionId, setWorkingDirectory } = usePanel();
   const { t } = useTranslation();
   const { status, refresh } = useGitStatus(workingDirectory);
 
@@ -64,9 +64,13 @@ export function GitPanel() {
         <GitConfigDialog
           open={showConfigDialog}
           onClose={() => setShowConfigDialog(false)}
-          onConfigured={() => {
+          onConfigured={(newPath) => {
             // Close dialog first
             setShowConfigDialog(false);
+            // Update working directory if a new path was provided (e.g. after clone)
+            if (newPath) {
+              setWorkingDirectory(newPath);
+            }
             // Force refresh after a short delay to allow filesystem changes to settle
             setTimeout(() => {
               refresh();
