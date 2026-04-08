@@ -242,7 +242,9 @@ export function MessageInput({
 
     // If Image Agent toggle is on and no badge, send via normal LLM with systemPromptAppend
     if (imageGen.state.enabled && !badge && !isStreaming) {
+      perf.mark('imageGen_path_start');
       const files = await convertFiles();
+      perf.mark('convertFiles_done', { count: files.length });
       if (!content && files.length === 0) return;
 
       // Store uploaded images as pending reference images for ImageGenConfirmation
@@ -254,29 +256,36 @@ export function MessageInput({
       }
 
       setInputValue('');
+      perf.mark('before_onSend_imageGen');
       if (onSend) {
         onSend(content, files.length > 0 ? files : undefined, IMAGE_AGENT_SYSTEM_PROMPT);
       }
+      perf.mark('onSend_complete');
       return;
     }
 
     // If badge is active, dispatch by kind
     if (badge && !isStreaming) {
+      perf.mark('badge_path_start');
       const files = await convertFiles();
       const { prompt, displayLabel } = dispatchBadge(badge, content);
       setBadge(null);
       setInputValue('');
+      perf.mark('before_onSend_badge');
       onSend(prompt, files.length > 0 ? files : undefined, undefined, displayLabel);
+      perf.mark('onSend_complete');
       return;
     }
 
     const files = await convertFiles();
+    perf.mark('convertFiles_done', { count: files.length });
     const hasFiles = files.length > 0;
 
     if ((!content && !hasFiles) || disabled || isStreaming) return;
 
     // Check if it's a direct slash command typed in the input
     if (!hasFiles) {
+      perf.mark('slash_check_start');
       const slashResult = resolveDirectSlash(content);
       if (slashResult.action === 'immediate_command') {
         if (onCommand) {
@@ -292,11 +301,15 @@ export function MessageInput({
     }
 
     // If CLI badge is active, inject systemPromptAppend to guide model
+    perf.mark('cliAppend_build');
     const cliAppend = buildCliAppend(cliBadge);
     if (cliBadge) setCliBadge(null);
 
+    perf.mark('before_onSend_final');
     onSend(content || 'Please review the attached file(s).', hasFiles ? files : undefined, cliAppend);
     setInputValue('');
+    perf.mark('handleSubmit_complete');
+    perf.printReport('MessageInput');
   }, [inputValue, onSend, onCommand, disabled, isStreaming, popover, badge, cliBadge, imageGen, setBadge, setCliBadge]);
 
   const handleKeyDown = useCallback(

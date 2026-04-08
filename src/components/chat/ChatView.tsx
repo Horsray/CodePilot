@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, ReplyMode } from '@/types';
+import { perf } from '@/lib/performance-logger';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { ChatComposerActionBar } from './ChatComposerActionBar';
@@ -393,7 +394,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
   const sendMessage = useCallback(
     async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => {
-      if (isStreaming) return;
+      perf.init('ChatView.sendMessage');
+      perf.mark('sendMessage_start', { contentLength: content.length, fileCount: files?.length || 0 });
+
+      if (isStreaming) {
+        perf.mark('sendMessage_rejected_streaming');
+        return;
+      }
 
       const displayUserContent = displayOverride || content;
       let displayContent = displayUserContent;
@@ -411,12 +418,15 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         token_usage: null,
       };
       cappedSetMessages((prev) => [...prev, userMessage]);
+      perf.mark('userMessage_appended');
 
       const notices = pendingImageNoticesRef.current.length > 0
         ? [...pendingImageNoticesRef.current]
         : undefined;
       if (notices) pendingImageNoticesRef.current = [];
+      perf.mark('pendingNotices_cleared');
 
+      perf.mark('startStream_called');
       startStream({
         sessionId,
         content,

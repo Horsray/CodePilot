@@ -13,6 +13,7 @@ const isTestRuntime = (
   process.env.npm_lifecycle_event === 'test' ||
   process.env.npm_lifecycle_event === 'test:unit'
 );
+const hasCustomDataDir = !!process.env.CLAUDE_GUI_DATA_DIR;
 const dataDir = process.env.CLAUDE_GUI_DATA_DIR || (
   isTestRuntime
     ? path.join(os.tmpdir(), `codepilot-test-${process.pid}`)
@@ -66,7 +67,7 @@ export function getDb(): Database.Database {
     }
 
     // Migrate from old locations if the new DB doesn't exist yet
-    if (!isTestRuntime && !fs.existsSync(DB_PATH)) {
+    if (!hasCustomDataDir && !isTestRuntime && !fs.existsSync(DB_PATH)) {
       const home = os.homedir();
       const oldPaths = [
         // Old Electron userData paths (app.getPath('userData'))
