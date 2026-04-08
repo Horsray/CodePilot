@@ -79,10 +79,8 @@ function enforceAlternation(messages: ModelMessage[]): ModelMessage[] {
     const curr = messages[i];
 
     if (curr.role === prev.role && curr.role === 'user') {
-      // Merge consecutive user messages
-      const prevText = typeof prev.content === 'string' ? prev.content : '';
-      const currText = typeof curr.content === 'string' ? curr.content : '';
-      result[result.length - 1] = { role: 'user', content: `${prevText}\n\n${currText}`.trim() };
+      // Merge consecutive user messages, preserving multi-part content
+      result[result.length - 1] = { role: 'user', content: mergeUserContent(prev.content, curr.content) };
     } else if (curr.role === prev.role && curr.role === 'assistant') {
       // Keep the later assistant message (more recent)
       result[result.length - 1] = curr;
@@ -95,6 +93,23 @@ function enforceAlternation(messages: ModelMessage[]): ModelMessage[] {
 }
 
 // ── Internal ────────────────────────────────────────────────────
+
+/**
+ * Merge two user message contents, handling both string and multi-part array formats.
+ * Ensures file attachments (non-string parts) are preserved during merge.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mergeUserContent(a: any, b: any): any {
+  const partsA = typeof a === 'string' ? [{ type: 'text', text: a }] : Array.isArray(a) ? a : [{ type: 'text', text: String(a) }];
+  const partsB = typeof b === 'string' ? [{ type: 'text', text: b }] : Array.isArray(b) ? b : [{ type: 'text', text: String(b) }];
+  const merged = [...partsA, ...partsB];
+
+  // If all parts are text, collapse back to a single string for simplicity
+  if (merged.every((p: { type: string }) => p.type === 'text')) {
+    return merged.map((p: { text?: string }) => p.text || '').join('\n\n').trim();
+  }
+  return merged;
+}
 
 /**
  * Parse user message content, rebuilding file attachments as multi-modal content parts.

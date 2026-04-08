@@ -171,18 +171,14 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         const historyMessages = buildCoreMessages(dbMessages);
 
         // The chat route persists the user message to DB BEFORE calling us,
-        // so it's almost always already the last message in historyMessages.
-        // We must detect this even when buildUserMessage() converted the DB
-        // record into multi-part content (e.g. messages with file attachments).
+        // so for normal messages it's already the last entry in historyMessages.
         //
-        // Detection: if the last message is a user message, assume it's ours —
-        // the chat route always saves before streaming, so the most recent DB
-        // user message IS the current prompt. Only append if history is empty
-        // or the last message is not from the user (edge case: autoTrigger
-        // messages that weren't saved to DB).
-        const lastMsg = historyMessages[historyMessages.length - 1];
-        const lastIsUser = lastMsg?.role === 'user';
-        if (!lastIsUser) {
+        // autoTrigger messages are NOT saved to DB (route.ts skips addMessage),
+        // so they must always be appended here.
+        //
+        // For non-autoTrigger: the last user message in history IS the current
+        // prompt (already includes any file attachments via buildUserMessage).
+        if (autoTrigger || historyMessages.length === 0 || historyMessages[historyMessages.length - 1]?.role !== 'user') {
           historyMessages.push({ role: 'user' as const, content: prompt });
         }
 
