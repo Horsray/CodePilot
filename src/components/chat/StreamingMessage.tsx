@@ -173,8 +173,8 @@ function useBufferedContent(rawContent: string, isStreaming: boolean): string {
 
 /**
  * Thinking phase label that evolves over time to reduce perceived wait.
- * 0-5s: "思考中..." / "Thinking..."
- * 5-15s: "深度思考中..." / "Thinking deeply..."
+ * 0-5s: "准备回复中..." / "Preparing response..."
+ * 5-15s: "生成中..." / "Generating..."
  * 15s+: "组织回复中..." / "Preparing response..."
  */
 function ThinkingPhaseLabel() {
@@ -188,9 +188,9 @@ function ThinkingPhaseLabel() {
   }, []);
 
   const text = phase === 0
-    ? t('streaming.thinking')
+    ? t('streaming.preparing')
     : phase === 1
-      ? t('streaming.thinkingDeep')
+      ? t('streaming.generating')
       : t('streaming.preparing');
 
   return <Shimmer>{text}</Shimmer>;
@@ -219,7 +219,8 @@ function ElapsedTimer() {
 }
 
 function StreamingStatusBar({ statusText, onForceStop }: { statusText?: string; onForceStop?: () => void }) {
-  const displayText = statusText || 'Thinking';
+  const { t } = useTranslation();
+  const displayText = statusText || t('streaming.preparing');
 
   // Parse elapsed seconds from statusText like "Running bash... (45s)"
   const elapsedMatch = statusText?.match(/\((\d+)s\)/);

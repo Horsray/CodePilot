@@ -1,3 +1,5 @@
+import type { TokenUsage } from '@/types';
+
 /**
  * Context Estimator — token estimation and context window budgeting.
  *
@@ -77,6 +79,32 @@ export function estimateContextTokens(params: ContextEstimateParams): ContextEst
       summary: summaryTokens,
     },
   };
+}
+
+export function getTotalInputUsage(usage?: Pick<TokenUsage, 'input_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens'> | null): number {
+  if (!usage) return 0;
+  return (usage.input_tokens || 0)
+    + (usage.cache_read_input_tokens || 0)
+    + (usage.cache_creation_input_tokens || 0);
+}
+
+export function shouldBypassSessionResume(params: {
+  compressionOccurred: boolean;
+  contextWindow: number | null;
+  lastTurnUsage?: Pick<TokenUsage, 'input_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens'> | null;
+  thresholdRatio?: number;
+}): boolean {
+  if (params.compressionOccurred) {
+    return true;
+  }
+  if (!params.contextWindow) {
+    return false;
+  }
+  const totalInputUsage = getTotalInputUsage(params.lastTurnUsage);
+  if (totalInputUsage <= 0) {
+    return false;
+  }
+  return totalInputUsage >= params.contextWindow * (params.thresholdRatio ?? 0.85);
 }
 
 // ── Context percentage + warning states ─────────────────────────────

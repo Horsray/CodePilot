@@ -226,7 +226,7 @@ export function ProviderManager() {
     setPresetEditProvider(null);
     
     // If cc-switch is enabled and this is a custom preset, pre-fill with cc-switch config
-    if (ccSwitchEnabled && (preset.key === 'custom-anthropic' || preset.key === 'custom-openai') && Object.keys(ccSwitchModels).length > 0) {
+    if (ccSwitchEnabled && preset.key === 'custom-anthropic' && Object.keys(ccSwitchModels).length > 0) {
       // Get first model's config as default
       const firstModelName = Object.keys(ccSwitchModels)[0];
       const modelConfig = ccSwitchModels[firstModelName] as Record<string, string>;
@@ -236,7 +236,7 @@ export function ProviderManager() {
           id: '',
           name: preset.name,
           provider_type: preset.key,
-          protocol: preset.key === 'custom-anthropic' ? 'anthropic' : 'openai-compatible',
+          protocol: 'anthropic',
           base_url: modelConfig.ANTHROPIC_BASE_URL || '',
           api_key: modelConfig.ANTHROPIC_API_KEY || modelConfig.ANTHROPIC_AUTH_TOKEN || '',
           is_active: 0,

@@ -31,6 +31,8 @@ export interface ContextAssemblyConfig {
   imageAgentMode?: boolean;
   /** Whether this is an auto-trigger turn (heartbeat, onboarding hook, etc.) */
   autoTrigger?: boolean;
+  /** Fast path skips heavyweight desktop prompt layers for plain chat turns */
+  replyProfileMode?: 'fast' | 'deep';
 }
 
 export interface AssembledContext {
@@ -47,8 +49,9 @@ export interface AssembledContext {
 // ── Main function ────────────────────────────────────────────────────
 
 export async function assembleContext(config: ContextAssemblyConfig): Promise<AssembledContext> {
-  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger } = config;
+  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, replyProfileMode } = config;
   const t0 = Date.now();
+  const lightweightMode = replyProfileMode === 'fast';
 
   let workspacePrompt = '';
   let memoryHint = '';
@@ -62,7 +65,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
       const sessionWd = session.working_directory || '';
       isAssistantProject = sessionWd === workspacePath;
 
-      if (isAssistantProject) {
+      if (isAssistantProject && !lightweightMode) {
         const { loadWorkspaceFiles, assembleWorkspacePrompt, loadState, shouldRunHeartbeat } =
           await import('@/lib/assistant-workspace');
 
@@ -181,7 +184,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
 
   // [STATIC 1] Widget system prompt (desktop only) — compile-time constant
   const generativeUISetting = getSetting('generative_ui_enabled');
-  const generativeUIEnabled = entryPoint === 'desktop' && generativeUISetting !== 'false';
+  const generativeUIEnabled = !lightweightMode && entryPoint === 'desktop' && generativeUISetting !== 'false';
 
   if (generativeUIEnabled) {
     try {
@@ -217,7 +220,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   // where the actual MCP server registration happens.
 
   // [VOLATILE 6] Dashboard context (desktop only)
-  if (entryPoint === 'desktop' && session.working_directory) {
+  if (!lightweightMode && entryPoint === 'desktop' && session.working_directory) {
     try {
       const { readDashboard } = await import('@/lib/dashboard-store');
       const config = readDashboard(session.working_directory);

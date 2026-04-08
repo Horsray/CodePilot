@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot } from '@/types';
+import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, ReplyMode } from '@/types';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { ChatComposerActionBar } from './ChatComposerActionBar';
@@ -40,6 +40,7 @@ interface ChatViewProps {
 
 /** Maximum messages kept in React state. Older messages are trimmed and reloaded on scroll. */
 const MAX_MESSAGES_IN_MEMORY = 300;
+const REPLY_MODE_STORAGE_KEY = 'codepilot:last-reply-mode';
 
 export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialHasSummary }: ChatViewProps) {
   const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setDashboardPanelOpen, setFileTreeOpen, setIsAssistantWorkspace } = usePanel();
@@ -107,6 +108,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const [currentModel, setCurrentModel] = useState(() => modelName || (typeof window !== 'undefined' ? localStorage.getItem('codepilot:last-model') : null) || 'sonnet');
   const [currentProviderId, setCurrentProviderId] = useState(() => providerId || (typeof window !== 'undefined' ? localStorage.getItem('codepilot:last-provider-id') : null) || '');
   const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
+  const [replyMode, setReplyMode] = useState<ReplyMode>('smart');
   const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
   const [context1m, setContext1m] = useState(false);
   const [hasSummary, setHasSummary] = useState(initialHasSummary || false);
@@ -114,6 +116,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // Sync model/provider when session data loads
   useEffect(() => { if (modelName) setCurrentModel(modelName); }, [modelName]);
   useEffect(() => { if (providerId) setCurrentProviderId(providerId); }, [providerId]);
+  useEffect(() => {
+    const stored = localStorage.getItem(REPLY_MODE_STORAGE_KEY) as ReplyMode | null;
+    if (stored === 'fast' || stored === 'smart' || stored === 'deep') {
+      setReplyMode(stored);
+    }
+  }, []);
+  useEffect(() => { localStorage.setItem(REPLY_MODE_STORAGE_KEY, replyMode); }, [replyMode]);
 
   // Fetch provider-specific options (with abort to prevent stale responses on fast switch)
   useEffect(() => {
@@ -414,11 +423,12 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         mode,
         model: currentModel,
         providerId: currentProviderId,
+        replyMode,
         files,
         systemPromptAppend,
         pendingImageNotices: notices,
-        effort: selectedEffort,
-        thinking: buildThinkingConfig(),
+        effort: replyMode === 'deep' ? selectedEffort : undefined,
+        thinking: replyMode === 'deep' ? buildThinkingConfig() : undefined,
         context1m,
         displayOverride,
         onModeChanged: (sdkMode) => {
@@ -438,7 +448,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       // happen on stream completion via onStreamCompleted — at that point both
       // user and assistant messages are persisted, so no race is possible.
     },
-    [sessionId, isStreaming, mode, currentModel, currentProviderId, selectedEffort, context1m, buildThinkingConfig, handleModeChange]
+    [sessionId, isStreaming, mode, currentModel, currentProviderId, replyMode, selectedEffort, context1m, buildThinkingConfig, handleModeChange]
   );
 
   sendMessageRef.current = sendMessage;
@@ -602,6 +612,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onAssistantTrigger={checkAssistantTrigger}
         effort={selectedEffort}
         onEffortChange={setSelectedEffort}
+        replyMode={replyMode}
+        onReplyModeChange={setReplyMode}
         sdkInitMeta={initMetaRef.current}
         isAssistantProject={isAssistantProject}
         hasMessages={messages.length > 0}

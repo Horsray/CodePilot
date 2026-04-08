@@ -456,8 +456,8 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       className="hidden h-full shrink-0 flex-col overflow-hidden bg-sidebar/80 backdrop-blur-xl lg:flex"
       style={{ width: width ?? 240 }}
     >
-      {/* Logo - 给 Mac 窗口控制按钮留空间 */}
-      <div className="flex h-11 shrink-0 items-end justify-center px-3 pb-1 pt-5">
+      {/* Logo 区域：为 Mac 窗口控制按钮预留顶部安全距离，避免遮挡品牌图 */}
+      <div className="flex shrink-0 items-end justify-center px-3 pb-2 pt-14">
         <img
           src="/icons/toplogo.png"
           alt="Logo"

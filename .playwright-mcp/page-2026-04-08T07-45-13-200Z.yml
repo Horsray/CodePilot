@@ -1,0 +1,49 @@
+- main [ref=e7]:
+  - generic [ref=e8]:
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e12] [cursor=pointer]:
+          - generic [ref=e13]:
+            - generic [ref=e14]:
+              - img [ref=e15]
+              - generic [ref=e17]: Project Chat
+            - generic [ref=e18]: Open a project folder, AI helps you code, debug and refactor
+          - button "Select Folder" [ref=e20]:
+            - img
+            - text: Select Folder
+        - generic [ref=e21] [cursor=pointer]:
+          - generic [ref=e22]:
+            - generic [ref=e24]: Personal Assistant
+            - generic [ref=e25]: Set up an AI that remembers you, manages schedule, assists creation
+          - button "Set Up Assistant" [ref=e27]
+      - paragraph [ref=e28]: Project Chat works within a codebase folder. Personal Assistant works across all your tasks without a specific project.
+    - group [ref=e33]:
+      - textbox "Message Claude..." [disabled] [ref=e34]
+      - group [ref=e35]:
+        - generic [ref=e36]:
+          - button [ref=e37]:
+            - img
+          - button [ref=e38]:
+            - img
+          - button [ref=e39]:
+            - img
+          - button "Sonnet 4.6" [ref=e41]:
+            - generic [ref=e42]: Sonnet 4.6
+            - img
+        - button "Submit" [disabled]:
+          - img
+    - generic [ref=e44]:
+      - tablist [ref=e46]:
+        - tab "Code" [selected] [ref=e47]:
+          - img
+          - text: Code
+        - tab "Plan" [ref=e48]:
+          - img
+          - text: Plan
+      - button "Design Agent" [ref=e49]:
+        - img
+        - text: Design Agent
+      - button "Default" [ref=e50]:
+        - img
+        - generic [ref=e51]: Default
+        - img

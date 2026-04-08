@@ -7,7 +7,17 @@ import type { ChatSession, Message, SettingsMap, TaskItem, TaskStatus, ApiProvid
 import type { ChannelType, ChannelBinding } from './bridge/types';
 import { getLocalDateString, localDayStartAsUTC } from './utils';
 
-const dataDir = process.env.CLAUDE_GUI_DATA_DIR || path.join(os.homedir(), '.codepilot');
+const isTestRuntime = (
+  process.env.NODE_ENV === 'test' ||
+  process.argv.includes('--test') ||
+  process.env.npm_lifecycle_event === 'test' ||
+  process.env.npm_lifecycle_event === 'test:unit'
+);
+const dataDir = process.env.CLAUDE_GUI_DATA_DIR || (
+  isTestRuntime
+    ? path.join(os.tmpdir(), `codepilot-test-${process.pid}`)
+    : path.join(os.homedir(), '.codepilot')
+);
 const DB_PATH = path.join(dataDir, 'codepilot.db');
 
 let db: Database.Database | null = null;
@@ -56,7 +66,7 @@ export function getDb(): Database.Database {
     }
 
     // Migrate from old locations if the new DB doesn't exist yet
-    if (!fs.existsSync(DB_PATH)) {
+    if (!isTestRuntime && !fs.existsSync(DB_PATH)) {
       const home = os.homedir();
       const oldPaths = [
         // Old Electron userData paths (app.getPath('userData'))

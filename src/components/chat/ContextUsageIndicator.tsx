@@ -1,5 +1,6 @@
 'use client';
 
+import type { TranslationKey } from '@/i18n';
 import type { Message } from '@/types';
 import { useContextUsage } from '@/hooks/useContextUsage';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -87,6 +88,14 @@ export function ContextUsageIndicator({ messages, modelName, context1m, hasSumma
               <span className="font-medium">{formatTokens(usage.used)}</span>
             </div>
             <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('context.actualContext' as TranslationKey)}</span>
+              <span>{formatTokens(usage.actualContextTokens)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('context.actualCache' as TranslationKey)}</span>
+              <span>{formatTokens(usage.actualCacheReadTokens)}</span>
+            </div>
+            <div className="flex justify-between">
               <span className="text-muted-foreground">{t('context.total')}</span>
               <span className="font-medium">
                 {usage.contextWindow ? formatTokens(usage.contextWindow) : t('context.unknown')}
@@ -111,11 +120,11 @@ export function ContextUsageIndicator({ messages, modelName, context1m, hasSumma
             <div className="border-t border-border pt-1.5 mt-1.5 space-y-1">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('context.cacheRead')}</span>
-                <span>{formatTokens(usage.cacheReadTokens)}</span>
+                <span>{formatTokens(usage.actualCacheReadTokens)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('context.cacheCreation')}</span>
-                <span>{formatTokens(usage.cacheCreationTokens)}</span>
+                <span>{formatTokens(usage.actualCacheCreationTokens)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('context.outputTokens')}</span>

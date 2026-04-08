@@ -21,6 +21,7 @@ import type {
   TokenUsage,
   PermissionRequestEvent,
   FileAttachment,
+  ReplyMode,
 } from '@/types';
 
 // ==========================================
@@ -58,6 +59,7 @@ export interface StartStreamParams {
   mode: string;
   model: string;
   providerId: string;
+  replyMode?: ReplyMode;
   files?: FileAttachment[];
   systemPromptAppend?: string;
   pendingImageNotices?: string[];
@@ -284,6 +286,10 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
   };
 
   try {
+    // Track time to first token for performance debugging
+    const fetchStartTime = Date.now();
+    let firstTokenLogged = false;
+
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -293,6 +299,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         mode: params.mode,
         model: params.model,
         provider_id: params.providerId,
+        ...(params.replyMode ? { reply_mode: params.replyMode } : {}),
         ...(params.files && params.files.length > 0 ? { files: params.files } : {}),
         ...(params.systemPromptAppend ? { systemPromptAppend: params.systemPromptAppend } : {}),
         ...(params.autoTrigger ? { autoTrigger: true } : {}),
@@ -314,12 +321,24 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
 
     const result = await consumeSSEStream(reader, {
       onText: (acc) => {
+        // Log time to first token (only on first text received)
+        if (!firstTokenLogged) {
+          firstTokenLogged = true;
+          const timeToFirstToken = Date.now() - fetchStartTime;
+          console.log(`[TIMING] first_token: ${timeToFirstToken}ms`);
+        }
         markActive();
         stream.accumulatedText = acc;
         stream.thinkingPhaseEnded = true;
         throttledTextEmit();
       },
       onThinking: (delta) => {
+        // Log time to first thinking token (only on first thinking received)
+        if (!firstTokenLogged) {
+          firstTokenLogged = true;
+          const timeToFirstThinking = Date.now() - fetchStartTime;
+          console.log(`[TIMING] first_thinking: ${timeToFirstThinking}ms`);
+        }
         markActive();
         // If non-thinking content has arrived since last thinking delta,
         // this is a new thinking phase (e.g. after a tool_use round-trip).

@@ -298,6 +298,8 @@ export interface TokenUsage {
   cost_usd?: number;
 }
 
+export type ReplyMode = 'fast' | 'smart' | 'deep';
+
 // ==========================================
 // API Request Types
 // ==========================================
@@ -318,6 +320,7 @@ export interface SendMessageRequest {
   model?: string;
   mode?: string;
   provider_id?: string;
+  reply_mode?: ReplyMode;
 }
 
 export interface UpdateMCPConfigRequest {

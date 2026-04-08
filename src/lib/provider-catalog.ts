@@ -358,7 +358,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     description: 'MiniMax Code Plan — China region',
     descriptionZh: 'MiniMax 编程套餐 — 中国区',
     protocol: 'anthropic',
-    authStyle: 'auth_token',
+    authStyle: 'api_key',
     baseUrl: 'https://api.minimaxi.com/anthropic',
     defaultEnvOverrides: {
       API_TIMEOUT_MS: '3000000',
@@ -390,7 +390,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     description: 'MiniMax Code Plan — Global region',
     descriptionZh: 'MiniMax 编程套餐 — 国际区',
     protocol: 'anthropic',
-    authStyle: 'auth_token',
+    authStyle: 'api_key',
     baseUrl: 'https://api.minimax.io/anthropic',
     defaultEnvOverrides: {
       API_TIMEOUT_MS: '3000000',
@@ -586,28 +586,10 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     authStyle: 'api_key',
     baseUrl: '',
     defaultEnvOverrides: {},
-    defaultModels: [],
+    defaultModels: ANTHROPIC_DEFAULT_MODELS,
     fields: ['name', 'api_key', 'base_url', 'model_names'],
     iconKey: 'server',
     sdkProxyOnly: true,
-    meta: {
-      billingModel: 'self_hosted',
-    },
-  },
-
-  // ── Custom OpenAI Compatible ──
-  {
-    key: 'custom-openai',
-    name: 'Custom OpenAI',
-    description: 'Custom OpenAI-compatible API — fully configurable',
-    descriptionZh: '自定义 OpenAI 兼容 API — 完全自定义配置',
-    protocol: 'openai-compatible',
-    authStyle: 'api_key',
-    baseUrl: '',
-    defaultEnvOverrides: {},
-    defaultModels: [],
-    fields: ['name', 'api_key', 'base_url', 'model_names'],
-    iconKey: 'server',
     meta: {
       billingModel: 'self_hosted',
     },

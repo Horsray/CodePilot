@@ -241,10 +241,18 @@ export function toClaudeCodeEnv(
     // Skip auth-related keys — they were already correctly injected above based on authStyle.
     // Legacy extra_env often contains placeholder entries like {"ANTHROPIC_AUTH_TOKEN":""} or
     // {"ANTHROPIC_API_KEY":""} that would delete the freshly-injected credentials.
+    // Also skip Claude Code mode flags that conflict with API-key authentication.
     const AUTH_ENV_KEYS = new Set([
       'ANTHROPIC_API_KEY',
       'ANTHROPIC_AUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
+      'CLAUDE_CODE_USE_BEDROCK',
+      'CLAUDE_CODE_USE_VERTEX',
+      'CLAUDE_CODE_SKIP_BEDROCK_AUTH',
+      'CLAUDE_CODE_SKIP_VERTEX_AUTH',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_SESSION_TOKEN',
     ]);
     for (const [key, value] of Object.entries(resolved.envOverrides)) {
       if (AUTH_ENV_KEYS.has(key)) continue; // already handled by auth injection
@@ -317,6 +325,7 @@ export function toClaudeCodeEnv(
     env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   }
 
+  env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   return env;
 }
 

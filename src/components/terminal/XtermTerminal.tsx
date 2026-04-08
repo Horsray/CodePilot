@@ -62,9 +62,6 @@ export function XtermTerminal({ onData, onResize, onReady }: XtermTerminalProps)
 
       if (disposed) return;
 
-      // Import xterm CSS
-      await import("@xterm/xterm/css/xterm.css");
-
       term = new xtermMod.Terminal({
         cursorBlink: true,
         fontSize: 13,

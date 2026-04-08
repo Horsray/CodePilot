@@ -9,7 +9,7 @@ const DEFAULT_CONFIG: CodexExtensionConfig = {
 };
 
 export function loadCodexConfig(): CodexExtensionConfig {
-  if (typeof window === 'undefined') return DEFAULT_CONFIG;
+  if (typeof localStorage === 'undefined') return DEFAULT_CONFIG;
   try {
     const raw = localStorage.getItem(CODEX_CONFIG_KEY);
     if (raw) {
@@ -25,7 +25,7 @@ export function loadCodexConfig(): CodexExtensionConfig {
 }
 
 export function saveCodexConfig(config: CodexExtensionConfig): void {
-  if (typeof window === 'undefined') return;
+  if (typeof localStorage === 'undefined') return;
   localStorage.setItem(CODEX_CONFIG_KEY, JSON.stringify(config));
 }
 

@@ -1,0 +1,104 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - img "Logo"
+      - generic [ref=e5]:
+        - button "Checking" [ref=e6]: Checking
+        - generic [ref=e8]:
+          - button "New Conversation" [ref=e9]:
+            - img
+            - generic [ref=e10]: New Conversation
+          - button "Search sessions..." [ref=e11]:
+            - img
+            - generic [ref=e12]: Search sessions...
+          - button "File Tree" [ref=e13]:
+            - img
+            - generic [ref=e14]: File Tree
+      - navigation [ref=e16]:
+        - generic [ref=e17]:
+          - link "Skills" [ref=e18] [cursor=pointer]:
+            - /url: /skills
+            - img [ref=e19]
+            - generic [ref=e21]: Skills
+          - link "MCP" [ref=e22] [cursor=pointer]:
+            - /url: /mcp
+            - img [ref=e23]
+            - generic [ref=e25]: MCP
+          - link "CLI Tools" [ref=e26] [cursor=pointer]:
+            - /url: /cli-tools
+            - img [ref=e27]
+            - generic [ref=e29]: CLI Tools
+          - link "Plugins" [ref=e30] [cursor=pointer]:
+            - /url: /plugins
+            - img [ref=e31]
+            - generic [ref=e33]: Plugins
+          - link "Gallery" [ref=e34] [cursor=pointer]:
+            - /url: /gallery
+            - img [ref=e35]
+            - generic [ref=e37]: Gallery
+          - link "Bridge" [ref=e38] [cursor=pointer]:
+            - /url: /bridge
+            - img [ref=e39]
+            - generic [ref=e41]: Bridge
+      - generic [ref=e43]:
+        - generic [ref=e44]: Threads
+        - button "New Project" [ref=e45]:
+          - img
+          - text: New Project
+      - paragraph [ref=e50]: No sessions yet
+      - link "Settings" [ref=e52] [cursor=pointer]:
+        - /url: /settings
+        - button "Settings" [ref=e53]:
+          - img
+          - text: Settings
+    - main [ref=e60]:
+      - generic [ref=e61]:
+        - generic [ref=e63]:
+          - generic [ref=e64]:
+            - generic [ref=e65] [cursor=pointer]:
+              - generic [ref=e66]:
+                - generic [ref=e67]:
+                  - img [ref=e68]
+                  - generic [ref=e70]: Project Chat
+                - generic [ref=e71]: Open a project folder, AI helps you code, debug and refactor
+              - button "Select Folder" [ref=e73]:
+                - img
+                - text: Select Folder
+            - generic [ref=e74] [cursor=pointer]:
+              - generic [ref=e75]:
+                - generic [ref=e77]: Personal Assistant
+                - generic [ref=e78]: Set up an AI that remembers you, manages schedule, assists creation
+              - button "Set Up Assistant" [ref=e80]
+          - paragraph [ref=e81]: Project Chat works within a codebase folder. Personal Assistant works across all your tasks without a specific project.
+        - group [ref=e86]:
+          - textbox "Message Claude..." [disabled] [ref=e87]
+          - group [ref=e88]:
+            - generic [ref=e89]:
+              - button [ref=e90]:
+                - img
+              - button [ref=e91]:
+                - img
+              - button [ref=e92]:
+                - img
+              - button "Sonnet 4.6" [ref=e94]:
+                - generic [ref=e95]: Sonnet 4.6
+                - img
+            - button "Submit" [disabled]:
+              - img
+        - generic [ref=e97]:
+          - tablist [ref=e99]:
+            - tab "Code" [selected] [ref=e100]:
+              - img
+              - text: Code
+            - tab "Plan" [ref=e101]:
+              - img
+              - text: Plan
+          - button "Design Agent" [ref=e102]:
+            - img
+            - text: Design Agent
+          - button "Default" [ref=e103]:
+            - img
+            - generic [ref=e104]: Default
+            - img
+  - alert [ref=e105]

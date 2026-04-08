@@ -1,0 +1,361 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e61]:
+      - img "Logo" [ref=e63]
+      - generic [ref=e64]:
+        - button "已连接" [ref=e65]: 已连接
+        - generic [ref=e67]:
+          - button "新对话" [ref=e68]:
+            - img
+            - generic [ref=e69]: 新对话
+          - button "搜索会话..." [ref=e70]:
+            - img
+            - generic [ref=e71]: 搜索会话...
+          - button "文件树" [ref=e72]:
+            - img
+            - generic [ref=e73]: 文件树
+      - navigation [ref=e75]:
+        - generic [ref=e76]:
+          - link "Skills" [ref=e77] [cursor=pointer]:
+            - /url: /skills
+            - img [ref=e78]
+            - generic [ref=e80]: Skills
+          - link "MCP" [ref=e81] [cursor=pointer]:
+            - /url: /mcp
+            - img [ref=e82]
+            - generic [ref=e84]: MCP
+          - link "CLI 工具" [ref=e85] [cursor=pointer]:
+            - /url: /cli-tools
+            - img [ref=e86]
+            - generic [ref=e88]: CLI 工具
+          - link "插件" [ref=e89] [cursor=pointer]:
+            - /url: /plugins
+            - img [ref=e90]
+            - generic [ref=e92]: 插件
+          - link "素材库" [ref=e93] [cursor=pointer]:
+            - /url: /gallery
+            - img [ref=e94]
+            - generic [ref=e96]: 素材库
+          - link "远程桥接" [ref=e97] [cursor=pointer]:
+            - /url: /bridge
+            - img [ref=e98]
+            - generic [ref=e100]: 远程桥接
+      - generic [ref=e102]:
+        - generic [ref=e103]: 对话列表
+        - button "新建项目" [ref=e104]:
+          - img
+          - text: 新建项目
+      - generic [ref=e108]:
+        - generic [ref=e110]:
+          - button "Dismiss" [ref=e111]:
+            - img [ref=e112]
+          - generic [ref=e115]:
+            - paragraph [ref=e116]: 设置你的个人助理 — 记住你的偏好、管理日程、辅助创作
+            - button "设置助理" [ref=e117]
+        - generic [ref=e118]:
+          - generic [ref=e119] [cursor=pointer]:
+            - img [ref=e120]
+            - img [ref=e122]
+            - generic [ref=e124]: CodePilot
+            - generic:
+              - button:
+                - img
+              - button:
+                - img
+          - generic [ref=e126]:
+            - generic [ref=e127]:
+              - link "我想给界面上的提示词输入框里，增加一个按钮，类似于trae的提示词优化，点击后自动优化为ai更容易理... 5分钟" [ref=e539] [cursor=pointer]:
+                - /url: /chat/030590ecfd313dd02dc9dc8ba2f00ad4
+                - generic [ref=e130]: 我想给界面上的提示词输入框里，增加一个按钮，类似于trae的提示词优化，点击后自动优化为ai更容易理...
+                - generic [ref=e132]: 5分钟
+              - button:
+                - img
+            - generic [ref=e133]:
+              - link "背景换成海边 3小时" [ref=e134] [cursor=pointer]:
+                - /url: /chat/d6e434270d5926e637d5747d61802532
+                - generic [ref=e136]: 背景换成海边
+                - generic [ref=e138]: 3小时
+              - button:
+                - img
+            - generic [ref=e139]:
+              - link "Terminal Validation 3小时" [ref=e140] [cursor=pointer]:
+                - /url: /chat/d974596eff3c4ee3f3a08bd1a8785639
+                - generic [ref=e142]: Terminal Validation
+                - generic [ref=e144]: 3小时
+              - button:
+                - img
+            - generic [ref=e145]:
+              - link "Design Diagnose 3小时" [ref=e146] [cursor=pointer]:
+                - /url: /chat/b87696545cbd1934f5f2867b780a5081
+                - generic [ref=e148]: Design Diagnose
+                - generic [ref=e150]: 3小时
+              - button:
+                - img
+            - generic [ref=e151]:
+              - link "终端问题还是没解决，opencode是git上的开源项目，原生支持终端，可以抄一下它的方法，不要浪费... 4小时" [ref=e152] [cursor=pointer]:
+                - /url: /chat/6485ff6afbc18c7e24ad1115da3160ff
+                - generic [ref=e154]: 终端问题还是没解决，opencode是git上的开源项目，原生支持终端，可以抄一下它的方法，不要浪费...
+                - generic [ref=e156]: 4小时
+              - button:
+                - img
+            - generic [ref=e157]:
+              - link "不可用 5小时" [ref=e158] [cursor=pointer]:
+                - /url: /chat/d678437bcdb0055d060b4f9b80f15056
+                - generic [ref=e160]: 不可用
+                - generic [ref=e162]: 5小时
+              - button:
+                - img
+            - generic [ref=e163]:
+              - link "当前的内置浏览器和内置终端都存在问题。 1.内置浏览器的标签页出现时，聊天窗口就不见了，应该和聊天对... 6小时" [ref=e164] [cursor=pointer]:
+                - /url: /chat/9891dd448556d510c131e46a82c251fb
+                - generic [ref=e166]: 当前的内置浏览器和内置终端都存在问题。 1.内置浏览器的标签页出现时，聊天窗口就不见了，应该和聊天对...
+                - generic [ref=e168]: 6小时
+              - button:
+                - img
+        - generic [ref=e170] [cursor=pointer]:
+          - img [ref=e171]
+          - img [ref=e173]
+          - generic [ref=e175]: codepilot
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+        - generic [ref=e177] [cursor=pointer]:
+          - img [ref=e178]
+          - img [ref=e180]
+          - generic [ref=e182]: horsray
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+      - link "设置" [ref=e184] [cursor=pointer]:
+        - /url: /settings
+        - button "设置" [ref=e185]:
+          - img
+          - text: 设置
+    - generic [ref=e224]:
+      - generic [ref=e225]:
+        - generic [ref=e226]: 文件
+        - generic [ref=e227]:
+          - button "新建文件" [ref=e228]:
+            - img
+          - button "新建文件夹" [ref=e229]:
+            - img
+          - button "刷新" [ref=e230]:
+            - img
+      - generic [ref=e232]:
+        - img
+        - textbox "筛选文件..." [ref=e233]
+      - generic [ref=e235]:
+        - generic [ref=e237] [cursor=pointer]:
+          - img [ref=e239]
+          - img [ref=e241]
+          - generic [ref=e243]: apps
+        - generic [ref=e245] [cursor=pointer]:
+          - img [ref=e247]
+          - img [ref=e249]
+          - generic [ref=e251]: dist-electron
+        - generic [ref=e253] [cursor=pointer]:
+          - img [ref=e255]
+          - img [ref=e257]
+          - generic [ref=e259]: docs
+        - generic [ref=e261] [cursor=pointer]:
+          - img [ref=e263]
+          - img [ref=e265]
+          - generic [ref=e267]: electron
+        - generic [ref=e269] [cursor=pointer]:
+          - img [ref=e271]
+          - img [ref=e273]
+          - generic [ref=e275]: playwright-report
+        - generic [ref=e277] [cursor=pointer]:
+          - img [ref=e279]
+          - img [ref=e281]
+          - generic [ref=e283]: public
+        - generic [ref=e285] [cursor=pointer]:
+          - img [ref=e287]
+          - img [ref=e289]
+          - generic [ref=e291]: release
+        - generic [ref=e293] [cursor=pointer]:
+          - img [ref=e295]
+          - img [ref=e297]
+          - generic [ref=e299]: scripts
+        - generic [ref=e301] [cursor=pointer]:
+          - img [ref=e303]
+          - img [ref=e305]
+          - generic [ref=e307]: src
+        - generic [ref=e309] [cursor=pointer]:
+          - img [ref=e311]
+          - img [ref=e313]
+          - generic [ref=e315]: test-results
+        - generic [ref=e317] [cursor=pointer]:
+          - img [ref=e319]
+          - img [ref=e321]
+          - generic [ref=e323]: themes
+        - generic [ref=e325] [cursor=pointer]:
+          - img [ref=e327]
+          - img [ref=e329]
+          - generic [ref=e331]: tmp
+        - generic [ref=e333] [cursor=pointer]:
+          - img [ref=e335]
+          - img [ref=e337]
+          - generic [ref=e339]: 资料
+        - generic [ref=e341] [cursor=pointer]:
+          - img [ref=e342]
+          - generic [ref=e344]: AGENTS.md
+        - generic [ref=e346] [cursor=pointer]:
+          - img [ref=e347]
+          - generic [ref=e349]: ARCHITECTURE.md
+        - generic [ref=e351] [cursor=pointer]:
+          - img [ref=e352]
+          - generic [ref=e354]: CHANGELOG.md
+        - generic [ref=e356] [cursor=pointer]:
+          - img [ref=e357]
+          - generic [ref=e359]: CLAUDE.md
+        - generic [ref=e361] [cursor=pointer]:
+          - img [ref=e362]
+          - generic [ref=e364]: components.json
+        - generic [ref=e366] [cursor=pointer]:
+          - img [ref=e367]
+          - generic [ref=e369]: electron-builder.yml
+        - generic [ref=e371] [cursor=pointer]:
+          - img [ref=e372]
+          - generic [ref=e374]: eslint.config.mjs
+        - generic [ref=e376] [cursor=pointer]:
+          - img [ref=e377]
+          - generic [ref=e379]: issue-screenshot.png
+        - generic [ref=e381] [cursor=pointer]:
+          - img [ref=e382]
+          - generic [ref=e384]: LICENSE
+        - generic [ref=e386] [cursor=pointer]:
+          - img [ref=e387]
+          - generic [ref=e389]: next-env.d.ts
+        - generic [ref=e391] [cursor=pointer]:
+          - img [ref=e392]
+          - generic [ref=e394]: next.config.ts
+        - generic [ref=e396] [cursor=pointer]:
+          - img [ref=e397]
+          - generic [ref=e399]: package-lock.json
+        - generic [ref=e401] [cursor=pointer]:
+          - img [ref=e402]
+          - generic [ref=e404]: package.json
+        - generic [ref=e406] [cursor=pointer]:
+          - img [ref=e407]
+          - generic [ref=e409]: playwright.config.ts
+        - generic [ref=e411] [cursor=pointer]:
+          - img [ref=e412]
+          - generic [ref=e414]: postcss.config.mjs
+        - generic [ref=e416] [cursor=pointer]:
+          - img [ref=e417]
+          - generic [ref=e419]: README_CN.md
+        - generic [ref=e421] [cursor=pointer]:
+          - img [ref=e422]
+          - generic [ref=e424]: README_JA.md
+        - generic [ref=e426] [cursor=pointer]:
+          - img [ref=e427]
+          - generic [ref=e429]: README.md
+        - generic [ref=e431] [cursor=pointer]:
+          - img [ref=e432]
+          - generic [ref=e434]: RELEASE_NOTES.md
+        - generic [ref=e436] [cursor=pointer]:
+          - img [ref=e437]
+          - generic [ref=e439]: tsconfig.json
+        - generic [ref=e441] [cursor=pointer]:
+          - img [ref=e442]
+          - generic [ref=e444]: tsconfig.tsbuildinfo
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e448]:
+          - button "聊天" [ref=e449]:
+            - img [ref=e450]
+            - text: 聊天
+          - button "浏览器" [ref=e452]:
+            - img [ref=e453]
+            - text: 浏览器
+        - generic [ref=e455]:
+          - generic [ref=e456]:
+            - heading "Terminal Validation" [level=2] [ref=e457]
+            - button [ref=e458]:
+              - img
+          - generic [ref=e459]: /
+          - button "CodePilot" [ref=e460]
+        - generic [ref=e461]:
+          - button "main 2 Git" [ref=e462]:
+            - img
+            - generic [ref=e463]: main
+            - generic [ref=e464]:
+              - img
+              - text: "2"
+            - generic [ref=e465]: Git
+          - button "看板" [ref=e466]:
+            - img
+            - generic [ref=e467]: 看板
+          - button "终端" [ref=e468]:
+            - img
+            - generic [ref=e469]: 终端
+      - generic [ref=e6]:
+        - main [ref=e7]:
+          - generic [ref=e471]:
+            - log [ref=e472]:
+              - generic [ref=e474]:
+                - generic [ref=e478]:
+                  - generic [ref=e481]: 画一个红色苹果
+                  - button "Copy" [ref=e483]:
+                    - img
+                - generic [ref=e487]:
+                  - generic [ref=e490]: 画一个红色苹果
+                  - button "Copy" [ref=e492]:
+                    - img
+            - group [ref=e497]:
+              - textbox "Message Claude..." [ref=e498]
+              - group [ref=e499]:
+                - generic [ref=e500]:
+                  - button [ref=e501]:
+                    - img
+                  - button [ref=e502]:
+                    - img
+                  - button [ref=e503]:
+                    - img
+                  - button "Sonnet 4.6 → MiniMax-M2.7" [ref=e505]:
+                    - generic [ref=e506]: Sonnet 4.6 → MiniMax-M2.7
+                    - img
+                - button "Submit" [disabled]:
+                  - img
+            - generic [ref=e507]:
+              - generic [ref=e508]:
+                - tablist [ref=e510]:
+                  - tab "代码" [selected] [ref=e511]:
+                    - img
+                    - text: 代码
+                  - tab "计划" [ref=e512]:
+                    - img
+                    - text: 计划
+                - button "设计 Agent" [ref=e513]:
+                  - img
+                  - text: 设计 Agent
+                - button "默认权限" [ref=e514]:
+                  - img
+                  - generic [ref=e515]: 默认权限
+                  - img
+              - button [ref=e517]:
+                - img
+        - generic [ref=e519]:
+          - generic [ref=e521]:
+            - button "终端" [ref=e522]:
+              - img [ref=e523]
+              - text: 终端
+            - button "控制台" [ref=e525]:
+              - img [ref=e526]
+              - text: 控制台
+            - button [ref=e528]:
+              - img
+            - button "关闭面板" [ref=e529]:
+              - img
+              - generic [ref=e530]: 关闭面板
+          - generic [ref=e537]:
+            - generic:
+              - textbox "Terminal input" [active]
+  - button "Open Next.js Dev Tools" [ref=e57] [cursor=pointer]:
+    - img [ref=e58]
+  - alert [ref=e220]

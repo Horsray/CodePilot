@@ -518,11 +518,13 @@ async function runFeaturesProbe(): Promise<ProbeResult> {
   try {
     const resolved = resolveProvider();
     const protocol = resolved.protocol;
+    const baseUrl = (resolved.provider?.base_url || process.env.ANTHROPIC_BASE_URL || getSetting('anthropic_base_url') || '').trim();
+    const isOfficialAnthropic = baseUrl.startsWith('https://api.anthropic.com');
 
     // Thinking support — only Anthropic native API supports extended thinking
     const thinkingMode = getSetting('thinking_mode');
     if (thinkingMode && thinkingMode !== 'disabled') {
-      const supportsThinking = protocol === 'anthropic';
+      const supportsThinking = protocol === 'anthropic' && isOfficialAnthropic;
       if (!supportsThinking) {
         findings.push({
           severity: 'warn',
@@ -534,7 +536,7 @@ async function runFeaturesProbe(): Promise<ProbeResult> {
         findings.push({
           severity: 'ok',
           code: 'features.thinking-ok',
-          message: `Thinking mode "${thinkingMode}" is compatible with protocol "${protocol}"`,
+          message: `Thinking mode "${thinkingMode}" is compatible with current provider`,
         });
       }
     }
@@ -542,7 +544,7 @@ async function runFeaturesProbe(): Promise<ProbeResult> {
     // Context 1M — check if enabled on unsupported providers
     const context1m = getSetting('context_1m');
     if (context1m === 'true') {
-      const supportsContext1m = protocol === 'anthropic';
+      const supportsContext1m = protocol === 'anthropic' && isOfficialAnthropic;
       if (!supportsContext1m) {
         findings.push({
           severity: 'warn',

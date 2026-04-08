@@ -1007,7 +1007,9 @@ const zh: Record<TranslationKey, string> = {
   // ── Context Usage ─────────────────────────────────────────
   'context.usage': '上下文占用',
   'context.model': '模型',
-  'context.used': '已用',
+  'context.used': '总输入占用',
+  'context.actualContext': '实际上下文',
+  'context.actualCache': '实际缓存',
   'context.total': '总计',
   'context.percentage': '占用',
   'context.cacheRead': '缓存读取',
@@ -1031,6 +1033,13 @@ const zh: Record<TranslationKey, string> = {
   'messageInput.effort.medium': '中',
   'messageInput.effort.high': '高',
   'messageInput.effort.max': '最大',
+  'messageInput.replyMode.label': '回复模式',
+  'messageInput.replyMode.fast': '极速回复',
+  'messageInput.replyMode.fastDesc': '关闭深度推理，优先首字速度',
+  'messageInput.replyMode.smart': '智能切换',
+  'messageInput.replyMode.smartDesc': '普通聊天走快路，复杂任务走深度',
+  'messageInput.replyMode.deep': '深度思考',
+  'messageInput.replyMode.deepDesc': '保留更强推理和复杂上下文',
 
   // ── SDK Capabilities: Rewind ──────────────────────────────
   'messageList.rewindToHere': '回滚到此处',
@@ -1552,6 +1561,18 @@ const zh: Record<TranslationKey, string> = {
 
   // Git (additional)
   'git.initFailed': '初始化仓库失败',
+
+  // Prompt Optimizer
+  'promptOptimizer.title': '优化提示词',
+  'promptOptimizer.optimize': '优化',
+  'promptOptimizer.optimizing': '优化中...',
+  'promptOptimizer.tooltip': '将提示词优化为 AI 更易理解的结构化格式',
+  'promptOptimizer.success': '提示词优化成功',
+  'promptOptimizer.error': '优化失败',
+  'promptOptimizer.cancel': '取消',
+  'promptOptimizer.useOptimized': '使用优化后的提示词',
+  'promptOptimizer.keepOriginal': '保留原提示词',
+  'promptOptimizer.empty': '请先输入提示词',
 };
 
 export default zh;

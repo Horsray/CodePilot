@@ -688,7 +688,11 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
         }
 
         // Pass through SDK-specific options from ClaudeStreamOptions
-        if (thinking) {
+        const supportsAnthropicExtendedFeatures = (() => {
+          const baseUrl = (resolved.provider?.base_url || sdkEnv.ANTHROPIC_BASE_URL || '').trim();
+          return baseUrl.startsWith('https://api.anthropic.com');
+        })();
+        if (thinking && supportsAnthropicExtendedFeatures) {
           queryOptions.thinking = thinking;
         }
         // Always set effort explicitly to prevent user-level ~/.claude/settings.json
@@ -707,7 +711,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
         if (enableFileCheckpointing) {
           queryOptions.enableFileCheckpointing = true;
         }
-        if (context1m) {
+        if (context1m && supportsAnthropicExtendedFeatures) {
           queryOptions.betas = [
             ...(queryOptions.betas || []),
             'context-1m-2025-08-07',

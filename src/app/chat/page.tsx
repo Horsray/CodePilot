@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, SSEEvent, SessionResponse, TokenUsage, PermissionRequestEvent } from '@/types';
+import type { Message, SSEEvent, SessionResponse, TokenUsage, PermissionRequestEvent, ReplyMode } from '@/types';
 import { MessageList } from '@/components/chat/MessageList';
 import { MessageInput } from '@/components/chat/MessageInput';
 import { ChatComposerActionBar } from '@/components/chat/ChatComposerActionBar';
@@ -29,6 +29,8 @@ interface ToolResultInfo {
   content: string;
   is_error?: boolean;
 }
+
+const REPLY_MODE_STORAGE_KEY = 'codepilot:last-reply-mode';
 
 export default function NewChatPage() {
   const router = useRouter();
@@ -85,9 +87,18 @@ export default function NewChatPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
   // Effort level — lifted here so the first message includes it
   const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
+  const [replyMode, setReplyMode] = useState<ReplyMode>('smart');
   // Provider options (thinking mode + 1M context)
   const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
   const [context1m, setContext1m] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(REPLY_MODE_STORAGE_KEY) as ReplyMode | null;
+    if (stored === 'fast' || stored === 'smart' || stored === 'deep') {
+      setReplyMode(stored);
+    }
+  }, []);
+  useEffect(() => { localStorage.setItem(REPLY_MODE_STORAGE_KEY, replyMode); }, [replyMode]);
 
   // Fetch provider-specific options (with abort to prevent stale responses on fast switch)
   useEffect(() => {
@@ -500,9 +511,9 @@ export default function NewChatPage() {
         setMessages([userMessage]);
 
         // Build thinking config from settings
-        const thinkingConfig = thinkingMode && thinkingMode !== 'adaptive'
+        const thinkingConfig = replyMode === 'deep' && thinkingMode && thinkingMode !== 'adaptive'
           ? { type: thinkingMode }
-          : thinkingMode === 'adaptive' ? { type: 'adaptive' } : undefined;
+          : replyMode === 'deep' && thinkingMode === 'adaptive' ? { type: 'adaptive' } : undefined;
 
         // Send the message via streaming API
         const response = await fetch('/api/chat', {
@@ -514,8 +525,9 @@ export default function NewChatPage() {
             mode,
             model: currentModel,
             provider_id: currentProviderId,
+            reply_mode: replyMode,
             ...(systemPromptAppend ? { systemPromptAppend } : {}),
-            ...(selectedEffort ? { effort: selectedEffort } : {}),
+            ...(replyMode === 'deep' && selectedEffort ? { effort: selectedEffort } : {}),
             ...(thinkingConfig ? { thinking: thinkingConfig } : {}),
             ...(context1m ? { context_1m: true } : {}),
             ...(displayOverride ? { displayOverride } : {}),
@@ -702,7 +714,7 @@ export default function NewChatPage() {
         abortControllerRef.current = null;
       }
     },
-    [isStreaming, router, workingDir, mode, currentModel, currentProviderId, permissionProfile, selectedEffort, thinkingMode, context1m, setPendingApprovalSessionId, t, hasProvider, modelReady]
+    [isStreaming, router, workingDir, mode, currentModel, currentProviderId, permissionProfile, replyMode, selectedEffort, thinkingMode, context1m, setPendingApprovalSessionId, t, hasProvider, modelReady]
   );
 
   const handleCommand = useCallback((command: string) => {
@@ -814,6 +826,8 @@ export default function NewChatPage() {
         workingDirectory={workingDir}
         effort={selectedEffort}
         onEffortChange={setSelectedEffort}
+        replyMode={replyMode}
+        onReplyModeChange={setReplyMode}
         initialValue={prefillText}
       />
       <ChatComposerActionBar

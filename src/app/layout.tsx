@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "@xterm/xterm/css/xterm.css";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { ThemeFamilyProvider } from "@/components/layout/ThemeFamilyProvider";
 import { I18nProvider } from "@/components/layout/I18nProvider";

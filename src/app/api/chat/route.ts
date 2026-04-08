@@ -25,10 +25,21 @@ export async function POST(request: NextRequest) {
   let activeSessionId: string | undefined;
   let activeLockId: string | undefined;
 
+  // ── Timing instrumentation ────────────────────────────────────────────
+  type TimingMap = Record<string, number>;
+  const T: TimingMap & { _last?: number } = { total: Date.now() };
+  const track = (label: string) => {
+    const now = Date.now();
+    console.log(`[TIMING] ${label}: ${now - T.total}ms (delta: ${now - (T._last || T.total)}ms)`);
+    T[label] = now;
+    T._last = now;
+  };
+
   try {
     const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean } = await request.json();
     const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m } = body;
 
+    track('request_received');
     console.log('[chat API] content length:', content.length, 'first 200 chars:', content.slice(0, 200));
     console.log('[chat API] systemPromptAppend:', systemPromptAppend ? `${systemPromptAppend.length} chars` : 'none');
 
@@ -39,6 +50,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    track('db_getSession');
     const session = getSession(session_id);
     if (!session) {
       return new Response(JSON.stringify({ error: 'Session not found' }), {
@@ -49,6 +61,7 @@ export async function POST(request: NextRequest) {
 
     // Acquire exclusive lock for this session to prevent concurrent requests
     const lockId = crypto.randomBytes(8).toString('hex');
+    track('db_acquireLock');
     const lockAcquired = acquireSessionLock(session_id, lockId, `chat-${process.pid}`, 600);
     if (!lockAcquired) {
       return new Response(
@@ -211,6 +224,7 @@ export async function POST(request: NextRequest) {
     // Load conversation history from DB as fallback context.
     // Fetch up to 200 messages (DB query is cheap); actual truncation is done
     // by buildFallbackContext using a token budget, not a fixed message count.
+    track('db_getMessages');
     const { messages: recentMsgs } = getMessages(session_id, { limit: 200, excludeHeartbeatAck: true });
     // Exclude the user message we just saved (last in the list) — it's already the prompt
     const historyMsgs = recentMsgs.slice(0, -1).map(m => ({
@@ -253,6 +267,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Unified context assembly — extracts workspace, CLI tools, widget prompt
+    track('before_assembleContext');
     const assembled = await assembleContext({
       session,
       entryPoint: 'desktop',
@@ -262,6 +277,7 @@ export async function POST(request: NextRequest) {
       imageAgentMode: isImageAgentMode,
       autoTrigger: !!autoTrigger,
     });
+    track('after_assembleContext');
     const finalSystemPrompt = assembled.systemPrompt;
     const generativeUIEnabled = assembled.generativeUIEnabled;
     const assistantProjectInstructions = assembled.assistantProjectInstructions;
@@ -354,6 +370,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Stream Claude response, using SDK session ID for resume if available
+    track('before_streamClaude');
     console.log('[chat API] streamClaude params:', {
       promptLength: content.length,
       promptFirst200: content.slice(0, 200),
@@ -392,6 +409,7 @@ export async function POST(request: NextRequest) {
         try { setSessionRuntimeStatus(session_id, status); } catch { /* best effort */ }
       },
     });
+    track('streamClaude_returned');
 
     // Tee the stream: one for client, one for collecting the response
     const [streamForClient, streamForCollect] = stream.tee();

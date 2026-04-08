@@ -54,7 +54,7 @@ export interface ProviderFormData {
   provider_type: string;
   protocol?: string;
   base_url: string;
-  api_key: string;
+  api_key?: string;
   extra_env: string;
   headers_json?: string;
   env_overrides_json?: string;
@@ -83,7 +83,24 @@ export function ProviderForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const { t } = useTranslation();
+
+  // Clean bedrock/vertex-specific keys from extra_env
+  const cleanExtraEnv = (extraEnvStr: string, type: string): string => {
+    if (type === 'bedrock' || type === 'vertex') return extraEnvStr;
+    try {
+      const extra = JSON.parse(extraEnvStr || '{}');
+      const toRemove: string[] = [];
+      if (extra.CLAUDE_CODE_USE_BEDROCK) toRemove.push('CLAUDE_CODE_USE_BEDROCK', 'AWS_REGION', 'CLAUDE_CODE_SKIP_BEDROCK_AUTH');
+      if (extra.CLAUDE_CODE_USE_VERTEX) toRemove.push('CLAUDE_CODE_USE_VERTEX', 'CLOUD_ML_REGION', 'CLAUDE_CODE_SKIP_VERTEX_AUTH');
+      if (toRemove.length > 0) {
+        for (const k of toRemove) delete extra[k];
+        return JSON.stringify(extra);
+      }
+    } catch { /* ignore */ }
+    return extraEnvStr;
+  };
 
   // Reset form when dialog opens
   useEffect(() => {
@@ -95,16 +112,18 @@ export function ProviderForm({
       setName(provider.name);
       setProviderType(provider.provider_type);
       setBaseUrl(provider.base_url);
-      // Show masked key so user sees dots indicating a key exists
-      setApiKey(provider.api_key || "");
-      setExtraEnv(provider.extra_env || "{}");
+      setHasStoredApiKey(!!provider.api_key);
+      setApiKey("");
+      // Clean bedrock/vertex keys that don't match current provider_type
+      const cleanedExtraEnv = cleanExtraEnv(provider.extra_env || "{}", provider.provider_type);
+      setExtraEnv(cleanedExtraEnv);
       setHeadersJson(provider.headers_json || "{}");
       setEnvOverridesJson(provider.env_overrides_json || "");
       setRoleModelsJson(provider.role_models_json || "{}");
       setNotes(provider.notes || "");
       // Show advanced if extra_env or new fields have content
       try {
-        const parsed = JSON.parse(provider.extra_env || "{}");
+        const parsed = JSON.parse(cleanedExtraEnv);
         const hasHeaders = provider.headers_json && provider.headers_json !== "{}";
         const hasEnvOverrides = provider.env_overrides_json && provider.env_overrides_json !== "";
         const hasRoleModels = provider.role_models_json && provider.role_models_json !== "{}";
@@ -117,6 +136,7 @@ export function ProviderForm({
       setProviderType(initialPreset.provider_type);
       setBaseUrl(initialPreset.base_url);
       setApiKey("");
+      setHasStoredApiKey(false);
       // Use extra_env from preset if provided, otherwise look up by type
       const envStr = initialPreset.extra_env || PROVIDER_PRESETS[initialPreset.provider_type]?.extra_env || "{}";
       setExtraEnv(envStr);
@@ -138,6 +158,7 @@ export function ProviderForm({
       setRoleModelsJson("{}");
       setNotes("");
       setShowAdvanced(false);
+      setHasStoredApiKey(false);
     }
   }, [open, mode, provider, initialPreset]);
 
@@ -182,13 +203,14 @@ export function ProviderForm({
     try {
       // Always sync protocol with provider_type to prevent stale protocol after edits
       const derivedProtocol = PROVIDER_PRESETS[providerType]?.protocol || providerType;
+      const apiKeyForSave = mode === "edit" ? (apiKey.trim() ? apiKey : undefined) : apiKey;
 
       await onSave({
         name: name.trim(),
         provider_type: providerType,
         protocol: derivedProtocol,
         base_url: baseUrl.trim(),
-        api_key: apiKey,
+        ...(apiKeyForSave !== undefined ? { api_key: apiKeyForSave } : {}),
         extra_env: extraEnv,
         headers_json: headersJson.trim() || "{}",
         env_overrides_json: envOverridesJson.trim() || "",
@@ -204,6 +226,7 @@ export function ProviderForm({
   };
 
   const isMaskedKey = mode === "edit" && apiKey?.startsWith("***");
+  const showKeepKeyHint = mode === "edit" && hasStoredApiKey && !apiKey.trim();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -271,16 +294,20 @@ export function ProviderForm({
             <Input
               id="provider-api-key"
               type="password"
-              placeholder={isMaskedKey ? "Leave empty to keep current key" : "sk-ant-..."}
+              placeholder={showKeepKeyHint ? "Leave empty to keep current key" : "sk-ant-..."}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               className="font-mono text-sm"
             />
-            {isMaskedKey && (
+            {(isMaskedKey || showKeepKeyHint) && (
               <p className="text-[11px] text-muted-foreground">
                 {t('nav.chats') === '对话'
-                  ? '当前显示的是掩码。直接保存会保留原 API Key，只有重新输入才会替换。'
-                  : 'This field is masked. Saving without changes keeps the current API key; re-enter it only if you want to replace it.'}
+                  ? (showKeepKeyHint
+                    ? '该服务商已保存密钥（为安全不显示）。留空保存会保留原值，重新输入才会替换。'
+                    : '当前显示的是掩码。直接保存会保留原 API Key，只有重新输入才会替换。')
+                  : (showKeepKeyHint
+                    ? 'This provider already has a saved key (hidden for security). Leave blank to keep it; enter a new one to replace it.'
+                    : 'This field is masked. Saving without changes keeps the current API key; re-enter it only if you want to replace it.')}
               </p>
             )}
           </div>

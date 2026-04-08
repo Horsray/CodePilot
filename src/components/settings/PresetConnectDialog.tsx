@@ -94,6 +94,7 @@ export function PresetConnectDialog({
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; error?: { code: string; message: string; suggestion: string; recoveryActions?: Array<{ label: string; url?: string; action?: string }> } } | null>(null);
+  const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const { t } = useTranslation();
   const isZh = t('nav.chats') === '对话';
 
@@ -111,7 +112,7 @@ export function PresetConnectDialog({
       } catch { /* ignore */ }
       
       // Check if we should use cc-switch config (when apiKey is empty and preset is custom)
-      const useCCSwitch = !apiKey && (preset?.key === 'custom-anthropic' || preset?.key === 'custom-openai');
+      const useCCSwitch = !apiKey && preset?.key === 'custom-anthropic';
       
       const res = await fetch('/api/providers/test', {
         method: 'POST',
@@ -150,6 +151,7 @@ export function PresetConnectDialog({
       setName(editProvider.name);
       setBaseUrl(editProvider.base_url);
       setExtraEnv(editProvider.extra_env || preset.extra_env);
+      setHasStoredApiKey(!!editProvider.api_key);
       // Use preset authStyle as source of truth; fall back to extra_env inference for legacy records
       let detected: 'auth_token' | 'api_key' = preset.authStyle === 'auth_token' ? 'auth_token' : 'api_key';
       if (preset.key === 'anthropic-thirdparty') {
@@ -170,7 +172,7 @@ export function PresetConnectDialog({
           : (presetEnv['ANTHROPIC_API_KEY'] || '');
         setApiKey(defaultToken);
       } else {
-        setApiKey(editProvider.api_key || "");
+        setApiKey("");
       }
       // Pre-fill advanced fields
       setHeadersJson(editProvider.headers_json || "{}");
@@ -242,6 +244,7 @@ export function PresetConnectDialog({
       } else {
         setApiKey("");
       }
+      setHasStoredApiKey(false);
       setAuthStyle(detectedStyle);
       setInitialAuthStyle(detectedStyle);
       setMapSonnet("");
@@ -258,6 +261,7 @@ export function PresetConnectDialog({
 
   if (!preset) return null;
   const isMaskedApiKey = isEdit && apiKey.startsWith("***");
+  const showKeepKeyHint = isEdit && hasStoredApiKey && !apiKey.trim();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -269,6 +273,18 @@ export function PresetConnectDialog({
         ? '切换认证方式后需要重新输入密钥'
         : 'Please re-enter the key after changing auth style');
       return;
+    }
+
+    if (preset.fields.includes("api_key")) {
+      if (isEdit) {
+        if (!apiKey.trim() && !hasStoredApiKey) {
+          setError(isZh ? '请输入 API Key' : 'Please enter the API key');
+          return;
+        }
+      } else if (!apiKey.trim()) {
+        setError(isZh ? '请输入 API Key' : 'Please enter the API key');
+        return;
+      }
     }
 
     // For anthropic-thirdparty, inject the correct auth key into extra_env
@@ -416,7 +432,7 @@ export function PresetConnectDialog({
         provider_type: preset.provider_type,
         protocol: preset.protocol,
         base_url: baseUrl.trim(),
-        api_key: apiKey,
+        ...((!isEdit || apiKey.trim()) ? { api_key: apiKey } : {}),
         extra_env: finalExtraEnv,
         role_models_json: roleModelsJson,
         headers_json: isEdit ? headersJson.trim() || "{}" : undefined,
@@ -579,11 +595,11 @@ export function PresetConnectDialog({
                     onValueChange={(v) => {
                       const newStyle = v as "api_key" | "auth_token";
                       setAuthStyle(newStyle);
-                      if (isEdit && editProvider?.api_key) {
+                      if (isEdit) {
                         if (newStyle !== initialAuthStyle) {
                           setApiKey("");
                         } else {
-                          setApiKey(editProvider.api_key);
+                          setApiKey("");
                         }
                       }
                     }}
@@ -606,11 +622,15 @@ export function PresetConnectDialog({
                   autoFocus
                 />
               </div>
-              {isMaskedApiKey && (
+              {(isMaskedApiKey || showKeepKeyHint) && (
                 <p className="text-[11px] text-muted-foreground">
                   {isZh
-                    ? '当前显示的是掩码。直接保存会保留原 API Key，只有重新输入才会替换。'
-                    : 'This field is masked. Saving without changes keeps the current API key; re-enter it only if you want to replace it.'}
+                    ? (showKeepKeyHint
+                      ? '该服务商已保存密钥（为安全不显示）。留空保存会保留原值，重新输入才会替换。'
+                      : '当前显示的是掩码。直接保存会保留原 API Key，只有重新输入才会替换。')
+                    : (showKeepKeyHint
+                      ? 'This provider already has a saved key (hidden for security). Leave blank to keep it; enter a new one to replace it.'
+                      : 'This field is masked. Saving without changes keeps the current API key; re-enter it only if you want to replace it.')}
                 </p>
               )}
               {/* Show auth style badge for non-thirdparty presets (auto-determined) */}
@@ -844,7 +864,7 @@ export function PresetConnectDialog({
                 type="button"
                 variant="outline"
                 onClick={handleTestConnection}
-                disabled={saving || testing || (!apiKey && preset.fields.includes("api_key") && preset.key !== 'custom-anthropic' && preset.key !== 'custom-openai')}
+                disabled={saving || testing || (!apiKey && preset.fields.includes("api_key") && preset.key !== 'custom-anthropic')}
                 className="gap-1.5"
               >
                 {testing ? <SpinnerGap size={14} className="animate-spin" /> : <Lightning size={14} />}

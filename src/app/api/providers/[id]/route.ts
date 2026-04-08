@@ -49,9 +49,15 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       );
     }
 
-    // If api_key starts with ***, the client sent back a masked value — don't update it
-    if (body.api_key && body.api_key.startsWith('***')) {
-      delete body.api_key;
+    if (typeof body.api_key === 'string' && body.api_key.startsWith('***')) {
+      if (body.api_key.length === 11) {
+        delete body.api_key;
+      } else {
+        return NextResponse.json<ErrorResponse>(
+          { error: 'Invalid api_key: looks like a masked value. Please clear the field and paste the full key again.' },
+          { status: 400 }
+        );
+      }
     }
 
     const updated = updateProvider(id, body);

@@ -1,7 +1,8 @@
 'use client';
 
 import { useRef, useState, useCallback, useEffect, type KeyboardEvent, type FormEvent } from 'react';
-import { Terminal } from "@/components/ui/icon";
+import { perf } from '@/lib/performance-logger';
+import { Terminal, Sparkle } from "@/components/ui/icon";
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import {
@@ -12,7 +13,7 @@ import {
   PromptInputButton,
 } from '@/components/ai-elements/prompt-input';
 import type { ChatStatus } from 'ai';
-import type { FileAttachment } from '@/types';
+import type { FileAttachment, ReplyMode } from '@/types';
 import { SlashCommandButton } from './SlashCommandButton';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { CliToolsPopover } from './CliToolsPopover';
@@ -35,6 +36,9 @@ import { useCliToolsFetch } from '@/hooks/useCliToolsFetch';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { resolveKeyAction, cycleIndex, resolveDirectSlash, dispatchBadge, buildCliAppend } from '@/lib/message-input-logic';
 import { QuickActions } from './QuickActions';
+import { usePromptOptimize } from '@/hooks/usePromptOptimize';
+import { Spinner } from '@/components/ui/spinner';
+import { ReplyModeSelectorDropdown } from './ReplyModeSelectorDropdown';
 
 interface MessageInputProps {
   onSend: (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => void;
@@ -52,6 +56,8 @@ interface MessageInputProps {
   /** Effort selection lifted to parent for inclusion in the stream chain */
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
+  replyMode?: ReplyMode;
+  onReplyModeChange?: (mode: ReplyMode) => void;
   /** SDK init metadata — when available, used to validate command/skill availability */
   sdkInitMeta?: { tools?: unknown; slash_commands?: unknown; skills?: unknown } | null;
   /** Initial value to prefill in the input */
@@ -77,6 +83,8 @@ export function MessageInput({
   onAssistantTrigger,
   effort: effortProp,
   onEffortChange,
+  replyMode = 'smart',
+  onReplyModeChange,
   sdkInitMeta,
   initialValue,
   isAssistantProject,
@@ -90,6 +98,10 @@ export function MessageInput({
   // key={initialValue} on the parent would be the canonical React way to reset,
   // but since this component remounts on navigation, useState(initialValue) is sufficient.
   const [inputValue, setInputValue] = useState(initialValue || '');
+
+  // Prompt optimizer state
+  const { isOptimizing, optimize } = usePromptOptimize();
+  const [optimizedPrompt, setOptimizedPrompt] = useState<string | null>(null);
 
   // --- Extracted hooks ---
   const popover = usePopoverState(modelName);
@@ -154,6 +166,32 @@ export function MessageInput({
     }
   }, [onAssistantTrigger]);
 
+  // Prompt optimization handler
+  const handleOptimizePrompt = useCallback(async () => {
+    const content = inputValue.trim();
+    if (!content) return;
+
+    const language = locale === 'zh' ? 'zh' : 'en';
+    const result = await optimize(content, language);
+    if (result) {
+      setOptimizedPrompt(result.optimized);
+    }
+  }, [inputValue, locale, optimize]);
+
+  // Accept optimized prompt
+  const handleUseOptimized = useCallback(() => {
+    if (optimizedPrompt) {
+      setInputValue(optimizedPrompt);
+      setOptimizedPrompt(null);
+      textareaRef.current?.focus();
+    }
+  }, [optimizedPrompt]);
+
+  // Discard optimized prompt
+  const handleKeepOriginal = useCallback(() => {
+    setOptimizedPrompt(null);
+  }, []);
+
   // Listen for file tree "+" button: insert @filepath into textarea
   useEffect(() => {
     const handler = (e: Event) => {
@@ -171,10 +209,15 @@ export function MessageInput({
   }, []);
 
   const handleSubmit = useCallback(async (msg: { text: string; files: Array<{ type: string; url: string; filename?: string; mediaType?: string }> }, e: FormEvent<HTMLFormElement>) => {
+    // 性能追踪开始
+    perf.init('MessageInput.handleSubmit');
+    perf.mark('submit_formEvent');
+
     e.preventDefault();
     const content = inputValue.trim();
 
     popover.closePopover();
+    perf.mark('submit_popoverClose');
 
     // Convert PromptInput FileUIParts (with data URLs) to FileAttachment[]
     const convertFiles = async (): Promise<FileAttachment[]> => {
@@ -330,7 +373,7 @@ export function MessageInput({
 
   // Effort selector state — guard against undefined when model not found in current provider's list
   const currentModelMeta = currentModelOption as (typeof currentModelOption & { supportsEffort?: boolean; supportedEffortLevels?: string[] }) | undefined;
-  const showEffortSelector = currentModelMeta?.supportsEffort === true;
+  const showEffortSelector = currentModelMeta?.supportsEffort === true && replyMode === 'deep';
   const [localEffort, setLocalEffort] = useState<string>('high');
   const selectedEffort = effortProp ?? localEffort;
   const setSelectedEffort = useCallback((v: string) => {
@@ -425,6 +468,34 @@ export function MessageInput({
               disabled={disabled}
               className="min-h-10"
             />
+
+            {/* Optimized prompt preview */}
+            {optimizedPrompt && (
+              <div className="px-3 py-2 bg-muted/50 border border-border rounded-md mx-2 my-1">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {t('promptOptimizer.title' as TranslationKey)}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleKeepOriginal}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {t('promptOptimizer.keepOriginal' as TranslationKey)}
+                    </button>
+                    <button
+                      onClick={handleUseOptimized}
+                      className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+                    >
+                      {t('promptOptimizer.useOptimized' as TranslationKey)}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-foreground/80 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                  {optimizedPrompt}
+                </p>
+              </div>
+            )}
             <PromptInputFooter>
               <PromptInputTools>
                 {/* Attach file button */}
@@ -445,6 +516,21 @@ export function MessageInput({
                   </TooltipContent>
                 </Tooltip>
 
+                {/* Prompt optimizer button */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PromptInputButton
+                      onClick={handleOptimizePrompt}
+                      disabled={isOptimizing || !inputValue.trim()}
+                    >
+                      {isOptimizing ? <Spinner /> : <Sparkle size={16} />}
+                    </PromptInputButton>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {t('promptOptimizer.tooltip' as TranslationKey)}
+                  </TooltipContent>
+                </Tooltip>
+
                 {/* Model selector */}
                 <ModelSelectorDropdown
                   currentModelValue={currentModelValue}
@@ -455,6 +541,11 @@ export function MessageInput({
                   onProviderModelChange={onProviderModelChange}
                   globalDefaultModel={globalDefaultModel}
                   globalDefaultProvider={globalDefaultProvider}
+                />
+
+                <ReplyModeSelectorDropdown
+                  replyMode={replyMode}
+                  onReplyModeChange={(mode) => onReplyModeChange?.(mode)}
                 />
 
                 {/* Effort selector — only visible when model supports effort */}

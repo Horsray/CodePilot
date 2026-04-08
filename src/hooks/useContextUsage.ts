@@ -5,9 +5,15 @@ import { getContextWindow } from '@/lib/model-context';
 export interface ContextUsageData {
   modelName: string;
   contextWindow: number | null;
-  /** Actual token usage from the last API response */
+  /** Total input footprint from the last API response */
   used: number;
-  /** Ratio of actual usage to context window */
+  /** Uncached input tokens actually sent in the request */
+  actualContextTokens: number;
+  /** Prompt cache tokens read back by the provider */
+  actualCacheReadTokens: number;
+  /** Prompt cache tokens newly written by the provider */
+  actualCacheCreationTokens: number;
+  /** Ratio of total input footprint to context window */
   ratio: number;
   /** Estimated next-turn token usage (input + output + ~200 for new message overhead) */
   estimatedNextTurn: number;
@@ -34,6 +40,9 @@ export function useContextUsage(
       modelName,
       contextWindow,
       used: 0,
+      actualContextTokens: 0,
+      actualCacheReadTokens: 0,
+      actualCacheCreationTokens: 0,
       ratio: 0,
       estimatedNextTurn: 0,
       estimatedNextRatio: 0,
@@ -76,6 +85,9 @@ export function useContextUsage(
           modelName,
           contextWindow,
           used,
+          actualContextTokens: inputTokens,
+          actualCacheReadTokens: cacheRead,
+          actualCacheCreationTokens: cacheCreation,
           ratio,
           estimatedNextTurn,
           estimatedNextRatio,

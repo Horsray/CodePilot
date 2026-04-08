@@ -1010,7 +1010,9 @@ const en = {
   // ── Context Usage ─────────────────────────────────────────
   'context.usage': 'Context Usage',
   'context.model': 'Model',
-  'context.used': 'Used',
+  'context.used': 'Total Input',
+  'context.actualContext': 'Actual Context',
+  'context.actualCache': 'Actual Cache',
   'context.total': 'Total',
   'context.percentage': 'Usage',
   'context.cacheRead': 'Cache Read',
@@ -1034,6 +1036,13 @@ const en = {
   'messageInput.effort.medium': 'Medium',
   'messageInput.effort.high': 'High',
   'messageInput.effort.max': 'Max',
+  'messageInput.replyMode.label': 'Reply Mode',
+  'messageInput.replyMode.fast': 'Fast Reply',
+  'messageInput.replyMode.fastDesc': 'Prefer first-token speed over deep reasoning',
+  'messageInput.replyMode.smart': 'Smart Switch',
+  'messageInput.replyMode.smartDesc': 'Use fast chat for simple turns and deep mode for heavy tasks',
+  'messageInput.replyMode.deep': 'Deep Thinking',
+  'messageInput.replyMode.deepDesc': 'Keep stronger reasoning and heavier context handling',
 
   // ── SDK Capabilities: Rewind ──────────────────────────────
   'messageList.rewindToHere': 'Rewind to here',
@@ -1555,6 +1564,18 @@ const en = {
 
   // Git (additional)
   'git.initFailed': 'Failed to initialize repository',
+
+  // Prompt Optimizer
+  'promptOptimizer.title': 'Optimize Prompt',
+  'promptOptimizer.optimize': 'Optimize',
+  'promptOptimizer.optimizing': 'Optimizing...',
+  'promptOptimizer.tooltip': 'Transform prompt into structured, AI-friendly format',
+  'promptOptimizer.success': 'Prompt optimized successfully',
+  'promptOptimizer.error': 'Optimization failed',
+  'promptOptimizer.cancel': 'Cancel',
+  'promptOptimizer.useOptimized': 'Use Optimized',
+  'promptOptimizer.keepOriginal': 'Keep Original',
+  'promptOptimizer.empty': 'Please enter a prompt first',
 } as const;
 
 export type TranslationKey = keyof typeof en;
