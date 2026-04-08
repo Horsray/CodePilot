@@ -5,6 +5,12 @@ import { getDefaultModelsForProvider, inferProtocolFromLegacy, findPresetForLega
 import { readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 import type { Protocol } from '@/lib/provider-catalog';
 import type { ErrorResponse, ProviderModelGroup } from '@/types';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 // Default Claude model options (for the built-in 'env' provider)
 const DEFAULT_MODELS = [
@@ -22,14 +28,12 @@ interface CCSwitchMapping {
 }
 
 function getCCSwitchModelMapping(): CCSwitchMapping | null {
+  if (getSetting('cc_switch_enabled') !== 'true') return null;
   const settings = readCCSwitchClaudeSettings();
   if (!settings) return null;
   
   // Read the raw settings.json to get the actual model names
   try {
-    const fs = require('fs');
-    const path = require('path');
-    const os = require('os');
     const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
     const content = fs.readFileSync(settingsPath, 'utf-8');
     const rawSettings = JSON.parse(content);

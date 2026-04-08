@@ -444,6 +444,10 @@ const zh: Record<TranslationKey, string> = {
   'imageGen.retryButton': '重试',
   'imageGen.generatingStatus': '正在生成...',
   'imageGen.stopButton': '停止',
+  'imageGen.provider': '生图服务',
+  'imageGen.providerLoading': '加载生图服务...',
+  'imageGen.providerTarget': '请求地址',
+  'imageGen.noProviderConfigured': '未配置可用的生图服务，请先在设置 > 服务商中添加 Google Gemini 或通用中转平台',
 
   // ── Batch Image Generation ─────────────────────────────────
   'batchImageGen.toggle': '批量生图',
@@ -1144,6 +1148,8 @@ const zh: Record<TranslationKey, string> = {
   'topBar.commit': '提交',
   'topBar.push': '推送',
   'topBar.terminal': '终端',
+  'topBar.chat': '聊天',
+  'topBar.browser': '浏览器',
 
   // ── Dashboard ─────────────────────────────────────────────────
   'dashboard.title': '看板',
@@ -1357,6 +1363,11 @@ const zh: Record<TranslationKey, string> = {
   'terminal.connecting': '连接中...',
   'terminal.disconnected': '已断开',
   'terminal.exited': '进程已退出',
+  'terminal.terminalErrorTitle': '终端错误',
+  'terminal.failedToConnect': '无法连接到终端服务',
+  'terminal.terminalError': '终端错误: {{error}}',
+  'terminal.terminalErrorHint': '这通常是终端后端未能在 Node.js 环境启动（例如被错误地运行在 Edge Runtime）或系统缺少 script 命令导致的。请重启应用并重新构建/安装依赖。',
+  'terminal.retry': '重试',
 
   // ── Setup Center ──────────────────────────────────────────────
   'setup.title': '欢迎使用 CodePilot',

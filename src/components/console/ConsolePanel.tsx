@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Trash, ArrowDown, Funnel, X } from "@/components/ui/icon";
+import { Trash, ArrowDown } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/hooks/useTranslation";
 
@@ -32,17 +32,19 @@ const LEVEL_BG: Record<LogLevel, string> = {
 };
 
 let entryIdCounter = 0;
+const CONSOLE_BRIDGE_KEY = "__codepilot_console_bridge_installed__" as const;
 
 export function ConsolePanel() {
   const { t } = useTranslation();
-  const [entries, setEntries] = useState<ConsoleEntry[]>([]);
+  const [runtimeEntries, setRuntimeEntries] = useState<ConsoleEntry[]>([]);
+  const [eventEntries, setEventEntries] = useState<ConsoleEntry[]>([]);
   const [filter, setFilter] = useState<LogLevel | "all">("all");
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Add a log entry
   const addEntry = useCallback((level: LogLevel, message: string, source?: string) => {
-    setEntries((prev) => {
+    setEventEntries((prev) => {
       const next = [
         ...prev,
         {
@@ -56,6 +58,68 @@ export function ConsolePanel() {
       // Keep max 2000 entries
       return next.length > 2000 ? next.slice(-2000) : next;
     });
+  }, []);
+
+  useEffect(() => {
+    const globalScope = window as Window & { [CONSOLE_BRIDGE_KEY]?: boolean };
+    if (globalScope[CONSOLE_BRIDGE_KEY]) return;
+
+    const installBridge = <T extends keyof Console>(level: T, eventLevel: LogLevel) => {
+      const original = console[level] as (...args: unknown[]) => void;
+      console[level] = ((...args: unknown[]) => {
+        const message = args
+          .map((arg) => {
+            if (typeof arg === "string") return arg;
+            try {
+              return JSON.stringify(arg);
+            } catch {
+              return String(arg);
+            }
+          })
+          .join(" ");
+        window.dispatchEvent(new CustomEvent("console-log", {
+          detail: { level: eventLevel, message, source: "browser" },
+        }));
+        original.apply(console, args);
+      }) as Console[T];
+    };
+
+    installBridge("log", "log");
+    installBridge("info", "info");
+    installBridge("warn", "warn");
+    installBridge("error", "error");
+    installBridge("debug", "debug");
+    globalScope[CONSOLE_BRIDGE_KEY] = true;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRuntimeLogs = async () => {
+      try {
+        const res = await fetch('/api/runtime-logs', { cache: 'no-store' });
+        if (!res.ok || cancelled) return;
+        const data: { logs?: Array<{ level: LogLevel; message: string; timestamp: string }> } = await res.json();
+        if (cancelled) return;
+        const next = (data.logs || []).map((entry, index) => ({
+          id: -(new Date(entry.timestamp).getTime() + index + 1),
+          level: entry.level,
+          message: entry.message,
+          timestamp: new Date(entry.timestamp).getTime(),
+          source: 'runtime',
+        }));
+        setRuntimeEntries(next);
+      } catch {
+        // ignore polling failures
+      }
+    };
+
+    void loadRuntimeLogs();
+    const timer = window.setInterval(loadRuntimeLogs, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   // Listen for console events from the built-in browser iframe
@@ -87,7 +151,7 @@ export function ConsolePanel() {
     if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [entries, autoScroll]);
+  }, [runtimeEntries, eventEntries, autoScroll]);
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
@@ -96,7 +160,9 @@ export function ConsolePanel() {
   }, []);
 
   const clearEntries = useCallback(() => {
-    setEntries([]);
+    setEventEntries([]);
+    setRuntimeEntries([]);
+    fetch('/api/runtime-logs', { method: 'DELETE' }).catch(() => {});
   }, []);
 
   const scrollToBottom = useCallback(() => {
@@ -106,6 +172,7 @@ export function ConsolePanel() {
     }
   }, []);
 
+  const entries = [...runtimeEntries, ...eventEntries].sort((a, b) => a.timestamp - b.timestamp);
   const filteredEntries = filter === "all" ? entries : entries.filter((e) => e.level === filter);
 
   const formatTime = (ts: number) => {

@@ -27,6 +27,14 @@ import { QUICK_PRESETS } from "./provider-presets";
 import type { ApiProvider } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
+import {
+  DEFAULT_MEDIA_RELAY_PROTOCOL,
+  getConfiguredImageModelNames,
+  getMediaRelayEndpoint,
+  getMediaRelayProtocol,
+  parseModelNames,
+  type MediaRelayProtocol,
+} from "@/lib/image-provider-utils";
 
 /** Infer auth style from base URL by fuzzy-matching preset hostnames */
 function inferAuthStyleFromUrl(url: string): "api_key" | "auth_token" | null {
@@ -66,6 +74,9 @@ export function PresetConnectDialog({
   const [name, setName] = useState("");
   const [extraEnv, setExtraEnv] = useState("{}");
   const [modelName, setModelName] = useState("");
+  const [modelNamesText, setModelNamesText] = useState("");
+  const [mediaProtocol, setMediaProtocol] = useState<MediaRelayProtocol>(DEFAULT_MEDIA_RELAY_PROTOCOL);
+  const [mediaEndpoint, setMediaEndpoint] = useState("");
   // Auth style for anthropic-thirdparty: 'api_key' or 'auth_token'
   const [authStyle, setAuthStyle] = useState<"api_key" | "auth_token">("api_key");
   // Track the initial auth style to detect changes
@@ -90,6 +101,9 @@ export function PresetConnectDialog({
     setTesting(true);
     setTestResult(null);
     try {
+      const effectiveModelName = preset?.key === 'custom-media'
+        ? parseModelNames(modelNamesText || modelName)[0]
+        : modelName.trim();
       const envOverrides: Record<string, string> = {};
       try {
         const parsed = JSON.parse(extraEnv || '{}');
@@ -109,7 +123,7 @@ export function PresetConnectDialog({
           protocol: preset?.protocol || 'anthropic',
           authStyle: preset?.key === 'anthropic-thirdparty' ? authStyle : (preset?.authStyle || authStyle),
           envOverrides,
-          modelName: modelName || undefined,
+          modelName: effectiveModelName || undefined,
           providerName: name || preset?.name,
           useCCSwitch,
         }),
@@ -162,15 +176,28 @@ export function PresetConnectDialog({
       setHeadersJson(editProvider.headers_json || "{}");
       setEnvOverridesJson(editProvider.env_overrides_json || "");
       setNotes(editProvider.notes || "");
+      setMediaProtocol(
+        preset.key === "custom-media"
+          ? getMediaRelayProtocol(editProvider)
+          : DEFAULT_MEDIA_RELAY_PROTOCOL
+      );
+      setMediaEndpoint(
+        preset.key === "custom-media"
+          ? getMediaRelayEndpoint(editProvider)
+          : ""
+      );
       // Pre-fill model name from role_models_json
       try {
         const rm = JSON.parse(editProvider.role_models_json || "{}");
-        setModelName(rm.default || "");
+        const configuredModelNames = getConfiguredImageModelNames(editProvider);
+        setModelName(configuredModelNames[0] || rm.default || "");
+        setModelNamesText(configuredModelNames.join("\n"));
         setMapSonnet(rm.sonnet || "");
         setMapOpus(rm.opus || "");
         setMapHaiku(rm.haiku || "");
       } catch {
         setModelName("");
+        setModelNamesText("");
         setMapSonnet("");
         setMapOpus("");
         setMapHaiku("");
@@ -201,6 +228,7 @@ export function PresetConnectDialog({
       setName(preset.name);
       setExtraEnv(preset.extra_env);
       setModelName("");
+      setModelNamesText("");
       // Use authStyle directly from preset (single source of truth)
       const detectedStyle = (preset.authStyle === 'auth_token' ? 'auth_token' : 'api_key') as 'api_key' | 'auth_token';
       // If preset doesn't expose api_key field, pre-fill from extra_env default
@@ -222,11 +250,14 @@ export function PresetConnectDialog({
       setHeadersJson("{}");
       setEnvOverridesJson("");
       setNotes("");
+      setMediaProtocol(preset.key === "custom-media" ? "openai-images" : DEFAULT_MEDIA_RELAY_PROTOCOL);
+      setMediaEndpoint(preset.key === "custom-media" ? "/v1/images/generations" : "");
       setShowAdvanced(false);
     }
   }, [open, preset, isEdit, editProvider]);
 
   if (!preset) return null;
+  const isMaskedApiKey = isEdit && apiKey.startsWith("***");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -299,17 +330,75 @@ export function PresetConnectDialog({
     // If the preset exposes model_names and user cleared it, remove the default key.
     if (preset.fields.includes("model_names")) {
       const existing = (() => { try { return JSON.parse(roleModelsJson); } catch { return {}; } })();
-      if (modelName.trim()) {
-        roleModelsJson = JSON.stringify({ ...existing, default: modelName.trim() });
+      const configuredModelNames = preset.key === "custom-media"
+        ? parseModelNames(modelNamesText || modelName)
+        : parseModelNames(modelName);
+
+      if (preset.key === "custom-media" && configuredModelNames.length === 0) {
+        setError(isZh
+          ? '通用中转平台至少需要填写一个模型名称'
+          : 'Relay image provider requires at least one model name');
+        return;
+      }
+
+      if (configuredModelNames.length > 0) {
+        roleModelsJson = JSON.stringify({ ...existing, default: configuredModelNames[0] });
       } else {
         delete existing.default;
         roleModelsJson = JSON.stringify(existing);
       }
     }
 
+    if (envOverridesJson.trim()) {
+      try {
+        JSON.parse(envOverridesJson);
+      } catch {
+        setError('Env overrides must be valid JSON');
+        return;
+      }
+    }
+
+    const finalEnvOverridesJson = (() => {
+      const base = (() => { try { return JSON.parse(envOverridesJson || "{}"); } catch { return {}; } })();
+      if (preset.key === "custom-media" && preset.fields.includes("model_names")) {
+        const configuredModelNames = parseModelNames(modelNamesText || modelName);
+        if (configuredModelNames.length > 0) {
+          base.model_names = configuredModelNames.join(",");
+        } else {
+          delete base.model_names;
+        }
+      }
+      return Object.keys(base).length > 0 ? JSON.stringify(base) : "";
+    })();
+
+    const finalOptionsJson = (() => {
+      if (preset.key !== "custom-media") {
+        return isEdit ? editProvider?.options_json || "{}" : "{}";
+      }
+      const existing = (() => {
+        try {
+          return JSON.parse(editProvider?.options_json || "{}");
+        } catch {
+          return {};
+        }
+      })();
+      const nextOptions = {
+        ...existing,
+        media_protocol: mediaProtocol,
+      } as Record<string, unknown>;
+      if (mediaEndpoint.trim()) {
+        nextOptions.media_endpoint = mediaEndpoint.trim();
+      } else {
+        delete nextOptions.media_endpoint;
+      }
+      return JSON.stringify(nextOptions);
+    })();
+
     // Validate JSON fields
     for (const [label, val] of [
       ["Extra environment variables", finalExtraEnv],
+      ["Env overrides", finalEnvOverridesJson],
+      ["Options", finalOptionsJson],
       ...(isEdit ? [["Headers", headersJson]] : []),
     ] as const) {
       if (val && val.trim()) {
@@ -331,7 +420,8 @@ export function PresetConnectDialog({
         extra_env: finalExtraEnv,
         role_models_json: roleModelsJson,
         headers_json: isEdit ? headersJson.trim() || "{}" : undefined,
-        env_overrides_json: isEdit ? envOverridesJson.trim() || "" : undefined,
+        env_overrides_json: finalEnvOverridesJson,
+        options_json: finalOptionsJson,
         notes: isEdit ? notes.trim() : "",
       });
       onOpenChange(false);
@@ -422,6 +512,58 @@ export function PresetConnectDialog({
             </div>
           )}
 
+          {preset.key === "custom-media" && (
+            <>
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">
+                  {isZh ? "接口协议" : "Protocol"}
+                </Label>
+                <Select
+                  value={mediaProtocol}
+                  onValueChange={(value) => setMediaProtocol(value as MediaRelayProtocol)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openai-images">
+                      {isZh ? "OpenAI 图片接口" : "OpenAI Images API"}
+                    </SelectItem>
+                    <SelectItem value="custom-image">
+                      {isZh ? "自定义图片接口" : "Custom Image API"}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  {mediaProtocol === "openai-images"
+                    ? (isZh
+                      ? "适用于 /v1/images/generations 这类 OpenAI-compatible 生图接口。"
+                      : "Use this for OpenAI-compatible image endpoints such as /v1/images/generations.")
+                    : (isZh
+                      ? "适用于返回 { images: [...] } 的自定义中转接口。"
+                      : "Use this for custom relay APIs that return { images: [...] }.")}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">
+                  {isZh ? "接口地址" : "Endpoint"}
+                </Label>
+                <Input
+                  value={mediaEndpoint}
+                  onChange={(e) => setMediaEndpoint(e.target.value)}
+                  placeholder={mediaProtocol === "openai-images" ? "/v1/images/generations" : "https://api.example.com/image/generate"}
+                  className="text-sm font-mono"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  {isZh
+                    ? "可填写相对路径或完整 URL。留空时，自定义接口直接请求 Base URL，OpenAI 图片接口默认补成 /v1/images/generations。"
+                    : "Use a relative path or full URL. Leave empty to call Base URL directly for custom relays, or default to /v1/images/generations for OpenAI Images."}
+                </p>
+              </div>
+            </>
+          )}
+
           {/* API Key with optional auth style select */}
           {preset.fields.includes("api_key") && (
             <div className="space-y-2">
@@ -464,6 +606,13 @@ export function PresetConnectDialog({
                   autoFocus
                 />
               </div>
+              {isMaskedApiKey && (
+                <p className="text-[11px] text-muted-foreground">
+                  {isZh
+                    ? '当前显示的是掩码。直接保存会保留原 API Key，只有重新输入才会替换。'
+                    : 'This field is masked. Saving without changes keeps the current API key; re-enter it only if you want to replace it.'}
+                </p>
+              )}
               {/* Show auth style badge for non-thirdparty presets (auto-determined) */}
               {preset.key !== "anthropic-thirdparty" && (
                 <p className="text-[11px] text-muted-foreground">
@@ -496,16 +645,34 @@ export function PresetConnectDialog({
           {preset.fields.includes("model_names") && (
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">{t('provider.modelName' as TranslationKey)}</Label>
-              <Input
-                value={modelName}
-                onChange={(e) => setModelName(e.target.value)}
-                placeholder="ark-code-latest"
-                className="text-sm font-mono"
-              />
+              {preset.key === "custom-media" ? (
+                <Textarea
+                  value={modelNamesText}
+                  onChange={(e) => {
+                    setModelNamesText(e.target.value);
+                    const names = parseModelNames(e.target.value);
+                    setModelName(names[0] || "");
+                  }}
+                  placeholder={"gemini-2.5-flash-image\nimagen-4.0-generate-preview"}
+                  className="text-sm font-mono min-h-[88px]"
+                  rows={4}
+                />
+              ) : (
+                <Input
+                  value={modelName}
+                  onChange={(e) => setModelName(e.target.value)}
+                  placeholder="ark-code-latest"
+                  className="text-sm font-mono"
+                />
+              )}
               <p className="text-[11px] text-muted-foreground">
-                {isZh
-                  ? '在服务商控制台配置的模型名称，如 ark-code-latest、doubao-seed-2.0-code'
-                  : 'Model name configured in provider console, e.g. ark-code-latest'}
+                {preset.key === "custom-media"
+                  ? (isZh
+                    ? '每行一个或用逗号分隔。首个模型会作为默认值，生成时可在图片卡片里切换。'
+                    : 'One model per line or comma-separated. The first model becomes the default, and users can switch models in the image card.')
+                  : (isZh
+                    ? '在服务商控制台配置的模型名称，如 ark-code-latest、doubao-seed-2.0-code'
+                    : 'Model name configured in provider console, e.g. ark-code-latest')}
               </p>
             </div>
           )}

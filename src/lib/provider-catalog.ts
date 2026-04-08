@@ -10,6 +10,7 @@
  */
 
 import { z } from 'zod';
+import { isOfficialGeminiImageProvider } from '@/lib/image-provider-utils';
 
 // ── Protocol types ──────────────────────────────────────────────
 
@@ -637,6 +638,27 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
+  // ── 通用中转平台 (Media) ──
+  {
+    key: 'custom-media',
+    name: '通用中转平台',
+    description: 'Custom media中转平台 — 完全自定义配置',
+    descriptionZh: '通用中转平台 — 自定义 baseurl、apikey、model',
+    protocol: 'gemini-image',
+    authStyle: 'api_key',
+    baseUrl: '',
+    defaultEnvOverrides: { GEMINI_API_KEY: '' },
+    defaultModels: [
+      { modelId: 'gemini-3.1-flash-image-preview', displayName: '默认模型' },
+    ],
+    fields: ['name', 'api_key', 'base_url', 'model_names'],
+    category: 'media',
+    iconKey: 'server',
+    meta: {
+      billingModel: 'self_hosted',
+    },
+  },
+
 ];
 
 // ── Runtime preset validation (fails fast on invalid presets) ───
@@ -746,7 +768,11 @@ export function findPresetForLegacy(baseUrl: string, providerType: string, proto
   if (providerType === 'bedrock') return VENDOR_PRESETS.find(p => p.key === 'bedrock');
   if (providerType === 'vertex') return VENDOR_PRESETS.find(p => p.key === 'vertex');
   if (providerType === 'openrouter') return VENDOR_PRESETS.find(p => p.key === 'openrouter');
-  if (providerType === 'gemini-image') return VENDOR_PRESETS.find(p => p.key === 'gemini-image');
+  if (providerType === 'gemini-image') {
+    return VENDOR_PRESETS.find(p => p.key === (
+      isOfficialGeminiImageProvider({ base_url: baseUrl }) ? 'gemini-image' : 'custom-media'
+    ));
+  }
   if (providerType === 'anthropic' && baseUrl === 'https://api.anthropic.com') {
     return VENDOR_PRESETS.find(p => p.key === 'anthropic-official');
   }

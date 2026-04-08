@@ -115,9 +115,11 @@ export function BuiltinBrowser({ initialUrl }: BuiltinBrowserProps) {
 
   // Navigate to initial URL on mount
   useEffect(() => {
-    if (initialUrl) {
+    if (!initialUrl) return;
+    const timer = setTimeout(() => {
       navigate(initialUrl);
-    }
+    }, 0);
+    return () => clearTimeout(timer);
   }, [initialUrl, navigate]);
 
   // Listen for browser-navigate events (from preview prompt)

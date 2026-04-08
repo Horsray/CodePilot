@@ -10,6 +10,7 @@ import {
   Brain,
   Terminal,
   Globe,
+  ChatCircle,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +48,9 @@ export function UnifiedTopBar() {
     setBottomPanelTab,
     browserTabOpen,
     setBrowserTabOpen,
+    browserUrl,
+    mainViewMode,
+    setMainViewMode,
   } = usePanel();
   const { t } = useTranslation();
   const { isWindows } = useClientPlatform();
@@ -136,7 +140,43 @@ export function UnifiedTopBar() {
         className="flex h-12 shrink-0 items-center gap-2 bg-background px-3"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        {/* Left: chat title + project folder */}
+        {/* Left: Main view tabs (Chat / Browser) */}
+        <div
+          className="flex items-center gap-1 shrink-0"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <div className="flex items-center border border-border/40 rounded-md overflow-hidden">
+            <button
+              onClick={() => setMainViewMode("chat")}
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
+                mainViewMode === "chat"
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+            >
+              <ChatCircle size={14} />
+              {t('topBar.chat')}
+            </button>
+            <button
+              onClick={() => {
+                if (!browserTabOpen) {
+                  setBrowserTabOpen(true);
+                }
+                setMainViewMode("browser");
+              }}
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
+                mainViewMode === "browser"
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+            >
+              <Globe size={14} />
+              {t('topBar.browser')}
+            </button>
+          </div>
+        </div>
+
+        {/* Middle: chat title + project folder */}
         <div
           className="flex items-center gap-1.5 min-w-0 shrink"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -282,23 +322,7 @@ export function UnifiedTopBar() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{t('bottomPanel.terminal')}</TooltipContent>
               </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={browserTabOpen ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    className={browserTabOpen ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => setBrowserTabOpen(!browserTabOpen)}
-                  >
-                    <Globe size={16} />
-                    <span className="sr-only">{t('bottomPanel.browser')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t('bottomPanel.browser')}</TooltipContent>
-              </Tooltip>
-            </>
-          )}
+            </>)}
           {isWindows && <div style={{ width: 138 }} className="shrink-0" />}
         </div>
       </div>

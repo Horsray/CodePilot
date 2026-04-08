@@ -55,4 +55,10 @@
 
 | 文件 | 主题 | 完成日期 |
 |------|------|----------|
+| completed/design-agent-structured-output-fix.md | 设计 Agent 结构化输出修复 | 2026-04-08 |
 | completed/engineering-quality-assurance.md | 工程质量保障体系（Harness Engineering）— 验证闭环、AI 文档、CDP、执行计划 | 2026-03-04 |
+| completed/image-provider-model-routing.md | 生图中转模型路由与错误治理 | 2026-04-08 |
+| completed/image-provider-selection.md | 生图服务选择与错误可见性修复 | 2026-04-08 |
+| completed/media-relay-endpoint-adaptation.md | 生图中转接口地址与协议适配 | 2026-04-08 |
+| completed/provider-edit-routing-fix.md | 服务商编辑路由修复 | 2026-04-08 |
+| completed/terminal-console-remediation.md | 内置终端 / Console 修复与 Trae 风格联动优化 | 2026-04-08 |

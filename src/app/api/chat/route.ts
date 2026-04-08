@@ -6,6 +6,7 @@ import { notifySessionStart, notifySessionComplete, notifySessionError } from '@
 import { extractCompletion } from '@/lib/onboarding-completion';
 import { loadCodePilotMcpServers } from '@/lib/mcp-loader';
 import { assembleContext } from '@/lib/context-assembler';
+import { buildImageAgentFallbackText, IMAGE_AGENT_OUTPUT_FORMAT } from '@/lib/image-agent-structured';
 import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, FileAttachment, ClaudeStreamOptions, MediaBlock } from '@/types';
 import { saveMediaToLibrary } from '@/lib/media-saver';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
@@ -224,6 +225,33 @@ export async function POST(request: NextRequest) {
     // not just any systemPromptAppend (which could come from CLI badges or skills).
     const isImageAgentMode = !!systemPromptAppend && systemPromptAppend.includes('image-gen-request');
 
+    if (isImageAgentMode && shouldBypassImagePlanner(content, fileAttachments)) {
+      const directText = buildImageAgentFallbackText(content);
+      if (directText) {
+        const directStream = new ReadableStream<string>({
+          start(controller) {
+            controller.enqueue(`data: ${JSON.stringify({ type: 'text', data: directText })}\n\n`);
+            controller.enqueue(`data: ${JSON.stringify({ type: 'done', data: '' })}\n\n`);
+            controller.close();
+          },
+        });
+        const [streamForClient, streamForCollect] = directStream.tee();
+
+        collectStreamResponse(streamForCollect, session_id, telegramNotifyOpts, () => {
+          releaseSessionLock(session_id, lockId);
+          setSessionRuntimeStatus(session_id, 'idle');
+        }, { isHeartbeatTurn: false, suppressNotifications: !!autoTrigger });
+
+        return new Response(streamForClient, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        });
+      }
+    }
+
     // Unified context assembly — extracts workspace, CLI tools, widget prompt
     const assembled = await assembleContext({
       session,
@@ -353,8 +381,9 @@ export async function POST(request: NextRequest) {
       sessionSummary: activeSessionSummary,
       fallbackTokenBudget,
       bypassPermissions,
-      thinking: thinking as ClaudeStreamOptions['thinking'],
+      thinking: isImageAgentMode ? { type: 'disabled' } : thinking as ClaudeStreamOptions['thinking'],
       effort: effort as ClaudeStreamOptions['effort'],
+      outputFormat: isImageAgentMode ? IMAGE_AGENT_OUTPUT_FORMAT : undefined,
       context1m: context_1m,
       generativeUI: generativeUIEnabled,
       enableFileCheckpointing: enableFileCheckpointing ?? true,
@@ -801,6 +830,15 @@ async function collectStreamResponse(
     }
     onComplete?.();
   }
+}
+
+function shouldBypassImagePlanner(content: string, files?: FileAttachment[]): boolean {
+  if (files?.some(file => file.type && !file.type.startsWith('image/'))) {
+    return false;
+  }
+
+  const needsPlanning = /(批量|多张|多个|一组|分别|每个|列表|清单|文档|表格|表单|海报合集|批处理|batch|multiple|several|each|list|document|pdf|ppt|docx|csv)/i.test(content);
+  return !needsPlanning;
 }
 
 /**

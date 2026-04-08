@@ -4,7 +4,9 @@
  */
 import { NextRequest } from 'next/server';
 import { getPtySession } from '@/lib/pty-manager';
+import { drainTerminalOutput } from '@/lib/terminal-output-store';
 
+export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
@@ -26,6 +28,11 @@ export async function GET(request: NextRequest) {
     start(controller) {
       // Send initial connected event
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'connected', id })}\n\n`));
+
+      const initialOutput = drainTerminalOutput(id);
+      if (initialOutput) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'output', data: initialOutput })}\n\n`));
+      }
 
       // Subscribe to PTY output
       const dataHandler = session.process.onData((data: string) => {

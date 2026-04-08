@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, useEffect } from "react";
 import { useWebTerminal } from "@/hooks/useWebTerminal";
+import { usePanel } from "@/hooks/usePanel";
 import { XtermTerminal } from "@/components/terminal/XtermTerminal";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/button";
 import { SpinnerGap } from "@/components/ui/icon";
 import type { Terminal } from "@xterm/xterm";
 
@@ -11,44 +13,83 @@ import type { Terminal } from "@xterm/xterm";
  * WebTerminalPanel — wraps XtermTerminal with the web-based PTY backend.
  */
 export function WebTerminalPanel() {
+  const { workingDirectory, sessionId } = usePanel();
+  const terminalIdentity = `${sessionId || 'default'}:${workingDirectory || 'workspace-default'}`;
+
+  return <WebTerminalSession key={terminalIdentity} />;
+}
+
+function WebTerminalSession() {
   const { t } = useTranslation();
-  const webTerminal = useWebTerminal();
+  const terminal = useWebTerminal();
   const xtermRef = useRef<Terminal | null>(null);
+  const [terminalKey, setTerminalKey] = useState(0);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [connectionAttempted, setConnectionAttempted] = useState(false);
 
   const handleData = useCallback(
     (data: string) => {
-      webTerminal.write(data);
+      terminal.write(data);
     },
-    [webTerminal]
+    [terminal]
   );
 
   const handleResize = useCallback(
     (cols: number, rows: number) => {
-      webTerminal.resize(cols, rows);
+      terminal.resize(cols, rows);
     },
-    [webTerminal]
+    [terminal]
   );
 
   const handleReady = useCallback(
-    (term: Terminal) => {
+    async (term: Terminal) => {
       xtermRef.current = term;
       setReady(true);
+      setConnectionAttempted(true);
+      setError(null);
 
       // Subscribe to PTY output → write to xterm
-      webTerminal.setOnData((data: string) => {
+      terminal.setOnData((data: string) => {
         term.write(data);
       });
 
       // Create PTY session with current terminal dimensions
-      webTerminal.create(term.cols, term.rows);
+      try {
+        await terminal.create(term.cols, term.rows);
+      } catch (err) {
+        setError(t('terminal.terminalError', { error: err instanceof Error ? err.message : 'Unknown error' }));
+      }
     },
-    [webTerminal]
+    [terminal, t]
   );
+
+  // Check if terminal connection failed
+  useEffect(() => {
+    if (!connectionAttempted || terminal.connected || error || terminal.exited) return;
+    const timer = setTimeout(() => {
+      setError(t('terminal.failedToConnect'));
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [connectionAttempted, error, t, terminal.connected, terminal.exited]);
+
+  const handleRetry = useCallback(() => {
+    setError(null);
+    setConnectionAttempted(false);
+    setReady(false);
+    void terminal.kill();
+    // Re-initialize terminal
+    if (xtermRef.current) {
+      xtermRef.current.dispose();
+      xtermRef.current = null;
+    }
+    setTerminalKey((k) => k + 1);
+  }, [terminal]);
 
   return (
     <div className="h-full w-full relative">
       <XtermTerminal
+        key={terminalKey}
         onData={handleData}
         onResize={handleResize}
         onReady={handleReady}
@@ -56,6 +97,23 @@ export function WebTerminalPanel() {
       {!ready && (
         <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a2e]">
           <SpinnerGap size={20} className="animate-spin text-muted-foreground" />
+        </div>
+      )}
+      {error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1a1a2e] p-4">
+          <div className="text-red-400 mb-2">⚠️ {t('terminal.terminalErrorTitle')}</div>
+          <div className="text-sm text-gray-400 mb-4 text-center max-w-md">
+            {error}
+          </div>
+          <div className="text-xs text-gray-500 mb-4">
+            {t('terminal.terminalErrorHint')}
+          </div>
+          <Button
+            onClick={handleRetry}
+            className="px-4 py-2 text-sm"
+          >
+            {t('terminal.retry')}
+          </Button>
         </div>
       )}
     </div>

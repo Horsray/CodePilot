@@ -4,6 +4,7 @@ import { generateSingleImage, NoImageGeneratedError } from '@/lib/image-generato
 interface GenerateRequest {
   prompt: string;
   model?: string;
+  providerId?: string;
   aspectRatio?: string;
   imageSize?: string;
   referenceImages?: { mimeType: string; data: string }[];
@@ -29,6 +30,7 @@ export async function POST(request: NextRequest) {
     const result = await generateSingleImage({
       prompt: body.prompt,
       model: body.model,
+      providerId: body.providerId,
       aspectRatio: body.aspectRatio,
       imageSize: body.imageSize,
       referenceImages: body.referenceImages,
@@ -41,7 +43,10 @@ export async function POST(request: NextRequest) {
         id: result.mediaGenerationId,
         text: '',
         images: result.images,
-        model: body.model || 'gemini-3-pro-image-preview',
+        model: result.model,
+        providerId: result.providerId,
+        providerName: result.providerName,
+        providerLabel: result.providerLabel,
         imageSize: body.imageSize || '1K',
         elapsedMs: result.elapsedMs,
       }),

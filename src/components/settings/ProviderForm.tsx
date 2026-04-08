@@ -59,6 +59,7 @@ export interface ProviderFormData {
   headers_json?: string;
   env_overrides_json?: string;
   role_models_json?: string;
+  options_json?: string;
   notes: string;
 }
 
@@ -275,6 +276,13 @@ export function ProviderForm({
               onChange={(e) => setApiKey(e.target.value)}
               className="font-mono text-sm"
             />
+            {isMaskedKey && (
+              <p className="text-[11px] text-muted-foreground">
+                {t('nav.chats') === '对话'
+                  ? '当前显示的是掩码。直接保存会保留原 API Key，只有重新输入才会替换。'
+                  : 'This field is masked. Saving without changes keeps the current API key; re-enter it only if you want to replace it.'}
+              </p>
+            )}
           </div>
 
           {/* Advanced options toggle */}

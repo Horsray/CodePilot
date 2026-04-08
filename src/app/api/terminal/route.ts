@@ -7,6 +7,15 @@ import {
   getPtySession,
   listPtySessions,
 } from '@/lib/pty-manager';
+import {
+  appendTerminalOutput,
+  clearTerminalOutput,
+  drainTerminalOutput,
+  resetTerminalOutput,
+} from '@/lib/terminal-output-store';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 /**
  * Terminal PTY API — REST-based terminal management.
@@ -14,23 +23,6 @@ import {
  * POST: create / write / resize / kill terminal sessions
  * GET:  read output from a terminal session (polling)
  */
-
-// Buffer terminal output for polling
-const outputBuffers = new Map<string, string[]>();
-const MAX_BUFFER_SIZE = 1000;
-
-function appendOutput(id: string, data: string) {
-  let buf = outputBuffers.get(id);
-  if (!buf) {
-    buf = [];
-    outputBuffers.set(id, buf);
-  }
-  buf.push(data);
-  // Trim old entries
-  if (buf.length > MAX_BUFFER_SIZE) {
-    buf.splice(0, buf.length - MAX_BUFFER_SIZE);
-  }
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -45,12 +37,12 @@ export async function POST(request: NextRequest) {
         const session = createPtySession(id, cwd || process.cwd(), cols || 120, rows || 30);
 
         // Wire up output buffering
-        outputBuffers.set(id, []);
+        resetTerminalOutput(id);
         session.process.onData((chunk: string) => {
-          appendOutput(id, chunk);
+          appendTerminalOutput(id, chunk);
         });
         session.process.onExit(({ exitCode }: { exitCode: number }) => {
-          appendOutput(id, `\r\n[Process exited with code ${exitCode}]\r\n`);
+          appendTerminalOutput(id, `\r\n[Process exited with code ${exitCode}]\r\n`);
         });
 
         return NextResponse.json({ success: true, id: session.id, cwd: session.cwd });
@@ -83,7 +75,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: 'id is required' }, { status: 400 });
         }
         killPtySession(id);
-        outputBuffers.delete(id);
+        clearTerminalOutput(id);
         return NextResponse.json({ success: true });
       }
 
@@ -110,17 +102,15 @@ export async function GET(request: NextRequest) {
   }
 
   const session = getPtySession(id);
-  const buf = outputBuffers.get(id);
+  const output = drainTerminalOutput(id);
+  const alive = !!session;
 
-  if (!buf) {
+  if (!alive && output.length === 0) {
     return NextResponse.json({ error: 'Session not found', alive: false }, { status: 404 });
   }
 
-  // Drain buffer
-  const output = buf.splice(0, buf.length).join('');
-
   return NextResponse.json({
     output,
-    alive: !!session,
+    alive,
   });
 }

@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
     const workingDir = cwd || getSetting('working_directory') || process.cwd();
 
     // Get list of remotes
-    let remotes: { name: string; url: string }[] = [];
+    const remotes: { name: string; url: string }[] = [];
     try {
       const output = execSync('git remote -v', {
         cwd: workingDir,

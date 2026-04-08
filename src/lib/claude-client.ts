@@ -26,6 +26,7 @@ import { findClaudeBinary, findGitBash, getExpandedPath, invalidateClaudePathCac
 import { notifyPermissionRequest, notifyGeneric } from './telegram-bot';
 import { classifyError, formatClassifiedError } from './error-classifier';
 import { resolveWorkingDirectory } from './working-directory';
+import { buildImageAgentFallbackText, structuredImageAgentResultToText } from './image-agent-structured';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -437,6 +438,8 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     async start(controller) {
       // Flag to prevent infinite PTL retry loops (at most one retry per request)
       let ptlRetryAttempted = false;
+      let streamedAssistantText = '';
+      let emittedImageAgentBlock = false;
 
       // Resolve provider via the unified resolver. The caller may pass an explicit
       // provider (from resolveProvider().provider), or undefined when 'env' mode is
@@ -1192,6 +1195,10 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
               if (evt.type === 'content_block_delta' && 'delta' in evt) {
                 const delta = evt.delta;
                 if ('text' in delta && delta.text) {
+                  streamedAssistantText = (streamedAssistantText + delta.text).slice(-8000);
+                  if (!emittedImageAgentBlock && /```(image-gen-request|batch-plan)/.test(streamedAssistantText)) {
+                    emittedImageAgentBlock = true;
+                  }
                   controller.enqueue(formatSSE({ type: 'text', data: delta.text }));
                 }
                 if ('thinking' in delta && (delta as { thinking?: string }).thinking) {
@@ -1290,8 +1297,21 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
 
             case 'result': {
               const resultMsg = message as SDKResultMessage;
-              tokenUsage = extractTokenUsage(resultMsg);
-              controller.enqueue(formatSSE({
+              if ('structured_output' in resultMsg && resultMsg.structured_output !== undefined) {
+                const structuredText = structuredImageAgentResultToText(resultMsg.structured_output, prompt);
+                if (structuredText) {
+                  emittedImageAgentBlock = true;
+                  controller.enqueue(formatSSE({ type: 'text', data: structuredText }));
+                }
+              } else if (imageAgentMode && !emittedImageAgentBlock) {
+                const fallbackText = buildImageAgentFallbackText(prompt);
+                if (fallbackText) {
+                  emittedImageAgentBlock = true;
+                  controller.enqueue(formatSSE({ type: 'text', data: fallbackText }));
+                }
+              }
+                  tokenUsage = extractTokenUsage(resultMsg);
+                  controller.enqueue(formatSSE({
                 type: 'result',
                 data: JSON.stringify({
                   subtype: resultMsg.subtype,
@@ -1418,6 +1438,9 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
             if (systemPrompt) {
               retryOptions.systemPrompt = { type: 'preset', preset: 'claude_code', append: systemPrompt };
             }
+            if (outputFormat) {
+              retryOptions.outputFormat = outputFormat;
+            }
 
             const retryConversation = query({ prompt: retryPrompt, options: retryOptions });
 
@@ -1494,6 +1517,10 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
                   const se = msg as { type: 'stream_event'; event: { type: string; delta?: { text?: string; thinking?: string }; index?: number } };
                   if (se.event.type === 'content_block_delta') {
                     if (se.event.delta?.text) {
+                      streamedAssistantText = (streamedAssistantText + se.event.delta.text).slice(-8000);
+                      if (!emittedImageAgentBlock && /```(image-gen-request|batch-plan)/.test(streamedAssistantText)) {
+                        emittedImageAgentBlock = true;
+                      }
                       controller.enqueue(formatSSE({ type: 'text', data: se.event.delta.text }));
                     }
                     if (se.event.delta?.thinking) {
@@ -1504,6 +1531,19 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
                 }
                 case 'result': {
                   const rMsg = msg as SDKResultMessage;
+                  if ('structured_output' in rMsg && rMsg.structured_output !== undefined) {
+                    const structuredText = structuredImageAgentResultToText(rMsg.structured_output, prompt);
+                    if (structuredText) {
+                      emittedImageAgentBlock = true;
+                      controller.enqueue(formatSSE({ type: 'text', data: structuredText }));
+                    }
+                  } else if (imageAgentMode && !emittedImageAgentBlock) {
+                    const fallbackText = buildImageAgentFallbackText(prompt);
+                    if (fallbackText) {
+                      emittedImageAgentBlock = true;
+                      controller.enqueue(formatSSE({ type: 'text', data: fallbackText }));
+                    }
+                  }
                   if ('result' in rMsg) {
                     const usage = extractTokenUsage(rMsg as SDKResultSuccess);
                     if (usage) {
@@ -1619,6 +1659,109 @@ export async function testProviderConnection(config: {
     };
   }
 
+  // Handle Gemini image generation protocol
+  if (config.protocol === 'gemini-image') {
+    let apiUrl = config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+    // Ensure URL ends with /models/{model}:generateContent
+    apiUrl = apiUrl.replace(/\/+$/, '');
+    // 使用官方推荐的图片生成模型
+    const geminiModel = model || 'gemini-3-pro-image-preview';
+    apiUrl += `/models/${geminiModel}:generateContent`;
+
+    // Build headers
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    // Gemini uses API key in query parameter, not header
+
+    // Minimal request body for Gemini
+    const body = JSON.stringify({
+      contents: [{
+        parts: [{
+          text: 'ping'
+        }]
+      }]
+    });
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15_000);
+
+    try {
+      // Add API key as query parameter for Gemini
+      const url = new URL(apiUrl);
+      url.searchParams.append('key', config.apiKey);
+
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      // 2xx = success
+      if (response.ok) {
+        return { success: true };
+      }
+
+      // Parse error response
+      let errorBody = '';
+      try { errorBody = await response.text(); } catch { /* ignore */ }
+
+      const classified = classifyError({
+        error: new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`),
+        providerName: config.providerName,
+        baseUrl: config.baseUrl,
+        providerMeta: config.providerMeta,
+      });
+
+      return {
+        success: false,
+        error: {
+          code: classified.category,
+          message: classified.userMessage,
+          suggestion: classified.actionHint,
+          recoveryActions: classified.recoveryActions,
+        },
+      };
+    } catch (err) {
+      clearTimeout(timeoutId);
+      
+      // Handle timeout specifically
+      if (err instanceof Error && err.name === 'AbortError') {
+        return {
+          success: false,
+          error: {
+            code: 'TIMEOUT',
+            message: 'Connection timed out. The Gemini API may be unreachable from your network.',
+            suggestion: 'Check your network connection or try using a different API endpoint.',
+            recoveryActions: [
+              { label: 'Verify you have internet access' },
+              { label: 'Try using a VPN if you\'re in a region with network restrictions' },
+              { label: 'Check if the Gemini API is available in your region' },
+            ],
+          },
+        };
+      }
+      
+      const classified = classifyError({
+        error: err instanceof Error ? err : new Error('Network error'),
+        providerName: config.providerName,
+        baseUrl: config.baseUrl,
+        providerMeta: config.providerMeta,
+      });
+      return {
+        success: false,
+        error: {
+          code: classified.category,
+          message: classified.userMessage,
+          suggestion: classified.actionHint,
+          recoveryActions: classified.recoveryActions,
+        },
+      };
+    }
+  }
+
   // Build the API URL — Anthropic-compatible endpoint
   let apiUrl = config.baseUrl || 'https://api.anthropic.com';
   // Ensure URL ends with /v1/messages for Anthropic-compatible providers
@@ -1630,12 +1773,21 @@ export async function testProviderConnection(config: {
     apiUrl += '/messages';
   }
 
+  // 中文注释：MiniMax 的连接探测走原生 Anthropic 兼容接口，鉴权头需要使用 x-api-key，
+  // 不能直接复用 Claude Code 运行时里的 auth_token 语义，否则会在“测试连接”阶段误报失败。
+  const probeAuthStyle = (() => {
+    if (preset?.key?.startsWith('minimax-')) return 'api_key';
+    if ((config.providerName || '').toLowerCase().includes('minimax')) return 'api_key';
+    if ((config.baseUrl || '').toLowerCase().includes('minimax')) return 'api_key';
+    return config.authStyle;
+  })();
+
   // Build headers based on auth style
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
   };
-  if (config.authStyle === 'auth_token') {
+  if (probeAuthStyle === 'auth_token') {
     headers['Authorization'] = `Bearer ${config.apiKey}`;
   } else {
     headers['x-api-key'] = config.apiKey;

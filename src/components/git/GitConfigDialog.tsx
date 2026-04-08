@@ -31,6 +31,15 @@ interface Repo {
   clone_url: string;
 }
 
+type GitHubRepoResponse = {
+  name: string;
+  full_name: string;
+  description?: string | null;
+  private: boolean;
+  html_url: string;
+  clone_url: string;
+};
+
 export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialogProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<"auth" | "repos" | "setup">("auth");
@@ -144,8 +153,8 @@ export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialog
 
       if (!res.ok) throw new Error("Failed to fetch repos");
 
-      const data = await res.json();
-      const formattedRepos: Repo[] = data.map((r: any) => ({
+      const data = (await res.json()) as GitHubRepoResponse[];
+      const formattedRepos: Repo[] = data.map((r) => ({
         name: r.name,
         full_name: r.full_name,
         description: r.description || "",
@@ -332,7 +341,7 @@ export function GitConfigDialog({ open, onClose, onConfigured }: GitConfigDialog
         {step === "auth" && (
           <div className="space-y-6 py-4">
             {/* Auth Method Tabs */}
-            <Tabs value={authMethod} onValueChange={(v) => setAuthMethod(v as any)}>
+            <Tabs value={authMethod} onValueChange={(v) => setAuthMethod(v === "https" ? "https" : "token")}>
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="token">
                   <Lock size={14} className="mr-1" />

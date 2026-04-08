@@ -5,7 +5,7 @@
  */
 
 export interface LogEntry {
-  level: 'error' | 'warn';
+  level: 'log' | 'info' | 'warn' | 'error' | 'debug';
   message: string;
   timestamp: string;
 }
@@ -16,8 +16,11 @@ const GLOBAL_KEY = '__codepilot_runtime_log__' as const;
 interface RuntimeLogState {
   buffer: LogEntry[];
   installed: boolean;
+  originalLog: typeof console.log;
+  originalInfo: typeof console.info;
   originalError: typeof console.error;
   originalWarn: typeof console.warn;
+  originalDebug: typeof console.debug;
 }
 
 function getState(): RuntimeLogState {
@@ -26,8 +29,11 @@ function getState(): RuntimeLogState {
     g[GLOBAL_KEY] = {
       buffer: [] as LogEntry[],
       installed: false,
+      originalLog: console.log,
+      originalInfo: console.info,
       originalError: console.error,
       originalWarn: console.warn,
+      originalDebug: console.debug,
     };
   }
   return g[GLOBAL_KEY] as RuntimeLogState;
@@ -55,7 +61,7 @@ const homeDirPattern = (typeof process !== 'undefined' && process.env?.HOME)
   ? process.env.HOME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   : '/Users/[^/\\s]+';
 
-function pushEntry(level: 'error' | 'warn', args: unknown[]): void {
+function pushEntry(level: LogEntry['level'], args: unknown[]): void {
   const state = getState();
   const raw = args
     .map(a => {
@@ -86,6 +92,16 @@ export function initRuntimeLog(): void {
   const state = getState();
   if (state.installed) return;
 
+  console.log = (...args: unknown[]) => {
+    pushEntry('log', args);
+    state.originalLog.apply(console, args);
+  };
+
+  console.info = (...args: unknown[]) => {
+    pushEntry('info', args);
+    state.originalInfo.apply(console, args);
+  };
+
   console.error = (...args: unknown[]) => {
     pushEntry('error', args);
     state.originalError.apply(console, args);
@@ -94,6 +110,11 @@ export function initRuntimeLog(): void {
   console.warn = (...args: unknown[]) => {
     pushEntry('warn', args);
     state.originalWarn.apply(console, args);
+  };
+
+  console.debug = (...args: unknown[]) => {
+    pushEntry('debug', args);
+    state.originalDebug.apply(console, args);
   };
 
   state.installed = true;

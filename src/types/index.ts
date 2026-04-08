@@ -272,6 +272,10 @@ export interface ProviderOptions {
   default_model?: string;
   /** Global default model's provider ID — which provider the default model belongs to */
   default_model_provider?: string;
+  /** Image relay request protocol for generic media providers */
+  media_protocol?: 'custom-image' | 'openai-images';
+  /** Image relay endpoint path or absolute URL */
+  media_endpoint?: string;
 }
 
 export interface ProvidersResponse {

@@ -5,6 +5,7 @@ import { HardDrives } from "@/components/ui/icon";
 import type { ApiProvider } from "@/types";
 import { VENDOR_PRESETS } from "@/lib/provider-catalog";
 import type { VendorPreset } from "@/lib/provider-catalog";
+import { isOfficialGeminiImageProvider } from "@/lib/image-provider-utils";
 import Anthropic from "@lobehub/icons/es/Anthropic";
 import OpenRouter from "@lobehub/icons/es/OpenRouter";
 import Zhipu from "@lobehub/icons/es/Zhipu";
@@ -151,7 +152,11 @@ export function findMatchingPreset(provider: ApiProvider): QuickPreset | undefin
   if (provider.provider_type === "bedrock") return QUICK_PRESETS.find(p => p.key === "bedrock");
   if (provider.provider_type === "vertex") return QUICK_PRESETS.find(p => p.key === "vertex");
   if (provider.provider_type === "openrouter") return QUICK_PRESETS.find(p => p.key === "openrouter");
-  if (provider.provider_type === "gemini-image") return QUICK_PRESETS.find(p => p.key === "gemini-image");
+  if (provider.provider_type === "gemini-image") {
+    return QUICK_PRESETS.find(p => p.key === (
+      isOfficialGeminiImageProvider(provider) ? "gemini-image" : "custom-media"
+    ));
+  }
   if (provider.provider_type === "anthropic" && provider.base_url === "https://api.anthropic.com") {
     return QUICK_PRESETS.find(p => p.key === "anthropic-official");
   }

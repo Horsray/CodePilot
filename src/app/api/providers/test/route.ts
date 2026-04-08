@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { testProviderConnection } from '@/lib/claude-client';
 import { getPreset } from '@/lib/provider-catalog';
+import { getSetting } from '@/lib/db';
 import { readCCSwitchConfig, readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 import type { ErrorResponse } from '@/types';
 
@@ -19,7 +20,7 @@ export async function POST(request: NextRequest) {
     let finalApiKey = apiKey;
     let finalBaseUrl = baseUrl;
     
-    if (!finalApiKey && useCCSwitch) {
+    if (!finalApiKey && useCCSwitch && getSetting('cc_switch_enabled') === 'true') {
       const ccConfig = readCCSwitchConfig();
       const ccSettings = readCCSwitchClaudeSettings();
       

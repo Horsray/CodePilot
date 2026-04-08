@@ -143,7 +143,10 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
           setDashboardPanelOpen(panel === 'dashboard');
         }
       } catch {
-        setFileTreeOpen(true);
+        // Default to no panels open if settings load fails
+        setFileTreeOpen(false);
+        setGitPanelOpen(false);
+        setDashboardPanelOpen(false);
       }
     })();
   }, [id, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen]);

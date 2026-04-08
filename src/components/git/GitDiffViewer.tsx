@@ -56,13 +56,28 @@ export function GitDiffViewer({ cwd, filePath, staged, onClose }: GitDiffViewerP
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
+    let active = true;
+    const setLoadingTimer = setTimeout(() => {
+      if (active) setLoading(true);
+    }, 0);
+    const controller = new AbortController();
     const params = new URLSearchParams({ cwd, file: filePath, staged: String(staged) });
-    fetch(`/api/git/diff?${params}`)
+    fetch(`/api/git/diff?${params}`, { signal: controller.signal })
       .then((r) => r.json())
-      .then((data) => setRaw(data.diff || ""))
-      .catch(() => setRaw(""))
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (active) setRaw(data.diff || "");
+      })
+      .catch(() => {
+        if (active) setRaw("");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+      clearTimeout(setLoadingTimer);
+      controller.abort();
+    };
   }, [cwd, filePath, staged]);
 
   const parsed = useMemo(() => (raw ? parseDiff(raw) : null), [raw]);

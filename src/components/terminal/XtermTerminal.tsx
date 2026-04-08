@@ -19,16 +19,31 @@ export function XtermTerminal({ onData, onResize, onReady }: XtermTerminalProps)
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const readyRef = useRef(false);
+  const onDataRef = useRef(onData);
+  const onResizeRef = useRef(onResize);
+  const onReadyRef = useRef(onReady);
+
+  useEffect(() => {
+    onDataRef.current = onData;
+  }, [onData]);
+
+  useEffect(() => {
+    onResizeRef.current = onResize;
+  }, [onResize]);
+
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
 
   const handleResize = useCallback(() => {
     if (fitAddonRef.current && termRef.current) {
       try {
         fitAddonRef.current.fit();
         const { cols, rows } = termRef.current;
-        onResize(cols, rows);
+        onResizeRef.current(cols, rows);
       } catch { /* ignore */ }
     }
-  }, [onResize]);
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current || readyRef.current) return;
@@ -96,10 +111,10 @@ export function XtermTerminal({ onData, onResize, onReady }: XtermTerminalProps)
 
         // Forward user input to parent
         term.onData((data) => {
-          onData(data);
+          onDataRef.current(data);
         });
 
-        onReady(term);
+        onReadyRef.current(term);
       }
     }
 
@@ -110,7 +125,7 @@ export function XtermTerminal({ onData, onResize, onReady }: XtermTerminalProps)
       if (fitAddonRef.current && termRef.current) {
         try {
           fitAddonRef.current.fit();
-          onResize(termRef.current.cols, termRef.current.rows);
+          onResizeRef.current(termRef.current.cols, termRef.current.rows);
         } catch { /* ignore */ }
       }
     });
@@ -127,7 +142,7 @@ export function XtermTerminal({ onData, onResize, onReady }: XtermTerminalProps)
       fitAddonRef.current = null;
       readyRef.current = false;
     };
-  }, [onData, onResize, onReady]);
+  }, []);
 
   // Also listen for window resize
   useEffect(() => {

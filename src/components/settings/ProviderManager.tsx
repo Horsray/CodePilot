@@ -29,6 +29,12 @@ import {
 import type { ApiProvider, ProviderModelGroup } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
+import {
+  getConfiguredImageModelNames,
+  getMediaRelayProtocol,
+  getMediaRelayTargetSummary,
+  isOfficialGeminiImageProvider,
+} from "@/lib/image-provider-utils";
 import Anthropic from "@lobehub/icons/es/Anthropic";
 import { ProviderOptionsSection } from "./ProviderOptionsSection";
 import {
@@ -86,12 +92,8 @@ export function ProviderManager() {
       setProviders(data.providers || []);
       setEnvDetected(data.env_detected || {});
       setCCSwitchModels(data.cc_switch_models || {});
-      
-      // Check cc-switch enabled status
-      const ccEnabled = data.cc_switch_models && Object.keys(data.cc_switch_models).length > 0;
-      if (ccEnabled !== ccSwitchEnabled) {
-        setCCSwitchEnabled(ccEnabled);
-      }
+
+      setCCSwitchEnabled(data.cc_switch_enabled === true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load providers");
     } finally {
@@ -505,6 +507,18 @@ export function ProviderManager() {
                           : t('provider.configured')}
                       </Badge>
                     </div>
+                    {provider.provider_type === 'gemini-image' && !isOfficialGeminiImageProvider(provider) && (
+                      <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
+                        <p className="truncate">
+                          {isZh ? '协议' : 'Protocol'}: {getMediaRelayProtocol(provider) === 'openai-images'
+                            ? 'OpenAI Images API'
+                            : (isZh ? '自定义图片接口' : 'Custom Image API')}
+                        </p>
+                        <p className="truncate">
+                          Endpoint: {getMediaRelayTargetSummary(provider)}
+                        </p>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Button
@@ -533,7 +547,7 @@ export function ProviderManager() {
                   />
                 )}
                 {/* Gemini Image model selector — capsule buttons */}
-                {provider.provider_type === 'gemini-image' && (
+                {provider.provider_type === 'gemini-image' && isOfficialGeminiImageProvider(provider) && (
                   <div className="ml-[34px] mt-2 flex items-center gap-1.5">
                     <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型' : 'Model'}:</span>
                     {GEMINI_IMAGE_MODELS.map((m) => {
@@ -554,6 +568,20 @@ export function ProviderManager() {
                         </Button>
                       );
                     })}
+                  </div>
+                )}
+                {provider.provider_type === 'gemini-image' && !isOfficialGeminiImageProvider(provider) && getConfiguredImageModelNames(provider).length > 0 && (
+                  <div className="ml-[34px] mt-2 flex items-center gap-1.5">
+                    <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型列表' : 'Models'}:</span>
+                    {getConfiguredImageModelNames(provider).map((model, index) => (
+                      <Badge
+                        key={model}
+                        variant={index === 0 ? "secondary" : "outline"}
+                        className="text-[10px] px-1.5 py-0"
+                      >
+                        {model}
+                      </Badge>
+                    ))}
                   </div>
                 )}
               </div>

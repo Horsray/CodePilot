@@ -31,6 +31,10 @@ export interface PanelContextValue {
   bottomPanelTab: BottomPanelTab;
   setBottomPanelTab: (tab: BottomPanelTab) => void;
 
+  // --- Main area view mode (chat vs browser) ---
+  mainViewMode: "chat" | "browser";
+  setMainViewMode: (mode: "chat" | "browser") => void;
+
   // --- Browser tab (shown in main content area) ---
   browserTabOpen: boolean;
   setBrowserTabOpen: (open: boolean) => void;

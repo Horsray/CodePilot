@@ -699,7 +699,7 @@ export default function PluginsPage() {
               claude plugin install code-review
             </code>
             <p className="mt-2">
-              安装后刷新页面即可在"已安装"标签页中看到。
+              安装后刷新页面即可在&quot;已安装&quot;标签页中看到。
             </p>
           </CardDescription>
         </CardHeader>

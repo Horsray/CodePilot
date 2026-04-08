@@ -66,6 +66,7 @@ export async function GET() {
       providers,
       env_detected: envDetected,
       default_provider_id: getSetting('default_provider_id') || '',
+      cc_switch_enabled: ccSwitchEnabled,
       cc_switch_models: ccSwitchModels,
     });
   } catch (error) {

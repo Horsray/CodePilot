@@ -74,6 +74,7 @@ interface ImageGenResultData {
   aspectRatio?: string;
   resolution?: string;
   model?: string;
+  providerName?: string;
   images?: Array<{ mimeType: string; localPath?: string; data?: string }>;
   error?: string;
 }
@@ -94,6 +95,7 @@ function parseImageGenResult(text: string): { beforeText: string; result: ImageG
         aspectRatio: json.aspectRatio,
         resolution: json.resolution,
         model: json.model,
+        providerName: json.providerName,
         images: Array.isArray(json.images) ? json.images : undefined,
         error: json.error,
       },
@@ -868,6 +870,7 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
               aspectRatio={result.aspectRatio}
               imageSize={result.resolution}
               model={result.model}
+              providerName={result.providerName}
             />
             {genResult.afterText && <MessageResponse>{genResult.afterText}</MessageResponse>}
           </>

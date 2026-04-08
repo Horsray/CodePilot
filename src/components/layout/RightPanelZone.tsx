@@ -13,14 +13,16 @@ export function RightPanelZone() {
 
   const anyOpen = (previewOpen && !!previewFile) || gitPanelOpen || dashboardPanelOpen || assistantPanelOpen;
 
-  if (!anyOpen) return null;
-
   return (
     <div className="flex h-full shrink-0 border-l border-border/40 overflow-hidden">
-      {assistantPanelOpen && <AssistantPanel />}
-      {previewOpen && previewFile && <PreviewPanel />}
-      {gitPanelOpen && <GitPanelContainer />}
-      {dashboardPanelOpen && <DashboardPanel />}
+      {anyOpen && (
+        <>
+          {assistantPanelOpen && <AssistantPanel />}
+          {previewOpen && previewFile && <PreviewPanel />}
+          {gitPanelOpen && <GitPanelContainer />}
+          {dashboardPanelOpen && <DashboardPanel />}
+        </>
+      )}
     </div>
   );
 }

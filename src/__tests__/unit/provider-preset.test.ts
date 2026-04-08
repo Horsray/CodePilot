@@ -74,8 +74,6 @@ describe('Preset Schema Validation', () => {
 describe('PROVIDER_MANAGED_BY_HOST', () => {
   it('toClaudeCodeEnv always sets CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST', async () => {
     const { toClaudeCodeEnv } = await import('../../lib/provider-resolver');
-    const { VENDOR_PRESETS: presets } = await import('../../lib/provider-catalog');
-    const anthropic = presets.find(p => p.key === 'anthropic-official')!;
 
     // With a provider
     const resolvedWithProvider = {
@@ -118,5 +116,69 @@ describe('PROVIDER_MANAGED_BY_HOST', () => {
     };
     const env2 = toClaudeCodeEnv({ PATH: '/usr/bin' }, resolvedWithoutProvider);
     assert.equal(env2.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, '1');
+  });
+});
+
+describe('provider connection probe auth headers', () => {
+  it('MiniMax probe uses x-api-key for raw compatibility check', async () => {
+    const originalFetch = global.fetch;
+    let requestHeaders: HeadersInit | undefined;
+
+    global.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestHeaders = init?.headers;
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const { testProviderConnection } = await import('../../lib/claude-client');
+      const result = await testProviderConnection({
+        apiKey: 'minimax-test-key',
+        baseUrl: 'https://api.minimaxi.com/anthropic',
+        protocol: 'anthropic',
+        authStyle: 'auth_token',
+        presetKey: 'minimax-cn',
+        providerName: 'MiniMax (CN)',
+      });
+
+      assert.equal(result.success, true);
+      assert.deepEqual(requestHeaders, {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'x-api-key': 'minimax-test-key',
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('non-MiniMax auth_token probe still uses Authorization header', async () => {
+    const originalFetch = global.fetch;
+    let requestHeaders: HeadersInit | undefined;
+
+    global.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestHeaders = init?.headers;
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const { testProviderConnection } = await import('../../lib/claude-client');
+      const result = await testProviderConnection({
+        apiKey: 'glm-test-key',
+        baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+        protocol: 'anthropic',
+        authStyle: 'auth_token',
+        presetKey: 'glm-cn',
+        providerName: 'GLM (CN)',
+      });
+
+      assert.equal(result.success, true);
+      assert.deepEqual(requestHeaders, {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        Authorization: 'Bearer glm-test-key',
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 });

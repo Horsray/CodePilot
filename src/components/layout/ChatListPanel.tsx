@@ -9,14 +9,14 @@ import {
   FileArrowDown,
   Plus,
   FolderPlus,
-  Lightning,
-  Plug,
-  Terminal,
   Image,
-  WifiHigh,
   Gear,
   NotePencil,
   Copy,
+  Lightning,
+  Plug,
+  Terminal,
+  WifiHigh,
   Package,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
@@ -59,6 +59,15 @@ interface ChatListPanelProps {
   hasUpdate?: boolean;
   readyToInstall?: boolean;
 }
+
+const quickNavItems = [
+  { href: "/skills", labelKey: "nav.skills", icon: Lightning },
+  { href: "/mcp", labelKey: "nav.mcp", icon: Plug },
+  { href: "/cli-tools", labelKey: "nav.cliTools", icon: Terminal },
+  { href: "/plugins", labelKey: "nav.plugins", icon: Package },
+  { href: "/gallery", labelKey: "nav.gallery", icon: Image },
+  { href: "/bridge", labelKey: "nav.bridge", icon: WifiHigh },
+] as const;
 
 
 export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatListPanelProps) {
@@ -442,33 +451,24 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
 
   if (!open) return null;
 
-  const navItems = [
-    { href: "/skills", label: t('nav.skills' as TranslationKey), icon: Lightning },
-    { href: "/mcp", label: t('nav.mcp' as TranslationKey), icon: Plug },
-    { href: "/cli-tools", label: t('nav.cliTools' as TranslationKey), icon: Terminal },
-    { href: "/plugins", label: t('nav.plugins' as TranslationKey), icon: Package },
-    { href: "/gallery", label: t('nav.gallery' as TranslationKey), icon: Image },
-    { href: "/bridge", label: t('nav.bridge' as TranslationKey), icon: WifiHigh },
-  ];
-
   return (
     <aside
       className="hidden h-full shrink-0 flex-col overflow-hidden bg-sidebar/80 backdrop-blur-xl lg:flex"
       style={{ width: width ?? 240 }}
     >
-      {/* Logo */}
-      <div className="flex h-20 shrink-0 items-center justify-center px-3 pt-4">
+      {/* Logo - 给 Mac 窗口控制按钮留空间 */}
+      <div className="flex h-11 shrink-0 items-end justify-center px-3 pb-1 pt-5">
         <img
           src="/icons/toplogo.png"
           alt="Logo"
-          className="h-14 w-auto object-contain"
+          className="h-9 w-auto object-contain"
         />
       </div>
 
-      {/* Header row: Connection + New Chat + Search + File Tree */}
+      {/* Header row: Connection + Gallery + New Chat + Search + File Tree */}
       <div className="flex h-12 shrink-0 items-center justify-between px-3 mt-2">
         <ConnectionStatus />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -515,46 +515,47 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         </div>
       </div>
 
-      {/* Feature nav items */}
-      <div className="px-3 pb-2">
-        <div className="flex flex-col gap-0.5">
-          {navItems.map((item) => {
-            const isActive = pathname.startsWith(item.href);
+      {/* Separator */}
+      <div className="mx-3 border-t border-border/40" />
+
+      {/* 中文注释：恢复左侧快捷入口，提供 Skills / MCP / CLI 工具等原始按钮导航。 */}
+      <nav className="shrink-0 px-4 py-3">
+        <div className="flex flex-col gap-1">
+          {quickNavItems.map((item) => {
+            const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`) || pathname.startsWith(`${item.href}?`);
+            const Icon = item.icon;
             return (
-              <Link key={item.href} href={item.href}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className={`w-full justify-start gap-2 h-8 text-xs ${
-                    isActive
-                      ? "bg-accent text-accent-foreground font-medium"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  <item.icon size={14} weight={isActive ? "fill" : "regular"} />
-                  {item.label}
-                </Button>
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition-colors ${
+                  isActive
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                }`}
+              >
+                <Icon size={18} weight={isActive ? "fill" : "regular"} />
+                <span>{t(item.labelKey as TranslationKey)}</span>
               </Link>
             );
           })}
         </div>
-      </div>
+      </nav>
 
-      {/* Separator */}
       <div className="mx-3 border-t border-border/40" />
 
-      {/* Section title + add folder button (fixed, not scrolling) */}
+      {/* 中文注释：保留原来的会话入口与新建项目操作，不改动会话业务逻辑。 */}
       <div className="flex items-center justify-between px-5 pt-2 pb-1.5 shrink-0">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">
+        <span className="text-sm font-medium text-muted-foreground">
           {t('chatList.threads')}
         </span>
         <Button
           variant="ghost"
           size="sm"
-          className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground/60 hover:text-foreground"
+          className="h-8 gap-1.5 px-2 text-sm text-muted-foreground hover:text-foreground"
           onClick={() => openFolderPicker()}
         >
-          <FolderPlus size={12} />
+          <FolderPlus size={14} />
           {t('chatList.addProjectFolder')}
         </Button>
       </div>

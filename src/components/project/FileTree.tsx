@@ -62,7 +62,7 @@ function containsMatch(node: FileTreeNode, query: string): boolean {
   const q = query.toLowerCase();
   if (node.name.toLowerCase().includes(q)) return true;
   if (node.children) {
-    return node.children.some((child) => containsMatch(child, q));
+    return node.children.some((child) => containsMatch(child, query));
   }
   return false;
 }
@@ -105,13 +105,39 @@ function RenderTreeNodes({ nodes, searchQuery }: { nodes: FileTreeNode[]; search
   );
 }
 
+// localStorage key for storing expanded paths
+const getExpandedPathsKey = (workingDirectory: string) => 
+  `fileTree_expanded_${workingDirectory}`;
+
 export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTreeProps) {
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const { t } = useTranslation();
+
+  // Load expanded paths from localStorage when workingDirectory changes
+  useEffect(() => {
+    if (workingDirectory) {
+      try {
+        const key = getExpandedPathsKey(workingDirectory);
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const paths = JSON.parse(saved);
+          setExpandedPaths(new Set(paths));
+        } else {
+          // Default: all collapsed
+          setExpandedPaths(new Set());
+        }
+      } catch {
+        setExpandedPaths(new Set());
+      }
+    } else {
+      setExpandedPaths(new Set());
+    }
+  }, [workingDirectory]);
 
   const fetchTree = useCallback(async () => {
     // Always cancel in-flight request first — even when clearing directory,
@@ -179,8 +205,19 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
     return () => window.removeEventListener('refresh-file-tree', handler);
   }, [fetchTree]);
 
-  // Default to all directories collapsed
-  const defaultExpanded = new Set<string>();
+  // Handle expanded paths change
+  const handleExpandedChange = useCallback((newExpanded: Set<string>) => {
+    setExpandedPaths(newExpanded);
+    // Save to localStorage
+    if (workingDirectory) {
+      try {
+        const key = getExpandedPathsKey(workingDirectory);
+        localStorage.setItem(key, JSON.stringify(Array.from(newExpanded)));
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  }, [workingDirectory]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -219,7 +256,8 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
           </p>
         ) : (
           <AIFileTree
-            defaultExpanded={defaultExpanded}
+            expanded={expandedPaths}
+            onExpandedChange={handleExpandedChange}
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- AI Elements FileTree onSelect type conflicts with HTMLAttributes.onSelect
             onSelect={onFileSelect as any}
             onAdd={onFileAdd}

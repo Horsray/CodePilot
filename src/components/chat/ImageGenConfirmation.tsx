@@ -1,15 +1,22 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ImageGenCard } from './ImageGenCard';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePanel } from '@/hooks/usePanel';
 import type { TranslationKey } from '@/i18n';
 import type { ReferenceImage } from '@/types';
 import type { ImageGenResult } from '@/hooks/useImageGen';
+import {
+  getConfiguredImageModelNames,
+  getMediaRelayProtocol,
+  getMediaRelayTargetSummary,
+  isOfficialGeminiImageProvider,
+} from '@/lib/image-provider-utils';
 
 const ASPECT_RATIOS = [
   '1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '21:9',
@@ -30,6 +37,36 @@ interface ImageGenConfirmationProps {
 
 type Status = 'idle' | 'generating' | 'completed' | 'error';
 
+interface MediaProviderOption {
+  id: string;
+  name: string;
+  providerType: string;
+  protocol: string;
+  baseUrl: string;
+  envOverridesJson: string;
+  roleModelsJson: string;
+  extraEnv: string;
+  optionsJson: string;
+}
+
+const LAST_IMAGE_PROVIDER_KEY = 'codepilot:last-image-provider-id';
+const LAST_IMAGE_MODEL_KEY_PREFIX = 'codepilot:last-image-model:';
+
+function isMediaProvider(provider: { provider_type: string; protocol: string; api_key: string }): boolean {
+  return !!provider.api_key && (
+    provider.protocol === 'gemini-image' ||
+    provider.provider_type === 'gemini-image' ||
+    provider.provider_type === 'generic-image'
+  );
+}
+
+function describeProvider(option: MediaProviderOption): string {
+  const url = option.baseUrl.toLowerCase();
+  return url.includes('generativelanguage.googleapis.com') || !url
+    ? 'Google Gemini'
+    : option.name;
+}
+
 export function ImageGenConfirmation({
   messageId,
   sessionId: sessionIdProp,
@@ -40,6 +77,7 @@ export function ImageGenConfirmation({
   referenceImages,
 }: ImageGenConfirmationProps) {
   const { t } = useTranslation();
+  const isZh = t('nav.chats' as TranslationKey) === '对话';
   const { sessionId: panelSessionId } = usePanel();
   const sessionId = sessionIdProp || panelSessionId;
   const [prompt, setPrompt] = useState(initialPrompt);
@@ -56,8 +94,117 @@ export function ImageGenConfirmation({
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<ImageGenResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [providerOptions, setProviderOptions] = useState<MediaProviderOption[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState('');
+  const [providersLoading, setProvidersLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    setProvidersLoading(true);
+
+    fetch('/api/providers')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (cancelled) return;
+        const options: MediaProviderOption[] = Array.isArray(data?.providers)
+          ? data.providers
+            .filter(isMediaProvider)
+            .map((provider: {
+              id: string;
+              name: string;
+              provider_type: string;
+              protocol: string;
+              base_url: string;
+              env_overrides_json?: string;
+              role_models_json?: string;
+              extra_env?: string;
+              options_json?: string;
+            }) => ({
+              id: provider.id,
+              name: provider.name,
+              providerType: provider.provider_type,
+              protocol: provider.protocol,
+              baseUrl: provider.base_url || '',
+              envOverridesJson: provider.env_overrides_json || '',
+              roleModelsJson: provider.role_models_json || '',
+              extraEnv: provider.extra_env || '',
+              optionsJson: provider.options_json || '',
+            }))
+          : [];
+        setProviderOptions(options);
+
+        const saved = typeof window !== 'undefined' ? window.localStorage.getItem(LAST_IMAGE_PROVIDER_KEY) : null;
+        const initial = (saved && options.some(option => option.id === saved))
+          ? saved
+          : options[0]?.id || '';
+        setSelectedProviderId(initial);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProviderOptions([]);
+          setSelectedProviderId('');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setProvidersLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedProvider = providerOptions.find(option => option.id === selectedProviderId);
+  const providerModelOptions = useMemo(
+    () => selectedProvider
+      ? getConfiguredImageModelNames({
+        base_url: selectedProvider.baseUrl,
+        env_overrides_json: selectedProvider.envOverridesJson,
+        role_models_json: selectedProvider.roleModelsJson,
+        extra_env: selectedProvider.extraEnv,
+      })
+      : [],
+    [selectedProvider]
+  );
+  const showModelSelector = !!selectedProvider
+    && !isOfficialGeminiImageProvider({ base_url: selectedProvider.baseUrl })
+    && providerModelOptions.length > 0;
+  const [selectedModel, setSelectedModel] = useState('');
+
+  const handleProviderChange = useCallback((value: string) => {
+    setSelectedProviderId(value);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(LAST_IMAGE_PROVIDER_KEY, value);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedProvider) {
+      setSelectedModel('');
+      return;
+    }
+
+    if (isOfficialGeminiImageProvider({ base_url: selectedProvider.baseUrl })) {
+      setSelectedModel('');
+      return;
+    }
+
+    const saved = typeof window !== 'undefined'
+      ? window.localStorage.getItem(`${LAST_IMAGE_MODEL_KEY_PREFIX}${selectedProvider.id}`)
+      : null;
+    const initialModel = (saved && providerModelOptions.includes(saved))
+      ? saved
+      : providerModelOptions[0] || '';
+    setSelectedModel(initialModel);
+  }, [providerModelOptions, selectedProvider]);
+
+  const handleModelChange = useCallback((value: string) => {
+    setSelectedModel(value);
+    if (selectedProvider && typeof window !== 'undefined') {
+      window.localStorage.setItem(`${LAST_IMAGE_MODEL_KEY_PREFIX}${selectedProvider.id}`, value);
+    }
+  }, [selectedProvider]);
 
   const handleStop = useCallback(() => {
     if (abortRef.current) {
@@ -83,8 +230,10 @@ export function ImageGenConfirmation({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
+          ...(showModelSelector && selectedModel ? { model: selectedModel } : {}),
           aspectRatio,
           imageSize: resolution,
+          ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
           sessionId,
           ...(refData && refData.length > 0
             ? { referenceImages: refData }
@@ -105,6 +254,10 @@ export function ImageGenConfirmation({
       const genResult: ImageGenResult = {
         id: data.id,
         text: data.text,
+        model: data.model,
+        providerId: data.providerId,
+        providerName: data.providerName,
+        providerLabel: data.providerLabel,
         images: data.images || [],
       };
 
@@ -121,6 +274,8 @@ export function ImageGenConfirmation({
             prompt,
             aspectRatio,
             resolution,
+            model: genResult.model,
+            providerName: genResult.providerName || selectedProvider?.name,
             images: genResult.images.map(img => ({
               mimeType: img.mimeType,
               localPath: img.localPath,
@@ -178,7 +333,7 @@ export function ImageGenConfirmation({
     } finally {
       abortRef.current = null;
     }
-  }, [prompt, aspectRatio, resolution, initialPrompt, sessionId, messageId, referenceImages]);
+  }, [prompt, selectedModel, showModelSelector, aspectRatio, resolution, selectedProviderId, selectedProvider?.name, initialPrompt, sessionId, messageId, referenceImages]);
 
   const handleRegenerate = useCallback(() => {
     setResult(null);
@@ -194,6 +349,8 @@ export function ImageGenConfirmation({
           prompt={prompt}
           aspectRatio={aspectRatio}
           imageSize={resolution}
+          model={result.model}
+          providerName={result.providerName}
           onRegenerate={handleRegenerate}
           referenceImages={referenceImages?.filter(r => r.data).map(r => ({ mimeType: r.mimeType, data: r.data! }))}
         />
@@ -250,6 +407,74 @@ export function ImageGenConfirmation({
           />
         </div>
 
+        <div>
+          <label className="text-xs font-medium text-muted-foreground mb-1 block">
+            {t('imageGen.provider' as TranslationKey)}
+          </label>
+          <Select
+            value={selectedProviderId}
+            onValueChange={handleProviderChange}
+            disabled={status === 'generating' || providersLoading || providerOptions.length === 0}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder={t('imageGen.providerLoading' as TranslationKey)} />
+            </SelectTrigger>
+            <SelectContent>
+              {providerOptions.map(option => (
+                <SelectItem key={option.id} value={option.id}>
+                  {describeProvider(option)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+              {selectedProvider && (
+            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+              <p>
+                {t('imageGen.providerTarget' as TranslationKey)}: {isOfficialGeminiImageProvider({ base_url: selectedProvider.baseUrl })
+                  ? 'Google Gemini API'
+                  : getMediaRelayTargetSummary({
+                    base_url: selectedProvider.baseUrl,
+                    options_json: selectedProvider.optionsJson,
+                  })}
+              </p>
+              {!isOfficialGeminiImageProvider({ base_url: selectedProvider.baseUrl }) && (
+                <p>
+                  {t('imageGen.provider' as TranslationKey)} {isZh ? '协议' : 'Protocol'}: {getMediaRelayProtocol({
+                    base_url: selectedProvider.baseUrl,
+                    options_json: selectedProvider.optionsJson,
+                  }) === 'openai-images'
+                    ? 'OpenAI Images API'
+                    : (isZh ? '自定义图片接口' : 'Custom Image API')}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {showModelSelector && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+              {t('imageGen.model' as TranslationKey)}
+            </label>
+            <Select
+              value={selectedModel}
+              onValueChange={handleModelChange}
+              disabled={status === 'generating'}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={t('imageGen.model' as TranslationKey)} />
+              </SelectTrigger>
+              <SelectContent>
+                {providerModelOptions.map(model => (
+                  <SelectItem key={model} value={model}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         {/* Aspect Ratio */}
         <div>
           <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
@@ -305,7 +530,7 @@ export function ImageGenConfirmation({
           <div className="pt-1">
             <Button
               onClick={handleGenerate}
-              disabled={!prompt.trim()}
+              disabled={!prompt.trim() || !selectedProviderId || (showModelSelector && !selectedModel)}
               size="sm"
               className="gap-1.5"
             >
@@ -339,6 +564,12 @@ export function ImageGenConfirmation({
               {t('imageGen.retryButton' as TranslationKey)}
             </Button>
           </div>
+        )}
+
+        {!providersLoading && providerOptions.length === 0 && (
+          <p className="text-sm text-status-error-foreground">
+            {t('imageGen.noProviderConfigured' as TranslationKey)}
+          </p>
         )}
       </div>
     </div>

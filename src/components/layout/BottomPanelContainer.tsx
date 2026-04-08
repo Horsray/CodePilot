@@ -7,6 +7,7 @@ import {
   ListBullets,
   X,
   ArrowsInLineVertical,
+  CaretUp,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { usePanel, type BottomPanelTab } from "@/hooks/usePanel";
@@ -29,9 +30,11 @@ export function BottomPanelContainer() {
   const { bottomPanelOpen, setBottomPanelOpen, bottomPanelTab, setBottomPanelTab } = usePanel();
   const { t } = useTranslation();
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
+  const [collapsed, setCollapsed] = useState(false);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (collapsed) return;
       e.preventDefault();
       const startY = e.clientY;
       const startHeight = height;
@@ -47,7 +50,7 @@ export function BottomPanelContainer() {
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
     },
-    [height]
+    [height, collapsed]
   );
 
   if (!bottomPanelOpen) return null;
@@ -68,20 +71,25 @@ export function BottomPanelContainer() {
   return (
     <div
       className="shrink-0 border-t border-border/40 bg-background flex flex-col"
-      style={{ height }}
+      style={{ height: collapsed ? 36 : height }}
     >
-      {/* Resize handle */}
-      <div
-        className="h-1 cursor-row-resize hover:bg-primary/20 transition-colors shrink-0"
-        onMouseDown={handleMouseDown}
-      />
+      {/* Resize handle — hidden when collapsed */}
+      {!collapsed && (
+        <div
+          className="h-1 cursor-row-resize hover:bg-primary/20 transition-colors shrink-0"
+          onMouseDown={handleMouseDown}
+        />
+      )}
 
       {/* Tab bar */}
       <div className="flex items-center h-8 px-2 border-b border-border/40 shrink-0 gap-0.5">
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setBottomPanelTab(tab.id)}
+            onClick={() => {
+              setBottomPanelTab(tab.id);
+              if (collapsed) setCollapsed(false);
+            }}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
               bottomPanelTab === tab.id
                 ? "bg-muted text-foreground"
@@ -95,14 +103,14 @@ export function BottomPanelContainer() {
 
         <div className="flex-1" />
 
-        {/* Reset height */}
+        {/* Minimize / Restore */}
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => setHeight(DEFAULT_HEIGHT)}
+          onClick={() => setCollapsed(!collapsed)}
           className="text-muted-foreground"
         >
-          <ArrowsInLineVertical size={12} />
+          {collapsed ? <CaretUp size={12} /> : <ArrowsInLineVertical size={12} />}
         </Button>
 
         {/* Close */}
@@ -117,10 +125,13 @@ export function BottomPanelContainer() {
         </Button>
       </div>
 
-      {/* Tab content */}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {bottomPanelTab === "terminal" && <WebTerminalTab />}
-        {bottomPanelTab === "console" && <ConsolePanelTab />}
+      <div className={`flex-1 min-h-0 overflow-hidden ${collapsed ? "hidden" : ""}`}>
+        <div className={bottomPanelTab === "terminal" ? "h-full" : "hidden h-full"}>
+          <WebTerminalTab />
+        </div>
+        <div className={bottomPanelTab === "console" ? "h-full" : "hidden h-full"}>
+          <ConsolePanelTab />
+        </div>
       </div>
     </div>
   );

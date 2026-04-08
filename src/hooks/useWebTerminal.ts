@@ -3,6 +3,19 @@
 import { useCallback, useRef, useState, useEffect } from "react";
 import { usePanel } from "./usePanel";
 
+function resolveTerminalUrl(pathname: string): string {
+  if (typeof window === "undefined") return `http://localhost:3000${pathname}`;
+  const href = window.location.href;
+  try {
+    const url = new URL(pathname, href);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return url.toString();
+    }
+  } catch {
+  }
+  return `http://localhost:3000${pathname}`;
+}
+
 /**
  * useWebTerminal — manages a web-based PTY terminal session via REST + SSE.
  * Works in both browser and Electron environments.
@@ -17,6 +30,7 @@ export function useWebTerminal() {
   const onExitCallbackRef = useRef<((code: number) => void) | null>(null);
 
   const create = useCallback(async (cols: number, rows: number) => {
+    const apiUrl = resolveTerminalUrl("/api/terminal");
     // Clean up previous session
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -24,7 +38,7 @@ export function useWebTerminal() {
     }
     if (terminalIdRef.current) {
       try {
-        await fetch('/api/terminal', {
+        await fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'kill', id: terminalIdRef.current }),
@@ -37,7 +51,7 @@ export function useWebTerminal() {
     setExited(false);
 
     try {
-      const res = await fetch('/api/terminal', {
+      const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -55,7 +69,8 @@ export function useWebTerminal() {
       }
 
       // Connect SSE stream for output
-      const es = new EventSource(`/api/terminal/stream?id=${encodeURIComponent(id)}`);
+      const streamUrl = resolveTerminalUrl(`/api/terminal/stream?id=${encodeURIComponent(id)}`);
+      const es = new EventSource(streamUrl);
       eventSourceRef.current = es;
 
       es.onmessage = (event) => {
@@ -79,15 +94,19 @@ export function useWebTerminal() {
         setConnected(false);
       };
     } catch (err) {
-      console.error('Failed to create web terminal:', err);
+      const pageUrl = typeof window !== "undefined" ? window.location.href : "unknown";
+      const message = `Failed to create web terminal (page=${pageUrl}, api=${apiUrl})`;
+      console.error(message, err);
       setExited(true);
+      throw err instanceof Error ? new Error(message, { cause: err }) : new Error(message);
     }
   }, [workingDirectory, sessionId]);
 
   const write = useCallback(async (data: string) => {
     if (!terminalIdRef.current) return;
+    const apiUrl = resolveTerminalUrl("/api/terminal");
     try {
-      await fetch('/api/terminal', {
+      await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -101,8 +120,9 @@ export function useWebTerminal() {
 
   const resize = useCallback(async (cols: number, rows: number) => {
     if (!terminalIdRef.current) return;
+    const apiUrl = resolveTerminalUrl("/api/terminal");
     try {
-      await fetch('/api/terminal', {
+      await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -121,8 +141,9 @@ export function useWebTerminal() {
       eventSourceRef.current = null;
     }
     if (!terminalIdRef.current) return;
+    const apiUrl = resolveTerminalUrl("/api/terminal");
     try {
-      await fetch('/api/terminal', {
+      await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'kill', id: terminalIdRef.current }),
@@ -145,7 +166,8 @@ export function useWebTerminal() {
     return () => {
       eventSourceRef.current?.close();
       if (terminalIdRef.current) {
-        fetch('/api/terminal', {
+        const apiUrl = resolveTerminalUrl("/api/terminal");
+        fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'kill', id: terminalIdRef.current }),

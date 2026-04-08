@@ -21,6 +21,7 @@ interface ImageGenCardProps {
   aspectRatio?: string;
   imageSize?: string;
   model?: string;
+  providerName?: string;
   onRegenerate?: () => void;
   referenceImages?: Array<{ mimeType: string; data: string; localPath?: string }>;
 }
@@ -38,6 +39,7 @@ export function ImageGenCard({
   aspectRatio,
   imageSize,
   model,
+  providerName,
   onRegenerate,
   referenceImages,
 }: ImageGenCardProps) {
@@ -143,6 +145,11 @@ export function ImageGenCard({
             <Badge variant="secondary" className="text-[10px] gap-1">
               <PaintBrush size={12} />
               {model}
+            </Badge>
+          )}
+          {providerName && (
+            <Badge variant="outline" className="text-[10px]">
+              {providerName}
             </Badge>
           )}
           {aspectRatio && (

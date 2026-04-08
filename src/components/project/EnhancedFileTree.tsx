@@ -364,6 +364,32 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
     isDirectory: boolean;
   }>({ open: false, path: "", isDirectory: false });
 
+  // 保存展开状态到 localStorage
+  const saveExpandedState = useCallback((expandedSet: Set<string>) => {
+    if (!workingDirectory) return;
+    const key = `codepilot:file-tree:expanded:${workingDirectory}`;
+    try {
+      localStorage.setItem(key, JSON.stringify(Array.from(expandedSet)));
+    } catch {
+      // 忽略存储错误
+    }
+  }, [workingDirectory]);
+
+  // 从 localStorage 加载展开状态
+  const loadExpandedState = useCallback((): Set<string> => {
+    if (!workingDirectory) return new Set();
+    const key = `codepilot:file-tree:expanded:${workingDirectory}`;
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        return new Set(JSON.parse(saved));
+      }
+    } catch {
+      // 忽略解析错误
+    }
+    return new Set();
+  }, [workingDirectory]);
+
   // 获取文件树
   const fetchTree = useCallback(async () => {
     if (abortRef.current) {
@@ -393,16 +419,9 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
         const data = await res.json();
         if (controller.signal.aborted) return;
         setTree(data.tree || []);
-        // 默认展开第一层
-        if (data.tree && data.tree.length > 0) {
-          const newExpanded = new Set<string>();
-          data.tree.forEach((node: FileTreeNode) => {
-            if (node.type === "directory") {
-              newExpanded.add(node.path);
-            }
-          });
-          setExpanded(newExpanded);
-        }
+        // 加载保存的展开状态，默认所有文件夹都是折叠的
+        const savedExpanded = loadExpandedState();
+        setExpanded(savedExpanded);
       } else {
         const errData = await res.json().catch(() => ({ error: res.statusText }));
         setTree([]);
@@ -417,7 +436,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
         setLoading(false);
       }
     }
-  }, [workingDirectory]);
+  }, [workingDirectory, loadExpandedState]);
 
   useEffect(() => {
     fetchTree();
@@ -440,9 +459,11 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
       } else {
         next.add(path);
       }
+      // 保存展开状态
+      saveExpandedState(next);
       return next;
     });
-  }, []);
+  }, [saveExpandedState]);
 
   // 选择文件
   const handleSelect = useCallback(

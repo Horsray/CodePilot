@@ -64,7 +64,9 @@ export default function RootLayout({
         <ThemeProvider>
           <ThemeFamilyProvider families={familiesMeta}>
             <I18nProvider>
-              <AppShell>{children}</AppShell>
+              <AppShell>
+                {children}
+              </AppShell>
             </I18nProvider>
           </ThemeFamilyProvider>
         </ThemeProvider>

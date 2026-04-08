@@ -447,6 +447,10 @@ const en = {
   'imageGen.retryButton': 'Retry',
   'imageGen.generatingStatus': 'Generating...',
   'imageGen.stopButton': 'Stop',
+  'imageGen.provider': 'Image Service',
+  'imageGen.providerLoading': 'Loading image services...',
+  'imageGen.providerTarget': 'Request target',
+  'imageGen.noProviderConfigured': 'No media provider is configured. Add Google Gemini or a relay provider in Settings > Providers.',
 
   // ── Batch Image Generation ─────────────────────────────────
   'batchImageGen.toggle': 'Batch Generate',
@@ -1147,6 +1151,8 @@ const en = {
   'topBar.commit': 'Commit All',
   'topBar.push': 'Push',
   'topBar.terminal': 'Terminal',
+  'topBar.chat': 'Chat',
+  'topBar.browser': 'Browser',
 
   // ── Dashboard ─────────────────────────────────────────────────
   'dashboard.title': 'Dashboard',
@@ -1360,6 +1366,11 @@ const en = {
   'terminal.connecting': 'Connecting...',
   'terminal.disconnected': 'Disconnected',
   'terminal.exited': 'Process exited',
+  'terminal.terminalErrorTitle': 'Terminal Error',
+  'terminal.failedToConnect': 'Failed to connect to terminal service',
+  'terminal.terminalError': 'Terminal error: {{error}}',
+  'terminal.terminalErrorHint': 'This usually means the terminal backend failed to start in a Node.js runtime (for example, it was incorrectly deployed to Edge Runtime) or the system is missing the script command. Restart the app and reinstall/rebuild dependencies.',
+  'terminal.retry': 'Retry',
 
   // ── Setup Center ──────────────────────────────────────────────
   'setup.title': 'Welcome to CodePilot',

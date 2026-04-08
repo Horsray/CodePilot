@@ -29,7 +29,6 @@ import {
 import {
   readCCSwitchConfig,
   readCCSwitchClaudeSettings,
-  isCCSwitchEnabled,
   type CCSwitchConfig,
   type CCSwitchResolvedConfig,
 } from './cc-switch';
@@ -258,9 +257,11 @@ export function toClaudeCodeEnv(
       }
     }
   } else if (!resolved.provider) {
-    // No provider — check cc-switch config (auto-detect if config files exist)
-    const ccConfig = readCCSwitchConfig();
-    const ccSettings = readCCSwitchClaudeSettings();
+    const ccSwitchEnabled = getSetting('cc_switch_enabled') === 'true';
+    // 中文注释：仅在用户明确启用 cc-switch 时才允许它接管 env 模式，
+    // 避免 fork 或本机遗留 ~/.claude/settings.json / ~/.cc-switch/config.json 意外覆盖已配置服务商。
+    const ccConfig = ccSwitchEnabled ? readCCSwitchConfig() : null;
+    const ccSettings = ccSwitchEnabled ? readCCSwitchClaudeSettings() : null;
     
     let modelConfig: CCSwitchConfig[string] | undefined;
     let ccResolvedConfig: CCSwitchResolvedConfig | null = null;
@@ -521,9 +522,10 @@ function buildResolution(
   opts: ResolveOptions,
 ): ResolvedProvider {
   if (!provider) {
-  // Check cc-switch config first (auto-detect if config files exist)
-  const ccSwitchConfig = readCCSwitchConfig();
-  const ccSwitchSettingsRaw = readCCSwitchClaudeSettings();
+  const ccSwitchEnabled = getSetting('cc_switch_enabled') === 'true';
+  // 中文注释：解析 env provider 时尊重显式开关，关闭后不再自动读取本机 cc-switch 配置。
+  const ccSwitchConfig = ccSwitchEnabled ? readCCSwitchConfig() : null;
+  const ccSwitchSettingsRaw = ccSwitchEnabled ? readCCSwitchClaudeSettings() : null;
   
   let ccSwitchModels: CatalogModel[] = [];
   let ccSwitchHasCredentials = false;
