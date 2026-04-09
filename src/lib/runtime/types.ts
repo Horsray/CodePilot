@@ -48,6 +48,7 @@ export interface RuntimeStreamOptions {
   // ── Core (all runtimes) ──
   prompt: string;
   sessionId: string;
+  traceId?: string;
   model?: string;
   systemPrompt?: string;
   workingDirectory?: string;

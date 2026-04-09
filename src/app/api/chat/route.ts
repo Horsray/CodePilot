@@ -9,6 +9,7 @@ import { assembleContext } from '@/lib/context-assembler';
 import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, FileAttachment, ClaudeStreamOptions, MediaBlock } from '@/types';
 import { saveMediaToLibrary } from '@/lib/media-saver';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
+import { createPerfTrace, createPerfTraceId } from '@/lib/perf-trace';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
@@ -23,10 +24,17 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: NextRequest) {
   let activeSessionId: string | undefined;
   let activeLockId: string | undefined;
+  const traceId = request.headers.get('x-codepilot-trace-id') || createPerfTraceId('chat');
+  const perfTrace = createPerfTrace('chat-route', { id: traceId });
 
   try {
-    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean } = await request.json();
+    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean } = await perfTrace.measureAsync('request.parse', () => request.json());
     const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m } = body;
+    perfTrace.annotate('request.received', {
+      contentLength: content?.length || 0,
+      hasFiles: !!files?.length,
+      autoTrigger: !!autoTrigger,
+    });
 
     console.log('[chat API] content length:', content.length, 'first 200 chars:', content.slice(0, 200));
     console.log('[chat API] systemPromptAppend:', systemPromptAppend ? `${systemPromptAppend.length} chars` : 'none');
@@ -34,25 +42,25 @@ export async function POST(request: NextRequest) {
     if (!session_id || !content) {
       return new Response(JSON.stringify({ error: 'session_id and content are required' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CodePilot-Trace-Id': traceId },
       });
     }
 
-    const session = getSession(session_id);
+    const session = perfTrace.measure('db.session.load', () => getSession(session_id));
     if (!session) {
       return new Response(JSON.stringify({ error: 'Session not found' }), {
         status: 404,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CodePilot-Trace-Id': traceId },
       });
     }
 
     // Acquire exclusive lock for this session to prevent concurrent requests
     const lockId = crypto.randomBytes(8).toString('hex');
-    const lockAcquired = acquireSessionLock(session_id, lockId, `chat-${process.pid}`, 600);
+    const lockAcquired = perfTrace.measure('db.lock.acquire', () => acquireSessionLock(session_id, lockId, `chat-${process.pid}`, 600));
     if (!lockAcquired) {
       return new Response(
         JSON.stringify({ error: 'Session is busy processing another request', code: 'SESSION_BUSY' }),
-        { status: 409, headers: { 'Content-Type': 'application/json' } },
+        { status: 409, headers: { 'Content-Type': 'application/json', 'X-CodePilot-Trace-Id': traceId } },
       );
     }
     activeSessionId = session_id;
@@ -119,28 +127,30 @@ export async function POST(request: NextRequest) {
     let savedContent = displayOverride || content;
     let fileMeta: Array<{ id: string; name: string; type: string; size: number; filePath: string }> | undefined;
     if (!autoTrigger) {
-      if (files && files.length > 0) {
-        const workDir = session.working_directory;
-        const uploadDir = path.join(workDir, '.codepilot-uploads');
-        if (!fs.existsSync(uploadDir)) {
-          fs.mkdirSync(uploadDir, { recursive: true });
+      perfTrace.measure('message.persist', () => {
+        if (files && files.length > 0) {
+          const workDir = session.working_directory;
+          const uploadDir = path.join(workDir, '.codepilot-uploads');
+          if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+          }
+          fileMeta = files.map((f) => {
+            const safeName = path.basename(f.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+            const filePath = path.join(uploadDir, `${Date.now()}-${safeName}`);
+            const buffer = Buffer.from(f.data, 'base64');
+            fs.writeFileSync(filePath, buffer);
+            return { id: f.id, name: f.name, type: f.type, size: buffer.length, filePath };
+          });
+          savedContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayOverride || content}`;
         }
-        fileMeta = files.map((f) => {
-          const safeName = path.basename(f.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-          const filePath = path.join(uploadDir, `${Date.now()}-${safeName}`);
-          const buffer = Buffer.from(f.data, 'base64');
-          fs.writeFileSync(filePath, buffer);
-          return { id: f.id, name: f.name, type: f.type, size: buffer.length, filePath };
-        });
-        savedContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayOverride || content}`;
-      }
-      addMessage(session_id, 'user', savedContent);
+        addMessage(session_id, 'user', savedContent);
 
-      // Auto-generate title from first message if still default
-      if (session.title === 'New Chat') {
-        const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
-        updateSessionTitle(session_id, title);
-      }
+        // Auto-generate title from first message if still default
+        if (session.title === 'New Chat') {
+          const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
+          updateSessionTitle(session_id, title);
+        }
+      });
     }
 
     // Determine model: request override > session model > default setting
@@ -167,12 +177,12 @@ export async function POST(request: NextRequest) {
 
     // Resolve provider via unified resolver (same logic for chat, bridge, onboarding, etc.)
     const effectiveProviderId = provider_id || session.provider_id || '';
-    const resolved = resolveProviderUnified({
+    const resolved = perfTrace.measure('provider.resolve', () => resolveProviderUnified({
       providerId: effectiveProviderId || undefined,
       sessionProviderId: session.provider_id || undefined,
       model: model || undefined,
       sessionModel: session.model || undefined,
-    });
+    }));
     const resolvedProvider = resolved.provider;
 
     const providerName = resolvedProvider?.name || '';
@@ -223,7 +233,7 @@ export async function POST(request: NextRequest) {
     // Load conversation history from DB as fallback context.
     // Fetch up to 200 messages (DB query is cheap); actual truncation is done
     // by buildFallbackContext using a token budget, not a fixed message count.
-    const { messages: recentMsgs } = getMessages(session_id, { limit: 200, excludeHeartbeatAck: true });
+    const { messages: recentMsgs } = perfTrace.measure('db.messages.load', () => getMessages(session_id, { limit: 200, excludeHeartbeatAck: true }));
     // Exclude the user message we just saved (last in the list) — it's already the prompt
     const historyMsgs = recentMsgs.slice(0, -1).map(m => ({
       role: m.role as 'user' | 'assistant',
@@ -238,7 +248,7 @@ export async function POST(request: NextRequest) {
     const isImageAgentMode = !!systemPromptAppend && systemPromptAppend.includes('image-gen-request');
 
     // Unified context assembly — extracts workspace, CLI tools, widget prompt
-    const assembled = await assembleContext({
+    const assembled = await perfTrace.measureAsync('context.assemble', () => assembleContext({
       session,
       entryPoint: 'desktop',
       userPrompt: content,
@@ -246,7 +256,7 @@ export async function POST(request: NextRequest) {
       conversationHistory: historyMsgs,
       imageAgentMode: isImageAgentMode,
       autoTrigger: !!autoTrigger,
-    });
+    }));
     const finalSystemPrompt = assembled.systemPrompt;
     const generativeUIEnabled = assembled.generativeUIEnabled;
     const assistantProjectInstructions = assembled.assistantProjectInstructions;
@@ -257,9 +267,11 @@ export async function POST(request: NextRequest) {
     // - Native Runtime: needs ALL servers (it manages MCP connections independently)
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { predictNativeRuntime } = require('@/lib/runtime') as typeof import('@/lib/runtime');
-    const mcpServers = predictNativeRuntime(effectiveProviderId)
-      ? loadAllMcpServers()
-      : loadCodePilotMcpServers();
+    const mcpServers = perfTrace.measure('mcp.config.load', () => (
+      predictNativeRuntime(effectiveProviderId)
+        ? loadAllMcpServers()
+        : loadCodePilotMcpServers()
+    ));
 
     // ── Context compression check ───────────────────────────────────
     // Estimate next-turn context size and compress if over threshold.
@@ -268,6 +280,7 @@ export async function POST(request: NextRequest) {
     let compressionOccurred = false;
 
     try {
+      perfTrace.start('context.compress.check');
       const { estimateContextTokens } = await import('@/lib/context-estimator');
       const { getContextWindow } = await import('@/lib/model-context');
       const { needsCompression, compressConversation } = await import('@/lib/context-compressor');
@@ -341,6 +354,8 @@ export async function POST(request: NextRequest) {
       }
     } catch (estimateErr) {
       console.warn('[chat API] Context estimation failed, proceeding without compression:', estimateErr);
+    } finally {
+      perfTrace.end('context.compress.check');
     }
 
     // Stream Claude response, using SDK session ID for resume if available
@@ -351,9 +366,10 @@ export async function POST(request: NextRequest) {
       systemPromptLength: finalSystemPrompt?.length || 0,
       systemPromptFirst200: finalSystemPrompt?.slice(0, 200) || 'none',
     });
-    const stream = streamClaude({
+    const stream = perfTrace.measure('runtime.stream.create', () => streamClaude({
       prompt: content,
       sessionId: session_id,
+      traceId,
       sdkSessionId: session.sdk_session_id || undefined,
       model: resolved.upstreamModel || resolved.model || effectiveModel,
       systemPrompt: finalSystemPrompt,
@@ -380,7 +396,7 @@ export async function POST(request: NextRequest) {
       onRuntimeStatusChange: (status: string) => {
         try { setSessionRuntimeStatus(session_id, status); } catch { /* best effort */ }
       },
-    });
+    }));
 
     // Tee the stream: one for client, one for collecting the response
     const [streamForClient, streamForCollect] = stream.tee();
@@ -416,12 +432,58 @@ export async function POST(request: NextRequest) {
           },
         })
       : streamForClient;
+    let startupTraceStored = false;
+    const perfChunk = () => `data: ${JSON.stringify({
+      type: 'status',
+      data: JSON.stringify({
+        subtype: 'perf',
+        source: 'route',
+        traceId,
+        snapshot: perfTrace.snapshot({
+          metadata: {
+            compressionOccurred,
+            mcpServerCount: mcpServers ? Object.keys(mcpServers).length : 0,
+          },
+        }),
+      }),
+    })}\n\n`;
 
-    return new Response(responseStream, {
+    const tracedResponseStream = new ReadableStream<string>({
+      async start(controller) {
+        controller.enqueue(perfChunk());
+        const reader = responseStream.getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!startupTraceStored) {
+              startupTraceStored = true;
+              perfTrace.annotate('stream.first_chunk');
+              console.log('[chat API][perf]', JSON.stringify(perfTrace.finish({
+                phase: 'response_started',
+                compressionOccurred,
+              })));
+            }
+            controller.enqueue(value);
+          }
+        } finally {
+          if (!startupTraceStored) {
+            console.log('[chat API][perf]', JSON.stringify(perfTrace.finish({
+              phase: 'stream_closed_without_chunk',
+              compressionOccurred,
+            })));
+          }
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(tracedResponseStream, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
+        'X-CodePilot-Trace-Id': traceId,
       },
     });
   } catch (error) {
@@ -436,7 +498,7 @@ export async function POST(request: NextRequest) {
     const message = error instanceof Error ? error.message : 'Internal server error';
     return new Response(JSON.stringify({ error: message }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CodePilot-Trace-Id': traceId },
     });
   }
 }

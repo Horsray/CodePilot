@@ -30,6 +30,190 @@ interface ToolResultInfo {
   is_error?: boolean;
 }
 
+interface ChatPerfEntry {
+  name: string;
+  atMs: number;
+  source: 'frontend' | 'route' | 'native';
+  durationMs?: number;
+  detail?: Record<string, unknown>;
+}
+
+interface ChatPerfTrace {
+  id: string;
+  createdAt: string;
+  entries: ChatPerfEntry[];
+  memorySamples: Array<{ atMs: number; usedJSHeapSize: number; totalJSHeapSize: number }>;
+  longTasks: Array<{ startMs: number; durationMs: number; name: string }>;
+  metadata: Record<string, unknown>;
+  finishReason?: string;
+}
+
+function getPerfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? Number(performance.now().toFixed(2))
+    : Date.now();
+}
+
+function createChatPerfTrace(metadata: Record<string, unknown>) {
+  const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `chat-${Date.now()}`;
+  const markPrefix = `codepilot-chat-${id}`;
+  const trace: ChatPerfTrace = {
+    id,
+    createdAt: new Date().toISOString(),
+    entries: [],
+    memorySamples: [],
+    longTasks: [],
+    metadata,
+  };
+  const startMarks = new Map<string, number>();
+  const perfWithMemory = performance as Performance & {
+    memory?: {
+      usedJSHeapSize: number;
+      totalJSHeapSize: number;
+    };
+  };
+  let memoryTimer: ReturnType<typeof setInterval> | null = null;
+  let longTaskObserver: PerformanceObserver | null = null;
+
+  const storeTrace = () => {
+    if (typeof window === 'undefined') return;
+    const w = window as typeof window & {
+      __codepilotChatPerf?: { traces: ChatPerfTrace[] };
+    };
+    if (!w.__codepilotChatPerf) {
+      w.__codepilotChatPerf = { traces: [] };
+    }
+    w.__codepilotChatPerf.traces.push({
+      ...trace,
+      entries: [...trace.entries],
+      memorySamples: [...trace.memorySamples],
+      longTasks: [...trace.longTasks],
+    });
+    if (w.__codepilotChatPerf.traces.length > 20) {
+      w.__codepilotChatPerf.traces.splice(0, w.__codepilotChatPerf.traces.length - 20);
+    }
+  };
+
+  const record = (
+    name: string,
+    source: ChatPerfEntry['source'],
+    detail?: Record<string, unknown>,
+    durationMs?: number,
+  ) => {
+    trace.entries.push({
+      name,
+      source,
+      atMs: getPerfNow(),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(detail ? { detail } : {}),
+    });
+  };
+
+  // 中文注释：记录前端阶段起点，并同步写入 Performance Timeline。
+  const start = (name: string, detail?: Record<string, unknown>) => {
+    startMarks.set(name, getPerfNow());
+    performance.mark(`${markPrefix}:${name}:start`);
+    record(`${name}:start`, 'frontend', detail);
+  };
+
+  // 中文注释：记录前端阶段终点，输出 duration 便于和后端阶段对齐分析。
+  const end = (name: string, detail?: Record<string, unknown>) => {
+    const startAt = startMarks.get(name);
+    if (startAt === undefined) return;
+    const durationMs = Number((getPerfNow() - startAt).toFixed(2));
+    performance.mark(`${markPrefix}:${name}:end`);
+    try {
+      performance.measure(`${markPrefix}:${name}`, `${markPrefix}:${name}:start`, `${markPrefix}:${name}:end`);
+    } catch { /* ignore duplicate measure errors */ }
+    record(name, 'frontend', detail, durationMs);
+    startMarks.delete(name);
+  };
+
+  // 中文注释：接收服务端 perf 事件，统一收敛到同一条前端链路中。
+  const addServerPerf = (source: 'route' | 'native', payload: Record<string, unknown>) => {
+    const snapshot = payload.snapshot as {
+      totalDurationMs?: number;
+      events?: Array<{ name?: string; durationMs?: number; detail?: Record<string, unknown> }>;
+      metadata?: Record<string, unknown>;
+    } | undefined;
+
+    if (snapshot?.events?.length) {
+      for (const event of snapshot.events) {
+        record(event.name || `${source}.event`, source, event.detail, event.durationMs);
+      }
+      return;
+    }
+
+    record(String(payload.name || `${source}.event`), source, (payload.detail as Record<string, unknown> | undefined), typeof payload.totalDurationMs === 'number' ? payload.totalDurationMs : undefined);
+    if (typeof payload.durationMs === 'number') {
+      trace.entries[trace.entries.length - 1].durationMs = payload.durationMs;
+    }
+  };
+
+  // 中文注释：采样堆内存和长任务，排查前端阻塞与潜在内存泄漏。
+  const beginMonitoring = () => {
+    if (perfWithMemory.memory) {
+      memoryTimer = setInterval(() => {
+        if (!perfWithMemory.memory) return;
+        trace.memorySamples.push({
+          atMs: getPerfNow(),
+          usedJSHeapSize: perfWithMemory.memory.usedJSHeapSize,
+          totalJSHeapSize: perfWithMemory.memory.totalJSHeapSize,
+        });
+      }, 500);
+    }
+
+    if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+      longTaskObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          trace.longTasks.push({
+            startMs: Number(entry.startTime.toFixed(2)),
+            durationMs: Number(entry.duration.toFixed(2)),
+            name: entry.name,
+          });
+        }
+      });
+      longTaskObserver.observe({ entryTypes: ['longtask'] });
+    }
+  };
+
+  const finish = (finishReason: string, detail?: Record<string, unknown>) => {
+    trace.finishReason = finishReason;
+    if (memoryTimer) clearInterval(memoryTimer);
+    memoryTimer = null;
+    longTaskObserver?.disconnect();
+    longTaskObserver = null;
+    record('trace.finish', 'frontend', {
+      finishReason,
+      ...(detail || {}),
+    });
+    storeTrace();
+    console.groupCollapsed(`[chat-perf] ${trace.id} ${finishReason}`);
+    console.table(trace.entries.map((entry) => ({
+      source: entry.source,
+      name: entry.name,
+      durationMs: entry.durationMs ?? '',
+      atMs: entry.atMs,
+    })));
+    if (trace.memorySamples.length > 0) console.table(trace.memorySamples);
+    if (trace.longTasks.length > 0) console.table(trace.longTasks);
+    console.groupEnd();
+  };
+
+  beginMonitoring();
+
+  return {
+    id,
+    start,
+    end,
+    record,
+    addServerPerf,
+    finish,
+  };
+}
+
 export default function NewChatPage() {
   const router = useRouter();
   // Read prefill from URL once on mount — avoids useSearchParams which requires Suspense boundary
@@ -456,6 +640,13 @@ export default function NewChatPage() {
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      const perfTrace = createChatPerfTrace({
+        mode,
+        workingDir: workingDir.trim(),
+        model: currentModel,
+        providerId: currentProviderId,
+        contentLength: content.length,
+      });
 
       let sessionId = '';
 
@@ -470,11 +661,13 @@ export default function NewChatPage() {
           provider_id: currentProviderId,
         };
 
+        perfTrace.start('session.create.fetch');
         const createRes = await fetch('/api/chat/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(createBody),
         });
+        perfTrace.end('session.create.fetch', { status: createRes.status });
 
         if (!createRes.ok) {
           const errBody = await createRes.json().catch(() => ({}));
@@ -505,9 +698,13 @@ export default function NewChatPage() {
           : thinkingMode === 'adaptive' ? { type: 'adaptive' } : undefined;
 
         // Send the message via streaming API
+        perfTrace.start('chat.fetch.headers');
         const response = await fetch('/api/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-codepilot-trace-id': perfTrace.id,
+          },
           body: JSON.stringify({
             session_id: session.id,
             content,
@@ -522,6 +719,10 @@ export default function NewChatPage() {
           }),
           signal: controller.signal,
         });
+        perfTrace.end('chat.fetch.headers', {
+          status: response.status,
+          traceId: response.headers.get('x-codepilot-trace-id') || perfTrace.id,
+        });
 
         if (!response.ok) {
           const err = await response.json();
@@ -535,10 +736,15 @@ export default function NewChatPage() {
         let accumulated = '';
         let tokenUsage: TokenUsage | null = null;
         let buffer = '';
+        let firstChunkSeen = false;
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          if (!firstChunkSeen) {
+            firstChunkSeen = true;
+            perfTrace.record('chat.stream.first_chunk', 'frontend');
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
@@ -594,7 +800,10 @@ export default function NewChatPage() {
                 case 'status': {
                   try {
                     const statusData = JSON.parse(event.data);
-                    if (statusData.session_id) {
+                    if (statusData.subtype === 'perf') {
+                      const source = statusData.source === 'route' ? 'route' : 'native';
+                      perfTrace.addServerPerf(source, statusData as Record<string, unknown>);
+                    } else if (statusData.session_id) {
                       setStatusText(`Connected (${statusData.model || 'claude'})`);
                       setTimeout(() => setStatusText(undefined), 2000);
                     } else if (statusData.notification) {
@@ -663,6 +872,7 @@ export default function NewChatPage() {
             }
           }
         }
+        perfTrace.record('chat.stream.completed', 'frontend');
 
         // Add the completed assistant message
         if (accumulated.trim()) {
@@ -678,15 +888,21 @@ export default function NewChatPage() {
         }
 
         // Navigate to the session page after response is complete
+        perfTrace.finish('completed', {
+          sessionId: session.id,
+          outputLength: accumulated.length,
+        });
         router.push(`/chat/${session.id}`);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') {
+          perfTrace.finish('aborted', { sessionId });
           // User stopped - navigate to session if we have one
           if (sessionId) {
             router.push(`/chat/${sessionId}`);
           }
         } else {
           const errMsg = error instanceof Error ? error.message : 'Unknown error';
+          perfTrace.finish('failed', { sessionId, message: errMsg });
           setErrorBanner({ message: t('error.sessionCreateFailed'), description: errMsg });
         }
       } finally {

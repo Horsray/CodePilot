@@ -110,7 +110,7 @@ function handleSSEEvent(
       try {
         const statusData = JSON.parse(event.data);
         // Skip internal-only status events (e.g. resume fallback notifications)
-        if (statusData._internal) {
+        if (statusData._internal || statusData.subtype === 'perf') {
           return accumulated;
         }
         if (statusData.session_id) {

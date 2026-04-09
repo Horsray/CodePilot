@@ -9,7 +9,7 @@ import type { AgentRuntime, RuntimeStreamOptions } from './types';
 import { runAgentLoop } from '../agent-loop';
 import { buildSystemPrompt } from '../agent-system-prompt';
 import { resolveProvider } from '../provider-resolver';
-import { syncMcpConnections, disposeAll as disposeMcp } from '../mcp-connection-manager';
+import { disposeAll as disposeMcp } from '../mcp-connection-manager';
 import { isOAuthUsable } from '../openai-oauth-manager';
 
 // Track active AbortControllers for interrupt support
@@ -40,6 +40,7 @@ export const nativeRuntime: AgentRuntime = {
     const stream = runAgentLoop({
       prompt: options.prompt,
       sessionId: options.sessionId,
+      traceId: options.traceId,
       providerId: options.providerId,
       sessionProviderId: options.sessionProviderId,
       model: options.model,

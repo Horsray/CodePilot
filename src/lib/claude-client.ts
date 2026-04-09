@@ -457,6 +457,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     // Universal fields
     prompt: options.prompt,
     sessionId: options.sessionId,
+    traceId: options.traceId,
     model: options.model,
     systemPrompt: options.systemPrompt,
     workingDirectory: options.workingDirectory,

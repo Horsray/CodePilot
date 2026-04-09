@@ -993,6 +993,7 @@ export type StreamEventListener = (event: StreamEvent) => void;
 export interface ClaudeStreamOptions {
   prompt: string;
   sessionId: string;
+  traceId?: string;
   sdkSessionId?: string; // SDK session ID for resuming conversations
   model?: string;
   systemPrompt?: string;

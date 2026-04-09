@@ -19,6 +19,7 @@ interface McpConnection {
   tools: McpToolDefinition[];
   status: 'connected' | 'connecting' | 'failed' | 'disabled';
   error?: string;
+  lastAttemptAt?: number;
 }
 
 export interface McpToolDefinition {
@@ -34,6 +35,26 @@ export interface McpToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+export interface McpSyncServerResult {
+  name: string;
+  status: 'connected' | 'reused' | 'failed' | 'disabled';
+  durationMs: number;
+  toolCount: number;
+  error?: string;
+}
+
+export interface McpSyncResult {
+  totalDurationMs: number;
+  connectedCount: number;
+  reusedCount: number;
+  failedCount: number;
+  servers: McpSyncServerResult[];
+}
+
+const MCP_CONNECT_TIMEOUT_MS = 4_000;
+const MCP_LIST_TOOLS_TIMEOUT_MS = 2_000;
+const MCP_FAILED_RETRY_COOLDOWN_MS = 60_000;
+
 // ── Singleton pool ──────────────────────────────────────────────
 
 const connections = new Map<string, McpConnection>();
@@ -44,35 +65,101 @@ const connections = new Map<string, McpConnection>();
  */
 export async function syncMcpConnections(
   desiredConfigs: Record<string, MCPServerConfig>,
-): Promise<void> {
+): Promise<McpSyncResult> {
+  const syncStart = Date.now();
   const desiredNames = new Set(Object.keys(desiredConfigs));
+  const results: McpSyncServerResult[] = [];
 
   // Disconnect servers that are no longer in config
-  for (const [name, conn] of connections) {
+  for (const [name] of connections) {
     if (!desiredNames.has(name)) {
       await disconnectServer(name);
     }
   }
 
   // Connect new or updated servers
+  const connectTasks: Array<Promise<McpSyncServerResult>> = [];
   for (const [name, config] of Object.entries(desiredConfigs)) {
-    const existing = connections.get(name);
-    if (!existing || existing.status === 'failed') {
-      await connectServer(name, config);
+    if (config.enabled === false) {
+      results.push({
+        name,
+        status: 'disabled',
+        durationMs: 0,
+        toolCount: 0,
+      });
+      continue;
     }
+    const existing = connections.get(name);
+    if (existing?.status === 'connected') {
+      results.push({
+        name,
+        status: 'reused',
+        durationMs: 0,
+        toolCount: existing.tools.length,
+      });
+      continue;
+    }
+    if (existing?.status === 'connecting') {
+      results.push({
+        name,
+        status: 'reused',
+        durationMs: 0,
+        toolCount: existing.tools.length,
+      });
+      continue;
+    }
+    if (existing?.status === 'failed' && existing.lastAttemptAt && Date.now() - existing.lastAttemptAt < MCP_FAILED_RETRY_COOLDOWN_MS) {
+      results.push({
+        name,
+        status: 'failed',
+        durationMs: 0,
+        toolCount: 0,
+        error: existing.error,
+      });
+      continue;
+    }
+    connectTasks.push(connectServer(name, config));
+  }
+
+  if (connectTasks.length > 0) {
+    const settled = await Promise.all(connectTasks);
+    results.push(...settled);
+  }
+
+  return {
+    totalDurationMs: Date.now() - syncStart,
+    connectedCount: results.filter(r => r.status === 'connected').length,
+    reusedCount: results.filter(r => r.status === 'reused').length,
+    failedCount: results.filter(r => r.status === 'failed').length,
+    servers: results.sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
 /**
  * Connect to a single MCP server.
  */
-export async function connectServer(name: string, config: MCPServerConfig): Promise<void> {
+export async function connectServer(name: string, config: MCPServerConfig): Promise<McpSyncServerResult> {
+  const startedAt = Date.now();
   const conn: McpConnection = {
     name,
     config,
     client: null,
     tools: [],
     status: 'connecting',
+    lastAttemptAt: startedAt,
   };
   connections.set(name, conn);
 
@@ -86,11 +173,11 @@ export async function connectServer(name: string, config: MCPServerConfig): Prom
     const client = new Client({ name: `codepilot-${name}`, version: '1.0.0' });
     const transport = await createTransport(config);
 
-    await client.connect(transport);
+    await withTimeout(client.connect(transport), MCP_CONNECT_TIMEOUT_MS, `[MCP] ${name} connect`);
     conn.client = client;
 
     // Discover tools
-    const toolsResult = await client.listTools();
+    const toolsResult = await withTimeout(client.listTools(), MCP_LIST_TOOLS_TIMEOUT_MS, `[MCP] ${name} listTools`);
     conn.tools = (toolsResult.tools || []).map(t => ({
       qualifiedName: `mcp__${name}__${t.name}`,
       originalName: t.name,
@@ -100,10 +187,26 @@ export async function connectServer(name: string, config: MCPServerConfig): Prom
     }));
 
     conn.status = 'connected';
+    return {
+      name,
+      status: 'connected',
+      durationMs: Date.now() - startedAt,
+      toolCount: conn.tools.length,
+    };
   } catch (err) {
     conn.status = 'failed';
     conn.error = err instanceof Error ? err.message : String(err);
     console.warn(`[MCP] Failed to connect to ${name}:`, conn.error);
+    try { await conn.client?.close(); } catch { /* ignore */ }
+    conn.client = null;
+    conn.tools = [];
+    return {
+      name,
+      status: 'failed',
+      durationMs: Date.now() - startedAt,
+      toolCount: 0,
+      error: conn.error,
+    };
   }
 }
 

@@ -1,6 +1,20 @@
 # CLAUDE.md
 
 CodePilot — 多模型 AI Agent 桌面客户端，基于 Electron + Next.js。
+本项目是https://github.com/op7418/CodePilot的fork分支版本
+与原始版本的主要差异在：
+- 新增了终端和控制台的支持
+- 新增了内置浏览器的支持
+- 新增了对cc switch的支持，用以切换本地/api/中转平台的模型调用
+- 新增了对中转平台的媒体渠道生成支持
+- 修改了文件树功能的ui和交互
+
+## Fork 同步须知
+
+- 处理 upstream 同步、官方更新合并、冲突解决前，必须先阅读 `docs/handover/fork-sync-playbook.md`
+- 合并目标是“优先继承官方演进，再保留并适配 fork 定制能力”
+- 不允许用整文件覆盖的方式粗暴解决冲突
+
 
 > 架构细节见 [ARCHITECTURE.md](./ARCHITECTURE.md)，本文件只包含规则和流程。
 

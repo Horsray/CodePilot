@@ -10,7 +10,7 @@
  * compatible with the existing frontend contract (useSSEStream.ts).
  */
 
-import { streamText, type LanguageModel, type ToolSet, type ModelMessage } from 'ai';
+import { streamText, type ToolSet, type ModelMessage } from 'ai';
 import type { SSEEvent, TokenUsage } from '@/types';
 import { createModel } from './ai-provider';
 import { assembleTools, READ_ONLY_TOOLS } from './agent-tools';
@@ -21,6 +21,7 @@ import { createCheckpoint } from './file-checkpoint';
 import type { PermissionMode } from './permission-checker';
 import { buildCoreMessages } from './message-builder';
 import { getMessages } from './db';
+import { createPerfTrace } from './perf-trace';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -29,6 +30,8 @@ export interface AgentLoopOptions {
   prompt: string;
   /** Session ID (for DB persistence and SSE metadata) */
   sessionId: string;
+  /** 性能追踪 ID，用于串联前后端一次请求。 */
+  traceId?: string;
   /** Provider ID */
   providerId?: string;
   /** Session's stored provider ID */
@@ -86,6 +89,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
   const {
     prompt,
     sessionId,
+    traceId,
     providerId,
     sessionProviderId,
     model: modelOverride,
@@ -103,38 +107,74 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
     permissionMode,
     mcpServers,
     bypassPermissions,
-    files,
   } = options;
 
   return new ReadableStream<string>({
     async start(controller) {
+      const perfTrace = createPerfTrace('agent-loop', {
+        id: traceId,
+        metadata: { sessionId },
+      });
       const keepAliveTimer = setInterval(() => {
         try { controller.enqueue(formatSSE({ type: 'keep_alive', data: '' })); } catch { /* stream closed */ }
       }, KEEPALIVE_INTERVAL_MS);
 
+      // 中文注释：把后端阶段耗时作为 status 事件发给前端，便于在浏览器侧重建完整链路。
+      const emitPerfStatus = (name: string, detail?: Record<string, unknown>, durationMs?: number) => {
+        const snapshot = perfTrace.snapshot();
+        controller.enqueue(formatSSE({
+          type: 'status',
+          data: JSON.stringify({
+            subtype: 'perf',
+            source: 'native',
+            traceId: perfTrace.id,
+            name,
+            ...(durationMs !== undefined ? { durationMs } : {}),
+            totalDurationMs: snapshot.totalDurationMs,
+            ...(detail ? { detail } : {}),
+          }),
+        }));
+      };
+
       try {
+        emitPerfStatus('agent_loop.stream_open', {
+          mcpServerCount: mcpServers ? Object.keys(mcpServers).length : 0,
+        });
+
         // 0. Sync MCP servers before assembling tools (await to avoid race condition)
         if (mcpServers && Object.keys(mcpServers).length > 0) {
           console.log(`[agent-loop] Syncing ${Object.keys(mcpServers).length} MCP servers: ${Object.keys(mcpServers).join(', ')}`);
           try {
             const { syncMcpConnections } = await import('./mcp-connection-manager');
-            await syncMcpConnections(mcpServers);
+            const syncStart = Date.now();
+            const syncResult = await perfTrace.measureAsync('mcp.sync', () => syncMcpConnections(mcpServers));
+            emitPerfStatus('mcp.sync', {
+              totalDurationMs: syncResult.totalDurationMs,
+              connectedCount: syncResult.connectedCount,
+              reusedCount: syncResult.reusedCount,
+              failedCount: syncResult.failedCount,
+              servers: syncResult.servers,
+            }, Date.now() - syncStart);
           } catch (err) {
             console.warn('[agent-loop] MCP sync error:', err instanceof Error ? err.message : err);
             reportNativeError('MCP_CONNECTION_ERROR', err, { sessionId });
+            emitPerfStatus('mcp.sync.error', {
+              message: err instanceof Error ? err.message : String(err),
+            });
           }
         } else {
           console.log('[agent-loop] No MCP servers to sync');
+          emitPerfStatus('mcp.sync.skipped');
         }
 
         // 0b. Assemble tools with permission context (needs controller for SSE emission)
         // When bypassPermissions is true (full_access profile), skip permission wrapping entirely.
-        let tools: import('ai').ToolSet;
-        let toolSystemPrompts: string[] = [];
-        if (toolsOverride) {
-          tools = toolsOverride;
-        } else {
-          const assembled = assembleTools({
+        const toolsStart = Date.now();
+        const assembledTools = perfTrace.measure('tools.assemble', () => {
+          if (toolsOverride) {
+            return { tools: toolsOverride, systemPrompts: [] };
+          }
+          return assembleTools({
             workingDirectory: workingDirectory || process.cwd(),
             prompt,
             mode: permissionMode,
@@ -150,9 +190,13 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
               abortSignal: abortController.signal,
             },
           });
-          tools = assembled.tools;
-          toolSystemPrompts = assembled.systemPrompts;
-        }
+        });
+        const tools = assembledTools.tools;
+        const toolSystemPrompts = assembledTools.systemPrompts;
+        emitPerfStatus('tools.assemble', {
+          toolCount: Object.keys(tools || {}).length,
+          toolSystemPromptCount: toolSystemPrompts.length,
+        }, Date.now() - toolsStart);
 
         // Augment system prompt with tool-specific context snippets
         // (notification hints, media capabilities, dashboard usage, etc.)
@@ -161,16 +205,20 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           : systemPrompt;
 
         // 1. Create model
-        const { languageModel, modelId, config, isThirdPartyProxy } = createModel({
+        const modelStart = Date.now();
+        const { languageModel, modelId, config, isThirdPartyProxy } = perfTrace.measure('model.create', () => createModel({
           providerId,
           sessionProviderId,
           model: modelOverride,
           sessionModel,
-        });
+        }));
+        emitPerfStatus('model.create', { modelId }, Date.now() - modelStart);
 
         // 2. Load conversation history from DB
-        const { messages: dbMessages } = getMessages(sessionId, { limit: 200, excludeHeartbeatAck: true });
+        const historyStart = Date.now();
+        const { messages: dbMessages } = perfTrace.measure('db.history.load', () => getMessages(sessionId, { limit: 200, excludeHeartbeatAck: true }));
         const historyMessages = buildCoreMessages(dbMessages);
+        emitPerfStatus('db.history.load', { messageCount: dbMessages.length }, Date.now() - historyStart);
 
         // The chat route persists the user message to DB BEFORE calling us,
         // so for normal messages it's already the last entry in historyMessages.
@@ -194,6 +242,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           type: 'status',
           data: JSON.stringify({
             session_id: sessionId,
+            trace_id: perfTrace.id,
             model: modelId,
             requested_model: modelOverride || sessionModel || modelId,
             tools: toolNames,
@@ -349,9 +398,20 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           let hasToolCalls = false;
           const stepToolNames: string[] = [];
           let eventCount = 0;
+          let firstModelEventSeen = false;
+          const firstEventStart = Date.now();
+          perfTrace.start(`model.step_${step}.first_event`);
 
           for await (const event of result.fullStream) {
             eventCount++;
+            if (!firstModelEventSeen) {
+              firstModelEventSeen = true;
+              perfTrace.end(`model.step_${step}.first_event`, { eventType: event.type });
+              emitPerfStatus('model.first_event', {
+                step,
+                eventType: event.type,
+              }, Date.now() - firstEventStart);
+            }
             switch (event.type) {
               case 'text-delta':
                 controller.enqueue(formatSSE({ type: 'text', data: event.text }));
