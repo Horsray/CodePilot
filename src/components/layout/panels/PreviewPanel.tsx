@@ -85,7 +85,13 @@ const PREVIEW_MIN_WIDTH = 320;
 const PREVIEW_MAX_WIDTH = 800;
 const PREVIEW_DEFAULT_WIDTH = 480;
 
-export function PreviewPanel() {
+interface PreviewPanelProps {
+  standalone?: boolean;
+  filePath?: string;
+  onClose?: () => void;
+}
+
+export function PreviewPanel({ standalone = false, filePath: filePathOverride, onClose }: PreviewPanelProps = {}) {
   const { resolvedTheme } = useTheme();
   const { workingDirectory, sessionId, previewFile, setPreviewFile, previewViewMode, setPreviewViewMode, setPreviewOpen } = usePanel();
   const isDark = resolvedTheme === "dark";
@@ -100,7 +106,7 @@ export function PreviewPanel() {
     setWidth((w) => Math.min(PREVIEW_MAX_WIDTH, Math.max(PREVIEW_MIN_WIDTH, w - delta)));
   }, []);
 
-  const filePath = previewFile || "";
+  const filePath = filePathOverride || previewFile || "";
 
   useEffect(() => {
     if (!filePath || isMediaPreview(filePath)) {
@@ -149,6 +155,10 @@ export function PreviewPanel() {
   };
 
   const handleClose = () => {
+    if (onClose) {
+      onClose();
+      return;
+    }
     setPreviewFile(null);
     setPreviewOpen(false);
   };
@@ -175,9 +185,12 @@ export function PreviewPanel() {
     : '';
 
   return (
-    <div className="flex h-full shrink-0 overflow-hidden">
-      <ResizeHandle side="left" onResize={handleResize} />
-      <div className="flex h-full flex-1 flex-col overflow-hidden border-r border-border/40 bg-background" style={{ width }}>
+    <div className="flex h-full overflow-hidden">
+      {!standalone && <ResizeHandle side="left" onResize={handleResize} />}
+      <div
+        className="flex h-full flex-1 flex-col overflow-hidden bg-background"
+        style={standalone ? undefined : { width }}
+      >
       {/* Header */}
       <div className="flex h-10 shrink-0 items-center gap-2 px-3">
         <div className="min-w-0 flex-1">

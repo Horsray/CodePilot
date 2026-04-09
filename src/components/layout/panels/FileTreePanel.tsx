@@ -3,15 +3,15 @@
 import { useCallback } from "react";
 import { usePanel } from "@/hooks/usePanel";
 import { EnhancedFileTree } from "@/components/project/EnhancedFileTree";
+import { TaskList } from "@/components/project/TaskList";
 import { showToast } from "@/hooks/useToast";
 
 export function FileTreePanel() {
-  const { workingDirectory, setPreviewFile, setPreviewOpen } = usePanel();
+  const { workingDirectory, sessionId, openPreviewTab } = usePanel();
 
   const handleFileSelect = useCallback((path: string) => {
-    setPreviewFile(path);
-    setPreviewOpen(true);
-  }, [setPreviewFile, setPreviewOpen]);
+    openPreviewTab(path);
+  }, [openPreviewTab]);
 
   const handleFileAdd = useCallback((path: string) => {
     window.dispatchEvent(new CustomEvent('attach-file-to-chat', { detail: { path } }));
@@ -26,6 +26,7 @@ export function FileTreePanel() {
       workingDirectory={workingDirectory}
       onFileSelect={handleFileSelect}
       onFileAdd={handleFileAdd}
+      topSlot={sessionId ? <TaskList sessionId={sessionId} /> : null}
     />
   );
 }

@@ -5,14 +5,12 @@ import { usePathname } from "next/navigation";
 import {
   GitBranch,
   TreeStructure,
-  Terminal,
-  ListBullets,
   Globe,
-  ChatCircle,
+  FileCode,
   PencilSimple,
   DotOutline,
   ChartBar,
-  Brain,
+  X,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,24 +37,16 @@ export function UnifiedTopBar() {
     setGitPanelOpen,
     dashboardPanelOpen,
     setDashboardPanelOpen,
-    assistantPanelOpen,
-    setAssistantPanelOpen,
     isAssistantWorkspace,
-    bottomPanelOpen,
-    setBottomPanelOpen,
-    bottomPanelTab,
-    setBottomPanelTab,
-    mainViewMode,
-    setMainViewMode,
-    browserTabOpen,
-    setBrowserTabOpen,
+    workspaceTabs,
+    activeWorkspaceTabId,
+    setActiveWorkspaceTabId,
+    closeWorkspaceTab,
     currentBranch,
     gitDirtyCount,
   } = usePanel();
   const { t } = useTranslation();
   const { isWindows } = useClientPlatform();
-  const [assistantName, setAssistantName] = useState('');
-  const [buddyEmoji, setBuddyEmoji] = useState('');
   const [buddySpecies, setBuddySpecies] = useState('');
 
   useEffect(() => {
@@ -64,15 +54,13 @@ export function UnifiedTopBar() {
     let cancelled = false;
     fetch('/api/workspace/summary')
       .then(r => r.ok ? r.json() : null)
-      .then(data => { if (!cancelled) { setAssistantName(data?.name || ''); setBuddyEmoji(data?.buddy?.emoji || ''); setBuddySpecies(data?.buddy?.species || ''); } })
+      .then(data => { if (!cancelled) { setBuddySpecies(data?.buddy?.species || ''); } })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [isAssistantWorkspace]);
   const pathname = usePathname();
 
-  // Only show Git/terminal/panel controls on chat detail routes (/chat/[id]),
-  // not on the empty /chat page where panels aren't mounted.
-  const isChatRoute = pathname.startsWith("/chat/") && pathname !== "/chat";
+  const isChatRoute = pathname.startsWith("/chat");
 
   // --- Title editing ---
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -141,44 +129,11 @@ export function UnifiedTopBar() {
         className="flex h-12 shrink-0 items-center gap-2 bg-background px-3"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        {/* Left: chat title + project folder */}
+        {/* Left: project + current chat tab */}
         <div
           className="flex items-center gap-1.5 min-w-0 shrink"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          {isChatRoute && sessionTitle && (
-            isEditingTitle ? (
-              <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-                <Input
-                  ref={titleInputRef}
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  onKeyDown={handleTitleKeyDown}
-                  onBlur={handleSaveTitle}
-                  className="h-7 text-sm max-w-[200px]"
-                />
-              </div>
-            ) : (
-              <div className="flex items-center gap-1 cursor-default max-w-[200px]">
-                <h2 className="text-sm font-medium text-foreground/80 truncate">
-                  {sessionTitle}
-                </h2>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleStartEditTitle}
-                  className="shrink-0 h-auto w-auto p-0.5"
-                >
-                  <PencilSimple size={12} className="text-muted-foreground" />
-                </Button>
-              </div>
-            )
-          )}
-
-          {isChatRoute && projectName && sessionTitle && (
-            <span className="text-xs text-muted-foreground/60 shrink-0">/</span>
-          )}
-
           {isChatRoute && projectName && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -208,10 +163,100 @@ export function UnifiedTopBar() {
               </TooltipContent>
             </Tooltip>
           )}
+
+          {isChatRoute && projectName && sessionTitle && (
+            <span className="text-xs text-muted-foreground/60 shrink-0">/</span>
+          )}
+
+          {sessionTitle && (
+            isEditingTitle ? (
+              <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+                <Input
+                  ref={titleInputRef}
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  onKeyDown={handleTitleKeyDown}
+                  onBlur={handleSaveTitle}
+                  className="h-8 text-sm max-w-[220px]"
+                />
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 min-w-0">
+                <Button
+                  variant={activeWorkspaceTabId === null ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setActiveWorkspaceTabId(null)}
+                  className="h-8 max-w-[220px] gap-1.5 rounded-2xl px-3 text-sm"
+                >
+                  <span className="truncate">{sessionTitle}</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleStartEditTitle}
+                  className="shrink-0 h-auto w-auto p-0.5"
+                >
+                  <PencilSimple size={12} className="text-muted-foreground" />
+                </Button>
+              </div>
+            )
+          )}
         </div>
 
-        {/* Spacer */}
-        <div className="flex-1" />
+        <div
+          className="flex min-w-0 flex-1 items-center"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-hide pr-2">
+            {workspaceTabs.map((tab) => {
+              const isActive = activeWorkspaceTabId === tab.id;
+              const isBrowserTab = tab.kind === "browser";
+              const isPreviewTab = tab.kind === "preview";
+
+              return (
+                <div
+                  key={tab.id}
+                  role="tab"
+                  tabIndex={0}
+                  onClick={() => setActiveWorkspaceTabId(tab.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setActiveWorkspaceTabId(tab.id);
+                    }
+                  }}
+                  className={`group flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-md border px-3 text-xs transition-colors ${
+                    isActive
+                      ? "border-border bg-accent text-foreground"
+                      : "border-transparent bg-muted/30 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                  }`}
+                >
+                  {isBrowserTab ? (
+                    <Globe size={13} className="shrink-0" />
+                  ) : isPreviewTab ? (
+                    <FileCode size={13} className="shrink-0" />
+                  ) : (
+                    <PencilSimple size={13} className="shrink-0" />
+                  )}
+                  <span className="max-w-[180px] truncate">{tab.title}</span>
+                  {tab.closable && (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeWorkspaceTab(tab.id);
+                      }}
+                      className="h-4 w-4 shrink-0 rounded-sm p-0 text-muted-foreground hover:bg-background/80 hover:text-foreground"
+                    >
+                      <X size={10} />
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
         {/* Right: action buttons */}
         <div
@@ -257,83 +302,6 @@ export function UnifiedTopBar() {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{t('topBar.fileTree')}</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={mainViewMode === "chat" ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    className={mainViewMode === "chat" ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => setMainViewMode("chat")}
-                  >
-                    <ChatCircle size={16} />
-                    <span className="sr-only">{t('topBar.chat')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t('topBar.chat')}</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={mainViewMode === "browser" ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    className={mainViewMode === "browser" ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => {
-                      if (!browserTabOpen) setBrowserTabOpen(true);
-                      setMainViewMode("browser");
-                    }}
-                  >
-                    <Globe size={16} />
-                    <span className="sr-only">{t('topBar.browser')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t('topBar.browser')}</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={bottomPanelOpen && bottomPanelTab === "terminal" ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    className={bottomPanelOpen && bottomPanelTab === "terminal" ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => {
-                      if (bottomPanelOpen && bottomPanelTab === "terminal") {
-                        setBottomPanelOpen(false);
-                        return;
-                      }
-                      setBottomPanelTab("terminal");
-                      setBottomPanelOpen(true);
-                    }}
-                  >
-                    <Terminal size={16} />
-                    <span className="sr-only">{t('bottomPanel.terminal')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t('bottomPanel.terminal')}</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={bottomPanelOpen && bottomPanelTab === "console" ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    className={bottomPanelOpen && bottomPanelTab === "console" ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => {
-                      if (bottomPanelOpen && bottomPanelTab === "console") {
-                        setBottomPanelOpen(false);
-                        return;
-                      }
-                      setBottomPanelTab("console");
-                      setBottomPanelOpen(true);
-                    }}
-                  >
-                    <ListBullets size={16} />
-                    <span className="sr-only">{t('bottomPanel.console')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t('bottomPanel.console')}</TooltipContent>
               </Tooltip>
 
               <Tooltip>

@@ -15,6 +15,8 @@ import {
   Image,
   WifiHigh,
   Gear,
+  Globe,
+  ListBullets,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,7 +63,18 @@ interface ChatListPanelProps {
 export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatListPanelProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, workingDirectory } = usePanel();
+  const {
+    streamingSessionId,
+    pendingApprovalSessionId,
+    activeStreamingSessions,
+    pendingApprovalSessionIds,
+    workingDirectory,
+    openBrowserTab,
+    bottomPanelOpen,
+    setBottomPanelOpen,
+    bottomPanelTab,
+    setBottomPanelTab,
+  } = usePanel();
   const { splitSessions, isSplitActive, activeColumnId, addToSplit, removeFromSplit, setActiveColumn, isInSplit } = useSplit();
   const { t } = useTranslation();
   const { isElectron, openNativePicker } = useNativeFolderPicker();
@@ -457,18 +470,66 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         <img src="/icons/toplogo.png" alt="CodePilot" className="h-8 w-auto object-contain" />
       </div>
 
-      {/* Top action bar: New Chat + Search */}
+      {/* Top action bar: New Chat + IDE tools + Search */}
       <div className="flex items-center gap-2 px-3 pb-2">
         <Button
           variant="outline"
           size="sm"
-          className="flex-1 justify-center gap-1.5 h-8 text-xs"
+          className="min-w-0 flex-1 justify-center gap-1.5 h-8 px-3 text-xs"
           disabled={creatingChat}
           onClick={handleNewChat}
         >
           <Plus size={14} />
           {t('chatList.newConversation')}
         </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              className="h-8 w-8 shrink-0"
+              onClick={() => openBrowserTab()}
+            >
+              <Globe size={14} />
+              <span className="sr-only">{t('topBar.browser')}</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('topBar.browser')}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={bottomPanelOpen && bottomPanelTab === "terminal" ? "secondary" : "outline"}
+              size="icon-sm"
+              className="h-8 w-8 shrink-0"
+              onClick={() => {
+                setBottomPanelTab("terminal");
+                setBottomPanelOpen(true);
+              }}
+            >
+              <Terminal size={14} />
+              <span className="sr-only">{t('bottomPanel.terminal')}</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('bottomPanel.terminal')}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={bottomPanelOpen && bottomPanelTab === "console" ? "secondary" : "outline"}
+              size="icon-sm"
+              className="h-8 w-8 shrink-0"
+              onClick={() => {
+                setBottomPanelTab("console");
+                setBottomPanelOpen(true);
+              }}
+            >
+              <ListBullets size={14} />
+              <span className="sr-only">{t('bottomPanel.console')}</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('bottomPanel.console')}</TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

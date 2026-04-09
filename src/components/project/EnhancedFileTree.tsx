@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import {
   Folder,
   FolderOpen,
@@ -47,6 +47,7 @@ interface EnhancedFileTreeProps {
   workingDirectory: string;
   onFileSelect: (path: string) => void;
   onFileAdd?: (path: string) => void;
+  topSlot?: ReactNode;
 }
 
 // 文件图标映射
@@ -331,7 +332,7 @@ function TreeNode({
   );
 }
 
-export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: EnhancedFileTreeProps) {
+export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, topSlot }: EnhancedFileTreeProps) {
   const { t } = useTranslation();
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
@@ -705,6 +706,12 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
           </Button>
         </div>
       </div>
+
+      {topSlot ? (
+        <div className="border-b border-border/40 px-3 py-2 shrink-0">
+          {topSlot}
+        </div>
+      ) : null}
 
       {/* Search */}
       <div className="px-3 py-2 border-b border-border/40 shrink-0">

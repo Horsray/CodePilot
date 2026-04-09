@@ -6,6 +6,17 @@ export type PanelContent = "files" | "tasks";
 
 export type PreviewViewMode = "source" | "rendered";
 export type BottomPanelTab = "terminal" | "console";
+export type WorkspaceTabKind = "browser" | "preview";
+
+export interface WorkspaceTab {
+  id: string;
+  kind: WorkspaceTabKind;
+  title: string;
+  closable: boolean;
+  url?: string;
+  filePath?: string;
+  sessionId?: string;
+}
 
 export interface PanelContextValue {
   // --- New independent panel states ---
@@ -33,6 +44,12 @@ export interface PanelContextValue {
   setBrowserTabOpen: (open: boolean) => void;
   browserUrl: string;
   setBrowserUrl: (url: string) => void;
+  workspaceTabs: WorkspaceTab[];
+  activeWorkspaceTabId: string | null;
+  setActiveWorkspaceTabId: (id: string | null) => void;
+  openBrowserTab: (url?: string) => void;
+  openPreviewTab: (path: string) => void;
+  closeWorkspaceTab: (id: string) => void;
 
   // --- Git summary (for top bar, derived — no setters) ---
   currentBranch: string;

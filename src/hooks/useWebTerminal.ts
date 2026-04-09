@@ -20,8 +20,7 @@ function resolveTerminalUrl(pathname: string): string {
  */
 export function useWebTerminal() {
   const { workingDirectory, sessionId } = usePanel();
-  // 终端后端开关：桌面端暂时强制走 HTTP+SSE，绕过 Electron IPC 写入链路不稳定问题。
-  const useElectronBackend = false;
+  const useElectronBackend = typeof window !== "undefined" && !!window.electronAPI?.terminal;
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
   const terminalIdRef = useRef<string>("");
@@ -144,7 +143,7 @@ export function useWebTerminal() {
       setExited(true);
       throw err instanceof Error ? new Error(message, { cause: err }) : new Error(message);
     }
-  }, [workingDirectory, sessionId]);
+  }, [useElectronBackend, workingDirectory, sessionId]);
 
   const write = useCallback(async (data: string) => {
     if (!terminalIdRef.current) return;
@@ -167,7 +166,7 @@ export function useWebTerminal() {
         }),
       });
     } catch { /* ignore */ }
-  }, []);
+  }, [useElectronBackend]);
 
   const resize = useCallback(async (cols: number, rows: number) => {
     if (!terminalIdRef.current) return;
@@ -189,7 +188,7 @@ export function useWebTerminal() {
         }),
       });
     } catch { /* ignore */ }
-  }, []);
+  }, [useElectronBackend]);
 
   const kill = useCallback(async () => {
     if (!terminalIdRef.current) return;
@@ -210,7 +209,7 @@ export function useWebTerminal() {
     terminalIdRef.current = "";
     backendRef.current = "http";
     setConnected(false);
-  }, []);
+  }, [useElectronBackend]);
 
   const setOnData = useCallback((cb: (data: string) => void) => {
     onDataCallbackRef.current = cb;

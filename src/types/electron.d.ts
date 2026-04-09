@@ -1,3 +1,5 @@
+import type React from "react";
+
 /**
  * Global type declarations for the Electron preload API.
  * Exposed via contextBridge.exposeInMainWorld('electronAPI', ...) in electron/preload.ts.
@@ -92,6 +94,16 @@ interface ElectronAPI {
 }
 
 declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
+        src?: string;
+        partition?: string;
+        allowpopups?: boolean;
+      };
+    }
+  }
+
   interface Window {
     electronAPI?: ElectronAPI;
   }
