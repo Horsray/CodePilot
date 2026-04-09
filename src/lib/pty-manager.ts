@@ -318,7 +318,8 @@ export async function executeCommandInPtySession(
       };
 
       const handleAbort = () => {
-        writePtySession(id, '\u0003stty echo\n');
+        // 中文注释：中断命令时仅在 TTY 场景尝试恢复回显，避免 spawn 回退模式报 stty 错误。
+        writePtySession(id, '\u0003\n[ -t 0 ] && stty echo 2>/dev/null || true\n');
         finalize('[Process killed: SIGTERM]');
       };
 
@@ -347,17 +348,23 @@ export async function executeCommandInPtySession(
       abortSignal?.addEventListener('abort', handleAbort, { once: true });
 
       const timeoutHandle = setTimeout(() => {
-        writePtySession(id, '\u0003stty echo\n');
+        // 中文注释：超时终止时同样做安全回显恢复，保证手动输入不会被永久隐藏。
+        writePtySession(id, '\u0003\n[ -t 0 ] && stty echo 2>/dev/null || true\n');
         finalize('[Process killed: SIGTERM]');
       }, timeoutMs);
 
       const wrappedCommand = [
-        'stty -echo',
+        // 中文注释：仅在交互式终端里关闭回显，避免非 TTY 下出现 "stdin isn\'t a terminal"。
+        '__codepilot_has_tty=0',
+        '[ -t 0 ] && __codepilot_has_tty=1 || true',
+        '[ "$__codepilot_has_tty" = "1" ] && __codepilot_prev_stty="$(stty -g 2>/dev/null || true)" || true',
+        '[ "$__codepilot_has_tty" = "1" ] && stty -echo 2>/dev/null || true',
         `printf '${startMarker}\\n'`,
         command,
         '__codepilot_status=$?',
         `printf '\\n${endMarker}:%s__\\n' "$__codepilot_status"`,
-        'stty echo',
+        // 中文注释：优先恢复原始 stty 状态；拿不到原状态时退化为 stty echo，且始终静默失败。
+        '[ "$__codepilot_has_tty" = "1" ] && { [ -n "$__codepilot_prev_stty" ] && stty "$__codepilot_prev_stty" 2>/dev/null || stty echo 2>/dev/null; } || true',
       ].join('\n');
 
       writePtySession(id, `${wrappedCommand}\n`);

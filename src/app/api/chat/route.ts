@@ -72,18 +72,12 @@ export async function POST(request: NextRequest) {
       try {
         const { compressConversation, resetCompressionState } = await import('@/lib/context-compressor');
         const { getMessages: getDbMessages, getSessionSummary: getDbSummary, updateSessionSummary: updateDbSummary, addMessage: addDbMessage } = await import('@/lib/db');
-        const { roughTokenEstimate } = await import('@/lib/context-estimator');
 
         resetCompressionState(session_id);
         const { messages: allMsgs } = getDbMessages(session_id, { limit: 200, excludeHeartbeatAck: true });
         const existingSummary = getDbSummary(session_id).summary;
 
-        const totalTokens = allMsgs.reduce((sum, m) => sum + roughTokenEstimate(m.content), 0);
-
-        // Allow compression if:
-        // 1. We have at least 4 messages (standard case)
-        // 2. OR we have fewer messages but they are large (> 5000 tokens, e.g. large file attachments)
-        if (allMsgs.length < 4 && totalTokens < 5000) {
+        if (allMsgs.length < 4) {
           const msg = '对话还很短，暂不需要压缩。';
           addDbMessage(session_id, 'assistant', JSON.stringify([{ type: 'text', text: msg }]));
           releaseSessionLock(session_id, lockId);
@@ -175,12 +169,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Persist model and provider to session so usage stats can group by model+provider.
-    // This runs on every message but the DB writes are cheap (single UPDATE by PK).
-    if (effectiveModel && effectiveModel !== session.model) {
-      updateSessionModel(session_id, effectiveModel);
-    }
-
     // Resolve provider via unified resolver (same logic for chat, bridge, onboarding, etc.)
     const effectiveProviderId = provider_id || session.provider_id || '';
     const resolved = perfTrace.measure('provider.resolve', () => resolveProviderUnified({
@@ -190,6 +178,12 @@ export async function POST(request: NextRequest) {
       sessionModel: session.model || undefined,
     }));
     const resolvedProvider = resolved.provider;
+
+    // 中文注释：功能名称「解析后模型回写会话」，用法是用最终解析模型更新 session，确保 CC Switch 切换后会话模型同步刷新。
+    const resolvedModelForSession = resolved.model || effectiveModel;
+    if (resolvedModelForSession && resolvedModelForSession !== session.model) {
+      updateSessionModel(session_id, resolvedModelForSession);
+    }
 
     const providerName = resolvedProvider?.name || '';
     if (providerName !== (session.provider_name || '')) {

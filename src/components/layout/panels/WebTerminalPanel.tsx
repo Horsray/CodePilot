@@ -67,11 +67,18 @@ function WebTerminalSession() {
   // Check if terminal connection failed
   useEffect(() => {
     if (!connectionAttempted || terminal.connected || error || terminal.exited) return;
+    // 中文注释：功能名称「首连容错超时」，用法是为网页端首次建立 PTY+SSE 连接预留更长时间，避免慢启动被误判为失败。
     const timer = setTimeout(() => {
       setError(t('terminal.failedToConnect'));
-    }, 2000);
+    }, 8000);
     return () => clearTimeout(timer);
   }, [connectionAttempted, error, t, terminal.connected, terminal.exited]);
+
+  useEffect(() => {
+    if (!terminal.connected) return;
+    // 中文注释：功能名称「连接成功自动清错」，用法是在连接恢复后移除错误遮罩，避免必须手动刷新页面。
+    setError(null);
+  }, [terminal.connected]);
 
   const handleRetry = useCallback(() => {
     setError(null);

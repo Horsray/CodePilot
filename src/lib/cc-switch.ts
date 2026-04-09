@@ -39,12 +39,22 @@ export function readCCSwitchClaudeSettings(): CCSwitchResolvedConfig | null {
       roleModels.haiku,
     ].filter((v): v is string => !!v && v.trim().length > 0);
     const uniqueModels = Array.from(new Set(models));
-    if (uniqueModels.length === 0) return null;
+    // 中文注释：功能名称「CC Switch 配置容错读取」，用法是即使未配置模型，也允许 base_url/token 动态跟随 settings.json。
+    const hasAnyCCField = !!(
+      env.ANTHROPIC_BASE_URL ||
+      env.ANTHROPIC_AUTH_TOKEN ||
+      env.ANTHROPIC_API_KEY ||
+      env.ANTHROPIC_MODEL ||
+      env.ANTHROPIC_DEFAULT_SONNET_MODEL ||
+      env.ANTHROPIC_DEFAULT_OPUS_MODEL ||
+      env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+    );
+    if (!hasAnyCCField) return null;
     return {
       baseUrl: env.ANTHROPIC_BASE_URL || '',
       apiKey: env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || '',
       models: uniqueModels,
-      currentModel: roleModels.default || uniqueModels[0],
+      currentModel: roleModels.default || uniqueModels[0] || '',
       roleModels,
     };
   } catch {

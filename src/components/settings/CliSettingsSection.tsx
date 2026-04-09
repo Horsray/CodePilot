@@ -242,6 +242,8 @@ export function CliSettingsSection() {
         setOriginalSettings(dataToSave);
         setJsonText(JSON.stringify(dataToSave, null, 2));
         setSaveSuccess(true);
+        // 中文注释：功能名称「保存后广播 provider 变更事件」，用法是让已连接的 CC Switch 服务商在切换配置后自动刷新。
+        window.dispatchEvent(new Event('provider-changed'));
         setTimeout(() => setSaveSuccess(false), 2000);
       }
     } finally {

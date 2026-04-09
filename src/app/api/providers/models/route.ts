@@ -5,6 +5,7 @@ import { getDefaultModelsForProvider, inferProtocolFromLegacy, findPresetForLega
 import type { Protocol } from '@/lib/provider-catalog';
 import type { ErrorResponse, ProviderModelGroup } from '@/types';
 import { getOAuthStatus } from '@/lib/openai-oauth-manager';
+import { readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 
 // OpenAI models available through ChatGPT Plus/Pro OAuth (Codex API)
 // Reasoning effort defaults to 'medium' server-side (not user-configurable)
@@ -28,6 +29,66 @@ interface ModelEntry {
   upstreamModelId?: string;
   capabilities?: Record<string, unknown>;
   variants?: Record<string, unknown>;
+}
+
+function isCCSwitchProvider(provider: ReturnType<typeof getAllProviders>[number]): boolean {
+  if (provider.provider_type === 'cc-switch') return true;
+  const normalizedName = (provider.name || '').trim().toLowerCase();
+  return normalizedName === 'cc switch' || normalizedName === 'cc-switch';
+}
+
+function hydrateCCSwitchProviderForModels(provider: ReturnType<typeof getAllProviders>[number]) {
+  if (!isCCSwitchProvider(provider)) return provider;
+
+  const resolved = readCCSwitchClaudeSettings();
+  if (!resolved) return provider;
+
+  const parseObj = (json: string | undefined | null): Record<string, string> => {
+    if (!json) return {};
+    try {
+      const parsed = JSON.parse(json);
+      if (typeof parsed === 'object' && parsed !== null) {
+        return parsed as Record<string, string>;
+      }
+    } catch {
+      // Ignore invalid JSON and keep existing values.
+    }
+    return {};
+  };
+
+  const roleModels = parseObj(provider.role_models_json);
+  const liveRoles: Record<string, string> = {};
+  if (typeof resolved.roleModels.default === 'string' && resolved.roleModels.default.trim()) {
+    liveRoles.default = resolved.roleModels.default.trim();
+  } else if (typeof resolved.currentModel === 'string' && resolved.currentModel.trim()) {
+    liveRoles.default = resolved.currentModel.trim();
+  }
+  if (typeof resolved.roleModels.sonnet === 'string' && resolved.roleModels.sonnet.trim()) {
+    liveRoles.sonnet = resolved.roleModels.sonnet.trim();
+  }
+  if (typeof resolved.roleModels.opus === 'string' && resolved.roleModels.opus.trim()) {
+    liveRoles.opus = resolved.roleModels.opus.trim();
+  }
+  if (typeof resolved.roleModels.haiku === 'string' && resolved.roleModels.haiku.trim()) {
+    liveRoles.haiku = resolved.roleModels.haiku.trim();
+  }
+
+  const envOverrides = parseObj(provider.env_overrides_json || provider.extra_env);
+  const liveModels = Array.isArray(resolved.models)
+    ? resolved.models.map(v => v.trim()).filter(Boolean)
+    : [];
+  if (liveModels.length > 0) {
+    envOverrides.model_names = liveModels.join(',');
+  }
+
+  // 中文注释：功能名称「CC Switch 模型列表实时同步」，用法是在读取 providers/models 时优先使用 ~/.claude/settings.json 的当前模型配置。
+  return {
+    ...provider,
+    base_url: resolved.baseUrl,
+    api_key: resolved.apiKey,
+    role_models_json: JSON.stringify({ ...roleModels, ...liveRoles }),
+    env_overrides_json: JSON.stringify(envOverrides),
+  };
 }
 
 /**
@@ -108,7 +169,8 @@ export async function GET(req: Request) {
     }
 
     // Build a group for each configured provider
-    for (const provider of providers) {
+    for (const providerRaw of providers) {
+      const provider = hydrateCCSwitchProviderForModels(providerRaw);
       // Determine protocol — use new field if present, otherwise infer from legacy
       const protocol: Protocol = (provider.protocol as Protocol) ||
         inferProtocolFromLegacy(provider.provider_type, provider.base_url);
