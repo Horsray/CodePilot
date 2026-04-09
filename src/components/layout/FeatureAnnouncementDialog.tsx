@@ -12,7 +12,6 @@ import {
 } from '@/components/ui/dialog';
 import { useTranslation } from '@/hooks/useTranslation';
 
-// Bump this key when there's a new announcement to show
 const ANNOUNCEMENT_KEY = 'codepilot:announcement:v0.48-agent-engine';
 
 export function FeatureAnnouncementDialog() {
@@ -43,34 +42,31 @@ export function FeatureAnnouncementDialog() {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {isZh ? '全新 Agent 内核' : 'New Agent Engine'}
+            {isZh ? '新版本更新' : "What's New"}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 text-sm">
+        <div className="space-y-3 text-sm">
           <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
             {isZh
-              ? <>本次更新涉及底层架构变更，虽已详细测试但仍可能存在问题。如遇异常请到 <a href="https://github.com/op7418/CodePilot/issues" target="_blank" rel="noopener noreferrer" className="underline font-medium">GitHub Issues</a> 反馈。</>
-              : <>This update involves significant architectural changes. While thoroughly tested, issues may still occur. Please report any problems on <a href="https://github.com/op7418/CodePilot/issues" target="_blank" rel="noopener noreferrer" className="underline font-medium">GitHub Issues</a>.</>
+              ? <>本次更新涉及底层架构变更，如遇问题请到 <a href="https://github.com/op7418/CodePilot/issues" target="_blank" rel="noopener noreferrer" className="underline font-medium">GitHub Issues</a> 反馈。</>
+              : <>This update involves architectural changes. Report issues on <a href="https://github.com/op7418/CodePilot/issues" target="_blank" rel="noopener noreferrer" className="underline font-medium">GitHub Issues</a>.</>
             }
           </div>
+
           {isZh ? (
             <>
-              <p>CodePilot 现在无需安装 Claude Code CLI 也能完整运行。</p>
-              <div className="space-y-2 text-muted-foreground">
-                <p><span className="text-foreground font-medium">AI SDK 内核</span> — 内置多模型引擎，开箱即用，支持所有已配置的服务商</p>
-                <p><span className="text-foreground font-medium">Claude Code 内核</span> — 通过 Claude Code CLI 驱动，获得完整的 CLI 能力</p>
-              </div>
-              <p>同时支持 <span className="font-medium">OpenAI 授权登录</span>，ChatGPT Plus/Pro 用户可在服务商设置中登录后直接使用 GPT-5.4 等模型。</p>
+              <p className="font-medium">双引擎可选</p>
+              <p className="text-muted-foreground">你可以在两种 Agent 引擎之间切换：<span className="text-foreground">AI SDK</span>（开箱即用，支持多个模型服务商）和 <span className="text-foreground">Claude Code</span>（需安装 CLI，提供完整命令行能力）。</p>
+              <p className="font-medium">OpenAI 模型支持</p>
+              <p className="text-muted-foreground">ChatGPT Plus/Pro 用户可通过 OAuth 登录后使用 GPT-5.4 等模型。</p>
             </>
           ) : (
             <>
-              <p>CodePilot now runs fully without the Claude Code CLI.</p>
-              <div className="space-y-2 text-muted-foreground">
-                <p><span className="text-foreground font-medium">AI SDK engine</span> — built-in multi-model engine, works out of the box with all configured providers</p>
-                <p><span className="text-foreground font-medium">Claude Code engine</span> — driven by Claude Code CLI for full CLI capabilities</p>
-              </div>
-              <p>Also supports <span className="font-medium">OpenAI OAuth login</span> — ChatGPT Plus/Pro users can sign in under Providers to use GPT-5.4 and more.</p>
+              <p className="font-medium">Dual Engine Support</p>
+              <p className="text-muted-foreground">Switch between two Agent engines: <span className="text-foreground">AI SDK</span> (works out of the box, multi-provider) and <span className="text-foreground">Claude Code</span> (requires CLI, full command-line capabilities).</p>
+              <p className="font-medium">OpenAI Models</p>
+              <p className="text-muted-foreground">ChatGPT Plus/Pro users can sign in via OAuth to use GPT-5.4 and more.</p>
             </>
           )}
         </div>

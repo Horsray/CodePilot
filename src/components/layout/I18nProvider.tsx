@@ -18,7 +18,7 @@ export const I18nContext = createContext<I18nContextValue>({
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>('en');
 
-  // Load persisted locale on mount
+  // Load persisted locale on mount; auto-detect system language if never set
   useEffect(() => {
     async function loadLocale() {
       try {
@@ -28,10 +28,23 @@ export function I18nProvider({ children }: { children: ReactNode }) {
           const saved = data.settings?.locale;
           if (saved === 'en' || saved === 'zh') {
             setLocaleState(saved);
+            return;
           }
         }
-      } catch {
-        // ignore — default to 'en'
+      } catch { /* ignore */ }
+
+      // No persisted locale — detect from browser language
+      if (typeof navigator !== 'undefined') {
+        const lang = navigator.language || '';
+        if (lang.startsWith('zh')) {
+          setLocaleState('zh');
+          // Persist so we don't detect again
+          fetch('/api/settings/app', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: { locale: 'zh' } }),
+          }).catch(() => {});
+        }
       }
     }
     loadLocale();
