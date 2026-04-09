@@ -5,6 +5,8 @@
 import { NextRequest } from 'next/server';
 import { getPtySession } from '@/lib/pty-manager';
 import { drainTerminalOutput } from '@/lib/terminal-output-store';
+import type { IPty } from 'node-pty';
+import type { ChildProcessWithoutNullStreams } from 'child_process';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,28 +36,74 @@ export async function GET(request: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'output', data: initialOutput })}\n\n`));
       }
 
-      // Subscribe to PTY output
-      const dataHandler = session.process.onData((data: string) => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'output', data })}\n\n`));
-        } catch {
-          // Stream closed
-        }
-      });
+      let dataHandler: { dispose: () => void } | null = null;
+      let exitHandler: { dispose: () => void } | null = null;
 
-      const exitHandler = session.process.onExit(({ exitCode }: { exitCode: number; signal?: number }) => {
+      // Subscribe to PTY output
+      if (session.mode === 'pty') {
+        const proc = session.process as IPty;
+        const dh = proc.onData((data: string) => {
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'output', data })}\n\n`));
+          } catch {
+            // Stream closed
+          }
+        });
+        dataHandler = { dispose: () => dh.dispose() };
+
+        const eh = proc.onExit(({ exitCode }: { exitCode: number; signal?: number }) => {
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'exit', exitCode })}\n\n`));
+            controller.close();
+          } catch {
+            // Stream already closed
+          }
+        });
+        exitHandler = { dispose: () => eh.dispose() };
+      } else {
+        const proc = session.process as ChildProcessWithoutNullStreams;
+        const onData = (data: Buffer) => {
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'output', data: data.toString() })}\n\n`));
+          } catch { /* ignore */ }
+        };
+        proc.stdout.on('data', onData);
+        proc.stderr.on('data', onData);
+        dataHandler = {
+          dispose: () => {
+            proc.stdout.removeListener('data', onData);
+            proc.stderr.removeListener('data', onData);
+          }
+        };
+
+        const onExit = (exitCode: number | null) => {
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'exit', exitCode: exitCode ?? 0 })}\n\n`));
+            controller.close();
+          } catch { /* ignore */ }
+        };
+        proc.on('exit', onExit);
+        exitHandler = {
+          dispose: () => {
+            proc.removeListener('exit', onExit);
+          }
+        };
+      }
+
+      // Heartbeat timer to keep connection alive
+      const heartbeatTimer = setInterval(() => {
         try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'exit', exitCode })}\n\n`));
-          controller.close();
+          controller.enqueue(encoder.encode(`: heartbeat\n\n`));
         } catch {
-          // Stream already closed
+          clearInterval(heartbeatTimer);
         }
-      });
+      }, 15000);
 
       // Handle client disconnect
       request.signal.addEventListener('abort', () => {
-        dataHandler.dispose();
-        exitHandler.dispose();
+        dataHandler?.dispose();
+        exitHandler?.dispose();
+        clearInterval(heartbeatTimer);
         controller.close();
       });
     },

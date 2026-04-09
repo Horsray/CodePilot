@@ -11,6 +11,8 @@ import { createWriteTool } from './write';
 import { createGlobTool } from './glob';
 import { createGrepTool } from './grep';
 import { createBashTool } from './bash';
+import { createBrowserOpenTool } from './browser';
+import { createBrowserContextTool } from './browser-context';
 import { createEditTool } from './edit';
 import { createSkillTool } from './skill';
 import { createAgentTool } from './agent';
@@ -43,6 +45,8 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
     Write: createWriteTool(ctx),
     Edit: createEditTool(ctx),
     Bash: createBashTool(ctx),
+    codepilot_browser_open: createBrowserOpenTool(ctx),
+    codepilot_browser_context: createBrowserContextTool(ctx),
     Glob: createGlobTool(ctx),
     Grep: createGrepTool(ctx),
     Skill: createSkillTool(ctx.workingDirectory),

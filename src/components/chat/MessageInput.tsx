@@ -93,7 +93,7 @@ export function MessageInput({
 
   // --- Extracted hooks ---
   const popover = usePopoverState(modelName);
-  const { providerGroups, currentProviderIdValue, modelOptions, currentModelOption, globalDefaultModel, globalDefaultProvider } = useProviderModels(providerId, modelName);
+  const { providerGroups, currentProviderIdValue, modelOptions, currentModelOption, globalDefaultModel, globalDefaultProvider } = useProviderModels(providerId, modelName, imageGen.state.enabled);
 
   // Auto-correct model when it doesn't exist in the current provider's model list.
   // This prevents sending an unsupported model name (e.g. 'opus' to MiniMax which only has 'sonnet').

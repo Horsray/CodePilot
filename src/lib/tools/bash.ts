@@ -4,11 +4,28 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { spawn } from 'child_process';
 import type { ToolContext } from './index';
+import { executeCommandInPtySession } from '@/lib/pty-manager';
 
 const MAX_OUTPUT_BYTES = 1024 * 1024; // 1MB
 const DEFAULT_TIMEOUT_MS = 120_000;   // 2 minutes
+
+function normalizePreviewUrl(candidate: string): string {
+  const trimmed = candidate.trim().replace(/[)\].,;]+$/, '');
+  return trimmed.replace('0.0.0.0', 'localhost');
+}
+
+function extractPreviewUrl(output: string): string | null {
+  const match = output.match(/\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s]*)?/i);
+  if (match?.[0]) return normalizePreviewUrl(match[0]);
+
+  const localhostOnly = output.match(/\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+(?:\/[^\s]*)?/i);
+  if (localhostOnly?.[0]) {
+    return normalizePreviewUrl(`http://${localhostOnly[0]}`);
+  }
+
+  return null;
+}
 
 export function createBashTool(ctx: ToolContext) {
   return tool({
@@ -24,63 +41,48 @@ export function createBashTool(ctx: ToolContext) {
     }),
     execute: async ({ command, timeout }, { abortSignal }) => {
       const timeoutMs = timeout ?? DEFAULT_TIMEOUT_MS;
+      const terminalId = `agent-terminal-${ctx.sessionId || 'default'}`;
 
-      return new Promise<string>((resolve) => {
-        const chunks: Buffer[] = [];
-        let totalBytes = 0;
-        let truncated = false;
-
-        const proc = spawn('bash', ['-c', command], {
-          cwd: ctx.workingDirectory,
-          env: { ...process.env, TERM: 'dumb' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: timeoutMs,
-        });
-
-        const collect = (data: Buffer) => {
-          if (truncated) return;
-          totalBytes += data.length;
-          if (totalBytes > MAX_OUTPUT_BYTES) {
-            truncated = true;
-            chunks.push(data.subarray(0, MAX_OUTPUT_BYTES - (totalBytes - data.length)));
-          } else {
-            chunks.push(data);
-          }
-        };
-
-        proc.stdout?.on('data', collect);
-        proc.stderr?.on('data', collect);
-
-        // Handle abort
-        const onAbort = () => {
-          proc.kill('SIGTERM');
-          setTimeout(() => proc.kill('SIGKILL'), 3000);
-        };
-        abortSignal?.addEventListener('abort', onAbort, { once: true });
-
-        proc.on('close', (code, signal) => {
-          abortSignal?.removeEventListener('abort', onAbort);
-
-          let output = Buffer.concat(chunks).toString('utf-8');
-          if (truncated) {
-            output += '\n\n[Output truncated — exceeded 1MB limit]';
-          }
-
-          if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-            output += `\n\n[Process killed: ${signal}]`;
-          }
-
-          if (code !== null && code !== 0) {
-            output += `\n\n[Exit code: ${code}]`;
-          }
-
-          resolve(output || '(no output)');
-        });
-
-        proc.on('error', (err) => {
-          resolve(`Error executing command: ${err.message}`);
-        });
+      ctx.emitSSE?.({
+        type: 'status',
+        data: JSON.stringify({
+          subtype: 'ui_action',
+          action: 'open_terminal',
+          tab: 'terminal',
+          terminalId,
+        }),
       });
+
+      try {
+        const output = await executeCommandInPtySession(
+          terminalId,
+          ctx.workingDirectory,
+          command,
+          timeoutMs,
+          abortSignal,
+        );
+
+        if (output.length > MAX_OUTPUT_BYTES) {
+          return `${output.slice(0, MAX_OUTPUT_BYTES)}\n\n[Output truncated — exceeded 1MB limit]`;
+        }
+
+        const previewUrl = extractPreviewUrl(output);
+        if (previewUrl) {
+          ctx.emitSSE?.({
+            type: 'status',
+            data: JSON.stringify({
+              subtype: 'ui_action',
+              action: 'open_browser',
+              url: previewUrl,
+              newTab: true,
+            }),
+          });
+        }
+
+        return output;
+      } catch (error) {
+        return `Error executing command: ${error instanceof Error ? error.message : String(error)}`;
+      }
     },
   });
 }

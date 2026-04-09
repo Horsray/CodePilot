@@ -472,16 +472,21 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
 
       {/* Top action bar: New Chat + IDE tools + Search */}
       <div className="flex items-center gap-2 px-3 pb-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="min-w-0 flex-1 justify-center gap-1.5 h-8 px-3 text-xs"
-          disabled={creatingChat}
-          onClick={handleNewChat}
-        >
-          <Plus size={14} />
-          {t('chatList.newConversation')}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              className="h-8 w-8 shrink-0"
+              disabled={creatingChat}
+              onClick={handleNewChat}
+            >
+              <Plus size={14} />
+              <span className="sr-only">{t('chatList.newConversation')}</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('chatList.newConversation')}</TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

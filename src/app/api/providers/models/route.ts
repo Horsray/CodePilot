@@ -45,12 +45,15 @@ function deduplicateModels(models: ModelEntry[]): ModelEntry[] {
   return result;
 }
 
-/** Media-only provider protocols — skip in chat model selector */
+/** Media-only provider protocols — skip in chat model selector unless explicitly requested */
 const MEDIA_PROTOCOLS = new Set<string>(['gemini-image']);
-const MEDIA_PROVIDER_TYPES = new Set(['gemini-image']);
+const MEDIA_PROVIDER_TYPES = new Set(['gemini-image', 'generic-image']);
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const { searchParams } = new URL(req.url);
+    const includeMedia = searchParams.get('includeMedia') === 'true';
+
     const providers = getAllProviders();
     const groups: ProviderModelGroup[] = [];
 
@@ -59,7 +62,7 @@ export async function GET() {
     const runtimeSetting = getSetting('agent_runtime') || 'auto';
     const cliEnabled = runtimeSetting !== 'native';
 
-    if (cliEnabled) {
+    if (cliEnabled && !includeMedia) {
       // Mark as sdkProxyOnly if no direct API credentials exist — in that case
       // the env provider only works through the Claude Code SDK subprocess.
       const envHasDirectCredentials = !!(
@@ -110,8 +113,11 @@ export async function GET() {
       const protocol: Protocol = (provider.protocol as Protocol) ||
         inferProtocolFromLegacy(provider.provider_type, provider.base_url);
 
-      // Skip media-only providers in chat model selector
-      if (MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type)) continue;
+      // Skip media-only providers in chat model selector unless explicitly requested
+      if (!includeMedia && (MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type))) continue;
+
+      // When includeMedia is true, only include media providers
+      if (includeMedia && !MEDIA_PROTOCOLS.has(protocol) && !MEDIA_PROVIDER_TYPES.has(provider.provider_type)) continue;
 
       // Get models: DB provider_models first, then catalog defaults, then env fallback
       let rawModels: ModelEntry[];
@@ -151,8 +157,6 @@ export async function GET() {
       }));
 
       // Start with DB models + catalog defaults.
-      // If both are empty (e.g. Volcengine where user must specify model names),
-      // leave rawModels empty — do NOT fall back to DEFAULT_MODELS (Sonnet/Opus/Haiku).
       if (dbModels.length > 0) {
         const dbIds = new Set(dbModels.map(m => m.value));
         rawModels = [...dbModels, ...catalogRaw.filter(m => !dbIds.has(m.value))];
@@ -161,17 +165,14 @@ export async function GET() {
       }
 
       // Inject models from role_models_json into the list if not already present
-      // (e.g. user configured "ark-code-latest" for a Volcengine or anthropic-thirdparty provider)
       try {
         const rm = JSON.parse(provider.role_models_json || '{}');
-        // Collect unique model IDs from all role fields (default, reasoning, small, haiku, sonnet, opus)
         const roleEntries: { id: string; role: string }[] = [];
         for (const role of ['default', 'reasoning', 'small', 'haiku', 'sonnet', 'opus'] as const) {
           if (rm[role] && !roleEntries.some(e => e.id === rm[role])) {
             roleEntries.push({ id: rm[role], role });
           }
         }
-        // Add each role model to the list (default role first, so it appears at the top)
         for (const entry of roleEntries) {
           if (!rawModels.some(m => m.value === entry.id || m.upstreamModelId === entry.id)) {
             const label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
@@ -181,8 +182,6 @@ export async function GET() {
       } catch { /* ignore */ }
 
       // Legacy: inject ANTHROPIC_MODEL from env overrides if not already present
-      // Also check upstreamModelId to avoid duplicates (e.g. catalog has modelId='sonnet'
-      // with upstreamModelId='mimo-v2-pro', and env has ANTHROPIC_MODEL='mimo-v2-pro')
       try {
         const envOverrides = provider.env_overrides_json || provider.extra_env || '{}';
         const envObj = JSON.parse(envOverrides);
@@ -213,22 +212,23 @@ export async function GET() {
     }
 
     // Add OpenAI OAuth virtual provider when authenticated
-    try {
-      const oauthStatus = getOAuthStatus();
-      if (oauthStatus.authenticated) {
-        groups.push({
-          provider_id: 'openai-oauth',
-          provider_name: `OpenAI${oauthStatus.plan ? ` (${oauthStatus.plan})` : ''}`,
-          provider_type: 'openai-oauth',
-          models: OPENAI_OAUTH_MODELS,
-        });
-      }
-    } catch { /* OpenAI OAuth module not available */ }
+    if (!includeMedia) {
+      try {
+        const oauthStatus = getOAuthStatus();
+        if (oauthStatus.authenticated) {
+          groups.push({
+            provider_id: 'openai-oauth',
+            provider_name: `OpenAI${oauthStatus.plan ? ` (${oauthStatus.plan})` : ''}`,
+            provider_type: 'openai-oauth',
+            models: OPENAI_OAUTH_MODELS,
+          });
+        }
+      } catch { /* OpenAI OAuth module not available */ }
+    }
 
     // Determine default provider — auto-heal stale references on read
     let defaultProviderId = getDefaultProviderId();
     if (defaultProviderId && !getProvider(defaultProviderId)) {
-      // Stale default (provider was deleted). Fix it now.
       const firstValid = groups.find(g => g.provider_id !== 'env');
       defaultProviderId = firstValid?.provider_id || '';
       setDefaultProviderId(defaultProviderId);

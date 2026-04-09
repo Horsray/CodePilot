@@ -268,7 +268,7 @@ export async function POST(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { predictNativeRuntime } = require('@/lib/runtime') as typeof import('@/lib/runtime');
     const mcpServers = perfTrace.measure('mcp.config.load', () => (
-      predictNativeRuntime(effectiveProviderId)
+      predictNativeRuntime(effectiveProviderId, isImageAgentMode)
         ? loadAllMcpServers()
         : loadCodePilotMcpServers()
     ));

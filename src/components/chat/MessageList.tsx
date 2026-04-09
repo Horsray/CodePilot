@@ -29,14 +29,14 @@ function ScrollOnStream({ isStreaming, messageCount }: { isStreaming: boolean; m
   // Scroll when new messages are appended (covers optimistic user message + assistant completion)
   useEffect(() => {
     if (messageCount > prevCount.current) {
-      scrollToBottom();
+      scrollToBottom({ animation: 'instant', preserveScrollPosition: true });
     }
     prevCount.current = messageCount;
   }, [messageCount, scrollToBottom]);
 
   useEffect(() => {
     if (isStreaming && !wasStreaming.current) {
-      scrollToBottom();
+      scrollToBottom({ animation: 'instant', preserveScrollPosition: true });
     }
     wasStreaming.current = isStreaming;
   }, [isStreaming, scrollToBottom]);

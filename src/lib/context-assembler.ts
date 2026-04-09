@@ -56,106 +56,110 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   let isAssistantProject = false;
 
   // ── Layer 1: Workspace prompt (if assistant project session) ──────
-  try {
-    const workspacePath = getSetting('assistant_workspace_path');
-    if (workspacePath) {
-      const sessionWd = session.working_directory || '';
-      isAssistantProject = sessionWd === workspacePath;
+  // For imageAgentMode, we skip the workspace prompt and assistant instructions
+  // to prevent the engineering persona from overriding the image generation focus.
+  if (!imageAgentMode) {
+    try {
+      const workspacePath = getSetting('assistant_workspace_path');
+      if (workspacePath) {
+        const sessionWd = session.working_directory || '';
+        isAssistantProject = sessionWd === workspacePath;
 
-      if (isAssistantProject) {
-        const { loadWorkspaceFiles, assembleWorkspacePrompt, loadState, shouldRunHeartbeat } =
-          await import('@/lib/assistant-workspace');
+        if (isAssistantProject) {
+          const { loadWorkspaceFiles, assembleWorkspacePrompt, loadState, shouldRunHeartbeat } =
+            await import('@/lib/assistant-workspace');
 
-        // Incremental reindex BEFORE MCP search so tool calls see latest content.
-        // Timeout after 5s to prevent blocking on large workspaces (e.g. Obsidian vaults).
-        try {
-          const { indexWorkspace } = await import('@/lib/workspace-indexer');
-          const indexStart = Date.now();
-          indexWorkspace(workspacePath);
-          const indexMs = Date.now() - indexStart;
-          if (indexMs > 3000) {
-            console.warn(`[context-assembler] Workspace indexing took ${indexMs}ms — consider reducing workspace size`);
-          }
-        } catch {
-          // indexer not available or timed out, skip — MCP search will use stale index
-        }
-
-        const files = loadWorkspaceFiles(workspacePath);
-
-        // Memory/retrieval is handled by codepilot_memory_search MCP tool.
-        // assembleWorkspacePrompt only includes identity files (soul/user/claude).
-        // We also inject a lightweight "memory availability hint" so AI knows
-        // what's available without loading full content.
-        workspacePrompt = assembleWorkspacePrompt(files);
-
-        // Memory availability hint — stored separately as volatile content
-        // (changes daily, should not invalidate the static identity prefix cache)
-        try {
-          const { loadDailyMemories } = await import('@/lib/assistant-workspace');
-          const recentDays = loadDailyMemories(workspacePath, 5);
-          if (recentDays.length > 0) {
-            const dateList = recentDays.map(d => d.date).join(', ');
-            memoryHint = `<memory-hint>Recent daily memories available: ${dateList}. Use codepilot_memory_recent to review them.</memory-hint>`;
-          }
-        } catch {
-          // skip if daily memories unavailable
-        }
-
-        const state = loadState(workspacePath);
-
-        // Detect heartbeat auto-trigger by checking the actual prompt content,
-        // not just the autoTrigger flag (which is also true for buddy-welcome).
-        const isHeartbeatTrigger = autoTrigger && userPrompt.includes('心跳检查');
-
-        if (!state.onboardingComplete) {
-          assistantProjectInstructions = buildOnboardingInstructions();
-        } else if (isHeartbeatTrigger && shouldRunHeartbeat(state)) {
-          // Full heartbeat task mode — only for explicit heartbeat auto-trigger
-          assistantProjectInstructions = buildHeartbeatInstructions();
-        } else {
-          // Progressive file update guidance for completed onboarding
-          assistantProjectInstructions = buildProgressiveUpdateInstructions();
-
-          // Soft heartbeat hint for normal conversations when overdue.
-          // The AI naturally incorporates a brief check-in; the backend
-          // updates lastHeartbeatDate when it detects heartbeat keywords
-          // in the assistant response (no HEARTBEAT_OK token needed).
-          if (!autoTrigger && shouldRunHeartbeat(state)) {
-            assistantProjectInstructions += '\n\n' + buildSoftHeartbeatHint();
+          // Incremental reindex BEFORE MCP search so tool calls see latest content.
+          // Timeout after 5s to prevent blocking on large workspaces (e.g. Obsidian vaults).
+          try {
+            const { indexWorkspace } = await import('@/lib/workspace-indexer');
+            const indexStart = Date.now();
+            indexWorkspace(workspacePath);
+            const indexMs = Date.now() - indexStart;
+            if (indexMs > 3000) {
+              console.warn(`[context-assembler] Workspace indexing took ${indexMs}ms — consider reducing workspace size`);
+            }
+          } catch {
+            // indexer not available or timed out, skip — MCP search will use stale index
           }
 
-          // If no buddy yet, prepend a welcome + adoption prompt
-          if (!state.buddy) {
-            assistantProjectInstructions = buildNoBuddyWelcome() + '\n\n' + assistantProjectInstructions;
+          const files = loadWorkspaceFiles(workspacePath);
+
+          // Memory/retrieval is handled by codepilot_memory_search MCP tool.
+          // assembleWorkspacePrompt only includes identity files (soul/user/claude).
+          // We also inject a lightweight "memory availability hint" so AI knows
+          // what's available without loading full content.
+          workspacePrompt = assembleWorkspacePrompt(files);
+
+          // Memory availability hint — stored separately as volatile content
+          // (changes daily, should not invalidate the static identity prefix cache)
+          try {
+            const { loadDailyMemories } = await import('@/lib/assistant-workspace');
+            const recentDays = loadDailyMemories(workspacePath, 5);
+            if (recentDays.length > 0) {
+              const dateList = recentDays.map(d => d.date).join(', ');
+              memoryHint = `<memory-hint>Recent daily memories available: ${dateList}. Use codepilot_memory_recent to review them.</memory-hint>`;
+            }
+          } catch {
+            // skip if daily memories unavailable
+          }
+
+          const state = loadState(workspacePath);
+
+          // Detect heartbeat auto-trigger by checking the actual prompt content,
+          // not just the autoTrigger flag (which is also true for buddy-welcome).
+          const isHeartbeatTrigger = autoTrigger && userPrompt.includes('心跳检查');
+
+          if (!state.onboardingComplete) {
+            assistantProjectInstructions = buildOnboardingInstructions();
+          } else if (isHeartbeatTrigger && shouldRunHeartbeat(state)) {
+            // Full heartbeat task mode — only for explicit heartbeat auto-trigger
+            assistantProjectInstructions = buildHeartbeatInstructions();
           } else {
-            // Inject buddy personality prompt before progressive update instructions
-            const buddyPersonality = buildBuddyPersonalityPrompt(state.buddy);
-            assistantProjectInstructions = buddyPersonality + '\n\n' + assistantProjectInstructions;
+            // Progressive file update guidance for completed onboarding
+            assistantProjectInstructions = buildProgressiveUpdateInstructions();
 
-            // Check evolution readiness
-            try {
-              const { checkEvolution } = await import('@/lib/buddy');
-              const fs = await import('fs');
-              const path = await import('path');
-              let memCount = 0;
+            // Soft heartbeat hint for normal conversations when overdue.
+            // The AI naturally incorporates a brief check-in; the backend
+            // updates lastHeartbeatDate when it detects heartbeat keywords
+            // in the assistant response (no HEARTBEAT_OK token needed).
+            if (!autoTrigger && shouldRunHeartbeat(state)) {
+              assistantProjectInstructions += '\n\n' + buildSoftHeartbeatHint();
+            }
+
+            // If no buddy yet, prepend a welcome + adoption prompt
+            if (!state.buddy) {
+              assistantProjectInstructions = buildNoBuddyWelcome() + '\n\n' + assistantProjectInstructions;
+            } else {
+              // Inject buddy personality prompt before progressive update instructions
+              const buddyPersonality = buildBuddyPersonalityPrompt(state.buddy);
+              assistantProjectInstructions = buddyPersonality + '\n\n' + assistantProjectInstructions;
+
+              // Check evolution readiness
               try {
-                const dailyDir = path.join(workspacePath, 'memory', 'daily');
-                if (fs.existsSync(dailyDir)) {
-                  memCount = fs.readdirSync(dailyDir).filter((f: string) => f.endsWith('.md')).length;
+                const { checkEvolution } = await import('@/lib/buddy');
+                const fs = await import('fs');
+                const path = await import('path');
+                let memCount = 0;
+                try {
+                  const dailyDir = path.join(workspacePath, 'memory', 'daily');
+                  if (fs.existsSync(dailyDir)) {
+                    memCount = fs.readdirSync(dailyDir).filter((f: string) => f.endsWith('.md')).length;
+                  }
+                } catch {}
+
+                const evoCheck = checkEvolution(state.buddy as Parameters<typeof checkEvolution>[0], memCount);
+                if (evoCheck.canEvolve) {
+                  assistantProjectInstructions += '\n\n<evolution-ready>你的进化条件已满足！在合适的时机告诉用户："我好像准备好进化了！你可以在看板面板点击检查进化。"</evolution-ready>';
                 }
               } catch {}
-
-              const evoCheck = checkEvolution(state.buddy as Parameters<typeof checkEvolution>[0], memCount);
-              if (evoCheck.canEvolve) {
-                assistantProjectInstructions += '\n\n<evolution-ready>你的进化条件已满足！在合适的时机告诉用户："我好像准备好进化了！你可以在看板面板点击检查进化。"</evolution-ready>';
-              }
-            } catch {}
+            }
           }
         }
       }
+    } catch (e) {
+      console.warn('[context-assembler] Failed to load assistant workspace:', e);
     }
-  } catch (e) {
-    console.warn('[context-assembler] Failed to load assistant workspace:', e);
   }
 
   // ── Prompt assembly: STATIC PREFIX → VOLATILE SUFFIX ──────────────

@@ -34,15 +34,18 @@ export function getAvailableRuntimes(): AgentRuntime[] {
  * 1. Explicit override (from function arg or per-session setting)
  * 2. Global user setting (agent_runtime)
  * 3. Auto: native if available, else claude-code-sdk
+ *
+ * @param overrideId - Explicit runtime ID to use
+ * @param isImageAgentMode - Whether this is an image agent mode call (forces native)
  */
-export function resolveRuntime(overrideId?: string): AgentRuntime {
+export function resolveRuntime(overrideId?: string, isImageAgentMode?: boolean): AgentRuntime {
   // 0. cli_enabled=false is an absolute constraint — never return SDK
   const cliDisabled = getSetting('cli_enabled') === 'false';
 
-  if (cliDisabled) {
+  if (cliDisabled || isImageAgentMode) {
     const native = getRuntime('native');
     if (native) return native;
-    throw new Error('Native runtime not registered but CLI is disabled. This is a bug.');
+    throw new Error('Native runtime not registered. This is a bug.');
   }
 
   // 1. Explicit override
@@ -79,8 +82,12 @@ export function resolveRuntime(overrideId?: string): AgentRuntime {
  * so callers (chat route, bridge) can prepare the right MCP config upfront.
  *
  * @param providerId - The provider for this request ('openai-oauth' forces native)
+ * @param isImageAgentMode - Whether this is an image agent mode call (forces native)
  */
-export function predictNativeRuntime(providerId?: string): boolean {
+export function predictNativeRuntime(providerId?: string, isImageAgentMode?: boolean): boolean {
+  // Image agent mode (Design Agent) always forces native to avoid the SDK's engineering persona
+  if (isImageAgentMode) return true;
+
   // Non-Anthropic providers always force native
   if (providerId === 'openai-oauth') return true;
 

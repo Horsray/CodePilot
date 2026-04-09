@@ -22,18 +22,23 @@ export const nativeRuntime: AgentRuntime = {
 
   stream(options: RuntimeStreamOptions): ReadableStream<string> {
     const cwd = options.workingDirectory || process.cwd();
+    const ro = options.runtimeOptions || {};
+    const isImageAgentMode = !!ro.imageAgentMode;
 
-    const systemPrompt = buildSystemPrompt({
-      userPrompt: options.systemPrompt,
-      workingDirectory: cwd,
-      modelId: options.model,
-    });
+    // Use a custom system prompt for image agent mode (Design Agent) to avoid
+    // the heavy software engineering persona and instructions.
+    const systemPrompt = isImageAgentMode
+      ? (options.systemPrompt || '')
+      : buildSystemPrompt({
+          userPrompt: options.systemPrompt,
+          workingDirectory: cwd,
+          modelId: options.model,
+        });
 
     // Create or reuse abort controller
     const abortController = options.abortController || new AbortController();
     activeControllers.set(options.sessionId, abortController);
 
-    const ro = options.runtimeOptions || {};
     const maxSteps = (ro.maxSteps as number) || undefined;
     const files = ro.files as import('@/types').FileAttachment[] | undefined;
 

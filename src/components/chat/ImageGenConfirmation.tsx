@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ImageGenCard } from './ImageGenCard';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePanel } from '@/hooks/usePanel';
+import { useProviderModels } from '@/hooks/useProviderModels';
 import type { TranslationKey } from '@/i18n';
 import type { ReferenceImage } from '@/types';
 import type { ImageGenResult } from '@/hooks/useImageGen';
@@ -23,6 +24,7 @@ interface ImageGenConfirmationProps {
   initialPrompt: string;
   initialAspectRatio: string;
   initialResolution: string;
+  initialModel?: string;
   /** The original raw ```image-gen-request...``` block — used for exact DB matching */
   rawRequestBlock?: string;
   referenceImages?: ReferenceImage[];
@@ -36,12 +38,15 @@ export function ImageGenConfirmation({
   initialPrompt,
   initialAspectRatio,
   initialResolution,
+  initialModel,
   rawRequestBlock,
   referenceImages,
 }: ImageGenConfirmationProps) {
   const { t } = useTranslation();
   const { sessionId: panelSessionId } = usePanel();
   const sessionId = sessionIdProp || panelSessionId;
+  const { providerGroups } = useProviderModels(undefined, undefined, true);
+
   const [prompt, setPrompt] = useState(initialPrompt);
   const [aspectRatio, setAspectRatio] = useState(
     ASPECT_RATIOS.includes(initialAspectRatio as typeof ASPECT_RATIOS[number])
@@ -53,6 +58,44 @@ export function ImageGenConfirmation({
       ? initialResolution
       : '1K'
   );
+
+  // Flatten models for easy selection
+  const allImageModels = providerGroups.flatMap(g => g.models.map(m => ({
+    providerId: g.provider_id,
+    providerName: g.provider_name,
+    providerType: g.provider_type,
+    modelId: m.value,
+    label: m.label,
+  })));
+
+  const [selectedModel, setSelectedModel] = useState<{ providerId: string; modelId: string } | null>(() => {
+    if (initialModel) {
+      // Find matching model in groups
+      for (const g of providerGroups) {
+        const m = g.models.find(m => m.value === initialModel);
+        if (m) return { providerId: g.provider_id, modelId: m.value };
+      }
+    }
+    return null;
+  });
+
+  // Update selectedModel when providerGroups load if not already set
+  useEffect(() => {
+    if (!selectedModel && allImageModels.length > 0) {
+      if (initialModel) {
+        for (const g of providerGroups) {
+          const m = g.models.find(m => m.value === initialModel);
+          if (m) {
+            setSelectedModel({ providerId: g.provider_id, modelId: m.value });
+            return;
+          }
+        }
+      }
+      // Fallback to first available
+      setSelectedModel({ providerId: allImageModels[0].providerId, modelId: allImageModels[0].modelId });
+    }
+  }, [providerGroups, selectedModel, initialModel, allImageModels]);
+
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<ImageGenResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +129,8 @@ export function ImageGenConfirmation({
           aspectRatio,
           imageSize: resolution,
           sessionId,
+          providerId: selectedModel?.providerId,
+          model: selectedModel?.modelId,
           ...(refData && refData.length > 0
             ? { referenceImages: refData }
             : {}),
@@ -178,7 +223,7 @@ export function ImageGenConfirmation({
     } finally {
       abortRef.current = null;
     }
-  }, [prompt, aspectRatio, resolution, initialPrompt, sessionId, messageId, referenceImages]);
+  }, [prompt, aspectRatio, resolution, initialPrompt, sessionId, messageId, referenceImages, selectedModel]);
 
   const handleRegenerate = useCallback(() => {
     setResult(null);
@@ -249,6 +294,33 @@ export function ImageGenConfirmation({
             )}
           />
         </div>
+
+        {/* Model Selection */}
+        {allImageModels.length > 0 && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
+              {t('imageGen.model' as TranslationKey)}
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {allImageModels.map((m) => (
+                <Button
+                  key={`${m.providerId}-${m.modelId}`}
+                  variant="outline"
+                  size="xs"
+                  disabled={status === 'generating'}
+                  onClick={() => setSelectedModel({ providerId: m.providerId, modelId: m.modelId })}
+                  className={cn(
+                    selectedModel?.providerId === m.providerId && selectedModel?.modelId === m.modelId
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                  )}
+                >
+                  {m.label} ({m.providerType === 'gemini-image' ? 'Google' : m.providerName})
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Aspect Ratio */}
         <div>

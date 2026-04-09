@@ -22,6 +22,7 @@ export interface UseProviderModelsReturn {
 export function useProviderModels(
   providerId?: string,
   modelName?: string,
+  includeMedia?: boolean,
 ): UseProviderModelsReturn {
   const [providerGroups, setProviderGroups] = useState<ProviderModelGroup[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState<string>('');
@@ -29,7 +30,7 @@ export function useProviderModels(
   const [globalDefaultProvider, setGlobalDefaultProvider] = useState<string | undefined>();
 
   const fetchAll = useCallback(() => {
-    fetch('/api/providers/models')
+    fetch(`/api/providers/models?includeMedia=${!!includeMedia}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.groups && data.groups.length > 0) {

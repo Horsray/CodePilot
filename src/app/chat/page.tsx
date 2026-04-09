@@ -803,6 +803,23 @@ export default function NewChatPage() {
                     if (statusData.subtype === 'perf') {
                       const source = statusData.source === 'route' ? 'route' : 'native';
                       perfTrace.addServerPerf(source, statusData as Record<string, unknown>);
+                    } else if (statusData.subtype === 'ui_action' && statusData.action) {
+                      if (statusData.action === 'open_browser' && typeof statusData.url === 'string') {
+                        window.dispatchEvent(new CustomEvent('browser-navigate', {
+                          detail: {
+                            url: statusData.url,
+                            newTab: statusData.newTab !== false,
+                          },
+                        }));
+                      }
+                      if (statusData.action === 'open_terminal') {
+                        window.dispatchEvent(new CustomEvent('terminal-ensure-visible', {
+                          detail: {
+                            tab: statusData.tab || 'terminal',
+                            terminalId: statusData.terminalId,
+                          },
+                        }));
+                      }
                     } else if (statusData.session_id) {
                       setStatusText(`Connected (${statusData.model || 'claude'})`);
                       setTimeout(() => setStatusText(undefined), 2000);

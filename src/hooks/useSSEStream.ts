@@ -27,6 +27,7 @@ export interface SSECallbacks {
   onModeChanged: (mode: string) => void;
   onTaskUpdate: (sessionId: string) => void;
   onRewindPoint: (sdkUserMessageId: string) => void;
+  onUiAction?: (action: { action: string; url?: string; tab?: string; terminalId?: string; newTab?: boolean }) => void;
   onThinking?: (delta: string) => void;
   onKeepAlive: () => void;
   onError: (accumulated: string) => void;
@@ -111,6 +112,16 @@ function handleSSEEvent(
         const statusData = JSON.parse(event.data);
         // Skip internal-only status events (e.g. resume fallback notifications)
         if (statusData._internal || statusData.subtype === 'perf') {
+          return accumulated;
+        }
+        if (statusData.subtype === 'ui_action' && statusData.action) {
+          callbacks.onUiAction?.({
+            action: statusData.action,
+            url: statusData.url,
+            tab: statusData.tab,
+            terminalId: statusData.terminalId,
+            newTab: statusData.newTab,
+          });
           return accumulated;
         }
         if (statusData.session_id) {
@@ -321,6 +332,7 @@ export function useSSEStream() {
         onModeChanged: (m) => callbacksRef.current?.onModeChanged(m),
         onTaskUpdate: (s) => callbacksRef.current?.onTaskUpdate(s),
         onRewindPoint: (id) => callbacksRef.current?.onRewindPoint(id),
+        onUiAction: (action) => callbacksRef.current?.onUiAction?.(action),
         onThinking: (d) => callbacksRef.current?.onThinking?.(d),
         onKeepAlive: () => callbacksRef.current?.onKeepAlive(),
         onError: (a) => callbacksRef.current?.onError(a),

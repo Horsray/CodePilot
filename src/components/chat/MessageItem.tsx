@@ -28,6 +28,7 @@ interface ImageGenRequest {
   prompt: string;
   aspectRatio: string;
   resolution: string;
+  model?: string;
   referenceImages?: string[];
   useLastGenerated?: boolean;
 }
@@ -57,6 +58,7 @@ function parseImageGenRequest(text: string): { beforeText: string; request: Imag
         prompt: String(json.prompt || ''),
         aspectRatio: String(json.aspectRatio || '1:1'),
         resolution: String(json.resolution || '1K'),
+        model: json.model ? String(json.model) : undefined,
         referenceImages: Array.isArray(json.referenceImages) ? json.referenceImages : undefined,
         useLastGenerated: json.useLastGenerated === true,
       },
@@ -893,6 +895,7 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
             initialPrompt={parsed.request.prompt}
             initialAspectRatio={parsed.request.aspectRatio}
             initialResolution={parsed.request.resolution}
+            initialModel={parsed.request.model}
             rawRequestBlock={parsed.rawBlock}
             referenceImages={refs.length > 0 ? refs : undefined}
           />

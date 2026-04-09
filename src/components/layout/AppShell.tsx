@@ -433,6 +433,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
+  const syncBrowserContextMeta = useCallback((meta: { url?: string; title?: string }) => {
+    if (!sessionId) return;
+    fetch("/api/browser-context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        type: "meta",
+        ...(meta.url ? { url: meta.url } : {}),
+        ...(meta.title ? { title: meta.title } : {}),
+      }),
+    }).catch(() => {});
+  }, [sessionId]);
+
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
@@ -455,6 +469,46 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     window.addEventListener("browser-navigate", handler);
     return () => window.removeEventListener("browser-navigate", handler);
   }, [openBrowserTab]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent).detail?.tab;
+      if (tab === "console") {
+        setBottomPanelTab("console");
+      } else {
+        setBottomPanelTab("terminal");
+      }
+      setBottomPanelOpen(true);
+    };
+    window.addEventListener("terminal-ensure-visible", handler);
+    return () => window.removeEventListener("terminal-ensure-visible", handler);
+  }, [setBottomPanelOpen, setBottomPanelTab]);
+
+  useEffect(() => {
+    if (!sessionId || !browserUrl) return;
+    syncBrowserContextMeta({ url: browserUrl });
+  }, [browserUrl, sessionId, syncBrowserContextMeta]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!sessionId || detail?.source !== "browser" || !detail?.message) return;
+      fetch("/api/browser-context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          type: "log",
+          level: detail.level || "log",
+          message: detail.message,
+          source: detail.source,
+          url: browserUrl || undefined,
+        }),
+      }).catch(() => {});
+    };
+    window.addEventListener("console-log", handler);
+    return () => window.removeEventListener("console-log", handler);
+  }, [browserUrl, sessionId]);
 
   const activeWorkspaceTab = useMemo(
     () => workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId) || null,
@@ -625,6 +679,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                               onMetaChange={(meta) => {
                                 const nextUrl = meta.url?.trim() || activeWorkspaceTab.url || "";
                                 if (nextUrl) setBrowserUrl(nextUrl);
+                                syncBrowserContextMeta({
+                                  ...(nextUrl ? { url: nextUrl } : {}),
+                                  ...(meta.title?.trim() ? { title: meta.title.trim() } : {}),
+                                });
                                 updateWorkspaceTab(activeWorkspaceTab.id, {
                                   ...(nextUrl ? { url: nextUrl } : {}),
                                   ...(meta.title?.trim() ? { title: meta.title.trim() } : nextUrl ? { title: getBrowserTabTitle(nextUrl) } : {}),

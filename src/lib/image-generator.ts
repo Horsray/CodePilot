@@ -40,28 +40,92 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
   const startTime = Date.now();
 
   const db = getDb();
-  const provider = (params.providerId
-    ? db.prepare(
-      "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE id = ? AND enabled = 1 LIMIT 1"
-    ).get(params.providerId)
-    : db.prepare(
-      "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE (provider_type = 'gemini-image' OR provider_type = 'generic-image') AND api_key != '' AND enabled = 1 ORDER BY CASE WHEN provider_type='gemini-image' THEN 0 ELSE 1 END LIMIT 1"
-    ).get()) as {
-      id: string;
-      name: string;
-      provider_type: string;
-      api_key: string;
-      base_url?: string;
-      extra_env?: string;
-      env_overrides_json?: string;
-      role_models_json?: string;
-      options_json?: string;
-    } | undefined;
 
-  if (!provider) {
+  // Helper to get a provider by ID
+  const getProviderById = (id: string) => db.prepare(
+    "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE id = ? AND api_key != '' LIMIT 1"
+  ).get(id) as {
+    id: string;
+    name: string;
+    provider_type: string;
+    api_key: string;
+    base_url?: string;
+    extra_env?: string;
+    env_overrides_json?: string;
+    role_models_json?: string;
+    options_json?: string;
+  } | undefined;
+
+  // When providerId is explicitly specified, use it directly
+  if (params.providerId) {
+    const provider = getProviderById(params.providerId);
+    if (!provider) {
+      throw new Error('Specified provider not found or has no API key.');
+    }
+    return generateWithProvider(provider, params, startTime);
+  }
+
+  // No provider specified: check which providers are enabled and select based on user preference
+  // Priority: if gemini-image is enabled, use it; otherwise use generic-image (relay)
+  const geminiProvider = db.prepare(
+    "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE provider_type = 'gemini-image' AND api_key != '' LIMIT 1"
+  ).get() as {
+    id: string;
+    name: string;
+    provider_type: string;
+    api_key: string;
+    base_url?: string;
+    extra_env?: string;
+    env_overrides_json?: string;
+    role_models_json?: string;
+    options_json?: string;
+  } | undefined;
+
+  // If gemini-image is enabled, use it (respects user's explicit enable/disable choice)
+  if (geminiProvider) {
+    return generateWithProvider(geminiProvider, params, startTime);
+  }
+
+  // Otherwise, fall back to generic-image (relay) if enabled
+  const genericProvider = db.prepare(
+    "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE provider_type = 'generic-image' AND api_key != '' LIMIT 1"
+  ).get() as {
+    id: string;
+    name: string;
+    provider_type: string;
+    api_key: string;
+    base_url?: string;
+    extra_env?: string;
+    env_overrides_json?: string;
+    role_models_json?: string;
+    options_json?: string;
+  } | undefined;
+
+  if (!genericProvider) {
     throw new Error('No image provider configured. Please add a media provider in Settings.');
   }
 
+  return generateWithProvider(genericProvider, params, startTime);
+}
+
+/**
+ * Generate image with a specific provider
+ */
+async function generateWithProvider(
+  provider: {
+    id: string;
+    name: string;
+    provider_type: string;
+    api_key: string;
+    base_url?: string;
+    extra_env?: string;
+    env_overrides_json?: string;
+    role_models_json?: string;
+    options_json?: string;
+  },
+  params: GenerateSingleImageParams,
+  startTime: number
+): Promise<GenerateSingleImageResult> {
   const configuredModel = getDefaultConfiguredImageModel(provider);
 
   const requestedModel = params.model || configuredModel;
@@ -94,17 +158,30 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
     const useRelay = provider.provider_type === 'generic-image' || relayProtocol === 'openai-images';
     if (useRelay) {
       const endpoint = resolveMediaRelayEndpoint(provider);
+      // Support for relay platforms that use Chat Completion API for image generation
+      // This is common for Gemini models or certain DALL-E 3 relay implementations
+      // We check for /chat/completions or if the model name suggests a chat-based generator
+      const isChatEndpoint = endpoint.includes('/chat/completions') || 
+                            endpoint.includes('/v1/chat') || 
+                            requestedModel.toLowerCase().includes('gemini') || 
+                            requestedModel.toLowerCase().includes('gpt-4');
+      
+      const requestBody = isChatEndpoint ? {
+        model: requestedModel,
+        messages: [{ role: 'user', content: params.prompt }],
+      } : {
+        model: requestedModel,
+        prompt: params.prompt,
+        size: imageSize === '2K' ? '1536x1536' : '1024x1024',
+      };
+
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${provider.api_key}`,
         },
-        body: JSON.stringify({
-          model: requestedModel,
-          prompt: params.prompt,
-          size: imageSize === '2K' ? '1536x1536' : '1024x1024',
-        }),
+        body: JSON.stringify(requestBody),
         signal: params.abortSignal || AbortSignal.timeout(300_000),
       });
       const payload = await response.json().catch(() => ({}));
@@ -112,10 +189,72 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
         const message = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
         throw new Error(`Image relay request failed: ${message}`);
       }
-      const b64 = payload?.data?.[0]?.b64_json;
-      if (!b64 || typeof b64 !== 'string') {
-        throw new Error('Image relay did not return b64_json');
+
+      let b64: string | undefined;
+      if (isChatEndpoint) {
+        // Handle Chat Completion response: extract image URL or base64 from message content
+        // Some relays return markdown: ![image](data:image/png;base64,...)
+        // or just the raw base64/URL
+        const content = payload?.choices?.[0]?.message?.content || '';
+        
+        // Try to find a URL in the content
+        const urlMatch = content.match(/https?:\/\/[^\s\)]+/);
+        // Try to find base64 in the content
+        const b64Match = content.match(/base64,([a-zA-Z0-9+/=]+)/);
+        
+        if (b64Match) {
+          b64 = b64Match[1];
+        } else if (urlMatch) {
+          b64 = urlMatch[0];
+        } else {
+          // Fallback: check if the whole content is base64 or a URL
+          const trimmed = content.trim();
+          if (trimmed.startsWith('http') || /^[a-zA-Z0-9+/=]+$/.test(trimmed)) {
+            b64 = trimmed;
+          }
+        }
+
+        // If still not found, check if it returned a standard data array even though it was a chat endpoint
+        if (!b64 && payload?.data?.[0]?.url) {
+          b64 = payload.data[0].url;
+        }
+        if (!b64 && payload?.data?.[0]?.b64_json) {
+          b64 = payload.data[0].b64_json;
+        }
+      } else {
+        b64 = payload?.data?.[0]?.b64_json || payload?.data?.[0]?.url;
       }
+
+      if (!b64 || typeof b64 !== 'string') {
+        throw new Error('Image relay did not return valid image data');
+      }
+
+      // If it's a URL or a data URI instead of base64, we need to handle it
+      if (b64.startsWith('http') || b64.startsWith('data:')) {
+        let buf: ArrayBuffer;
+        let mimeType = 'image/png';
+
+        if (b64.startsWith('data:')) {
+          const match = b64.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            mimeType = match[1];
+            buf = Buffer.from(match[2], 'base64').buffer;
+          } else {
+            throw new Error('Invalid data URI format from image relay');
+          }
+        } else {
+          const imgRes = await fetch(b64);
+          if (!imgRes.ok) {
+            throw new Error(`Failed to download image from relay URL: ${imgRes.statusText}`);
+          }
+          buf = await imgRes.arrayBuffer();
+          const contentType = imgRes.headers.get('content-type');
+          if (contentType) mimeType = contentType;
+        }
+
+        return [{ mediaType: mimeType, uint8Array: new Uint8Array(buf) }];
+      }
+
       return [{ mediaType: 'image/png', uint8Array: Uint8Array.from(Buffer.from(b64, 'base64')) }];
     }
     const generated = await generateImage({
@@ -215,7 +354,8 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
     metadata.referenceImages = savedRefImages;
   }
 
-  db.prepare(
+  const dbForInsert = getDb();
+  dbForInsert.prepare(
     `INSERT INTO media_generations (id, type, status, provider, model, prompt, aspect_ratio, image_size, local_path, thumbnail_path, session_id, message_id, tags, metadata, error, created_at, completed_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(

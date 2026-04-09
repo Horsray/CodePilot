@@ -432,6 +432,25 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         markActive();
         stream.rewindPoints = [...stream.rewindPoints, { userMessageId: sdkUserMessageId }];
       },
+      onUiAction: (action) => {
+        markActive();
+        if (action.action === 'open_browser' && action.url) {
+          window.dispatchEvent(new CustomEvent('browser-navigate', {
+            detail: {
+              url: action.url,
+              newTab: action.newTab !== false,
+            },
+          }));
+        }
+        if (action.action === 'open_terminal') {
+          window.dispatchEvent(new CustomEvent('terminal-ensure-visible', {
+            detail: {
+              tab: action.tab || 'terminal',
+              terminalId: action.terminalId,
+            },
+          }));
+        }
+      },
       onKeepAlive: () => {
         markActive();
       },
