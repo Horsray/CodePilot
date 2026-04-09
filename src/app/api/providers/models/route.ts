@@ -138,7 +138,11 @@ export async function GET() {
       } catch { /* table may not exist in old DBs */ }
 
       // 2) Catalog defaults
-      const catalogModels = getDefaultModelsForProvider(protocol, provider.base_url);
+      // Prefer preset-matched defaults (can be intentionally empty, e.g. cc-switch/custom providers).
+      const matchedPreset = findPresetForLegacy(provider.base_url, provider.provider_type, protocol);
+      const catalogModels = matchedPreset
+        ? matchedPreset.defaultModels
+        : getDefaultModelsForProvider(protocol, provider.base_url);
       const catalogRaw = catalogModels.map(m => ({
         value: m.modelId,
         label: m.displayName,

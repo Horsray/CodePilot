@@ -93,17 +93,27 @@ function resolveIcon(iconKey: string): ReactNode {
 
 /** Convert a VendorPreset to the frontend QuickPreset format */
 function toQuickPreset(vp: VendorPreset): QuickPreset {
+  const providerType = vp.key === 'custom-media'
+    ? 'generic-image'
+    : vp.key === 'cc-switch'
+      ? 'cc-switch'
+      : vp.protocol === 'openrouter'
+        ? 'openrouter'
+        : vp.protocol === 'bedrock'
+          ? 'bedrock'
+          : vp.protocol === 'vertex'
+            ? 'vertex'
+            : vp.protocol === 'gemini-image'
+              ? 'gemini-image'
+              : 'anthropic';
+
   return {
     key: vp.key,
     name: vp.name,
     description: vp.description,
     descriptionZh: vp.descriptionZh,
     icon: resolveIcon(vp.iconKey),
-    provider_type: vp.protocol === 'openrouter' ? 'openrouter'
-      : vp.protocol === 'bedrock' ? 'bedrock'
-      : vp.protocol === 'vertex' ? 'vertex'
-      : vp.protocol === 'gemini-image' ? 'gemini-image'
-      : 'anthropic',
+    provider_type: providerType,
     protocol: vp.protocol,
     authStyle: vp.authStyle,
     base_url: vp.baseUrl,
@@ -152,6 +162,8 @@ export function findMatchingPreset(provider: ApiProvider): QuickPreset | undefin
   if (provider.provider_type === "vertex") return QUICK_PRESETS.find(p => p.key === "vertex");
   if (provider.provider_type === "openrouter") return QUICK_PRESETS.find(p => p.key === "openrouter");
   if (provider.provider_type === "gemini-image") return QUICK_PRESETS.find(p => p.key === "gemini-image");
+  if (provider.provider_type === "generic-image") return QUICK_PRESETS.find(p => p.key === "custom-media");
+  if (provider.provider_type === "cc-switch") return QUICK_PRESETS.find(p => p.key === "cc-switch");
   if (provider.provider_type === "anthropic" && provider.base_url === "https://api.anthropic.com") {
     return QUICK_PRESETS.find(p => p.key === "anthropic-official");
   }

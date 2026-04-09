@@ -5,6 +5,10 @@ import { usePathname } from "next/navigation";
 import {
   GitBranch,
   TreeStructure,
+  Terminal,
+  ListBullets,
+  Globe,
+  ChatCircle,
   PencilSimple,
   DotOutline,
   ChartBar,
@@ -38,6 +42,14 @@ export function UnifiedTopBar() {
     assistantPanelOpen,
     setAssistantPanelOpen,
     isAssistantWorkspace,
+    bottomPanelOpen,
+    setBottomPanelOpen,
+    bottomPanelTab,
+    setBottomPanelTab,
+    mainViewMode,
+    setMainViewMode,
+    browserTabOpen,
+    setBrowserTabOpen,
     currentBranch,
     gitDirtyCount,
   } = usePanel();
@@ -245,6 +257,83 @@ export function UnifiedTopBar() {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{t('topBar.fileTree')}</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={mainViewMode === "chat" ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    className={mainViewMode === "chat" ? "" : "text-muted-foreground hover:text-foreground"}
+                    onClick={() => setMainViewMode("chat")}
+                  >
+                    <ChatCircle size={16} />
+                    <span className="sr-only">{t('topBar.chat')}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t('topBar.chat')}</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={mainViewMode === "browser" ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    className={mainViewMode === "browser" ? "" : "text-muted-foreground hover:text-foreground"}
+                    onClick={() => {
+                      if (!browserTabOpen) setBrowserTabOpen(true);
+                      setMainViewMode("browser");
+                    }}
+                  >
+                    <Globe size={16} />
+                    <span className="sr-only">{t('topBar.browser')}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t('topBar.browser')}</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={bottomPanelOpen && bottomPanelTab === "terminal" ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    className={bottomPanelOpen && bottomPanelTab === "terminal" ? "" : "text-muted-foreground hover:text-foreground"}
+                    onClick={() => {
+                      if (bottomPanelOpen && bottomPanelTab === "terminal") {
+                        setBottomPanelOpen(false);
+                        return;
+                      }
+                      setBottomPanelTab("terminal");
+                      setBottomPanelOpen(true);
+                    }}
+                  >
+                    <Terminal size={16} />
+                    <span className="sr-only">{t('bottomPanel.terminal')}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t('bottomPanel.terminal')}</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={bottomPanelOpen && bottomPanelTab === "console" ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    className={bottomPanelOpen && bottomPanelTab === "console" ? "" : "text-muted-foreground hover:text-foreground"}
+                    onClick={() => {
+                      if (bottomPanelOpen && bottomPanelTab === "console") {
+                        setBottomPanelOpen(false);
+                        return;
+                      }
+                      setBottomPanelTab("console");
+                      setBottomPanelOpen(true);
+                    }}
+                  >
+                    <ListBullets size={16} />
+                    <span className="sr-only">{t('bottomPanel.console')}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t('bottomPanel.console')}</TooltipContent>
               </Tooltip>
 
               <Tooltip>

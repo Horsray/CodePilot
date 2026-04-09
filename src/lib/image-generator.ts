@@ -1,6 +1,7 @@
 import { generateImage, NoImageGeneratedError } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { getDb, getSession } from '@/lib/db';
+import { getDefaultConfiguredImageModel, getMediaRelayProtocol, resolveMediaRelayEndpoint } from '@/lib/image-provider-utils';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -17,6 +18,7 @@ export interface GenerateSingleImageParams {
   referenceImages?: { mimeType: string; data: string }[];
   referenceImagePaths?: string[];
   sessionId?: string;
+  providerId?: string;
   abortSignal?: AbortSignal;
   /** When true, skip disk write / project copy / DB insert — caller (MCP pipeline) handles persistence */
   skipSave?: boolean;
@@ -38,25 +40,33 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
   const startTime = Date.now();
 
   const db = getDb();
-  const provider = db.prepare(
-    "SELECT api_key, extra_env FROM api_providers WHERE provider_type = 'gemini-image' AND api_key != '' LIMIT 1"
-  ).get() as { api_key: string; extra_env?: string } | undefined;
+  const provider = (params.providerId
+    ? db.prepare(
+      "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE id = ? AND enabled = 1 LIMIT 1"
+    ).get(params.providerId)
+    : db.prepare(
+      "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE (provider_type = 'gemini-image' OR provider_type = 'generic-image') AND api_key != '' AND enabled = 1 ORDER BY CASE WHEN provider_type='gemini-image' THEN 0 ELSE 1 END LIMIT 1"
+    ).get()) as {
+      id: string;
+      name: string;
+      provider_type: string;
+      api_key: string;
+      base_url?: string;
+      extra_env?: string;
+      env_overrides_json?: string;
+      role_models_json?: string;
+      options_json?: string;
+    } | undefined;
 
   if (!provider) {
-    throw new Error('No Gemini Image provider configured. Please add a provider with type "gemini-image" in Settings.');
+    throw new Error('No image provider configured. Please add a media provider in Settings.');
   }
 
-  // Read configured model from extra_env, fall back to default
-  let configuredModel = 'gemini-3.1-flash-image-preview';
-  try {
-    const env = JSON.parse(provider.extra_env || '{}');
-    if (env.GEMINI_IMAGE_MODEL) configuredModel = env.GEMINI_IMAGE_MODEL;
-  } catch { /* use default */ }
+  const configuredModel = getDefaultConfiguredImageModel(provider);
 
   const requestedModel = params.model || configuredModel;
   const aspectRatio = (params.aspectRatio || '1:1') as `${number}:${number}`;
   const imageSize = params.imageSize || '1K';
-
   const google = createGoogleGenerativeAI({ apiKey: provider.api_key });
 
   // Build prompt: plain string or { text, images } for reference images
@@ -79,17 +89,48 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
     ? { text: params.prompt, images: refImageData }
     : params.prompt;
 
-  const { images } = await generateImage({
-    model: google.image(requestedModel),
-    prompt,
-    providerOptions: {
-      google: {
-        imageConfig: { aspectRatio, imageSize },
+  const images = await (async () => {
+    const relayProtocol = getMediaRelayProtocol(provider);
+    const useRelay = provider.provider_type === 'generic-image' || relayProtocol === 'openai-images';
+    if (useRelay) {
+      const endpoint = resolveMediaRelayEndpoint(provider);
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${provider.api_key}`,
+        },
+        body: JSON.stringify({
+          model: requestedModel,
+          prompt: params.prompt,
+          size: imageSize === '2K' ? '1536x1536' : '1024x1024',
+        }),
+        signal: params.abortSignal || AbortSignal.timeout(300_000),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
+        throw new Error(`Image relay request failed: ${message}`);
+      }
+      const b64 = payload?.data?.[0]?.b64_json;
+      if (!b64 || typeof b64 !== 'string') {
+        throw new Error('Image relay did not return b64_json');
+      }
+      return [{ mediaType: 'image/png', uint8Array: Uint8Array.from(Buffer.from(b64, 'base64')) }];
+    }
+    const generated = await generateImage({
+      model: google.image(requestedModel),
+      prompt,
+      providerOptions: {
+        google: {
+          imageConfig: { aspectRatio, imageSize },
+        },
       },
-    },
-    maxRetries: 3,
-    abortSignal: params.abortSignal || AbortSignal.timeout(300_000),
-  });
+      maxRetries: 3,
+      abortSignal: params.abortSignal || AbortSignal.timeout(300_000),
+    });
+    return generated.images;
+  })();
 
   const elapsed = Date.now() - startTime;
   console.log(`[image-generator] ${requestedModel} ${imageSize} completed in ${elapsed}ms`);

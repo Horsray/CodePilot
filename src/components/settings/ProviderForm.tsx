@@ -59,6 +59,7 @@ export interface ProviderFormData {
   headers_json?: string;
   env_overrides_json?: string;
   role_models_json?: string;
+  options_json?: string;
   notes: string;
 }
 

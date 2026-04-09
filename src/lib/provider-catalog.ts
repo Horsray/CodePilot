@@ -617,6 +617,24 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
+  {
+    key: 'cc-switch',
+    name: 'CC Switch',
+    description: 'Use CC Switch profile as an independent provider',
+    descriptionZh: '将 CC Switch 配置作为独立服务商接入',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: '',
+    defaultEnvOverrides: {},
+    defaultModels: [],
+    fields: ['name', 'api_key', 'base_url', 'model_names', 'model_mapping'],
+    iconKey: 'anthropic',
+    sdkProxyOnly: true,
+    meta: {
+      billingModel: 'self_hosted',
+    },
+  },
+
   // ── Google Gemini (Image) ──
   {
     key: 'gemini-image',
@@ -639,6 +657,26 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       apiKeyUrl: 'https://aistudio.google.com/api-keys',
       docsUrl: 'https://ai.google.dev/gemini-api/docs/image-generation',
       billingModel: 'pay_as_you_go',
+    },
+  },
+
+  {
+    key: 'custom-media',
+    name: '通用中转平台',
+    description: 'Custom media relay provider',
+    descriptionZh: '通用中转平台 — 自定义 baseurl、apikey、model',
+    protocol: 'gemini-image',
+    authStyle: 'api_key',
+    baseUrl: '',
+    defaultEnvOverrides: { GEMINI_API_KEY: '' },
+    defaultModels: [
+      { modelId: 'gemini-3.1-flash-image-preview', displayName: 'Default Model' },
+    ],
+    fields: ['name', 'api_key', 'base_url', 'model_names'],
+    category: 'media',
+    iconKey: 'server',
+    meta: {
+      billingModel: 'self_hosted',
     },
   },
 
@@ -676,6 +714,8 @@ export function inferProtocolFromLegacy(
   if (providerType === 'bedrock') return 'bedrock';
   if (providerType === 'vertex') return 'vertex';
   if (providerType === 'gemini-image') return 'gemini-image';
+  if (providerType === 'generic-image') return 'gemini-image';
+  if (providerType === 'cc-switch') return 'anthropic';
 
   // For 'custom' type, check if the base_url matches a known Anthropic-compatible vendor
   if (providerType === 'custom') {
@@ -753,6 +793,8 @@ export function findPresetForLegacy(baseUrl: string, providerType: string, proto
   if (providerType === 'vertex') return VENDOR_PRESETS.find(p => p.key === 'vertex');
   if (providerType === 'openrouter') return VENDOR_PRESETS.find(p => p.key === 'openrouter');
   if (providerType === 'gemini-image') return VENDOR_PRESETS.find(p => p.key === 'gemini-image');
+  if (providerType === 'generic-image') return VENDOR_PRESETS.find(p => p.key === 'custom-media');
+  if (providerType === 'cc-switch') return VENDOR_PRESETS.find(p => p.key === 'cc-switch');
   if (providerType === 'anthropic' && baseUrl === 'https://api.anthropic.com') {
     return VENDOR_PRESETS.find(p => p.key === 'anthropic-official');
   }

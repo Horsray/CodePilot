@@ -30,6 +30,7 @@ import type { ApiProvider, ProviderModelGroup } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
 import Anthropic from "@lobehub/icons/es/Anthropic";
+import { isOfficialGeminiImageProvider } from "@/lib/image-provider-utils";
 import { ProviderOptionsSection } from "./ProviderOptionsSection";
 import {
   Select,
@@ -524,7 +525,7 @@ export function ProviderManager() {
                   />
                 )}
                 {/* Gemini Image model selector — capsule buttons */}
-                {provider.provider_type === 'gemini-image' && (
+                {provider.provider_type === 'gemini-image' && isOfficialGeminiImageProvider(provider) && (
                   <div className="ml-[34px] mt-2 flex items-center gap-1.5">
                     <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型' : 'Model'}:</span>
                     {GEMINI_IMAGE_MODELS.map((m) => {

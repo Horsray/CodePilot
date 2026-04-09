@@ -5,6 +5,7 @@ import { createContext, useContext } from "react";
 export type PanelContent = "files" | "tasks";
 
 export type PreviewViewMode = "source" | "rendered";
+export type BottomPanelTab = "terminal" | "console";
 
 export interface PanelContextValue {
   // --- New independent panel states ---
@@ -22,6 +23,16 @@ export interface PanelContextValue {
   setAssistantPanelOpen: (open: boolean) => void;
   isAssistantWorkspace: boolean;
   setIsAssistantWorkspace: (is: boolean) => void;
+  bottomPanelOpen: boolean;
+  setBottomPanelOpen: (open: boolean) => void;
+  bottomPanelTab: BottomPanelTab;
+  setBottomPanelTab: (tab: BottomPanelTab) => void;
+  mainViewMode: "chat" | "browser";
+  setMainViewMode: (mode: "chat" | "browser") => void;
+  browserTabOpen: boolean;
+  setBrowserTabOpen: (open: boolean) => void;
+  browserUrl: string;
+  setBrowserUrl: (url: string) => void;
 
   // --- Git summary (for top bar, derived — no setters) ---
   currentBranch: string;

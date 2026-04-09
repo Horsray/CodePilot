@@ -452,8 +452,10 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       className="hidden h-full shrink-0 flex-col overflow-hidden bg-sidebar/80 backdrop-blur-xl lg:flex"
       style={{ width: width ?? 240 }}
     >
-      {/* macOS traffic lights spacing */}
-      <div className="h-5 shrink-0 mt-3" />
+      <div className="h-4 shrink-0 mt-2" />
+      <div className="flex shrink-0 items-center justify-center px-3 pb-2">
+        <img src="/icons/toplogo.png" alt="CodePilot" className="h-8 w-auto object-contain" />
+      </div>
 
       {/* Top action bar: New Chat + Search */}
       <div className="flex items-center gap-2 px-3 pb-2">

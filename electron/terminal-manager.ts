@@ -1,4 +1,17 @@
+import * as os from 'os';
+import * as fs from 'fs';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import type { IPty } from 'node-pty';
+
+let pty: typeof import('node-pty') | null = null;
+
+function getPty() {
+  if (!pty) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    pty = require('node-pty');
+  }
+  return pty as typeof import('node-pty');
+}
 
 export interface TerminalCreateOptions {
   cwd: string;
@@ -8,20 +21,11 @@ export interface TerminalCreateOptions {
 }
 
 interface TerminalInstance {
-  process: ChildProcessWithoutNullStreams;
+  mode: 'pty' | 'spawn';
+  process: IPty | ChildProcessWithoutNullStreams;
   cwd: string;
 }
 
-// TerminalManager — manages terminal processes.
-//
-// KNOWN LIMITATION: Uses child_process.spawn with stdio: 'pipe' instead of
-// a real PTY. This means:
-//  - resize() is a no-op (COLUMNS/LINES env vars are set at creation only)
-//  - Full-screen programs (vim, htop) won't render correctly
-//  - readline line-editing may behave differently
-//
-// TODO: Upgrade to a real PTY library for full support. See
-// docs/handover/git-terminal-layout.md for the 4-step upgrade path.
 export class TerminalManager {
   private terminals = new Map<string, TerminalInstance>();
   private onData: ((id: string, data: string) => void) | null = null;
@@ -35,6 +39,34 @@ export class TerminalManager {
     this.onExit = handler;
   }
 
+  private getShell(): string {
+    if (process.platform === 'win32') {
+      return process.env.COMSPEC || 'cmd.exe';
+    }
+    return process.env.SHELL || '/bin/zsh';
+  }
+
+  private getShellArgs(): string[] {
+    if (process.platform === 'win32') {
+      return [];
+    }
+    return ['-il'];
+  }
+
+  private resolveCwd(cwd?: string): string {
+    // 终端工作目录兜底：优先使用传入目录，不可用时回退到 home，再回退到当前进程目录。
+    if (cwd && fs.existsSync(cwd)) {
+      try {
+        if (fs.statSync(cwd).isDirectory()) {
+          return cwd;
+        }
+      } catch {
+        // ignore and fallback
+      }
+    }
+    return os.homedir() || process.cwd();
+  }
+
   create(id: string, opts: TerminalCreateOptions): void {
     if (this.terminals.has(id)) {
       this.kill(id);
@@ -42,20 +74,43 @@ export class TerminalManager {
 
     const shell = this.getShell();
     const shellArgs = this.getShellArgs();
+    const resolvedCwd = this.resolveCwd(opts.cwd);
 
     const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
+      ...(process.env as Record<string, string>),
       ...opts.env,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
-      COLUMNS: String(opts.cols),
-      LINES: String(opts.rows),
     };
-    // Allow launching Claude Code inside the terminal
     delete env.CLAUDECODE;
 
+    try {
+      const nodePty = getPty();
+      const proc = nodePty.spawn(shell, shellArgs, {
+        name: 'xterm-256color',
+        cols: opts.cols || 80,
+        rows: opts.rows || 24,
+        cwd: resolvedCwd,
+        env,
+      });
+
+      proc.onData((data: string) => {
+        this.onData?.(id, data);
+      });
+
+      proc.onExit(({ exitCode }) => {
+        this.terminals.delete(id);
+        this.onExit?.(id, exitCode ?? 0);
+      });
+
+      this.terminals.set(id, { mode: 'pty', process: proc, cwd: resolvedCwd });
+      return;
+    } catch (err) {
+      console.error('[terminal-manager] node-pty spawn failed, fallback to child_process.spawn:', err);
+    }
+
     const child = spawn(shell, shellArgs, {
-      cwd: opts.cwd,
+      cwd: resolvedCwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -73,96 +128,57 @@ export class TerminalManager {
       this.onExit?.(id, code ?? 0);
     });
 
-    child.on('error', (err) => {
-      console.error(`[terminal:${id}] error:`, err);
+    child.on('error', (error) => {
+      console.error(`[terminal:${id}] spawn error:`, error);
       this.terminals.delete(id);
       this.onExit?.(id, 1);
     });
 
-    this.terminals.set(id, { process: child, cwd: opts.cwd });
+    this.terminals.set(id, { mode: 'spawn', process: child, cwd: resolvedCwd });
   }
 
   write(id: string, data: string): void {
     const terminal = this.terminals.get(id);
-    if (!terminal) return;
-    terminal.process.stdin.write(data);
+    if (!terminal) {
+      console.error('[terminal-manager] write called but terminal not found:', id);
+      return;
+    }
+    if (terminal.mode === 'pty') {
+      (terminal.process as IPty).write(data);
+      return;
+    }
+    (terminal.process as ChildProcessWithoutNullStreams).stdin.write(data);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  resize(id: string, _cols: number, _rows: number): void {
-    // With spawn (non-PTY), resize is a no-op.
-    // Would use pty.resize() with a real PTY library.
+  resize(id: string, cols: number, rows: number): void {
+    const terminal = this.terminals.get(id);
+    if (!terminal) {
+      return;
+    }
+    if (terminal.mode === 'pty') {
+      (terminal.process as IPty).resize(cols, rows);
+    }
   }
 
   kill(id: string): void {
     const terminal = this.terminals.get(id);
-    if (!terminal) return;
-    try {
-      terminal.process.kill();
-    } catch {
-      // already dead
+    if (terminal) {
+      try {
+        if (terminal.mode === 'pty') {
+          (terminal.process as IPty).kill();
+        } else {
+          (terminal.process as ChildProcessWithoutNullStreams).kill();
+        }
+      } catch (err) {
+        console.warn(`[terminal-manager] error killing terminal ${id}:`, err);
+      }
+      this.terminals.delete(id);
     }
-    this.terminals.delete(id);
   }
 
   killAll(): void {
     for (const [id] of this.terminals) {
       this.kill(id);
     }
-  }
-
-  private getShell(): string {
-    if (process.platform === 'win32') {
-      return this.findGitBash() || process.env.COMSPEC || 'cmd.exe';
-    }
-    return process.env.SHELL || '/bin/zsh';
-  }
-
-  private getShellArgs(): string[] {
-    if (process.platform === 'win32') {
-      return [];
-    }
-    // Interactive login shell
-    return ['-il'];
-  }
-
-  private findGitBash(): string | null {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('fs');
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('path');
-
-    // Check env var
-    const envBash = process.env.CLAUDE_CODE_GIT_BASH_PATH;
-    if (envBash && fs.existsSync(envBash)) return envBash;
-
-    // Common paths
-    const commonPaths = [
-      'C:\\Program Files\\Git\\bin\\bash.exe',
-      'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
-    ];
-    for (const p of commonPaths) {
-      if (fs.existsSync(p)) return p;
-    }
-
-    // Try to find via 'where git'
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { execFileSync } = require('child_process');
-      const whereResult = execFileSync('where', ['git'], {
-        timeout: 3000, encoding: 'utf-8', shell: true, stdio: 'pipe',
-      });
-      for (const line of whereResult.trim().split(/\r?\n/)) {
-        const gitExe = line.trim();
-        if (!gitExe) continue;
-        const gitDir = path.dirname(path.dirname(gitExe));
-        const bashPath = path.join(gitDir, 'bin', 'bash.exe');
-        if (fs.existsSync(bashPath)) return bashPath;
-      }
-    } catch {
-      // ignore
-    }
-
-    return null;
   }
 }

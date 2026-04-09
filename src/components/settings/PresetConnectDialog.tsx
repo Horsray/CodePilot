@@ -78,6 +78,10 @@ export function PresetConnectDialog({
   const [mapSonnet, setMapSonnet] = useState("");
   const [mapOpus, setMapOpus] = useState("");
   const [mapHaiku, setMapHaiku] = useState("");
+  const [modelNamesText, setModelNamesText] = useState("");
+  const [mediaProtocol, setMediaProtocol] = useState<"custom-image" | "openai-images">("custom-image");
+  const [mediaEndpoint, setMediaEndpoint] = useState("");
+  const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -157,6 +161,29 @@ export function PresetConnectDialog({
       setHeadersJson(editProvider.headers_json || "{}");
       setEnvOverridesJson(editProvider.env_overrides_json || "");
       setNotes(editProvider.notes || "");
+      try {
+        const envOverrides = JSON.parse(editProvider.env_overrides_json || "{}");
+        const modelNames = typeof envOverrides.model_names === "string" ? envOverrides.model_names : "";
+        setModelNamesText(
+          modelNames
+            .split(/[\n,]/)
+            .map((v: string) => v.trim())
+            .filter(Boolean)
+            .join("\n")
+        );
+      } catch {
+        setModelNamesText("");
+      }
+      try {
+        const options = JSON.parse(editProvider.options_json || "{}");
+        const protocol = options.media_protocol === "openai-images" ? "openai-images" : "custom-image";
+        const endpoint = typeof options.media_endpoint === "string" ? options.media_endpoint : "";
+        setMediaProtocol(protocol);
+        setMediaEndpoint(endpoint);
+      } catch {
+        setMediaProtocol("custom-image");
+        setMediaEndpoint("");
+      }
       // Pre-fill model name from role_models_json
       try {
         const rm = JSON.parse(editProvider.role_models_json || "{}");
@@ -217,9 +244,46 @@ export function PresetConnectDialog({
       setHeadersJson("{}");
       setEnvOverridesJson("");
       setNotes("");
+      setModelNamesText("");
+      setMediaProtocol("custom-image");
+      setMediaEndpoint("");
+      setHasStoredApiKey(false);
+      if (preset.key === "custom-media") {
+        setName("通用中转平台");
+        setMediaProtocol("custom-image");
+      }
       setShowAdvanced(false);
     }
   }, [open, preset, isEdit, editProvider]);
+
+  useEffect(() => {
+    if (!open || !preset || isEdit || preset.key !== "cc-switch") return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/providers");
+        if (!res.ok) return;
+        const data = await res.json();
+        const resolved = data?.cc_switch_resolved;
+        if (!resolved || cancelled) return;
+        const models = Array.isArray(resolved.models) ? resolved.models : [];
+        const roleModels = resolved.roleModels || {};
+        setBaseUrl(typeof resolved.baseUrl === "string" ? resolved.baseUrl : "");
+        setApiKey(typeof resolved.apiKey === "string" ? resolved.apiKey : "");
+        setHasStoredApiKey(Boolean(resolved.apiKey));
+        setModelName(typeof resolved.currentModel === "string" ? resolved.currentModel : "");
+        setMapSonnet(typeof roleModels.sonnet === "string" ? roleModels.sonnet : "");
+        setMapOpus(typeof roleModels.opus === "string" ? roleModels.opus : "");
+        setMapHaiku(typeof roleModels.haiku === "string" ? roleModels.haiku : "");
+        setModelNamesText(models.join("\n"));
+      } catch {
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, preset, isEdit]);
 
   if (!preset) return null;
 
@@ -257,6 +321,39 @@ export function PresetConnectDialog({
           : '{"ANTHROPIC_API_KEY":""}';
       }
     }
+    let envOverridesObj: Record<string, string> = {};
+    if (envOverridesJson && envOverridesJson.trim()) {
+      try {
+        const parsed = JSON.parse(envOverridesJson.trim());
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          envOverridesObj = parsed as Record<string, string>;
+        }
+      } catch {
+        setError(isZh ? "环境覆盖 JSON 格式不正确" : "Environment overrides must be valid JSON");
+        return;
+      }
+    }
+
+    if (preset.fields.includes("model_names")) {
+      const parsedModelNames = modelNamesText
+        .split(/[\n,]/)
+        .map(v => v.trim())
+        .filter(Boolean);
+      if (parsedModelNames.length > 0) {
+        envOverridesObj.model_names = parsedModelNames.join(",");
+      } else {
+        delete envOverridesObj.model_names;
+      }
+    }
+
+    const optionsObj: Record<string, string> = {};
+    if (preset.key === "custom-media") {
+      optionsObj.media_protocol = mediaProtocol;
+      if (mediaEndpoint.trim()) {
+        optionsObj.media_endpoint = mediaEndpoint.trim();
+      }
+    }
+
     // In edit mode, preserve existing role_models_json unless the user modifies mapping fields
     let roleModelsJson = (isEdit && editProvider?.role_models_json) ? editProvider.role_models_json : "{}";
 
@@ -322,11 +419,12 @@ export function PresetConnectDialog({
         provider_type: preset.provider_type,
         protocol: preset.protocol,
         base_url: baseUrl.trim(),
-        api_key: apiKey,
+        api_key: preset.key === "cc-switch" && hasStoredApiKey && apiKey.startsWith("***") ? "" : apiKey,
         extra_env: finalExtraEnv,
         role_models_json: roleModelsJson,
         headers_json: isEdit ? headersJson.trim() || "{}" : undefined,
-        env_overrides_json: isEdit ? envOverridesJson.trim() || "" : undefined,
+        env_overrides_json: JSON.stringify(envOverridesObj),
+        options_json: Object.keys(optionsObj).length > 0 ? JSON.stringify(optionsObj) : undefined,
         notes: isEdit ? notes.trim() : "",
       });
       onOpenChange(false);
@@ -505,6 +603,45 @@ export function PresetConnectDialog({
             </div>
           )}
 
+          {preset.fields.includes("model_names") && (
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">{isZh ? '可用模型列表（每行一个）' : 'Available Models (one per line)'}</Label>
+              <Textarea
+                value={modelNamesText}
+                onChange={(e) => setModelNamesText(e.target.value)}
+                placeholder={isZh ? "claude-sonnet-4-5\nclaude-opus-4-1" : "claude-sonnet-4-5\nclaude-opus-4-1"}
+                className="text-sm font-mono min-h-[72px]"
+                rows={4}
+              />
+            </div>
+          )}
+
+          {preset.key === "custom-media" && (
+            <>
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">{isZh ? '中转协议' : 'Relay Protocol'}</Label>
+                <Select value={mediaProtocol} onValueChange={(v: "custom-image" | "openai-images") => setMediaProtocol(v)}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="custom-image">{isZh ? "自定义图像接口" : "Custom Image API"}</SelectItem>
+                    <SelectItem value="openai-images">OpenAI Images API</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">{isZh ? '中转端点（可选）' : 'Relay Endpoint (optional)'}</Label>
+                <Input
+                  value={mediaEndpoint}
+                  onChange={(e) => setMediaEndpoint(e.target.value)}
+                  placeholder={isZh ? "/v1/images/generations 或完整 URL" : "/v1/images/generations or full URL"}
+                  className="text-sm font-mono"
+                />
+              </div>
+            </>
+          )}
+
           {/* Extra env — bedrock/vertex/custom always shown */}
           {preset.fields.includes("extra_env") && (
             <div className="space-y-2">
@@ -672,7 +809,7 @@ export function PresetConnectDialog({
                 type="button"
                 variant="outline"
                 onClick={handleTestConnection}
-                disabled={saving || testing || (!apiKey && preset.fields.includes("api_key"))}
+                disabled={saving || testing || (!(apiKey || hasStoredApiKey) && preset.fields.includes("api_key"))}
                 className="gap-1.5"
               >
                 {testing ? <SpinnerGap size={14} className="animate-spin" /> : <Lightning size={14} />}

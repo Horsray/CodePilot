@@ -11,6 +11,8 @@ import { FeatureAnnouncementDialog } from "./FeatureAnnouncementDialog";
 import { UpdateBanner } from "./UpdateBanner";
 import { UnifiedTopBar } from "./UnifiedTopBar";
 import { PanelZone } from "./PanelZone";
+import { BottomPanelContainer } from "./BottomPanelContainer";
+import { BrowserTabView } from "./BrowserTabView";
 import { PanelContext, type PreviewViewMode } from "@/hooks/usePanel";
 import { UpdateContext } from "@/hooks/useUpdate";
 import { useUpdateChecker } from "@/hooks/useUpdateChecker";
@@ -147,6 +149,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [dashboardPanelOpen, setDashboardPanelOpen] = useState(false);
   const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
   const [isAssistantWorkspace, setIsAssistantWorkspace] = useState(false);
+  const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
+  const [bottomPanelTab, setBottomPanelTab] = useState<"terminal" | "console">("terminal");
+  const [mainViewMode, setMainViewMode] = useState<"chat" | "browser">("chat");
+  const [browserTabOpen, setBrowserTabOpen] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState("");
 
   // --- Git summary (derived from polling hook, no setState needed) ---
   const [currentWorktreeLabel, setCurrentWorktreeLabel] = useState("");
@@ -396,6 +403,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setAssistantPanelOpen,
       isAssistantWorkspace,
       setIsAssistantWorkspace,
+      bottomPanelOpen,
+      setBottomPanelOpen,
+      bottomPanelTab,
+      setBottomPanelTab,
+      mainViewMode,
+      setMainViewMode,
+      browserTabOpen,
+      setBrowserTabOpen,
+      browserUrl,
+      setBrowserUrl,
       currentBranch,
       gitDirtyCount,
       currentWorktreeLabel,
@@ -417,7 +434,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       previewViewMode,
       setPreviewViewMode,
     }),
-    [fileTreeOpen, gitPanelOpen, previewOpen, terminalOpen, dashboardPanelOpen, assistantPanelOpen, isAssistantWorkspace, currentBranch, gitDirtyCount, currentWorktreeLabel, workingDirectory, sessionId, sessionTitle, streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, previewFile, setPreviewFile, previewViewMode]
+    [fileTreeOpen, gitPanelOpen, previewOpen, terminalOpen, dashboardPanelOpen, assistantPanelOpen, isAssistantWorkspace, bottomPanelOpen, bottomPanelTab, mainViewMode, browserTabOpen, browserUrl, currentBranch, gitDirtyCount, currentWorktreeLabel, workingDirectory, sessionId, sessionTitle, streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, previewFile, setPreviewFile, previewViewMode]
   );
 
   const imageGenValue = useImageGenState();
@@ -449,14 +466,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div className="flex flex-1 min-h-0 overflow-hidden">
                 <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                   <main className="relative flex-1 overflow-hidden">
-                    {isSplitActive ? (
+                    {mainViewMode === "browser" && browserTabOpen ? (
+                      <BrowserTabView />
+                    ) : isSplitActive ? (
                       <SplitChatContainer />
                     ) : (
                       <ErrorBoundary>{children}</ErrorBoundary>
                     )}
                   </main>
+                  {isChatDetailRoute && <BottomPanelContainer />}
                 </div>
-                {isChatDetailRoute && <PanelZone />}
+                {isChatDetailRoute && mainViewMode === "chat" && <PanelZone />}
               </div>
             </div>
           </div>

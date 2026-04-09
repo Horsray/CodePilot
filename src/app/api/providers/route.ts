@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllProviders, createProvider, getSetting } from '@/lib/db';
 import type { ProviderResponse, ErrorResponse, CreateProviderRequest, ApiProvider } from '@/types';
+import { readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 
 function maskApiKey(provider: ApiProvider): ApiProvider {
   let maskedKey = provider.api_key;
@@ -38,10 +39,12 @@ export async function GET() {
   try {
     const providers = getAllProviders().map(maskApiKey);
     const envDetected = detectEnvVars();
+    const ccSwitchResolved = readCCSwitchClaudeSettings();
     return NextResponse.json({
       providers,
       env_detected: envDetected,
       default_provider_id: getSetting('default_provider_id') || '',
+      cc_switch_resolved: ccSwitchResolved,
     });
   } catch (error) {
     return NextResponse.json<ErrorResponse>(

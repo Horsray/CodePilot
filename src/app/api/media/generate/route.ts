@@ -9,6 +9,7 @@ interface GenerateRequest {
   referenceImages?: { mimeType: string; data: string }[];
   referenceImagePaths?: string[];
   sessionId?: string;
+  providerId?: string;
 }
 
 export const runtime = 'nodejs';
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest) {
       referenceImages: body.referenceImages,
       referenceImagePaths: body.referenceImagePaths,
       sessionId: body.sessionId,
+      providerId: body.providerId,
     });
 
     return new Response(
