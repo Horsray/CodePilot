@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import type { MessageContentBlock } from '@/types';
 
 // ── Suite 1: message dedup (inlined — agent-loop needs DB to test directly) ──
 
@@ -127,5 +128,70 @@ describe('message-builder buildCoreMessages (real import)', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('tool-call recovery helpers', () => {
+  it('sanitizes orphaned tool_use blocks with synthetic tool_result blocks', async () => {
+    const { sanitizeToolCallBlocks } = await import('@/lib/tool-call-recovery');
+    const blocks: MessageContentBlock[] = [
+      { type: 'text', text: 'Running command' },
+      { type: 'tool_use', id: 'call_123', name: 'Bash', input: { command: 'sleep 10' } },
+    ];
+
+    const result = sanitizeToolCallBlocks(blocks, 'Timed out');
+    assert.equal(result.length, 3);
+    assert.equal(result[2]?.type, 'tool_result');
+    assert.equal(result[2]?.tool_use_id, 'call_123');
+    assert.equal(result[2]?.is_error, true);
+    assert.match(result[2]?.content || '', /Timed out/);
+  });
+
+  it('hoists misplaced tool_result blocks before later assistant text for compat APIs', async () => {
+    const { sanitizeToolCallBlocks } = await import('@/lib/tool-call-recovery');
+    const blocks: MessageContentBlock[] = [
+      { type: 'text', text: 'Running command' },
+      { type: 'tool_use', id: 'call_123', name: 'Bash', input: { command: 'sleep 10' } },
+      { type: 'text', text: 'This text was persisted before the tool result.' },
+      { type: 'tool_result', tool_use_id: 'call_123', content: 'done', is_error: false },
+    ];
+
+    const result = sanitizeToolCallBlocks(blocks, 'Timed out');
+    assert.deepEqual(
+      result.map((block) => block.type),
+      ['text', 'tool_use', 'tool_result', 'text'],
+    );
+    assert.equal(result[2]?.type, 'tool_result');
+    assert.equal(result[2]?.tool_use_id, 'call_123');
+  });
+
+  it('inserts synthetic tool_result before later assistant text when none exists', async () => {
+    const { sanitizeToolCallBlocks } = await import('@/lib/tool-call-recovery');
+    const blocks: MessageContentBlock[] = [
+      { type: 'text', text: 'Running command' },
+      { type: 'tool_use', id: 'call_123', name: 'Bash', input: { command: 'sleep 10' } },
+      { type: 'text', text: 'Assistant resumed speaking without a real tool result.' },
+    ];
+
+    const result = sanitizeToolCallBlocks(blocks, 'Timed out');
+    assert.deepEqual(
+      result.map((block) => block.type),
+      ['text', 'tool_use', 'tool_result', 'text'],
+    );
+    assert.equal(result[2]?.type, 'tool_result');
+    assert.equal(result[2]?.tool_use_id, 'call_123');
+    assert.match(result[2]?.content || '', /Timed out/);
+  });
+
+  it('extracts missing tool ids from structured AI SDK errors', async () => {
+    const { extractMissingToolCallIds } = await import('@/lib/tool-call-recovery');
+    const ids = extractMissingToolCallIds(
+      '{"userMessage":"AI_MissingToolResultsError: Tool results are missing for tool calls call_function_x89yazecd8hu_1, call_function_revb5vk89w7j_1."}',
+    );
+
+    assert.deepEqual(ids, [
+      'call_function_x89yazecd8hu_1',
+      'call_function_revb5vk89w7j_1',
+    ]);
   });
 });

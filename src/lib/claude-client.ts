@@ -528,6 +528,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
     async start(controller) {
       // Flag to prevent infinite PTL retry loops (at most one retry per request)
       let ptlRetryAttempted = false;
+      let toolWatchdog: ReturnType<typeof setInterval> | null = null;
+      let forcedToolTimeout: { toolName: string; elapsedSeconds: number } | null = null;
 
       // Resolve provider via the unified resolver. The caller may pass an explicit
       // provider (from resolveProvider().provider), or undefined when 'env' mode is
@@ -1124,6 +1126,33 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         let tokenUsage: TokenUsage | null = null;
         // Track pending TodoWrite tool_use_ids so we can sync after successful execution
         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
+        const pendingToolExecutions = new Map<string, { toolName: string; startedAt: number; timeoutEmitted: boolean }>();
+        // 中文注释：功能名称「SDK 工具墙钟超时」，用法是独立于 tool_progress 事件监控工具总耗时，
+        // 避免工具静默卡死时永远等不到前端可见的超时反馈。
+        toolWatchdog = toolTimeoutSeconds > 0
+          ? setInterval(() => {
+              if (abortController?.signal.aborted || forcedToolTimeout) return;
+              const now = Date.now();
+              for (const pendingTool of pendingToolExecutions.values()) {
+                const elapsedSeconds = Math.round((now - pendingTool.startedAt) / 1000);
+                if (elapsedSeconds < toolTimeoutSeconds || pendingTool.timeoutEmitted) continue;
+                pendingTool.timeoutEmitted = true;
+                forcedToolTimeout = {
+                  toolName: pendingTool.toolName,
+                  elapsedSeconds,
+                };
+                controller.enqueue(formatSSE({
+                  type: 'tool_timeout',
+                  data: JSON.stringify({
+                    tool_name: pendingTool.toolName,
+                    elapsed_seconds: elapsedSeconds,
+                  }),
+                }));
+                abortController?.abort();
+                break;
+              }
+            }, 1000)
+          : null;
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
             break;
@@ -1145,6 +1174,11 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
               // Check for tool use blocks
               for (const block of assistantMsg.message.content) {
                 if (block.type === 'tool_use') {
+                  pendingToolExecutions.set(block.id, {
+                    toolName: block.name,
+                    startedAt: Date.now(),
+                    timeoutEmitted: false,
+                  });
                   controller.enqueue(formatSSE({
                     type: 'tool_use',
                     data: JSON.stringify({
@@ -1179,6 +1213,9 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
               if (Array.isArray(content)) {
                 for (const block of content) {
                   if (block.type === 'tool_result') {
+                    if (block.tool_use_id) {
+                      pendingToolExecutions.delete(block.tool_use_id);
+                    }
                     let resultContent = typeof block.content === 'string'
                       ? block.content
                       : Array.isArray(block.content)
@@ -1422,6 +1459,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         controller.enqueue(formatSSE({ type: 'done', data: '' }));
         controller.close();
       } catch (error) {
+        if (toolWatchdog) clearInterval(toolWatchdog);
         const rawMessage = error instanceof Error ? error.message : 'Unknown error';
         // Log full error details for debugging (visible in terminal / dev tools)
         const stderrContent = error instanceof Error ? (error as { stderr?: string }).stderr : undefined;
@@ -1432,6 +1470,23 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           stderr: stderrContent,
           code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         });
+
+        if (forcedToolTimeout) {
+          controller.enqueue(formatSSE({
+            type: 'error',
+            data: JSON.stringify({
+              category: 'TOOL_TIMEOUT',
+              userMessage: `工具 "${forcedToolTimeout.toolName}" 在 ${forcedToolTimeout.elapsedSeconds}s 内没有完成，系统已自动中止本轮，避免界面一直卡住。`,
+              actionHint: '请重试本轮，或改用不同方案，避免重复执行刚才卡住的工具操作。',
+              retryable: true,
+              details: `Wall-clock timeout hit for ${forcedToolTimeout.toolName}.`,
+              rawMessage,
+            }),
+          }));
+          controller.enqueue(formatSSE({ type: 'done', data: '' }));
+          controller.close();
+          return;
+        }
 
         // Look up preset meta for recovery action URLs
         const presetForMeta = resolved.provider?.base_url
@@ -1652,6 +1707,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
 
         controller.close();
       } finally {
+        if (toolWatchdog) clearInterval(toolWatchdog);
         unregisterConversation(sessionId);
       }
     },

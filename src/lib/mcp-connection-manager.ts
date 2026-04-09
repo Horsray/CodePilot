@@ -53,6 +53,7 @@ export interface McpSyncResult {
 
 const MCP_CONNECT_TIMEOUT_MS = 4_000;
 const MCP_LIST_TOOLS_TIMEOUT_MS = 2_000;
+const MCP_CALL_TOOL_TIMEOUT_MS = 30_000;
 const MCP_FAILED_RETRY_COOLDOWN_MS = 60_000;
 
 // ── Singleton pool ──────────────────────────────────────────────
@@ -234,10 +235,11 @@ export async function callMcpTool(
     throw new Error(`MCP server "${serverName}" is not connected`);
   }
 
-  const result = await conn.client.callTool({
-    name: toolName,
-    arguments: args,
-  });
+  const result = await withTimeout(
+    conn.client.callTool({ name: toolName, arguments: args }),
+    MCP_CALL_TOOL_TIMEOUT_MS,
+    `[MCP] ${serverName}/${toolName} callTool`,
+  );
 
   return result;
 }

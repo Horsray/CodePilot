@@ -32,7 +32,9 @@ interface ActiveStream {
   abortController: AbortController;
   snapshot: SessionStreamSnapshot;
   idleCheckTimer: ReturnType<typeof setInterval> | null;
-  lastEventTime: number;
+  lastTransportEventTime: number;
+  lastMeaningfulEventTime: number;
+  lastKeepAliveTime: number;
   gcTimer: ReturnType<typeof setTimeout> | null;
   /** Tracked ad-hoc timeouts — cleaned up when the stream ends. */
   pendingTimers: Set<ReturnType<typeof setTimeout>>;
@@ -47,7 +49,7 @@ interface ActiveStream {
   toolResultsArray: ToolResultInfo[];
   toolOutputAccumulated: string;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
-  isIdleTimeout: boolean;
+  abortReason: 'transport_idle' | 'no_meaningful_progress' | null;
   sendMessageFn: ((content: string, files?: FileAttachment[]) => void) | null;
   rewindPoints: Array<{ userMessageId: string }>;
 }
@@ -86,6 +88,7 @@ export interface StartStreamParams {
 const GLOBAL_KEY = '__streamSessionManager__' as const;
 const LISTENERS_KEY = '__streamSessionListeners__' as const;
 const STREAM_IDLE_TIMEOUT_MS = 330_000;
+const STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS = 90_000;
 const GC_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 function getStreamsMap(): Map<string, ActiveStream> {
@@ -212,7 +215,9 @@ export function startStream(params: StartStreamParams): void {
       finalMessageContent: null,
     },
     idleCheckTimer: null,
-    lastEventTime: Date.now(),
+    lastTransportEventTime: Date.now(),
+    lastMeaningfulEventTime: Date.now(),
+    lastKeepAliveTime: 0,
     gcTimer: null,
     pendingTimers: new Set(),
     accumulatedText: '',
@@ -223,7 +228,7 @@ export function startStream(params: StartStreamParams): void {
     toolResultsArray: [],
     toolOutputAccumulated: '',
     toolTimeoutInfo: null,
-    isIdleTimeout: false,
+    abortReason: null,
     sendMessageFn: params.sendMessageFn ?? null,
     rewindPoints: [],
   };
@@ -236,13 +241,29 @@ export function startStream(params: StartStreamParams): void {
 }
 
 async function runStream(stream: ActiveStream, params: StartStreamParams): Promise<void> {
-  const markActive = () => { stream.lastEventTime = Date.now(); };
+  // 中文注释：功能名称「传输活跃心跳」，用法是在收到任意 SSE 事件时刷新链路时间，
+  // 仅用于判断连接是否断开，不代表模型真的还在推进。
+  const markTransportActive = () => { stream.lastTransportEventTime = Date.now(); };
+  // 中文注释：功能名称「有效进展打点」，用法是在收到文本、思维、工具开始/结束、工具进度等真实推进事件时刷新，
+  // 避免 keep_alive 心跳把“假活跃”误判成正常推理。
+  const markMeaningfulProgress = () => {
+    const now = Date.now();
+    stream.lastTransportEventTime = now;
+    stream.lastMeaningfulEventTime = now;
+  };
 
-  // Idle timeout checker
+  // 中文注释：功能名称「双层 watchdog」，用法是区分“连接断开”和“有心跳但无有效进展”两类卡死。
   stream.idleCheckTimer = setInterval(() => {
-    if (Date.now() - stream.lastEventTime >= STREAM_IDLE_TIMEOUT_MS) {
+    const now = Date.now();
+    if (now - stream.lastMeaningfulEventTime >= STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS) {
       cleanupTimers(stream);
-      stream.isIdleTimeout = true;
+      stream.abortReason = 'no_meaningful_progress';
+      stream.abortController.abort();
+      return;
+    }
+    if (now - stream.lastTransportEventTime >= STREAM_IDLE_TIMEOUT_MS) {
+      cleanupTimers(stream);
+      stream.abortReason = 'transport_idle';
       stream.abortController.abort();
     }
   }, 10_000);
@@ -314,13 +335,13 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
 
     const result = await consumeSSEStream(reader, {
       onText: (acc) => {
-        markActive();
+        markMeaningfulProgress();
         stream.accumulatedText = acc;
         stream.thinkingPhaseEnded = true;
         throttledTextEmit();
       },
       onThinking: (delta) => {
-        markActive();
+        markMeaningfulProgress();
         // If non-thinking content has arrived since last thinking delta,
         // this is a new thinking phase (e.g. after a tool_use round-trip).
         // Reset the live accumulator so the UI shows only the current phase.
@@ -336,7 +357,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         emit(stream, 'snapshot-updated');
       },
       onToolUse: (tool) => {
-        markActive();
+        markMeaningfulProgress();
         flushTextThrottle(); // Ensure text is up-to-date before tool events
         stream.thinkingPhaseEnded = true;
         stream.toolOutputAccumulated = '';
@@ -346,7 +367,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         emit(stream, 'snapshot-updated');
       },
       onToolResult: (res) => {
-        markActive();
+        markMeaningfulProgress();
         stream.toolOutputAccumulated = '';
         const existingIdx = stream.toolResultsArray.findIndex(r => r.tool_use_id === res.tool_use_id);
         if (existingIdx >= 0) {
@@ -361,18 +382,18 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         window.dispatchEvent(new Event('refresh-file-tree'));
       },
       onToolOutput: (data) => {
-        markActive();
+        markMeaningfulProgress();
         const next = stream.toolOutputAccumulated + (stream.toolOutputAccumulated ? '\n' : '') + data;
         stream.toolOutputAccumulated = next.length > 2000 ? next.slice(-2000) : next;
         emit(stream, 'snapshot-updated');
       },
       onToolProgress: (toolName, elapsed) => {
-        markActive();
+        markMeaningfulProgress();
         stream.snapshot = { ...stream.snapshot, statusText: `Running ${toolName}... (${elapsed}s)` };
         emit(stream, 'snapshot-updated');
       },
       onStatus: (text) => {
-        markActive();
+        markMeaningfulProgress();
         // Detect compression notifications and broadcast window events
         if (text === 'context_compressed') {
           if (typeof window !== 'undefined') {
@@ -402,11 +423,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         }
       },
       onResult: (usage) => {
-        markActive();
+        markMeaningfulProgress();
         stream.snapshot = { ...stream.snapshot, tokenUsage: usage };
       },
       onPermissionRequest: (permData) => {
-        markActive();
+        markMeaningfulProgress();
         stream.snapshot = {
           ...stream.snapshot,
           pendingPermission: permData,
@@ -415,25 +436,25 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         emit(stream, 'permission-request');
       },
       onToolTimeout: (toolName, elapsedSeconds) => {
-        markActive();
+        markMeaningfulProgress();
         stream.toolTimeoutInfo = { toolName, elapsedSeconds };
       },
       onModeChanged: (sdkMode) => {
-        markActive();
+        markMeaningfulProgress();
         if (params.onModeChanged) {
           params.onModeChanged(sdkMode);
         }
       },
       onTaskUpdate: () => {
-        markActive();
+        markMeaningfulProgress();
         window.dispatchEvent(new CustomEvent('tasks-updated'));
       },
       onRewindPoint: (sdkUserMessageId) => {
-        markActive();
+        markMeaningfulProgress();
         stream.rewindPoints = [...stream.rewindPoints, { userMessageId: sdkUserMessageId }];
       },
       onUiAction: (action) => {
-        markActive();
+        markMeaningfulProgress();
         if (action.action === 'open_browser' && action.url) {
           window.dispatchEvent(new CustomEvent('browser-navigate', {
             detail: {
@@ -452,15 +473,16 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         }
       },
       onKeepAlive: () => {
-        markActive();
+        markTransportActive();
+        stream.lastKeepAliveTime = Date.now();
       },
       onError: (acc) => {
-        markActive();
+        markMeaningfulProgress();
         stream.accumulatedText = acc;
         emit(stream, 'snapshot-updated');
       },
       onInitMeta: (meta) => {
-        markActive();
+        markMeaningfulProgress();
         params.onInitMeta?.(meta);
       },
     });
@@ -549,7 +571,36 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     };
 
     if (error instanceof DOMException && error.name === 'AbortError') {
-      if (stream.isIdleTimeout) {
+      if (stream.abortReason === 'no_meaningful_progress') {
+        const stalledSecs = Math.round(STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS / 1000);
+        const heartbeatStillAlive = stream.lastKeepAliveTime > stream.lastMeaningfulEventTime;
+        const detail = heartbeatStillAlive
+          ? `推理在 ${stalledSecs}s 内没有新的有效进展，系统已自动中止。本次连接心跳仍在持续到达，所以更像是模型或工具内部卡住，而不是网络直接断开。`
+          : `推理在 ${stalledSecs}s 内没有新的有效进展，系统已自动中止。这段时间里没有新的文本、思维、工具更新或权限事件。`;
+        const textPart = stream.accumulatedText.trim()
+          ? stream.accumulatedText.trim() + `\n\n**错误:** ${detail}\n\n建议重试本轮；如果反复出现，请改用不同方案，或检查当前工具调用与 provider 稳定性。`
+          : `**错误:** ${detail}\n\n建议重试本轮；如果反复出现，请改用不同方案，或检查当前工具调用与 provider 稳定性。`;
+
+        stream.snapshot = {
+          ...buildSnapshot(stream),
+          phase: 'error',
+          completedAt: Date.now(),
+          error: `No meaningful progress timeout (${stalledSecs}s)`,
+          finalMessageContent: buildFinalContent(textPart),
+          statusText: undefined,
+          pendingPermission: null,
+          permissionResolved: null,
+        };
+        stream.accumulatedText = '';
+        stream.accumulatedThinking = '';
+        stream.fullThinking = '';
+        stream.toolUsesArray = [];
+        stream.toolResultsArray = [];
+        stream.toolOutputAccumulated = '';
+        stream.abortReason = null;
+        emit(stream, 'completed');
+        scheduleGC(stream);
+      } else if (stream.abortReason === 'transport_idle') {
         // Idle timeout
         const idleSecs = Math.round(STREAM_IDLE_TIMEOUT_MS / 1000);
         const textPart = stream.accumulatedText.trim()
@@ -572,6 +623,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolUsesArray = [];
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';
+        stream.abortReason = null;
         emit(stream, 'completed');
         // Clear stale SDK session so next message starts fresh
         fetch(`/api/chat/sessions/${encodeURIComponent(stream.sessionId)}`, {
@@ -603,6 +655,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';
         stream.toolTimeoutInfo = null;
+        stream.abortReason = null;
         emit(stream, 'completed');
         scheduleGC(stream);
 
@@ -636,6 +689,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolUsesArray = [];
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';
+        stream.abortReason = null;
         emit(stream, 'completed');
         scheduleGC(stream);
       }
@@ -658,6 +712,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       stream.toolUsesArray = [];
       stream.toolResultsArray = [];
       stream.toolOutputAccumulated = '';
+      stream.abortReason = null;
       emit(stream, 'completed');
       scheduleGC(stream);
     }

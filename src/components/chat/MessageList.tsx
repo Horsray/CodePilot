@@ -5,6 +5,8 @@ import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import { useStickToBottomContext } from 'use-stick-to-bottom';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { ArrowCounterClockwise, SpinnerGap } from '@phosphor-icons/react';
 import type { Message } from '@/types';
 import {
   Conversation,
@@ -47,7 +49,7 @@ function ScrollOnStream({ isStreaming, messageCount }: { isStreaming: boolean; m
 /**
  * Rewind button shown on user messages that have file checkpoints.
  */
-function RewindButton({ sessionId, userMessageId }: { sessionId: string; userMessageId: string }) {
+function RewindButton({ sessionId, rewindTargetId }: { sessionId: string; rewindTargetId: string }) {
   const { t } = useTranslation();
   const [state, setState] = useState<'idle' | 'preview' | 'loading' | 'done'>('idle');
   const [preview, setPreview] = useState<{ filesChanged?: string[]; insertions?: number; deletions?: number } | null>(null);
@@ -58,7 +60,7 @@ function RewindButton({ sessionId, userMessageId }: { sessionId: string; userMes
       const res = await fetch('/api/chat/rewind', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, userMessageId, dryRun: true }),
+        body: JSON.stringify({ sessionId, userMessageId: rewindTargetId, dryRun: true }),
       });
       const data = await res.json();
       if (data.canRewind) {
@@ -70,7 +72,7 @@ function RewindButton({ sessionId, userMessageId }: { sessionId: string; userMes
     } catch {
       setState('idle');
     }
-  }, [sessionId, userMessageId]);
+  }, [sessionId, rewindTargetId]);
 
   const handleRewind = useCallback(async () => {
     setState('loading');
@@ -78,7 +80,7 @@ function RewindButton({ sessionId, userMessageId }: { sessionId: string; userMes
       const res = await fetch('/api/chat/rewind', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, userMessageId }),
+        body: JSON.stringify({ sessionId, userMessageId: rewindTargetId }),
       });
       const data = await res.json();
       if (data.canRewind !== false) {
@@ -90,7 +92,7 @@ function RewindButton({ sessionId, userMessageId }: { sessionId: string; userMes
     } catch {
       setState('idle');
     }
-  }, [sessionId, userMessageId]);
+  }, [sessionId, rewindTargetId]);
 
   if (state === 'done') {
     return (
@@ -127,15 +129,25 @@ function RewindButton({ sessionId, userMessageId }: { sessionId: string; userMes
   }
 
   return (
-    <Button
-      variant="ghost"
-      size="xs"
-      onClick={handleDryRun}
-      disabled={state === 'loading'}
-      className="text-[10px] text-muted-foreground hover:text-foreground ml-2 opacity-0 group-hover:opacity-100 h-auto p-0"
-    >
-      {state === 'loading' ? '...' : t('messageList.rewindToHere' as TranslationKey)}
-    </Button>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={handleDryRun}
+            disabled={state === 'loading'}
+            className="ml-2 text-muted-foreground/70 hover:text-foreground"
+            aria-label={t('messageList.rewindToHere' as TranslationKey)}
+          >
+            {state === 'loading' ? <SpinnerGap size={12} className="animate-spin" /> : <ArrowCounterClockwise size={12} />}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {t('messageList.rewindToHere' as TranslationKey)}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -176,6 +188,29 @@ interface MessageListProps {
   isAssistantProject?: boolean;
   /** Assistant name for avatar display */
   assistantName?: string;
+}
+
+function getRewindTargetForMessage(messages: Message[], rewindPoints: RewindPoint[], message: Message): string | undefined {
+  if (message.role === 'user') {
+    const userMessages = messages.filter((m) => m.role === 'user');
+    const userIndex = userMessages.indexOf(message);
+    if (userIndex >= 0 && userIndex < rewindPoints.length) {
+      return rewindPoints[userIndex].userMessageId;
+    }
+    return message.id;
+  }
+
+  const assistantIndex = messages.indexOf(message);
+  if (assistantIndex < 0) return undefined;
+
+  for (let i = assistantIndex - 1; i >= 0; i -= 1) {
+    const previous = messages[i];
+    if (previous.role === 'user') {
+      return getRewindTargetForMessage(messages, rewindPoints, previous);
+    }
+  }
+
+  return undefined;
 }
 
 export function MessageList({
@@ -288,23 +323,19 @@ export function MessageList({
           </div>
         )}
         {messages.map((message) => {
-          // Map rewind points to visible user messages by position:
-          // Backend only emits rewind_point for prompt-level user messages
-          // (not tool results, not auto-trigger), so they're 1:1 with visible user messages.
-          let rewindSdkUuid: string | undefined;
-          if (message.role === 'user' && sessionId && rewindPoints.length > 0) {
-            const userMsgsBefore = messages.filter(m => m.role === 'user');
-            const userIndex = userMsgsBefore.indexOf(message);
-            if (userIndex >= 0 && userIndex < rewindPoints.length) {
-              rewindSdkUuid = rewindPoints[userIndex].userMessageId;
-            }
-          }
+          const rewindTargetId = sessionId ? getRewindTargetForMessage(messages, rewindPoints, message) : undefined;
 
           return (
             <div key={message.id} id={`msg-${message.id}`} className="group">
-              <MessageItem message={message} sessionId={sessionId} isAssistantProject={isAssistantProject} assistantName={assistantName} />
-              {rewindSdkUuid && sessionId && !isStreaming && (
-                <RewindButton sessionId={sessionId} userMessageId={rewindSdkUuid} />
+              <MessageItem
+                message={message}
+                sessionId={sessionId}
+                rewindUserMessageId={message.role === 'assistant' ? rewindTargetId : undefined}
+                isAssistantProject={isAssistantProject}
+                assistantName={assistantName}
+              />
+              {message.role === 'user' && rewindTargetId && sessionId && !isStreaming && (
+                <RewindButton sessionId={sessionId} rewindTargetId={rewindTargetId} />
               )}
             </div>
           );
@@ -315,6 +346,7 @@ export function MessageList({
             content={streamingContent}
             isStreaming={isStreaming}
             sessionId={sessionId}
+            rewindUserMessageId={messages.length > 0 ? getRewindTargetForMessage(messages, rewindPoints, messages[messages.length - 1]) : undefined}
             toolUses={toolUses}
             toolResults={toolResults}
             streamingToolOutput={streamingToolOutput}

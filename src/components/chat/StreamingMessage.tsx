@@ -108,6 +108,7 @@ interface StreamingMessageProps {
   content: string;
   isStreaming: boolean;
   sessionId?: string;
+  rewindUserMessageId?: string;
   toolUses?: ToolUseInfo[];
   toolResults?: ToolResultInfo[];
   streamingToolOutput?: string;
@@ -262,6 +263,7 @@ export function StreamingMessage({
   content,
   isStreaming,
   sessionId,
+  rewindUserMessageId,
   toolUses = [],
   toolResults = [],
   streamingToolOutput,
@@ -298,17 +300,35 @@ export function StreamingMessage({
     return `Running ${tool.name}...`;
   };
 
-  const renderedContent = useMemo(() => {
-    if (!content) return null;
+  // Filter out leaked SSE raw data that wasn't properly parsed
+  const cleanContent = useMemo(() => {
+    if (!content) return '';
+    // Line-by-line filter: remove any line that looks like raw JSON event data
+    const lines = content.split('\n');
+    const cleaned = lines.filter(line => {
+      const trimmed = line.trim();
+      // Remove lines starting with $data or data: followed by JSON
+      if (/^\$?data\s*:?\s*\{/.test(trimmed)) return false;
+      // Remove lines that are standalone JSON objects (SSE event leak)
+      if (/^\{.*"type"\s*:/.test(trimmed)) return false;
+      // Remove lines that are just a JSON object
+      if (/^\{.*\}$/.test(trimmed) && trimmed.length > 20) return false;
+      return true;
+    }).join('\n').trim();
+    return cleaned;
+  }, [content]);
 
-    const hasWidgetFence = /`{1,3}show-widget/.test(content);
+  const renderedContent = useMemo(() => {
+    if (!cleanContent) return null;
+
+    const hasWidgetFence = /`{1,3}show-widget/.test(cleanContent);
 
     if (hasWidgetFence && isStreaming) {
-      const lastMarkerMatch = [...content.matchAll(/`{1,3}show-widget/g)].pop();
-      if (!lastMarkerMatch) return <MessageResponse>{content}</MessageResponse>;
+      const lastMarkerMatch = [...cleanContent.matchAll(/`{1,3}show-widget/g)].pop();
+      if (!lastMarkerMatch) return <MessageResponse>{cleanContent}</MessageResponse>;
 
       const lastFenceStart = lastMarkerMatch.index!;
-      const afterLastFence = content.slice(lastFenceStart);
+      const afterLastFence = cleanContent.slice(lastFenceStart);
       const jsonStart = afterLastFence.indexOf('{');
       let lastFenceClosed = false;
       if (jsonStart !== -1) {
@@ -327,7 +347,7 @@ export function StreamingMessage({
       }
 
       if (lastFenceClosed) {
-        const allSegments = parseAllShowWidgets(content);
+        const allSegments = parseAllShowWidgets(cleanContent);
         return (
           <>
             {allSegments.map((seg, i) =>
@@ -339,7 +359,7 @@ export function StreamingMessage({
         );
       }
 
-      const beforePart = content.slice(0, lastFenceStart).trim();
+      const beforePart = cleanContent.slice(0, lastFenceStart).trim();
       const hasCompletedFences = !!beforePart && /`{1,3}show-widget/.test(beforePart);
       const completedSegments = hasCompletedFences ? parseAllShowWidgets(beforePart) : [];
       const markerEnd = afterLastFence.match(/^`{1,3}show-widget`{0,3}\s*(?:\n\s*`{3}(?:json)?\s*)?\n?/);
@@ -384,7 +404,7 @@ export function StreamingMessage({
 
       const titleMatch = fenceBody.match(/"title"\s*:\s*"([^"]*?)"/);
       const partialTitle = titleMatch ? titleMatch[1] : undefined;
-      const partialWidgetKey = computePartialWidgetKey(content);
+      const partialWidgetKey = computePartialWidgetKey(cleanContent);
 
       return (
         <>
@@ -404,7 +424,7 @@ export function StreamingMessage({
     }
 
     if (hasWidgetFence && !isStreaming) {
-      const widgetSegments = parseAllShowWidgets(content);
+      const widgetSegments = parseAllShowWidgets(cleanContent);
       if (widgetSegments.length > 0) {
         return (
           <>
@@ -418,7 +438,7 @@ export function StreamingMessage({
       }
     }
 
-    const batchPlanResult = parseBatchPlan(content);
+    const batchPlanResult = parseBatchPlan(cleanContent);
     if (batchPlanResult) {
       return (
         <>
@@ -429,7 +449,7 @@ export function StreamingMessage({
       );
     }
 
-    const parsed = parseImageGenRequest(content);
+    const parsed = parseImageGenRequest(cleanContent);
     if (parsed) {
       const refs = buildReferenceImages(
         PENDING_KEY,
@@ -456,8 +476,8 @@ export function StreamingMessage({
     }
 
     if (isStreaming) {
-      const hasImageGenBlock = /```image-gen-request/.test(content);
-      const hasBatchPlanBlock = /```batch-plan/.test(content);
+      const hasImageGenBlock = /```image-gen-request/.test(cleanContent);
+      const hasBatchPlanBlock = /```batch-plan/.test(cleanContent);
       const textToRender = bufferedContent || '';
       const stripped = textToRender
         .replace(/```image-gen-request[\s\S]*$/, '')
@@ -469,13 +489,13 @@ export function StreamingMessage({
       return null;
     }
 
-    const stripped = content
+    const stripped = cleanContent
       .replace(/```image-gen-request[\s\S]*?```/g, '')
       .replace(/```batch-plan[\s\S]*?```/g, '')
       .replace(/```show-widget[\s\S]*?(```|$)/g, '')
       .trim();
     return stripped ? <MessageResponse>{stripped}</MessageResponse> : null;
-  }, [bufferedContent, content, isStreaming, sessionId, t]);
+  }, [bufferedContent, cleanContent, isStreaming, sessionId, t]);
 
   return (
     <AIMessage from="assistant">
@@ -497,6 +517,9 @@ export function StreamingMessage({
             isStreaming={isStreaming}
             streamingToolOutput={streamingToolOutput}
             thinkingContent={thinkingContent}
+            statusText={statusText}
+            sessionId={sessionId}
+            rewindUserMessageId={rewindUserMessageId}
           />
         )}
 

@@ -22,6 +22,12 @@ import type { PermissionMode } from './permission-checker';
 import { buildCoreMessages } from './message-builder';
 import { getMessages } from './db';
 import { createPerfTrace } from './perf-trace';
+import {
+  buildRecoveredToolResultText,
+  buildSyntheticToolRecoveryMessages,
+  extractMissingToolCallIds,
+  type ToolCallSnapshot,
+} from './tool-call-recovery';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -75,6 +81,14 @@ export interface AgentLoopOptions {
 const DEFAULT_MAX_STEPS = 50;
 const DOOM_LOOP_THRESHOLD = 3; // same tool called 3 times in a row
 const KEEPALIVE_INTERVAL_MS = 15_000;
+
+interface ToolErrorPayload {
+  __codepilot_tool_error?: boolean;
+  toolName?: string;
+  reason?: 'timeout' | 'error';
+  message?: string;
+  attempts?: number;
+}
 
 // ── Main ────────────────────────────────────────────────────────
 
@@ -182,13 +196,13 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             sessionProviderId,
             model: modelOverride || sessionModel,
             permissionContext: bypassPermissions ? undefined : {
-              sessionId,
               permissionMode: (permissionMode || 'normal') as PermissionMode,
               emitSSE: (event) => {
                 try { controller.enqueue(formatSSE(event as SSEEvent)); } catch { /* stream closed */ }
               },
               abortSignal: abortController.signal,
             },
+            sessionId,
           });
         });
         const tools = assembledTools.tools;
@@ -397,6 +411,9 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           // Consume the fullStream
           let hasToolCalls = false;
           const stepToolNames: string[] = [];
+          const stepToolCalls: ToolCallSnapshot[] = [];
+          const resolvedToolCallIds = new Set<string>();
+          let stepTextBuffer = '';
           let eventCount = 0;
           let firstModelEventSeen = false;
           const firstEventStart = Date.now();
@@ -414,6 +431,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             }
             switch (event.type) {
               case 'text-delta':
+                stepTextBuffer += event.text;
                 controller.enqueue(formatSSE({ type: 'text', data: event.text }));
                 break;
 
@@ -424,6 +442,11 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
               case 'tool-call':
                 hasToolCalls = true;
                 stepToolNames.push(event.toolName);
+                stepToolCalls.push({
+                  id: event.toolCallId,
+                  name: event.toolName,
+                  input: event.input,
+                });
                 controller.enqueue(formatSSE({
                   type: 'tool_use',
                   data: JSON.stringify({
@@ -435,14 +458,18 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
                 break;
 
               case 'tool-result':
+                resolvedToolCallIds.add(event.toolCallId);
+                {
+                  const normalizedOutput = normalizeToolResultOutput(event.output, event.toolName);
                 controller.enqueue(formatSSE({
                   type: 'tool_result',
                   data: JSON.stringify({
                     tool_use_id: event.toolCallId,
-                    content: typeof event.output === 'string' ? event.output : JSON.stringify(event.output),
-                    is_error: false,
+                    content: normalizedOutput.content,
+                    is_error: normalizedOutput.isError,
                   }),
                 }));
+                }
                 break;
 
               case 'error':
@@ -491,8 +518,44 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           // Update messages for next iteration.
           // streamText returns the full message list including our input + model response.
           // Use response.messages which contains properly typed ModelMessage[].
-          const responseData = await result.response;
-          messages = [...messages, ...responseData.messages] as ModelMessage[];
+          try {
+            const responseData = await result.response;
+            messages = [...messages, ...responseData.messages] as ModelMessage[];
+          } catch (error) {
+            const missingIds = extractMissingToolCallIds(error);
+            const unresolvedToolCalls = stepToolCalls.filter((toolCall) => {
+              if (resolvedToolCallIds.has(toolCall.id)) return false;
+              return missingIds.length === 0 || missingIds.includes(toolCall.id);
+            });
+
+            if (unresolvedToolCalls.length === 0) {
+              throw error;
+            }
+
+            const recoveryReason = error instanceof Error
+              ? error.message
+              : 'Tool execution did not produce a final result.';
+
+            for (const toolCall of unresolvedToolCalls) {
+              controller.enqueue(formatSSE({
+                type: 'tool_result',
+                data: JSON.stringify({
+                  tool_use_id: toolCall.id,
+                  content: buildRecoveredToolResultText(toolCall.name, recoveryReason),
+                  is_error: true,
+                }),
+              }));
+            }
+
+            messages = [
+              ...messages,
+              ...buildSyntheticToolRecoveryMessages({
+                toolCalls: unresolvedToolCalls,
+                text: stepTextBuffer,
+                reason: recoveryReason,
+              }),
+            ] as ModelMessage[];
+          }
         }
 
         // 6. Emit result event
@@ -539,4 +602,38 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
 
 function formatSSE(event: SSEEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
+}
+
+/**
+ * 中文注释：把工具输出统一规范成前端可展示的字符串，并标记是否为错误结果。
+ * 用法：消费 AI SDK 的 tool-result 事件时调用，避免对象型错误结果被当成正常输出。
+ */
+function normalizeToolResultOutput(output: unknown, toolName: string): { content: string; isError: boolean } {
+  if (typeof output === 'string') {
+    return { content: output, isError: false };
+  }
+
+  if (isGuardedToolError(output)) {
+    const detail = output.attempts && output.attempts > 1
+      ? `${output.message} Attempts: ${output.attempts}.`
+      : output.message;
+    return {
+      content: buildRecoveredToolResultText(output.toolName || toolName, detail),
+      isError: true,
+    };
+  }
+
+  return {
+    content: JSON.stringify(output),
+    isError: false,
+  };
+}
+
+function isGuardedToolError(value: unknown): value is ToolErrorPayload {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    '__codepilot_tool_error' in value &&
+    (value as ToolErrorPayload).__codepilot_tool_error,
+  );
 }

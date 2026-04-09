@@ -10,6 +10,7 @@ import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, Fil
 import { saveMediaToLibrary } from '@/lib/media-saver';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
 import { createPerfTrace, createPerfTraceId } from '@/lib/perf-trace';
+import { sanitizeToolCallBlocks } from '@/lib/tool-call-recovery';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
@@ -688,15 +689,21 @@ async function collectStreamResponse(
       const cleanedBlocks = contentBlocks.map(b =>
         b.type === 'text' && 'text' in b ? { ...b, text: (b.text as string).replace(heartbeatMarkerRe, '') } : b
       );
+      const repairedBlocks = sanitizeToolCallBlocks(
+        cleanedBlocks,
+        hasError
+          ? errorMessage || 'The tool call failed before returning a final result.'
+          : 'The tool call ended without a final result. A synthetic error result was inserted automatically.',
+      );
 
       // If it contains tool calls or thinking blocks, store as structured JSON.
-      const hasStructuredBlocks = cleanedBlocks.some(
+      const hasStructuredBlocks = repairedBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
       );
 
       const content = hasStructuredBlocks
-        ? JSON.stringify(cleanedBlocks)
-        : cleanedBlocks
+        ? JSON.stringify(repairedBlocks)
+        : repairedBlocks
             .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
             .map((b) => b.text)
             .join('')
@@ -727,12 +734,16 @@ async function collectStreamResponse(
       const errCleanedBlocks = contentBlocks.map(b =>
         b.type === 'text' && 'text' in b ? { ...b, text: (b.text as string).replace(hbRe, '') } : b
       );
-      const hasStructuredBlocks = errCleanedBlocks.some(
+      const repairedBlocks = sanitizeToolCallBlocks(
+        errCleanedBlocks,
+        errorMessage || 'The stream stopped before the tool returned a final result.',
+      );
+      const hasStructuredBlocks = repairedBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
       );
       const content = hasStructuredBlocks
-        ? JSON.stringify(errCleanedBlocks)
-        : errCleanedBlocks
+        ? JSON.stringify(repairedBlocks)
+        : repairedBlocks
             .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
             .map((b) => b.text)
             .join('')

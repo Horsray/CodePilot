@@ -32,7 +32,19 @@ function extractPackageSpec(command: string): string | null {
   if (installIdx < 0) return null;
   for (let i = installIdx + 1; i < parts.length; i++) {
     if (!parts[i].startsWith('-')) {
-      return parts[i].replace(/@\d+.*$/, '');
+      // strip version pinning like @latest or @5.0.0, but preserve scoped packages like @elevenlabs/cli
+      const pkg = parts[i];
+      if (pkg.startsWith('@') && pkg.includes('/')) {
+        // scoped package: preserve the scope, strip version from the end if exists
+        const parts = pkg.split('@');
+        if (parts.length > 2) {
+          // has version: @scope/package@version
+          return `@${parts[1]}`;
+        }
+        return pkg;
+      }
+      // regular package: strip any @suffix
+      return pkg.replace(/@.*$/, '');
     }
   }
   return null;
@@ -132,10 +144,14 @@ describe('extractPackageSpec', () => {
     assert.equal(extractPackageSpec('npm install -g @elevenlabs/cli'), '@elevenlabs/cli');
     assert.equal(extractPackageSpec('npm install -g @music163/ncm-cli'), '@music163/ncm-cli');
     assert.equal(extractPackageSpec('npm install -g @googleworkspace/cli'), '@googleworkspace/cli');
+    assert.equal(extractPackageSpec('npm install -g @elevenlabs/cli@latest'), '@elevenlabs/cli');
+    assert.equal(extractPackageSpec('npm install -g @elevenlabs/cli@1.0.0'), '@elevenlabs/cli');
   });
 
   it('strips version pinning', () => {
     assert.equal(extractPackageSpec('npm install -g typescript@5.0.0'), 'typescript');
+    assert.equal(extractPackageSpec('npm install -g typescript@latest'), 'typescript');
+    assert.equal(extractPackageSpec('npm install -g typescript@beta'), 'typescript');
   });
 
   it('skips flags correctly', () => {

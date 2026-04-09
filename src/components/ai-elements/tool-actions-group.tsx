@@ -1,35 +1,17 @@
 'use client';
 
-import React, { useState, createElement } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import type { Icon } from "@phosphor-icons/react";
 import {
-  File,
-  NotePencil,
-  Terminal,
-  MagnifyingGlass,
-  Wrench,
-  SpinnerGap,
-  CheckCircle,
-  XCircle,
-  CaretRight,
-  Brain,
-  Image as ImageIcon,
-} from "@phosphor-icons/react";
+  File, FilePlus, NotePencil, Terminal, MagnifyingGlass,
+  Wrench, SpinnerGap, CheckCircle, XCircle, CaretDown,
+  Brain, Eye, GitDiff, Check, X, ArrowSquareOut,
+} from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { Shimmer } from '@/components/ai-elements/shimmer';
 import { useStickToBottomContext } from 'use-stick-to-bottom';
-import { Streamdown } from 'streamdown';
-import { cjk } from '@streamdown/cjk';
-import { math } from '@streamdown/math';
-import { mermaid } from '@streamdown/mermaid';
-
-const thinkingPlugins = { cjk, math, mermaid };
 import type { MediaBlock } from '@/types';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ToolAction {
   id?: string;
@@ -44,342 +26,495 @@ interface ToolActionsGroupProps {
   tools: ToolAction[];
   isStreaming?: boolean;
   streamingToolOutput?: string;
-  /** When true, skip the collapsible header and render the tool list directly */
   flat?: boolean;
-  /** Thinking/reasoning content — rendered as the first expandable item inside the group */
   thinkingContent?: string;
+  statusText?: string;
+  sessionId?: string;
+  rewindUserMessageId?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Tool Registry — extensible per-type rendering
-// ---------------------------------------------------------------------------
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-interface ToolRendererDef {
-  match: (name: string) => boolean;
-  icon: Icon;
-  label: string;
-  getSummary: (input: unknown, name?: string) => string;
-  /** Render inline detail when tool row is hovered/expanded (optional) */
-  renderDetail?: (tool: ToolAction, streamingOutput?: string) => React.ReactNode;
+function rec(input: unknown): Record<string, unknown> {
+  return (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+}
+function fp(input: unknown): string {
+  const o = rec(input); return String(o.file_path ?? o.path ?? o.filePath ?? '');
+}
+function fname(p: string) { return p.split('/').pop() || p; }
+function shortP(p: string, max = 48) {
+  return p.length <= max ? p : '…' + p.slice(p.length - max + 1);
+}
+function sv(input: unknown, keys: string[]): string {
+  const o = rec(input);
+  for (const k of keys) if (typeof o[k] === 'string' && o[k]) return o[k] as string;
+  return '';
+}
+function countLines(text: string): number { return text ? text.split('\n').length : 0; }
+function previewLines(text: string, max = 10): { lines: string[]; more: number } {
+  const all = text.replace(/\r\n/g, '\n').split('\n');
+  if (all.length <= max) return { lines: all, more: 0 };
+  return { lines: all.slice(0, max), more: all.length - max };
 }
 
-function extractFilename(path: string): string {
-  const parts = path.split('/');
-  return parts[parts.length - 1] || path;
+type ToolKind = 'read' | 'write' | 'create' | 'search' | 'bash' | 'other';
+function toolKind(name: string): ToolKind {
+  const n = name.toLowerCase();
+  if (['read', 'readfile', 'read_file', 'read_text_file', 'read_multiple_files'].includes(n)) return 'read';
+  if (['edit', 'notebookedit', 'notebook_edit'].includes(n)) return 'write';
+  if (['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(n)) return 'create';
+  if (['glob', 'grep', 'search', 'find_files', 'search_files', 'websearch', 'web_search'].some(x => n.includes(x))) return 'search';
+  if (['bash', 'execute', 'run', 'shell', 'execute_command', 'computer'].includes(n)) return 'bash';
+  return 'other';
 }
 
-function getFilePath(input: unknown): string {
-  const inp = input as Record<string, unknown> | undefined;
-  if (!inp) return '';
-  return (inp.file_path || inp.path || inp.filePath || '') as string;
+function stepLabel(t: ToolAction): string {
+  const k = toolKind(t.name);
+  const p = fp(t.input);
+  const fn = p ? fname(p) : '';
+
+  // Handle abort/error results — show friendly message
+  if (t.isError && t.result) {
+    if (t.result.includes('aborted') || t.result.includes('abort')) {
+      return fn ? `${fn} — 已中断` : `${t.name} — 已中断`;
+    }
+  }
+
+  switch (k) {
+    case 'read':   return fn ? `读取 ${fn}` : '读取文件';
+    case 'write':  return fn ? `编辑 ${fn}` : '编辑文件';
+    case 'create': return fn ? `创建 ${fn}` : '创建文件';
+    case 'search': {
+      const q = sv(t.input, ['pattern', 'query', 'glob', 'q']);
+      return q ? `搜索 "${q.length > 30 ? q.slice(0, 27) + '…' : q}"` : '搜索';
+    }
+    case 'bash': {
+      const cmd = sv(t.input, ['command', 'cmd', 'input']);
+      return cmd ? `$ ${cmd.length > 42 ? cmd.slice(0, 39) + '…' : cmd}` : '执行命令';
+    }
+    default: return t.name;
+  }
 }
 
-function truncatePath(path: string, maxLen = 50): string {
-  if (path.length <= maxLen) return path;
-  return '...' + path.slice(path.length - maxLen + 3);
+function stepIcon(k: ToolKind) {
+  const map = { read: File, write: NotePencil, create: FilePlus, search: MagnifyingGlass, bash: Terminal, other: Wrench };
+  return map[k];
 }
 
-const TOOL_REGISTRY: ToolRendererDef[] = [
-  {
-    match: (n) => ['bash', 'execute', 'run', 'shell', 'execute_command'].includes(n.toLowerCase()),
-    icon: Terminal,
-    label: '',
-    getSummary: (input) => {
-      const cmd = ((input as Record<string, unknown>)?.command || (input as Record<string, unknown>)?.cmd || '') as string;
-      return cmd ? (cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd) : 'bash';
-    },
-    renderDetail: (tool, streamingOutput) => {
-      const cmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
-      const isRunning = tool.result === undefined;
-      // While running: show command + last 5 lines of output (rolling window)
-      // When done: show command + full result (collapsible)
-      const outputText = isRunning ? streamingOutput : tool.result;
-      const displayLines = (() => {
-        if (!outputText) return null;
-        if (isRunning) {
-          // Rolling window: only last 5 lines while streaming
-          const lines = outputText.split('\n');
-          return lines.slice(-5).join('\n');
-        }
-        // Completed: show full output, truncated to 20 lines with indicator
-        const lines = outputText.split('\n');
-        if (lines.length > 20) {
-          return lines.slice(0, 20).join('\n') + `\n… +${lines.length - 20} lines`;
-        }
-        return outputText;
-      })();
+type StepStatus = 'running' | 'ok' | 'err';
+function stepStatus(t: ToolAction): StepStatus {
+  if (t.result === undefined) return 'running';
+  return t.isError ? 'err' : 'ok';
+}
 
-      return (
-        <div className="mt-1 rounded bg-muted/40 px-2 py-1.5 font-mono text-[11px] text-muted-foreground/80 max-h-[140px] overflow-auto whitespace-pre-wrap break-all">
-          {cmd && <div className="text-foreground/70">$ {cmd}</div>}
-          {displayLines && (
-            <div className={cn("mt-1", isRunning ? "text-muted-foreground/50" : "text-muted-foreground/60")}>
-              {displayLines}
+interface DiffInfo {
+  filename: string; fullPath: string; mode: 'edit' | 'create';
+  added: number; removed: number;
+  beforeLines: string[]; afterLines: string[];
+  moreB: number; moreA: number;
+}
+
+function extractDiff(t: ToolAction): DiffInfo | null {
+  const k = toolKind(t.name);
+  if (k !== 'write' && k !== 'create') return null;
+  const p = fp(t.input);
+  const old = sv(t.input, ['old_string', 'oldText', 'previous']);
+  const nw = sv(t.input, ['new_string', 'newText']);
+  const content = sv(t.input, ['content']);
+  if (k === 'write' && !old && !nw) return null;
+  if (k === 'create' && !content) return null;
+  const added = k === 'create' ? countLines(content) : countLines(nw);
+  const removed = k === 'create' ? 0 : countLines(old);
+  const { lines: bl, more: mb } = previewLines(old || '', 10);
+  const { lines: al, more: ma } = previewLines(k === 'create' ? content : nw, 10);
+  return {
+    filename: p ? fname(p) : 'file', fullPath: p,
+    mode: k === 'create' ? 'create' : 'edit',
+    added, removed, beforeLines: bl, afterLines: al, moreB: mb, moreA: ma,
+  };
+}
+
+// ─── Timeline segments ────────────────────────────────────────────────────────
+// Simple approach: thinking always appears at the BOTTOM of the timeline,
+// after all current tools. This way it naturally scrolls down with the flow
+// and shows "what the agent is thinking right now" — not a historical dump.
+
+type Segment =
+  | { type: 'thinking'; content: string; streaming: boolean }
+  | { type: 'tool'; tool: ToolAction; streamingOutput?: string };
+
+function buildSegments(
+  tools: ToolAction[],
+  thinkingContent: string | undefined,
+  isStreaming: boolean,
+  streamingToolOutput: string | undefined,
+): Segment[] {
+  const segs: Segment[] = [];
+  const lastRunningId = [...tools].reverse().find(t => t.result === undefined)?.id;
+
+  for (const t of tools) {
+    segs.push({
+      type: 'tool', tool: t,
+      streamingOutput: t.id === lastRunningId ? streamingToolOutput : undefined,
+    });
+  }
+
+  // Thinking goes AFTER all tools — it represents "what the agent is thinking NOW"
+  const tc = (thinkingContent || '').trim();
+  if (tc) {
+    segs.push({ type: 'thinking', content: tc, streaming: isStreaming });
+  }
+
+  return segs;
+}
+// ─── UI Components ────────────────────────────────────────────────────────────
+
+/** Inline thinking row — always expanded, real-time, never truncated */
+function ThinkingRow({ content, streaming }: { content: string; streaming: boolean }) {
+  return (
+    <div className="flex items-start gap-2.5 py-1">
+      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-violet-500/10">
+        {streaming
+          ? <SpinnerGap size={11} className="animate-spin text-violet-400/60" />
+          : <Brain size={11} className="text-violet-400/70" />}
+      </div>
+      <div className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted-foreground/60 whitespace-pre-wrap break-words">
+        {!content && streaming && (
+          <span className="text-violet-400/50">思考中…</span>
+        )}
+        {content}
+        {streaming && content && (
+          <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse rounded-sm bg-violet-400/40 align-middle" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Tool step row — one line per tool call */
+function ToolRow({ tool, streamingOutput }: { tool: ToolAction; streamingOutput?: string }) {
+  const k = toolKind(tool.name);
+  const s = stepStatus(tool);
+  const Icon = stepIcon(k);
+  const label = stepLabel(tool);
+  const diff = useMemo(() => extractDiff(tool), [tool]);
+  const isBash = k === 'bash';
+  const bashOutput = isBash ? (streamingOutput ?? (s !== 'running' ? tool.result : undefined)) : undefined;
+  const hasBashOutput = isBash && bashOutput;
+  // Show diff card for completed write/create, or while running if input already has content
+  const showDiff = diff !== null;
+
+  return (
+    <div className="py-0.5">
+      {/* main row */}
+      <div className="flex items-center gap-2.5 py-1">
+        <div className={cn(
+          'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+          s === 'running' && 'bg-blue-500/10',
+          s === 'ok'      && 'bg-emerald-500/8',
+          s === 'err'     && 'bg-red-500/8',
+        )}>
+          {s === 'running'
+            ? <SpinnerGap size={11} className="animate-spin text-blue-400/70" />
+            : <Icon size={11} className={cn(
+                s === 'ok'  && 'text-emerald-500/60',
+                s === 'err' && 'text-red-500/60',
+              )} />
+          }
+        </div>
+        <span className={cn(
+          'flex-1 truncate text-[12px]',
+          s === 'running' && 'text-foreground/70',
+          s === 'ok'      && 'text-foreground/75',
+          s === 'err'     && 'text-red-500/70',
+        )}>
+          {label}
+        </span>
+        {s === 'ok'  && <CheckCircle size={12} weight="fill" className="shrink-0 text-emerald-500/60" />}
+        {s === 'err' && <XCircle     size={12} weight="fill" className="shrink-0 text-red-500/60" />}
+        {s === 'running' && !isBash && (
+          <span className="shrink-0 text-[11px] text-blue-400/50">进行中</span>
+        )}
+      </div>
+
+      {/* bash output — compact, right below the step */}
+      {hasBashOutput && <BashBlock output={bashOutput} live={!!streamingOutput} />}
+
+      {/* diff card — right below the edit/create step, even while running */}
+      {showDiff && <DiffCard diff={diff} />}
+    </div>
+  );
+}
+
+/** Compact bash output */
+function BashBlock({ output, live }: { output: string; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const { lines: ls, more } = previewLines(output, live ? 4 : 8);
+  const preview = ls[0]?.slice(0, 60) || '';
+
+  return (
+    <div className="ml-[30px] mt-1 mb-1">
+      <button type="button" onClick={() => setOpen(v => !v)}
+        className="flex w-full items-center gap-1.5 rounded-md border border-border/25 bg-zinc-950/50 px-2.5 py-1.5 text-left font-mono text-[11px] text-zinc-400/70 hover:bg-zinc-950/70 transition-colors">
+        <Terminal size={10} className="shrink-0 text-zinc-500/50" />
+        <span className="flex-1 truncate">{preview}{output.length > 60 ? '…' : ''}</span>
+        {live && <span className="inline-block h-2.5 w-1 animate-pulse rounded-sm bg-zinc-400/40" />}
+        <CaretDown size={9} className={cn('shrink-0 text-zinc-500/40 transition-transform', open && 'rotate-180')} />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }}
+            transition={{ duration: 0.12 }} style={{ overflow: 'hidden' }}>
+            <div className="max-h-[120px] overflow-auto rounded-b-md border border-t-0 border-border/25 bg-zinc-950/50 px-2.5 py-2">
+              <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-[1.6] text-zinc-400/60">
+                {ls.join('\n')}
+                {more > 0 && `\n… +${more} lines`}
+              </pre>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** Diff card — shows +N -N, click to expand, click to open file */
+function DiffCard({ diff }: { diff: DiffInfo }) {
+  const [open, setOpen] = useState(false);
+  const { stopScroll } = useStickToBottomContext();
+
+  const openFile = () => {
+    // Try to open file in editor via API
+    fetch('/api/open-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: diff.fullPath }),
+    }).catch(() => {});
+  };
+
+  return (
+    <div className="ml-[30px] mt-1 mb-1 overflow-hidden rounded-lg border border-border/35">
+      {/* header */}
+      <div className="flex items-center gap-2 bg-muted/15 px-2.5 py-1.5 text-[11px]">
+        <GitDiff size={11} className="shrink-0 text-muted-foreground/45" />
+        <span className="flex-1 truncate font-mono text-foreground/70">{diff.filename}</span>
+        {diff.added > 0 && <span className="text-emerald-500/70">+{diff.added}</span>}
+        {diff.removed > 0 && <span className="text-red-400/60">-{diff.removed}</span>}
+        {diff.mode === 'create' && (
+          <span className="rounded px-1.5 py-0.5 text-[10px] bg-emerald-500/12 text-emerald-500/70">new</span>
+        )}
+        <button type="button" onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground/50 hover:bg-muted/30 hover:text-muted-foreground/70 transition-colors">
+          <Eye size={10} />{open ? '收起' : 'diff'}
+        </button>
+        {diff.fullPath && (
+          <button type="button" onClick={openFile}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground/50 hover:bg-muted/30 hover:text-muted-foreground/70 transition-colors">
+            <ArrowSquareOut size={10} />打开
+          </button>
+        )}
+      </div>
+      {/* expandable diff */}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }}
+            transition={{ duration: 0.15 }} style={{ overflow: 'hidden' }}>
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/25 text-[11px]">
+              {diff.mode === 'edit' && (
+                <div className="bg-red-500/[0.03] px-2.5 py-2">
+                  <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-muted-foreground/55">
+                    {diff.beforeLines.map((l, i) => <div key={i}><span className="mr-1 select-none text-red-400/35">−</span>{l}</div>)}
+                    {diff.moreB > 0 && <div className="text-muted-foreground/30">… +{diff.moreB} lines</div>}
+                  </pre>
+                </div>
+              )}
+              <div className={cn('bg-emerald-500/[0.03] px-2.5 py-2', diff.mode === 'create' && 'md:col-span-2')}>
+                <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-foreground/70">
+                  {diff.afterLines.map((l, i) => <div key={i}><span className="mr-1 select-none text-emerald-500/35">+</span>{l}</div>)}
+                  {diff.moreA > 0 && <div className="text-muted-foreground/30">… +{diff.moreA} lines</div>}
+                </pre>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+// ─── Completion summary ───────────────────────────────────────────────────────
+
+function CompletionBar({
+  changedFiles, errCount, sessionId, rewindId,
+}: {
+  changedFiles: { tool: ToolAction; diff: DiffInfo }[];
+  errCount: number;
+  sessionId?: string;
+  rewindId?: string;
+}) {
+  const [allAccepted, setAllAccepted] = useState(false);
+  const [rewinding, setRewinding] = useState(false);
+  const pending = changedFiles.length;
+
+  const handleRewindAll = async () => {
+    if (!sessionId || !rewindId) return;
+    setRewinding(true);
+    try {
+      const res = await fetch('/api/chat/rewind', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, userMessageId: rewindId }),
+      });
+      if (!res.ok) throw new Error('failed');
+      window.location.reload();
+    } catch { setRewinding(false); }
+  };
+
+  if (pending === 0 && errCount === 0) {
+    return (
+      <div className="mt-2 flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2.5 text-[12px] text-emerald-600/80">
+        <CheckCircle size={14} weight="fill" className="shrink-0" />
+        <span>任务完成</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      {/* summary bar */}
+      <div className="flex items-center gap-2.5 rounded-lg border border-border/30 bg-muted/10 px-3 py-2.5">
+        <CheckCircle size={14} weight="fill" className="shrink-0 text-emerald-500/70" />
+        <span className="flex-1 text-[12px] text-foreground/80">
+          任务完成
+          {pending > 0 && <span className="ml-1.5 text-muted-foreground/60">· {pending} 个文件待审查</span>}
+          {errCount > 0 && <span className="ml-1.5 text-red-500/60">· {errCount} 个错误</span>}
+        </span>
+      </div>
+
+      {/* per-file review cards */}
+      {pending > 0 && !allAccepted && (
+        <div className="space-y-1.5">
+          {changedFiles.map(({ tool: t, diff: d }, i) => (
+            <FileReviewRow key={t.id || `fr-${i}`} diff={d} sessionId={sessionId} rewindId={rewindId} />
+          ))}
+
+          {/* batch actions */}
+          {sessionId && rewindId && (
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setAllAccepted(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-medium text-emerald-600/80 transition hover:bg-emerald-500/20">
+                <Check size={12} weight="bold" /> 全部采纳
+              </button>
+              <button type="button" onClick={handleRewindAll} disabled={rewinding}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border/40 px-3 py-1.5 text-[11px] font-medium text-muted-foreground/70 transition hover:bg-muted/30 disabled:opacity-50">
+                {rewinding ? <SpinnerGap size={11} className="animate-spin" /> : <X size={12} weight="bold" />}
+                全部撤销
+              </button>
             </div>
           )}
         </div>
-      );
-    },
-  },
-  {
-    match: (n) => ['write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'notebookedit', 'notebook_edit'].includes(n.toLowerCase()),
-    icon: NotePencil,
-    label: 'Edit',
-    getSummary: (input) => {
-      const path = getFilePath(input);
-      return path ? extractFilename(path) : 'file';
-    },
-  },
-  {
-    match: (n) => ['read', 'readfile', 'read_file'].includes(n.toLowerCase()),
-    icon: File,
-    label: 'Read',
-    getSummary: (input) => {
-      const path = getFilePath(input);
-      return path ? extractFilename(path) : 'file';
-    },
-  },
-  {
-    match: (n) => ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search'].includes(n.toLowerCase()),
-    icon: MagnifyingGlass,
-    label: 'Search',
-    getSummary: (input) => {
-      const inp = input as Record<string, unknown> | undefined;
-      const pattern = (inp?.pattern || inp?.query || inp?.glob || '') as string;
-      return pattern ? `"${pattern.length > 50 ? pattern.slice(0, 47) + '...' : pattern}"` : 'search';
-    },
-  },
-  {
-    // Fallback — must be last. Shows the raw tool name so unregistered tools
-    // (TodoWrite, MCP tools, plugin tools) remain identifiable.
-    match: () => true,
-    icon: Wrench,
-    label: '',
-    getSummary: (input, name?: string) => {
-      const prefix = name || '';
-      if (!input || typeof input !== 'object') return prefix;
-      const str = JSON.stringify(input);
-      const detail = str.length > 50 ? str.slice(0, 47) + '...' : str;
-      return prefix ? `${prefix} ${detail}` : detail;
-    },
-  },
-];
-
-function getRenderer(name: string): ToolRendererDef {
-  return TOOL_REGISTRY.find((r) => r.match(name)) || TOOL_REGISTRY[TOOL_REGISTRY.length - 1];
-}
-
-/** Register a custom tool renderer. It takes priority over built-in ones. */
-export function registerToolRenderer(def: ToolRendererDef): void {
-  TOOL_REGISTRY.unshift(def);
-}
-
-// ---------------------------------------------------------------------------
-// Status indicator — running: gray, completed: green, error: red
-// ---------------------------------------------------------------------------
-
-type ToolStatus = 'running' | 'success' | 'error';
-
-function getStatus(tool: ToolAction): ToolStatus {
-  if (tool.result === undefined) return 'running';
-  return tool.isError ? 'error' : 'success';
-}
-
-function StatusDot({ status }: { status: ToolStatus }) {
-  return (
-    <AnimatePresence mode="wait">
-      {status === 'running' && (
-        <motion.span
-          key="running"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
-          className="inline-flex"
-        >
-          <SpinnerGap size={14} className="shrink-0 animate-spin text-muted-foreground/50" />
-        </motion.span>
       )}
-      {status === 'success' && (
-        <motion.span
-          key="success"
-          initial={{ scale: 0.5, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-          className="inline-flex"
-        >
-          <CheckCircle size={14} className="shrink-0 text-green-500" />
-        </motion.span>
+
+      {allAccepted && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-[11px] text-emerald-600/70">
+          <CheckCircle size={13} weight="fill" /> 已采纳全部 {pending} 个文件变更
+        </div>
       )}
-      {status === 'error' && (
-        <motion.span
-          key="error"
-          initial={{ scale: 0.5, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-          className="inline-flex"
-        >
-          <XCircle size={14} className="shrink-0 text-red-500" />
-        </motion.span>
-      )}
-    </AnimatePresence>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Context tool grouping — auto-group 3+ consecutive read/search tools
-// ---------------------------------------------------------------------------
-
-const CONTEXT_TOOLS = new Set([
-  'read', 'readfile', 'read_file',
-  'glob', 'grep',
-  'ls', 'list', 'list_files',
-  'search', 'find_files', 'search_files',
-]);
-
-function isContextTool(name: string): boolean {
-  return CONTEXT_TOOLS.has(name.toLowerCase());
-}
-
-type Segment =
-  | { kind: 'context'; tools: ToolAction[] }
-  | { kind: 'single'; tool: ToolAction };
-
-function computeSegments(tools: ToolAction[]): Segment[] {
-  const segments: Segment[] = [];
-  let contextBuffer: ToolAction[] = [];
-
-  const flushContext = () => {
-    if (contextBuffer.length >= 3) {
-      segments.push({ kind: 'context', tools: contextBuffer });
-    } else {
-      for (const t of contextBuffer) {
-        segments.push({ kind: 'single', tool: t });
-      }
-    }
-    contextBuffer = [];
-  };
-
-  for (const tool of tools) {
-    if (isContextTool(tool.name)) {
-      contextBuffer.push(tool);
-    } else {
-      flushContext();
-      segments.push({ kind: 'single', tool });
-    }
-  }
-  flushContext();
-  return segments;
-}
-
-function ContextGroup({ tools }: { tools: ToolAction[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const hasRunning = tools.some((t) => t.result === undefined);
-  const hasError = tools.some((t) => t.isError);
-  const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
-      >
-        <MagnifyingGlass size={14} className="shrink-0 text-muted-foreground" />
-        <CaretRight
-          size={10}
-          className={cn(
-            "shrink-0 text-muted-foreground/60 transition-transform duration-200",
-            expanded && "rotate-90"
-          )}
-        />
-        <span className="font-medium text-muted-foreground">
-          {hasRunning ? `Gathering context (${tools.length})` : `Gathered context (${tools.length} files)`}
-        </span>
-        <span className="ml-auto">
-          <StatusDot status={groupStatus} />
-        </span>
-      </button>
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0 }}
-            animate={{ height: 'auto' }}
-            exit={{ height: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{ overflow: 'hidden' }}
-          >
-            <div className="ml-6 border-l-2 border-border/30 pl-2">
-              {tools.map((tool, i) => (
-                <ToolActionRow key={tool.id || `ctx-${i}`} tool={tool} />
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Thinking row — same style as tool rows, Brain icon → caret on hover
-// ---------------------------------------------------------------------------
-
-function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
-  // Default open during streaming, collapsed in history
-  const [expanded, setExpanded] = useState(!!isStreaming);
-  const [hovered, setHovered] = useState(false);
+/** Single file review row in completion section */
+function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionId?: string; rewindId?: string }) {
+  const [status, setStatus] = useState<'pending' | 'accepted' | 'rejected'>('pending');
+  const [open, setOpen] = useState(false);
+  const [rewinding, setRewinding] = useState(false);
   const { stopScroll } = useStickToBottomContext();
 
-  // Extract summary from first **bold** or # heading
-  const summary = (() => {
-    const boldMatch = content.match(/\*\*(.+?)\*\*/);
-    if (boldMatch) return boldMatch[1];
-    const headingMatch = content.match(/^#{1,4}\s+(.+)$/m);
-    if (headingMatch) return headingMatch[1];
-    return isStreaming ? 'Thinking...' : 'Thought';
-  })();
+  const handleRewind = async () => {
+    if (!sessionId || !rewindId) return;
+    setRewinding(true);
+    try {
+      const res = await fetch('/api/chat/rewind', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, userMessageId: rewindId }),
+      });
+      if (!res.ok) throw new Error('failed');
+      window.location.reload();
+    } catch { setRewinding(false); }
+  };
+
+  const openFile = () => {
+    fetch('/api/open-file', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: diff.fullPath }),
+    }).catch(() => {});
+  };
 
   return (
-    <div>
-      <button
-        type="button"
-        onClick={() => {
-          const willExpand = !expanded;
-          setExpanded(willExpand);
-          // Detach from auto-scroll when expanding to prevent page jump
-          if (willExpand) stopScroll();
-        }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        className="flex items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors w-full"
-      >
-        {hovered ? (
-          <CaretRight
-            size={14}
-            className={cn(
-              "shrink-0 text-muted-foreground transition-transform duration-200",
-              expanded && "rotate-90"
-            )}
-          />
-        ) : (
-          <Brain size={14} className="shrink-0 text-muted-foreground" />
+    <div className={cn(
+      'overflow-hidden rounded-lg border transition-colors',
+      status === 'accepted' && 'border-emerald-500/30 bg-emerald-500/5',
+      status === 'rejected' && 'border-red-500/25 bg-red-500/5 opacity-60',
+      status === 'pending'  && 'border-border/30',
+    )}>
+      <div className="flex items-center gap-2 px-2.5 py-2 text-[11px]">
+        <div className={cn(
+          'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+          diff.mode === 'create' ? 'bg-emerald-500/12' : 'bg-amber-500/12',
+        )}>
+          {diff.mode === 'create'
+            ? <FilePlus size={11} className="text-emerald-500/70" />
+            : <NotePencil size={11} className="text-amber-500/70" />}
+        </div>
+        <span className="flex-1 truncate font-mono text-foreground/70">{diff.filename}</span>
+        {diff.added > 0 && <span className="text-emerald-500/65">+{diff.added}</span>}
+        {diff.removed > 0 && <span className="text-red-400/55">-{diff.removed}</span>}
+
+        {status === 'pending' && sessionId && rewindId && (
+          <>
+            <button type="button" onClick={() => setStatus('accepted')} title="采纳"
+              className="flex h-5 w-5 items-center justify-center rounded-md border border-emerald-500/35 text-emerald-500/70 hover:bg-emerald-500/15 transition">
+              <Check size={10} weight="bold" />
+            </button>
+            <button type="button" onClick={handleRewind} disabled={rewinding} title="撤销"
+              className="flex h-5 w-5 items-center justify-center rounded-md border border-red-500/25 text-red-500/60 hover:bg-red-500/15 transition disabled:opacity-50">
+              {rewinding ? <SpinnerGap size={9} className="animate-spin" /> : <X size={10} weight="bold" />}
+            </button>
+          </>
         )}
-        <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
-          {isStreaming ? <Shimmer duration={1.5}>{summary}</Shimmer> : summary}
-        </span>
-      </button>
+        {status === 'accepted' && <span className="text-emerald-500/60">已采纳</span>}
+        {status === 'rejected' && <span className="text-red-500/50">已撤销</span>}
+
+        <button type="button" onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}
+          className="rounded px-1 text-muted-foreground/45 hover:text-muted-foreground/65 transition">
+          <Eye size={10} />
+        </button>
+        {diff.fullPath && (
+          <button type="button" onClick={openFile}
+            className="rounded px-1 text-muted-foreground/45 hover:text-muted-foreground/65 transition">
+            <ArrowSquareOut size={10} />
+          </button>
+        )}
+      </div>
+
       <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{ overflow: 'hidden' }}
-          >
-            <div className="ml-6 px-2 py-1.5 text-xs text-muted-foreground/70 border-l-2 border-border/30 prose prose-sm dark:prose-invert max-w-none">
-              <Streamdown plugins={thinkingPlugins}>{content}</Streamdown>
+        {open && (
+          <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }}
+            transition={{ duration: 0.15 }} style={{ overflow: 'hidden' }}>
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/20 border-t border-border/20 text-[11px]">
+              {diff.mode === 'edit' && (
+                <div className="bg-red-500/[0.03] px-2.5 py-2">
+                  <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-muted-foreground/50">
+                    {diff.beforeLines.map((l, i) => <div key={i}><span className="mr-1 select-none text-red-400/30">−</span>{l}</div>)}
+                    {diff.moreB > 0 && <div className="text-muted-foreground/25">… +{diff.moreB} lines</div>}
+                  </pre>
+                </div>
+              )}
+              <div className={cn('bg-emerald-500/[0.03] px-2.5 py-2', diff.mode === 'create' && 'md:col-span-2')}>
+                <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-foreground/65">
+                  {diff.afterLines.map((l, i) => <div key={i}><span className="mr-1 select-none text-emerald-500/30">+</span>{l}</div>)}
+                  {diff.moreA > 0 && <div className="text-muted-foreground/25">… +{diff.moreA} lines</div>}
+                </pre>
+              </div>
             </div>
           </motion.div>
         )}
@@ -388,189 +523,68 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
   );
 }
 
-// ---------------------------------------------------------------------------
-// Compact row for a single tool action
-// ---------------------------------------------------------------------------
-
-function ToolActionRow({ tool, streamingToolOutput }: { tool: ToolAction; streamingToolOutput?: string }) {
-  const renderer = getRenderer(tool.name);
-  const summary = renderer.getSummary(tool.input, tool.name);
-  const filePath = getFilePath(tool.input);
-  const status = getStatus(tool);
-  const isBash = renderer.icon === Terminal;
-  const showDetail = isBash && renderer.renderDetail && (status === 'running' || streamingToolOutput || tool.result);
-
-  return (
-    <div>
-      <div className="flex items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors">
-        {createElement(renderer.icon, { size: 14, className: "shrink-0 text-muted-foreground" })}
-
-        {renderer.label && (
-          <span className="font-medium text-muted-foreground shrink-0">{renderer.label}</span>
-        )}
-
-        <span className="font-mono text-muted-foreground/60 truncate flex-1">
-          {summary}
-        </span>
-
-        {filePath && !isBash && (
-          <span className="text-muted-foreground/40 text-[11px] font-mono truncate max-w-[200px] hidden sm:inline">
-            {truncatePath(filePath)}
-          </span>
-        )}
-
-        {tool.media && tool.media.length > 0 && (
-          <ImageIcon size={14} className="shrink-0 text-primary/60" />
-        )}
-
-        <StatusDot status={status} />
-      </div>
-      {showDetail && renderer.renderDetail?.(tool, streamingToolOutput)}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Header summary helper — build running task description
-// ---------------------------------------------------------------------------
-
-function getRunningDescription(tools: ToolAction[]): string {
-  const running = tools.filter((t) => t.result === undefined);
-  if (running.length === 0) return '';
-  const last = running[running.length - 1];
-  return getRenderer(last.name).getSummary(last.input, last.name);
-}
-
-// ---------------------------------------------------------------------------
-// Main group component
-// ---------------------------------------------------------------------------
+// ─── Main export ──────────────────────────────────────────────────────────────
 
 export function ToolActionsGroup({
   tools,
   isStreaming = false,
   streamingToolOutput,
-  flat = false,
+  flat: _flat = false,
   thinkingContent,
+  statusText,
+  sessionId,
+  rewindUserMessageId,
 }: ToolActionsGroupProps) {
-  const hasRunningTool = tools.some((t) => t.result === undefined);
+  const segments = useMemo(
+    () => buildSegments(tools, thinkingContent, isStreaming, streamingToolOutput),
+    [tools, thinkingContent, isStreaming, streamingToolOutput],
+  );
 
-  // Track whether user has manually toggled and their chosen state
-  const [userExpandedState, setUserExpandedState] = useState<boolean | null>(null);
+  const allDone = !isStreaming && tools.length > 0 && tools.every(t => t.result !== undefined);
+  const errCount = tools.filter(t => t.isError).length;
+  const changedFiles = useMemo(() => {
+    return tools
+      .map(t => ({ tool: t, diff: extractDiff(t) }))
+      .filter((x): x is { tool: ToolAction; diff: DiffInfo } => x.diff !== null);
+  }, [tools]);
 
-  // Derived: if user has toggled, use their choice; otherwise auto-expand based on streaming state
-  const expanded = userExpandedState !== null ? userExpandedState : (hasRunningTool || isStreaming);
-
-  if (tools.length === 0 && !thinkingContent) return null;
-
-  // Flat mode: skip header, render tool list directly
-  if (flat) {
-    const lastRunningId = [...tools].reverse().find((t) => t.result === undefined)?.id;
-    return (
-      <div className="w-[min(100%,48rem)]">
-        <div className="border-l-2 border-border/50 pl-2 ml-1.5">
-          {thinkingContent && <ThinkingRow content={thinkingContent} isStreaming={isStreaming} />}
-          {computeSegments(tools).map((seg, i) =>
-            seg.kind === 'context' ? (
-              <ContextGroup key={`ctx-group-${i}`} tools={seg.tools} />
-            ) : (
-              <ToolActionRow
-                key={seg.tool.id || `tool-${i}`}
-                tool={seg.tool}
-                streamingToolOutput={seg.tool.id === lastRunningId ? streamingToolOutput : undefined}
-              />
-            )
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  const runningCount = tools.filter((t) => t.result === undefined).length;
-  const doneCount = tools.length - runningCount;
-  const runningDesc = getRunningDescription(tools);
-
-  const handleToggle = () => {
-    setUserExpandedState((prev) => prev !== null ? !prev : !expanded);
-  };
-
-  // Build summary text parts
-  const summaryParts: string[] = [];
-  if (runningCount > 0) summaryParts.push(`${runningCount} running`);
-  if (doneCount > 0) summaryParts.push(`${doneCount} completed`);
-  if (runningCount === 0 && isStreaming) summaryParts.push('generating response');
-  if (summaryParts.length === 0) summaryParts.push(`${tools.length} actions`);
+  if (segments.length === 0) return null;
 
   return (
-    <div className="w-[min(100%,48rem)]">
-      {/* Header — content left, caret right */}
-      <button
-        type="button"
-        onClick={handleToggle}
-        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
-      >
-        <span className="inline-flex items-center justify-center rounded bg-muted/80 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/70 tabular-nums">
-          {tools.length + (thinkingContent ? 1 : 0)}
-        </span>
+    <div className="py-1">
+      {/* chronological timeline */}
+      <div className="space-y-0">
+        {segments.map((seg, i) => {
+          if (seg.type === 'thinking') {
+            return <ThinkingRow key={`think-${i}`} content={seg.content} streaming={seg.streaming} />;
+          }
+          return <ToolRow key={seg.tool.id || `tool-${i}`} tool={seg.tool} streamingOutput={seg.streamingOutput} />;
+        })}
+      </div>
 
-        <span className="text-muted-foreground/60 truncate">
-          {summaryParts.join(' · ')}
-        </span>
-
-        {/* Show running task description */}
-        {runningDesc && (
-          <span className="text-muted-foreground/40 text-[11px] font-mono truncate max-w-[40%]">
-            {hasRunningTool ? <Shimmer duration={1.5}>{runningDesc}</Shimmer> : runningDesc}
+      {/* streaming status — real-time "what's happening now" */}
+      {isStreaming && (statusText || tools.some(t => t.result === undefined)) && (
+        <div className="flex items-center gap-2 py-1.5 pl-[30px] text-[11px] text-muted-foreground/50">
+          <SpinnerGap size={10} className="animate-spin text-blue-400/50" />
+          <span className="truncate">
+            {statusText || (() => {
+              const running = tools.filter(t => t.result === undefined);
+              if (running.length === 0) return '生成回复中…';
+              return stepLabel(running[running.length - 1]) + '…';
+            })()}
           </span>
-        )}
+        </div>
+      )}
 
-        <CaretRight
-          size={12}
-          className={cn(
-            "shrink-0 text-muted-foreground/60 transition-transform duration-200 ml-auto",
-            expanded && "rotate-90"
-          )}
+      {/* completion summary */}
+      {allDone && (
+        <CompletionBar
+          changedFiles={changedFiles}
+          errCount={errCount}
+          sessionId={sessionId}
+          rewindId={rewindUserMessageId}
         />
-      </button>
-
-      {/* Expanded list — left vertical line like blockquote */}
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0 }}
-            animate={{ height: 'auto' }}
-            exit={{ height: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{ overflow: 'hidden', transformOrigin: 'top' }}
-          >
-            <motion.div
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.12, ease: 'easeOut' }}
-            >
-              <div className="ml-1.5 mt-0.5 border-l-2 border-border/50 pl-2">
-                {thinkingContent && <ThinkingRow content={thinkingContent} isStreaming={isStreaming} />}
-                {(() => {
-                  const segments = computeSegments(tools);
-                  // Find the last running tool to attach streamingToolOutput
-                  const lastRunningId = [...tools].reverse().find((t) => t.result === undefined)?.id;
-                  return segments.map((seg, i) =>
-                    seg.kind === 'context' ? (
-                      <ContextGroup key={`ctx-group-${i}`} tools={seg.tools} />
-                    ) : (
-                      <ToolActionRow
-                        key={seg.tool.id || `tool-${i}`}
-                        tool={seg.tool}
-                        streamingToolOutput={seg.tool.id === lastRunningId ? streamingToolOutput : undefined}
-                      />
-                    )
-                  );
-                })()}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      )}
     </div>
   );
 }

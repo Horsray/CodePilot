@@ -325,6 +325,7 @@ function extractTruncatedWidget(fenceBody: string): ShowWidgetData | null {
 interface MessageItemProps {
   message: Message;
   sessionId?: string;
+  rewindUserMessageId?: string;
   /** Whether this is an assistant workspace project */
   isAssistantProject?: boolean;
   /** Assistant name for avatar */
@@ -573,7 +574,7 @@ function DiffSummary({ files }: { files: Array<{ path: string; name: string }> }
   );
 }
 
-export const MessageItem = memo(function MessageItem({ message, sessionId, isAssistantProject, assistantName }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, sessionId, rewindUserMessageId, isAssistantProject, assistantName }: MessageItemProps) {
   const isUser = message.role === 'user';
 
   // Collapse/expand state for long user messages (hooks must be called unconditionally)
@@ -659,6 +660,8 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, isAss
               media: tool.media,
             }))}
             thinkingContent={thinking}
+            sessionId={sessionId}
+            rewindUserMessageId={rewindUserMessageId}
           />
         )}
 

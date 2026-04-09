@@ -28,6 +28,7 @@ import type {
 import type { Message, MessageContentBlock } from '@/types';
 import { parseMessageContent } from '@/types';
 import fs from 'fs';
+import { sanitizeToolCallBlocks } from './tool-call-recovery';
 
 interface FileMeta {
   id: string;
@@ -53,7 +54,10 @@ export function buildCoreMessages(dbMessages: Message[]): ModelMessage[] {
       raw.push(buildUserMessage(msg.content));
     } else {
       // assistant — may contain structured blocks
-      const blocks = parseMessageContent(msg.content);
+      const blocks = sanitizeToolCallBlocks(
+        parseMessageContent(msg.content),
+        'A previous tool call ended without a final result. The runtime inserted a synthetic error result so this session can continue.',
+      );
       const converted = convertAssistantBlocks(blocks);
       raw.push(...converted);
     }

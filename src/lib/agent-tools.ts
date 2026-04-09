@@ -30,9 +30,10 @@ export interface AssembleToolsOptions {
   sessionProviderId?: string;
   /** Model (passed to sub-agents for inheritance) */
   model?: string;
+  /** Session ID — always required for tool execution */
+  sessionId?: string;
   /** Permission context — when set, tools are wrapped with permission checks */
   permissionContext?: {
-    sessionId: string;
     permissionMode: PermissionMode;
     /** Callback to emit SSE events (for permission_request) */
     emitSSE: (event: { type: string; data: string }) => void;
@@ -57,7 +58,7 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
   // (Agent tool) can inherit the parent's permission mode and SSE emitter.
   const builtinTools = createBuiltinTools({
     workingDirectory: cwd,
-    sessionId: options.permissionContext?.sessionId,
+    sessionId: options.sessionId,
     providerId: options.providerId,
     sessionProviderId: options.sessionProviderId,
     model: options.model,
@@ -83,11 +84,17 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
   // External MCP tools from connected servers
   const mcpTools = buildMcpToolSet();
 
-  const allTools = { ...builtinTools, ...builtinMcpTools, ...mcpTools };
+  const allTools = guardToolExecution(
+    { ...builtinTools, ...builtinMcpTools, ...mcpTools },
+    {
+      emitSSE: options.permissionContext?.emitSSE,
+      abortSignal: options.permissionContext?.abortSignal,
+    },
+  );
 
   // Wrap with permission checks if context provided
   if (options.permissionContext) {
-    return { tools: wrapWithPermissions(allTools, options.permissionContext), systemPrompts };
+    return { tools: wrapWithPermissions(allTools, options.sessionId!, options.permissionContext), systemPrompts };
   }
 
   return { tools: allTools, systemPrompts };
@@ -98,6 +105,144 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
 // Session-level auto-approved rules (accumulated from "allow for session" responses)
 const sessionApprovals = new Map<string, Array<{ toolName: string; pattern: string }>>();
 
+const DEFAULT_TOOL_TIMEOUT_MS = 45_000;
+const RETRYABLE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'Skill', 'Agent', 'codepilot_browser_open', 'codepilot_browser_context']);
+
+interface ToolGuardOptions {
+  emitSSE?: (event: { type: string; data: string }) => void;
+  abortSignal?: AbortSignal;
+}
+
+interface ToolFailurePayload {
+  __codepilot_tool_error: true;
+  toolName: string;
+  reason: 'timeout' | 'error';
+  message: string;
+  attempts: number;
+}
+
+/**
+ * 中文注释：为所有工具增加统一的超时、重试、跳过兜底。
+ * 用法：在 assembleTools 阶段包裹一次，确保任意工具失败后仍然返回 tool_result。
+ */
+function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet {
+  const wrapped: ToolSet = {};
+
+  for (const [name, t] of Object.entries(tools)) {
+    const original = t as { description?: string; inputSchema?: unknown; execute?: (...args: unknown[]) => unknown };
+    wrapped[name] = tool({
+      description: original.description || name,
+      inputSchema: (original.inputSchema || z.object({})) as z.ZodType,
+      execute: async (input: unknown, execOptions: unknown) => {
+        if (!original.execute) {
+          return `(tool "${name}" has no execute function)`;
+        }
+
+        const config = getToolGuardConfig(name);
+        const totalAttempts = config.maxRetries + 1;
+        let lastFailure: ToolFailurePayload | null = null;
+
+        for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+          const localAbortController = new AbortController();
+          const parentAbortSignal = extractAbortSignal(execOptions) || options.abortSignal;
+          const handleParentAbort = () => localAbortController.abort();
+          parentAbortSignal?.addEventListener('abort', handleParentAbort, { once: true });
+
+          let didTimeout = false;
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(() => {
+              didTimeout = true;
+              localAbortController.abort();
+              reject(new Error(`Tool "${name}" timed out after ${config.timeoutMs}ms`));
+            }, config.timeoutMs);
+          });
+
+          try {
+            const result = await Promise.race([
+              Promise.resolve(original.execute(input, injectAbortSignal(execOptions, localAbortController.signal))),
+              timeoutPromise,
+            ]);
+            return result ?? '(tool completed with no output)';
+          } catch (error) {
+            if (parentAbortSignal?.aborted) {
+              throw error;
+            }
+
+            lastFailure = {
+              __codepilot_tool_error: true,
+              toolName: name,
+              reason: didTimeout ? 'timeout' : 'error',
+              message: error instanceof Error ? error.message : String(error),
+              attempts: attempt,
+            };
+
+            if (didTimeout) {
+              options.emitSSE?.({
+                type: 'tool_timeout',
+                data: JSON.stringify({
+                  tool_name: name,
+                  elapsed_seconds: Math.round(config.timeoutMs / 1000),
+                }),
+              });
+            }
+
+            if (attempt < totalAttempts) {
+              continue;
+            }
+          } finally {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            parentAbortSignal?.removeEventListener('abort', handleParentAbort);
+          }
+        }
+
+        return lastFailure || {
+          __codepilot_tool_error: true,
+          toolName: name,
+          reason: 'error' as const,
+          message: `Tool "${name}" failed without a recoverable result`,
+          attempts: totalAttempts,
+        };
+      },
+    });
+  }
+
+  return wrapped;
+}
+
+/**
+ * 中文注释：给不同工具分配保守的超时和重试策略，避免对有副作用的工具重复执行。
+ * 用法：读类工具允许一次重试；写类和命令类默认不重试，只在失败后跳过。
+ */
+function getToolGuardConfig(toolName: string): { timeoutMs: number; maxRetries: number } {
+  if (toolName === 'Bash') {
+    return { timeoutMs: 130_000, maxRetries: 0 };
+  }
+  if (toolName === 'Agent') {
+    return { timeoutMs: 180_000, maxRetries: 0 };
+  }
+  if (toolName.startsWith('mcp__')) {
+    return { timeoutMs: 60_000, maxRetries: 0 };
+  }
+  return {
+    timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
+    maxRetries: RETRYABLE_TOOLS.has(toolName) ? 1 : 0,
+  };
+}
+
+function extractAbortSignal(execOptions: unknown): AbortSignal | undefined {
+  if (!execOptions || typeof execOptions !== 'object') return undefined;
+  if (!('abortSignal' in execOptions)) return undefined;
+  return (execOptions as { abortSignal?: AbortSignal }).abortSignal;
+}
+
+function injectAbortSignal(execOptions: unknown, abortSignal: AbortSignal): unknown {
+  if (!execOptions || typeof execOptions !== 'object') {
+    return { abortSignal };
+  }
+  return { ...(execOptions as Record<string, unknown>), abortSignal };
+}
+
 function getSessionRules(sessionId: string): Array<{ permission: string; pattern: string; action: 'allow' | 'deny' | 'ask' }> {
   const approvals = sessionApprovals.get(sessionId) || [];
   return approvals.map(a => ({ permission: a.toolName, pattern: a.pattern, action: 'allow' as const }));
@@ -105,7 +250,8 @@ function getSessionRules(sessionId: string): Array<{ permission: string; pattern
 
 function wrapWithPermissions(
   tools: ToolSet,
-  ctx: NonNullable<AssembleToolsOptions['permissionContext']>,
+  sessionId: string,
+  permissionContext: NonNullable<AssembleToolsOptions['permissionContext']>,
 ): ToolSet {
   const wrapped: ToolSet = {};
 
@@ -124,8 +270,8 @@ function wrapWithPermissions(
       description: original.description || name,
       inputSchema: (original.inputSchema || z.object({})) as z.ZodType,
       execute: async (input: unknown, execOptions: unknown) => {
-        emitEvent('tool:pre-use', { sessionId: ctx.sessionId, toolName: name, input });
-        const result = checkPermission(name, input, ctx.permissionMode, getSessionRules(ctx.sessionId));
+        emitEvent('tool:pre-use', { sessionId, toolName: name, input });
+        const result = checkPermission(name, input, permissionContext.permissionMode, getSessionRules(sessionId));
 
         if (result.action === 'deny') {
           return `Permission denied: ${result.reason || 'Tool not allowed in current mode'}`;
@@ -139,17 +285,17 @@ function wrapWithPermissions(
           try {
             createPermissionRequest({
               id: permId,
-              sessionId: ctx.sessionId,
+              sessionId,
               toolName: name,
               toolInput: JSON.stringify(input),
               expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
             });
           } catch { /* non-critical */ }
 
-          emitEvent('permission:request', { sessionId: ctx.sessionId, toolName: name, permissionId: permId });
+          emitEvent('permission:request', { sessionId, toolName: name, permissionId: permId });
 
           // Emit SSE
-          ctx.emitSSE({
+          permissionContext.emitSSE({
             type: 'permission_request',
             data: JSON.stringify({
               permissionRequestId: permId,
@@ -163,10 +309,10 @@ function wrapWithPermissions(
           const permResult = await registerPendingPermission(
             permId,
             (input || {}) as Record<string, unknown>,
-            ctx.abortSignal,
+            permissionContext.abortSignal,
           );
 
-          emitEvent('permission:resolved', { sessionId: ctx.sessionId, toolName: name, behavior: permResult.behavior });
+          emitEvent('permission:resolved', { sessionId, toolName: name, behavior: permResult.behavior });
 
           if (permResult.behavior === 'deny') {
             return `Permission denied by user: ${permResult.message || 'Denied'}`;
@@ -179,16 +325,16 @@ function wrapWithPermissions(
 
           // Save session-level approval for future calls (allow_session)
           if (permResult.updatedPermissions && Array.isArray(permResult.updatedPermissions)) {
-            const existing = sessionApprovals.get(ctx.sessionId) || [];
+            const existing = sessionApprovals.get(sessionId) || [];
             existing.push({ toolName: name, pattern: '*' });
-            sessionApprovals.set(ctx.sessionId, existing);
+            sessionApprovals.set(sessionId, existing);
           }
         }
 
         // Execute the original tool (with possibly updated input from permission approval)
         if (original.execute) {
           const output = await original.execute(input, execOptions);
-          emitEvent('tool:post-use', { sessionId: ctx.sessionId, toolName: name });
+          emitEvent('tool:post-use', { sessionId, toolName: name });
           return output;
         }
         return '(tool has no execute function)';
@@ -198,4 +344,3 @@ function wrapWithPermissions(
 
   return wrapped;
 }
-

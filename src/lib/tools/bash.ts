@@ -41,7 +41,11 @@ export function createBashTool(ctx: ToolContext) {
     }),
     execute: async ({ command, timeout }, { abortSignal }) => {
       const timeoutMs = timeout ?? DEFAULT_TIMEOUT_MS;
-      const terminalId = `agent-terminal-${ctx.sessionId || 'default'}`;
+      // 修复：确保 sessionId 不为 undefined，否则所有命令都会写入同一个 PTY
+    if (!ctx.sessionId) {
+      throw new Error('sessionId is required for bash tool');
+    }
+    const terminalId = `agent-terminal-${ctx.sessionId}`;
 
       ctx.emitSSE?.({
         type: 'status',
