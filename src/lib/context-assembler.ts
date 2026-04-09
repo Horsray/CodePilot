@@ -70,11 +70,24 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
           await import('@/lib/assistant-workspace');
 
         // Incremental reindex BEFORE MCP search so tool calls see latest content.
-        // Timeout after 5s to prevent blocking on large workspaces (e.g. Obsidian vaults).
+        // Runs with a 3s timeout to prevent blocking on large workspaces.
+        // If it times out, we continue without indexing (stale index is acceptable).
         try {
           const { indexWorkspace } = await import('@/lib/workspace-indexer');
           const indexStart = Date.now();
-          indexWorkspace(workspacePath);
+
+          // Run indexing with a 3s timeout — if it takes longer, we skip it
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              indexWorkspace(workspacePath);
+              resolve();
+            }),
+            new Promise<void>((resolve) => setTimeout(() => {
+              console.warn(`[context-assembler] Workspace indexing timed out after 3s — skipping`);
+              resolve();
+            }, 3000)),
+          ]);
+
           const indexMs = Date.now() - indexStart;
           if (indexMs > 3000) {
             console.warn(`[context-assembler] Workspace indexing took ${indexMs}ms — consider reducing workspace size`);

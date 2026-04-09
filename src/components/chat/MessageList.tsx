@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import { useStickToBottomContext } from 'use-stick-to-bottom';
@@ -199,6 +199,17 @@ export function MessageList({
   const { t } = useTranslation();
   // Scroll anchor: preserve position when older messages are prepended
   const anchorIdRef = useRef<string | null>(null);
+
+  // Memoize user message indices for rewind point mapping — avoids O(n²) in map iteration
+  const userMessageIndices = useMemo(() => {
+    const indices: number[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].role === 'user') {
+        indices.push(i);
+      }
+    }
+    return indices;
+  }, [messages]);
   // Before loading more, record the first visible message ID
   const handleLoadMore = () => {
     if (messages.length > 0) {
@@ -287,16 +298,16 @@ export function MessageList({
             </Button>
           </div>
         )}
-        {messages.map((message) => {
+        {messages.map((message, index) => {
           // Map rewind points to visible user messages by position:
           // Backend only emits rewind_point for prompt-level user messages
           // (not tool results, not auto-trigger), so they're 1:1 with visible user messages.
           let rewindSdkUuid: string | undefined;
           if (message.role === 'user' && sessionId && rewindPoints.length > 0) {
-            const userMsgsBefore = messages.filter(m => m.role === 'user');
-            const userIndex = userMsgsBefore.indexOf(message);
-            if (userIndex >= 0 && userIndex < rewindPoints.length) {
-              rewindSdkUuid = rewindPoints[userIndex].userMessageId;
+            // Use pre-computed userMessageIndices for O(1) lookup instead of O(n) filter+indexOf
+            const userPositionInList = userMessageIndices.indexOf(index);
+            if (userPositionInList >= 0 && userPositionInList < rewindPoints.length) {
+              rewindSdkUuid = rewindPoints[userPositionInList].userMessageId;
             }
           }
 

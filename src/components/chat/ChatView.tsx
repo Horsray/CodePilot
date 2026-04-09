@@ -150,17 +150,17 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     () => getSnapshot(sessionId)
   );
 
-  // Derive rendering state from snapshot
+  // Derive rendering state from snapshot — memoized to avoid unnecessary re-renders
   const isStreaming = streamSnapshot?.phase === 'active';
-  const streamingContent = streamSnapshot?.streamingContent ?? '';
-  const toolUses = streamSnapshot?.toolUses ?? [];
-  const toolResults = streamSnapshot?.toolResults ?? [];
-  const streamingToolOutput = streamSnapshot?.streamingToolOutput ?? '';
-  const streamingThinkingContent = streamSnapshot?.streamingThinkingContent ?? '';
-  const statusText = streamSnapshot?.statusText;
-  const pendingPermission = streamSnapshot?.pendingPermission ?? null;
-  const permissionResolved = streamSnapshot?.permissionResolved ?? null;
-  const rewindPoints = getRewindPoints(sessionId);
+  const streamingContent = useMemo(() => streamSnapshot?.streamingContent ?? '', [streamSnapshot?.streamingContent]);
+  const toolUses = useMemo(() => streamSnapshot?.toolUses ?? [], [streamSnapshot?.toolUses]);
+  const toolResults = useMemo(() => streamSnapshot?.toolResults ?? [], [streamSnapshot?.toolResults]);
+  const streamingToolOutput = useMemo(() => streamSnapshot?.streamingToolOutput ?? '', [streamSnapshot?.streamingToolOutput]);
+  const streamingThinkingContent = useMemo(() => streamSnapshot?.streamingThinkingContent ?? '', [streamSnapshot?.streamingThinkingContent]);
+  const statusText = useMemo(() => streamSnapshot?.statusText, [streamSnapshot?.statusText]);
+  const pendingPermission = useMemo(() => streamSnapshot?.pendingPermission ?? null, [streamSnapshot?.pendingPermission]);
+  const permissionResolved = useMemo(() => streamSnapshot?.permissionResolved ?? null, [streamSnapshot?.permissionResolved]);
+  const rewindPoints = useMemo(() => getRewindPoints(sessionId), [sessionId]);
 
   // Pending image generation notices
   const pendingImageNoticesRef = useRef<string[]>([]);

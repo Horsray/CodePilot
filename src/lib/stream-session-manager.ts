@@ -131,6 +131,23 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
 
 function emit(stream: ActiveStream, type: StreamEvent['type']) {
   const snapshot = buildSnapshot(stream);
+
+  // Skip emit if snapshot content hasn't actually changed (avoids unnecessary React re-renders)
+  const prev = stream.snapshot;
+  if (
+    prev &&
+    prev.phase === snapshot.phase &&
+    prev.streamingContent === snapshot.streamingContent &&
+    prev.streamingThinkingContent === snapshot.streamingThinkingContent &&
+    prev.statusText === snapshot.statusText &&
+    prev.pendingPermission === snapshot.pendingPermission &&
+    prev.permissionResolved === snapshot.permissionResolved
+  ) {
+    // Content unchanged, only update reference if needed (for getSnapshot callers)
+    stream.snapshot = snapshot;
+    return;
+  }
+
   stream.snapshot = snapshot; // store latest
   const event: StreamEvent = { type, sessionId: stream.sessionId, snapshot };
   const listeners = getListenersMap().get(stream.sessionId);
@@ -261,9 +278,16 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
   const TEXT_THROTTLE_MS = 100;
   let textEmitTimer: ReturnType<typeof setTimeout> | null = null;
   let textDirty = false;
+  let thinkingEmitTimer: ReturnType<typeof setTimeout> | null = null;
+  let thinkingDirty = false;
 
   const emitTextUpdate = () => {
     textDirty = false;
+    emit(stream, 'snapshot-updated');
+  };
+
+  const emitThinkingUpdate = () => {
+    thinkingDirty = false;
     emit(stream, 'snapshot-updated');
   };
 
@@ -277,12 +301,28 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     }
   };
 
+  const throttledThinkingEmit = () => {
+    thinkingDirty = true;
+    if (!thinkingEmitTimer) {
+      thinkingEmitTimer = setTimeout(() => {
+        thinkingEmitTimer = null;
+        if (thinkingDirty) emitThinkingUpdate();
+      }, TEXT_THROTTLE_MS);
+    }
+  };
+
   const flushTextThrottle = () => {
     if (textEmitTimer) {
       clearTimeout(textEmitTimer);
       textEmitTimer = null;
     }
     if (textDirty) emitTextUpdate();
+    // Also flush any pending thinking update
+    if (thinkingEmitTimer) {
+      clearTimeout(thinkingEmitTimer);
+      thinkingEmitTimer = null;
+    }
+    if (thinkingDirty) emitThinkingUpdate();
   };
 
   try {
@@ -352,7 +392,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           stream.thinkingPhaseEnded = false;
         }
         stream.accumulatedThinking += delta;
-        emit(stream, 'snapshot-updated');
+        throttledThinkingEmit();
       },
       onToolUse: (tool) => {
         markActive();
