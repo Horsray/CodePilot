@@ -76,6 +76,42 @@ export async function getStatus(cwd: string): Promise<GitStatus> {
     // no upstream
   }
 
+  // Get diff numstat for additions/deletions counts
+  const stagedNumstat = new Map<string, { additions: number; deletions: number }>();
+  const unstagedNumstat = new Map<string, { additions: number; deletions: number }>();
+
+  try {
+    // Staged changes: git diff --cached --numstat
+    const stagedOutput = await runGit(['diff', '--cached', '--numstat'], { cwd });
+    for (const line of stagedOutput.split('\n')) {
+      if (!line) continue;
+      const parts = line.split('\t');
+      if (parts.length >= 3) {
+        const additions = parts[0] === '-' ? 0 : parseInt(parts[0], 10) || 0;
+        const deletions = parts[1] === '-' ? 0 : parseInt(parts[1], 10) || 0;
+        stagedNumstat.set(parts[2], { additions, deletions });
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    // Unstaged changes: git diff --numstat
+    const unstagedOutput = await runGit(['diff', '--numstat'], { cwd });
+    for (const line of unstagedOutput.split('\n')) {
+      if (!line) continue;
+      const parts = line.split('\t');
+      if (parts.length >= 3) {
+        const additions = parts[0] === '-' ? 0 : parseInt(parts[0], 10) || 0;
+        const deletions = parts[1] === '-' ? 0 : parseInt(parts[1], 10) || 0;
+        unstagedNumstat.set(parts[2], { additions, deletions });
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   // Get changed files using porcelain v2
   const changedFiles: GitChangedFile[] = [];
   try {
@@ -94,17 +130,23 @@ export async function getStatus(cwd: string): Promise<GitStatus> {
         const worktreeStatus = xy[1];
 
         if (indexStatus !== '.' && indexStatus !== '?') {
+          const stats = stagedNumstat.get(pathPart.trim());
           changedFiles.push({
             path: pathPart.trim(),
             status: parseStatusChar(indexStatus),
             staged: true,
+            additions: stats?.additions,
+            deletions: stats?.deletions,
           });
         }
         if (worktreeStatus !== '.' && worktreeStatus !== '?') {
+          const stats = unstagedNumstat.get(pathPart.trim());
           changedFiles.push({
             path: pathPart.trim(),
             status: parseStatusChar(worktreeStatus),
             staged: false,
+            additions: stats?.additions,
+            deletions: stats?.deletions,
           });
         }
       } else if (line.startsWith('? ')) {
@@ -247,15 +289,44 @@ export async function commit(cwd: string, message: string): Promise<string> {
 }
 
 export async function push(cwd: string): Promise<void> {
-  // Try regular push first
-  try {
-    await runGit(['push'], { cwd, timeoutMs: 30000 });
-  } catch (err) {
-    // If no upstream, set it
-    if (err instanceof Error && (err.message.includes('no upstream') || err.message.includes('has no upstream'))) {
-      const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
-      await runGit(['push', '-u', 'origin', branch], { cwd, timeoutMs: 30000 });
-    } else {
+  const PUSH_TIMEOUT = 120000; // 2 minutes for large pushes
+  const MAX_RETRIES = 2;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Use http.version=HTTP/1.1 to avoid HTTP2 framing issues with GitHub
+      await runGit(['-c', 'http.version=HTTP/1.1', 'push'], { cwd, timeoutMs: PUSH_TIMEOUT });
+      return;
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      const msg = err.message;
+
+      // If no upstream, set it automatically
+      if (msg.includes('no upstream') || msg.includes('has no upstream')) {
+        const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
+        await runGit(['-c', 'http.version=HTTP/1.1', 'push', '-u', 'origin', branch], { cwd, timeoutMs: PUSH_TIMEOUT });
+        return;
+      }
+
+      // HTTP2 / network flake — retry
+      if (attempt < MAX_RETRIES && (msg.includes('HTTP2') || msg.includes('HTTP/2') || msg.includes('framing layer') || msg.includes('unexpected disconnect'))) {
+        continue;
+      }
+
+      // Provide clearer error messages for common failures
+      if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
+        throw new Error('无法连接到远程仓库，请检查网络连接');
+      }
+      if (msg.includes('Authentication failed') || msg.includes('Permission denied') || msg.includes('could not read Username')) {
+        throw new Error('认证失败，请检查 SSH key 或登录凭证是否配置正确');
+      }
+      if (msg.includes('rejected') || msg.includes('non-fast-forward')) {
+        throw new Error('远程有新的提交，请先拉取合并再推送');
+      }
+      if (msg.includes('timed out') || msg.includes('SIGTERM')) {
+        throw new Error('推送超时，请检查网络或稍后重试');
+      }
+
       throw err;
     }
   }
@@ -382,4 +453,225 @@ export async function deriveWorktree(cwd: string, branch: string, targetPath: st
   await runGit(['worktree', 'add', '-b', branch, targetPath], { cwd, timeoutMs: 30000 });
 
   return targetPath;
+}
+
+// ---------------------------------------------------------------------------
+// Path validation helper
+// ---------------------------------------------------------------------------
+
+function validatePaths(paths: string[]): void {
+  for (const p of paths) {
+    if (!p || p.startsWith('-') || /[\x00]/.test(p)) {
+      throw new Error(`Invalid path: ${p}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage / Unstage / Discard
+// ---------------------------------------------------------------------------
+
+export async function stageFiles(cwd: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  validatePaths(paths);
+  await runGit(['add', '--', ...paths], { cwd, timeoutMs: 10000 });
+}
+
+export async function unstageFiles(cwd: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  validatePaths(paths);
+  await runGit(['reset', 'HEAD', '--', ...paths], { cwd, timeoutMs: 10000 });
+}
+
+export async function discardFiles(cwd: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  validatePaths(paths);
+
+  // Separate tracked vs untracked files
+  const statusOutput = await runGit(
+    ['status', '--porcelain', '--untracked-files=normal'],
+    { cwd, timeoutMs: 10000 },
+  );
+
+  const untrackedSet = new Set<string>();
+  for (const line of statusOutput.split('\n')) {
+    if (line.startsWith('? ')) {
+      untrackedSet.add(line.substring(2).trim());
+    }
+  }
+
+  const tracked = paths.filter((p) => !untrackedSet.has(p));
+  const untracked = paths.filter((p) => untrackedSet.has(p));
+
+  if (tracked.length > 0) {
+    await runGit(['checkout', '--', ...tracked], { cwd, timeoutMs: 10000 });
+  }
+  if (untracked.length > 0) {
+    await runGit(['clean', '-f', '--', ...untracked], { cwd, timeoutMs: 10000 });
+  }
+}
+
+export async function stageAll(cwd: string): Promise<void> {
+  await runGit(['add', '-A'], { cwd, timeoutMs: 10000 });
+}
+
+export async function unstageAll(cwd: string): Promise<void> {
+  await runGit(['reset', 'HEAD'], { cwd, timeoutMs: 10000 });
+}
+
+// ---------------------------------------------------------------------------
+// Diffs
+// ---------------------------------------------------------------------------
+
+export async function getFileDiff(cwd: string, filePath: string, staged: boolean): Promise<string> {
+  validatePaths([filePath]);
+
+  // Check if the file is untracked
+  const statusOutput = await runGit(
+    ['status', '--porcelain', '--untracked-files=normal', '--', filePath],
+    { cwd, timeoutMs: 10000 },
+  );
+
+  const isUntracked = statusOutput.split('\n').some((l) => l.startsWith('? '));
+
+  if (isUntracked) {
+    // git diff --no-index exits with code 1 when files differ, which runGit
+    // treats as an error. Use execFile directly and ignore the exit code.
+    return new Promise<string>((resolve) => {
+      execFile('git', ['diff', '--no-index', '--', '/dev/null', filePath], {
+        cwd,
+        timeout: 10000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      }, (_err, stdout) => {
+        resolve(stdout || '');
+      });
+    });
+  }
+
+  const args = staged
+    ? ['diff', '--cached', '--', filePath]
+    : ['diff', '--', filePath];
+  return runGit(args, { cwd, timeoutMs: 10000 });
+}
+
+export async function getDiffSummary(cwd: string, staged: boolean): Promise<string> {
+  const args = staged
+    ? ['diff', '--cached', '--stat', '-p']
+    : ['diff', '--stat', '-p'];
+
+  const output = await runGit(args, { cwd, timeoutMs: 10000 });
+
+  // Limit output to ~50000 chars for AI consumption
+  if (output.length > 50000) {
+    return output.substring(0, 50000) + '\n\n... [truncated]';
+  }
+  return output;
+}
+
+// ---------------------------------------------------------------------------
+// Network operations
+// ---------------------------------------------------------------------------
+
+export async function pull(cwd: string): Promise<string> {
+  const output = await runGit(['pull'], { cwd, timeoutMs: 120000 });
+  return output;
+}
+
+export async function fetch(cwd: string): Promise<string> {
+  const output = await runGit(['fetch', '--all', '--prune'], { cwd, timeoutMs: 120000 });
+  return output;
+}
+
+// ---------------------------------------------------------------------------
+// Stash
+// ---------------------------------------------------------------------------
+
+export async function stashSave(cwd: string, message?: string): Promise<string> {
+  const args = ['stash', 'push'];
+  if (message) {
+    args.push('-m', message);
+  }
+  const output = await runGit(args, { cwd, timeoutMs: 10000 });
+  return output;
+}
+
+export async function stashPop(cwd: string): Promise<string> {
+  const output = await runGit(['stash', 'pop'], { cwd, timeoutMs: 10000 });
+  return output;
+}
+
+export async function stashList(cwd: string): Promise<Array<{ index: number; message: string }>> {
+  const output = await runGit(['stash', 'list'], { cwd, timeoutMs: 10000 });
+
+  const entries: Array<{ index: number; message: string }> = [];
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+    // Format: stash@{0}: WIP on main: abc1234 some message
+    const match = line.match(/^stash@\{(\d+)\}:\s*(.+)$/);
+    if (match) {
+      entries.push({
+        index: parseInt(match[1], 10),
+        message: match[2],
+      });
+    }
+  }
+  return entries;
+}
+
+export async function stashDrop(cwd: string, index: number): Promise<void> {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`Invalid stash index: ${index}`);
+  }
+  await runGit(['stash', 'drop', `stash@{${index}}`], { cwd, timeoutMs: 10000 });
+}
+
+/**
+ * Push current HEAD to a specific remote branch.
+ * If targetBranch differs from current branch, creates/updates the remote branch.
+ * Workflow: local HEAD -> origin/<targetBranch>
+ */
+export async function pushToBranch(cwd: string, targetBranch: string): Promise<void> {
+  // Validate branch name
+  if (!/^[\w.\-/]+$/.test(targetBranch)) {
+    throw new Error(`Invalid branch name: ${targetBranch}`);
+  }
+
+  const PUSH_TIMEOUT = 120000;
+  const MAX_RETRIES = 2;
+  const localBranch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Push local branch to the specified remote branch: git push origin localBranch:targetBranch
+      await runGit(
+        ['-c', 'http.version=HTTP/1.1', 'push', '-u', 'origin', `${localBranch}:${targetBranch}`],
+        { cwd, timeoutMs: PUSH_TIMEOUT },
+      );
+      return;
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      const msg = err.message;
+
+      // HTTP2 / network flake — retry
+      if (attempt < MAX_RETRIES && (msg.includes('HTTP2') || msg.includes('HTTP/2') || msg.includes('framing layer') || msg.includes('unexpected disconnect'))) {
+        continue;
+      }
+
+      if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
+        throw new Error('无法连接到远程仓库，请检查网络连接');
+      }
+      if (msg.includes('Authentication failed') || msg.includes('Permission denied') || msg.includes('could not read Username')) {
+        throw new Error('认证失败，请检查 SSH key 或登录凭证是否配置正确');
+      }
+      if (msg.includes('rejected') || msg.includes('non-fast-forward')) {
+        throw new Error('远程有新的提交，请先拉取合并再推送');
+      }
+      if (msg.includes('timed out') || msg.includes('SIGTERM')) {
+        throw new Error('推送超时，请检查网络或稍后重试');
+      }
+
+      throw err;
+    }
+  }
 }

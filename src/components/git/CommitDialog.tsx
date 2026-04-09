@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { X, GitCommit, CloudArrowUp } from "@/components/ui/icon";
+import { X, GitCommit, CloudArrowUp, Sparkle } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/hooks/useTranslation";
 
@@ -19,6 +19,7 @@ export function CommitDialog({ cwd, open, onClose, onSuccess }: CommitDialogProp
   const [message, setMessage] = useState("");
   const [mode, setMode] = useState<CommitMode>("commit");
   const [committing, setCommitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -44,6 +45,30 @@ export function CommitDialog({ cwd, open, onClose, onSuccess }: CommitDialogProp
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
+
+  const handleGenerateMessage = useCallback(async () => {
+    if (!cwd || generating) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/git/ai-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd, action: "summary" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || t('git.generateFailed'));
+      }
+      if (data.result) {
+        setMessage(data.result);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('git.generateFailed'));
+    } finally {
+      setGenerating(false);
+    }
+  }, [cwd, generating, t]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = message.trim();
@@ -104,19 +129,31 @@ export function CommitDialog({ cwd, open, onClose, onSuccess }: CommitDialogProp
 
         {/* Body */}
         <div className="p-4 space-y-3">
-          <textarea
-            ref={textareaRef}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder={t('git.commitMessage')}
-            className="w-full h-24 rounded-md border border-input bg-transparent px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                handleSubmit();
-              }
-            }}
-          />
+          <div className="relative">
+            <textarea
+              ref={textareaRef}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder={t('git.commitMessage')}
+              className="w-full h-24 rounded-md border border-input bg-transparent px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-ring pr-10"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+              }}
+            />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="absolute top-1.5 right-1.5 opacity-60 hover:opacity-100"
+              onClick={handleGenerateMessage}
+              disabled={generating}
+              title={t('git.generateCommitMsg')}
+            >
+              <Sparkle size={14} className={generating ? "animate-spin" : ""} />
+            </Button>
+          </div>
 
           {/* Mode selector */}
           <div className="flex flex-col gap-1.5">

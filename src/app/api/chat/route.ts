@@ -72,12 +72,18 @@ export async function POST(request: NextRequest) {
       try {
         const { compressConversation, resetCompressionState } = await import('@/lib/context-compressor');
         const { getMessages: getDbMessages, getSessionSummary: getDbSummary, updateSessionSummary: updateDbSummary, addMessage: addDbMessage } = await import('@/lib/db');
+        const { roughTokenEstimate } = await import('@/lib/context-estimator');
 
         resetCompressionState(session_id);
         const { messages: allMsgs } = getDbMessages(session_id, { limit: 200, excludeHeartbeatAck: true });
         const existingSummary = getDbSummary(session_id).summary;
 
-        if (allMsgs.length < 4) {
+        const totalTokens = allMsgs.reduce((sum, m) => sum + roughTokenEstimate(m.content), 0);
+
+        // Allow compression if:
+        // 1. We have at least 4 messages (standard case)
+        // 2. OR we have fewer messages but they are large (> 5000 tokens, e.g. large file attachments)
+        if (allMsgs.length < 4 && totalTokens < 5000) {
           const msg = '对话还很短，暂不需要压缩。';
           addDbMessage(session_id, 'assistant', JSON.stringify([{ type: 'text', text: msg }]));
           releaseSessionLock(session_id, lockId);

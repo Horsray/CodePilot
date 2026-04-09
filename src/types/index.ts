@@ -1151,6 +1151,8 @@ export interface GitChangedFile {
   path: string;
   status: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked';
   staged: boolean;
+  additions?: number;
+  deletions?: number;
 }
 
 export interface GitBranch {

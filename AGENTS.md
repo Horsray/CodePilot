@@ -7,7 +7,7 @@ CodePilot — 多模型 AI Agent 桌面客户端，基于 Electron + Next.js。
 ## Fork 同步须知
 
 - 本仓库是 `https://github.com/op7418/CodePilot` 的 fork
-- 处理 upstream 同步、官方更新合并、冲突解决前，必须先阅读 `docs/handover/fork-sync-playbook.md`
+- 处理 upstream 同步、官方更新合并、冲突解决前，必须先阅读 `fork-sync-playbook.md`
 - 合并目标是“优先继承官方演进，再保留并适配 fork 定制能力”，不要用整文件覆盖的方式粗暴解决冲突
 
 ## 项目概述
