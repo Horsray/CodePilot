@@ -20,9 +20,12 @@ function resolveTerminalUrl(pathname: string): string {
  */
 export function useWebTerminal() {
   const { workingDirectory, sessionId } = usePanel();
+  // 终端后端开关：桌面端暂时强制走 HTTP+SSE，绕过 Electron IPC 写入链路不稳定问题。
+  const useElectronBackend = false;
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
   const terminalIdRef = useRef<string>("");
+  const backendRef = useRef<"electron" | "http">("http");
   const eventSourceRef = useRef<EventSource | null>(null);
   const onDataCallbackRef = useRef<((data: string) => void) | null>(null);
   const onExitCallbackRef = useRef<((code: number) => void) | null>(null);
@@ -37,7 +40,7 @@ export function useWebTerminal() {
 
     if (terminalIdRef.current) {
       try {
-        if (terminalApi) {
+        if (useElectronBackend && backendRef.current === "electron" && terminalApi) {
           await terminalApi.kill(terminalIdRef.current);
         } else {
           await fetch(apiUrl, {
@@ -55,15 +58,22 @@ export function useWebTerminal() {
     setExited(false);
 
     try {
-      if (terminalApi) {
-        await terminalApi.create({
-          id,
-          cwd: workingDirectory || "/",
-          cols,
-          rows,
-        });
-        setConnected(true);
-        return;
+      if (useElectronBackend && terminalApi) {
+        try {
+          await terminalApi.create({
+            id,
+            // 终端创建：空工作目录时传空字符串，让桌面端自动回退到系统可用目录（避免 "/" 在部分平台不可用）。
+            cwd: workingDirectory || "",
+            cols,
+            rows,
+          });
+          // 后端选择：优先使用 Electron IPC，失败时自动回退到 HTTP 路径。
+          backendRef.current = "electron";
+          setConnected(true);
+          return;
+        } catch (electronErr) {
+          console.warn("[terminal] electron backend create failed, fallback to http backend", electronErr);
+        }
       }
 
       const res = await fetch(apiUrl, {
@@ -82,6 +92,8 @@ export function useWebTerminal() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Failed to create terminal");
       }
+      // 后端选择：HTTP create 成功后，后续读写统一走 HTTP + SSE。
+      backendRef.current = "http";
 
       const streamUrl = resolveTerminalUrl(`/api/terminal/stream?id=${encodeURIComponent(id)}`);
       const es = new EventSource(streamUrl);
@@ -126,7 +138,8 @@ export function useWebTerminal() {
         setConnected(false);
       };
     } catch (err) {
-      const message = `Failed to create web terminal (id=${id})`;
+      const detail = err instanceof Error ? err.message : String(err);
+      const message = `Failed to create web terminal (id=${id}): ${detail}`;
       console.error(message, err);
       setExited(true);
       throw err instanceof Error ? new Error(message, { cause: err }) : new Error(message);
@@ -135,10 +148,12 @@ export function useWebTerminal() {
 
   const write = useCallback(async (data: string) => {
     if (!terminalIdRef.current) return;
+    
     const terminalApi = window.electronAPI?.terminal;
     try {
-      if (terminalApi) {
-        terminalApi.write(terminalIdRef.current, data);
+      if (useElectronBackend && backendRef.current === "electron" && terminalApi) {
+        // 输入写入：必须 await，确保 IPC 失败能进入 catch，避免“可显示但无法输入”静默失败。
+        await terminalApi.write(terminalIdRef.current, data);
         return;
       }
 
@@ -158,7 +173,7 @@ export function useWebTerminal() {
     if (!terminalIdRef.current) return;
     const terminalApi = window.electronAPI?.terminal;
     try {
-      if (terminalApi) {
+      if (useElectronBackend && backendRef.current === "electron" && terminalApi) {
         await terminalApi.resize(terminalIdRef.current, cols, rows);
         return;
       }
@@ -182,7 +197,7 @@ export function useWebTerminal() {
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
     try {
-      if (terminalApi) {
+      if (useElectronBackend && backendRef.current === "electron" && terminalApi) {
         await terminalApi.kill(terminalIdRef.current);
       } else {
         await fetch(resolveTerminalUrl("/api/terminal"), {
@@ -193,6 +208,7 @@ export function useWebTerminal() {
       }
     } catch { /* ignore */ }
     terminalIdRef.current = "";
+    backendRef.current = "http";
     setConnected(false);
   }, []);
 
@@ -206,7 +222,7 @@ export function useWebTerminal() {
 
   useEffect(() => {
     const terminalApi = window.electronAPI?.terminal;
-    if (!terminalApi) {
+    if (!useElectronBackend || !terminalApi) {
       cleanupRef.current = () => {
         eventSourceRef.current?.close();
         eventSourceRef.current = null;
@@ -239,11 +255,11 @@ export function useWebTerminal() {
       cleanupRef.current?.();
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
-      if (terminalIdRef.current) {
+      if (useElectronBackend && terminalIdRef.current) {
         terminalApi.kill(terminalIdRef.current).catch(() => {});
       }
     };
-  }, []);
+  }, [useElectronBackend]);
 
   return {
     connected,

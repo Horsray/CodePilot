@@ -106,12 +106,33 @@ export function XtermTerminal({ onData, onResize, onReady }: XtermTerminalProps)
         term.open(containerRef.current);
         fitAddon.fit();
 
+        // Focus the terminal when it opens and on container click
+        term.focus();
+
         // Forward user input to parent
         term.onData((data) => {
           onDataRef.current(data);
         });
 
+        // Also handle keyboard input via keypress events for better Electron compatibility
+        const handleKeyPress = (e: KeyboardEvent) => {
+          if (document.activeElement === containerRef.current || containerRef.current?.contains(document.activeElement)) {
+            // Let xterm.js handle it
+          }
+        };
+
+        // Focus terminal when clicking on the container
+        const handleContainerClick = () => {
+          term.focus();
+        };
+
+        containerRef.current.addEventListener('click', handleContainerClick);
+
         onReadyRef.current(term);
+
+        return () => {
+          containerRef.current?.removeEventListener('click', handleContainerClick);
+        };
       }
     }
 

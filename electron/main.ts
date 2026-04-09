@@ -140,7 +140,7 @@ async function isBridgeActive(): Promise<boolean> {
     return await new Promise<boolean>((resolve) => {
       const req = http.get(`http://127.0.0.1:${serverPort}/api/bridge`, (res: { statusCode?: number; on: (event: string, cb: (data?: Buffer) => void) => void }) => {
         let body = '';
-        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+        res.on('data', (chunk?: Buffer) => { if (chunk) body += chunk.toString(); });
         res.on('end', () => {
           try {
             const data = JSON.parse(body);
@@ -1324,15 +1324,22 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('terminal:create', async (_event, opts: { id: string; cwd: string; cols: number; rows: number }) => {
-    terminalManager.create(opts.id, {
-      cwd: opts.cwd,
-      cols: opts.cols,
-      rows: opts.rows,
-      env: userShellEnv,
-    });
+    try {
+      terminalManager.create(opts.id, {
+        cwd: opts.cwd,
+        cols: opts.cols,
+        rows: opts.rows,
+        env: userShellEnv,
+      });
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[main] terminal:create failed:', message);
+      throw new Error(message);
+    }
   });
 
-  ipcMain.on('terminal:write', (_event, data: { id: string; data: string }) => {
+  ipcMain.handle('terminal:write', async (_event, data: { id: string; data: string }) => {
     terminalManager.write(data.id, data.data);
   });
 

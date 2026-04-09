@@ -3,12 +3,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import {
-  GitBranch,
   PencilSimple,
-  DotOutline,
   ChartBar,
-  Brain,
-  Terminal,
   Globe,
   ChatCircle,
 } from "@/components/ui/icon";
@@ -31,21 +27,11 @@ export function UnifiedTopBar() {
     setSessionTitle,
     sessionId,
     workingDirectory,
-    fileTreeOpen,
-    setFileTreeOpen,
-    gitPanelOpen,
-    setGitPanelOpen,
     dashboardPanelOpen,
     setDashboardPanelOpen,
     assistantPanelOpen,
     setAssistantPanelOpen,
     isAssistantWorkspace,
-    currentBranch,
-    gitDirtyCount,
-    bottomPanelOpen,
-    setBottomPanelOpen,
-    bottomPanelTab,
-    setBottomPanelTab,
     browserTabOpen,
     setBrowserTabOpen,
     browserUrl,
@@ -254,75 +240,28 @@ export function UnifiedTopBar() {
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           {isChatRoute && (
-            <>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={gitPanelOpen ? "secondary" : "ghost"}
-                    size="sm"
-                    className={`h-7 gap-1 px-1.5 ${gitPanelOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
-                    onClick={() => setGitPanelOpen(!gitPanelOpen)}
-                  >
-                    <GitBranch size={16} />
-                    {currentBranch && (
-                      <span className="text-xs max-w-[100px] truncate">{currentBranch}</span>
-                    )}
-                    {gitDirtyCount > 0 && (
-                      <span className="flex items-center gap-0.5 text-[11px] text-amber-500">
-                        <DotOutline size={10} weight="fill" />
-                        {gitDirtyCount}
-                      </span>
-                    )}
-                    <span className="sr-only">{t('topBar.git')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t('topBar.git')}</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={dashboardPanelOpen ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    className={dashboardPanelOpen ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => setDashboardPanelOpen(!dashboardPanelOpen)}
-                  >
-                    {isAssistantWorkspace
-                      ? <img
-                          src={buddySpecies ? (SPECIES_IMAGE_URL[buddySpecies as Species] || '') : EGG_IMAGE_URL}
-                          alt="" width={16} height={16} className="rounded-sm"
-                        />
-                      : <ChartBar size={16} />}
-                    <span className="sr-only">{t('topBar.dashboard')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {isAssistantWorkspace ? 'Assistant' : t('topBar.dashboard')}
-                </TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={bottomPanelOpen && bottomPanelTab === "terminal" ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    className={bottomPanelOpen && bottomPanelTab === "terminal" ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => {
-                      if (bottomPanelOpen && bottomPanelTab === "terminal") {
-                        setBottomPanelOpen(false);
-                      } else {
-                        setBottomPanelTab("terminal");
-                        setBottomPanelOpen(true);
-                      }
-                    }}
-                  >
-                    <Terminal size={16} />
-                    <span className="sr-only">{t('bottomPanel.terminal')}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t('bottomPanel.terminal')}</TooltipContent>
-              </Tooltip>
-            </>)}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={dashboardPanelOpen ? "secondary" : "ghost"}
+                  size="icon-sm"
+                  className={dashboardPanelOpen ? "" : "text-muted-foreground hover:text-foreground"}
+                  onClick={() => setDashboardPanelOpen(!dashboardPanelOpen)}
+                >
+                  {isAssistantWorkspace
+                    ? <img
+                        src={buddySpecies ? (SPECIES_IMAGE_URL[buddySpecies as Species] || '') : EGG_IMAGE_URL}
+                        alt="" width={16} height={16} className="rounded-sm"
+                      />
+                    : <ChartBar size={16} />}
+                  <span className="sr-only">{t('topBar.dashboard')}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {isAssistantWorkspace ? 'Assistant' : t('topBar.dashboard')}
+              </TooltipContent>
+            </Tooltip>
+          )}
           {isWindows && <div style={{ width: 138 }} className="shrink-0" />}
         </div>
       </div>

@@ -41,7 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     create: (opts: { id: string; cwd: string; cols: number; rows: number }) =>
       ipcRenderer.invoke('terminal:create', opts),
     write: (id: string, data: string) =>
-      ipcRenderer.send('terminal:write', { id, data }),
+      ipcRenderer.invoke('terminal:write', { id, data }),
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
     kill: (id: string) =>

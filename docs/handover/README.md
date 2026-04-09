@@ -30,3 +30,4 @@
 | provider-governance.md | 服务商治理系统：Zod Schema 防护、authStyle 修正 6 preset、宿主接管、连通性验证、引导 UX、错误恢复、模型 CRUD |
 | sentry-error-reporting.md | Sentry 匿名错误上报：三层覆盖（browser/server/electron）、opt-out 机制、隐私保护、上报策略 |
 | planning-with-files-skill.md | 全局技能模块：拉取并安装 planning-with-files Skill，统一初始化接口、错误码与测试 |
+| console-search-copy.md | 控制台模糊检索 + 高亮 + 快捷键 + 单行/批量复制 + 虚拟滚动 + 兼容性降级复制 |

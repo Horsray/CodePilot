@@ -96,6 +96,8 @@ module.exports = async function afterPack(context) {
   let replacedSqlite = 0;
   let replacedPty = 0;
   let replacedSpawnHelper = 0;
+  let injectedPty = 0;
+  let injectedSpawnHelper = 0;
 
   function walkAndReplace(dir) {
     if (!fs.existsSync(dir)) return;
@@ -134,8 +136,46 @@ module.exports = async function afterPack(context) {
     walkAndReplace(root);
   }
 
-  if (replacedSqlite > 0 || replacedPty > 0) {
-    console.log(`[afterPack] Successfully replaced better_sqlite3.node=${replacedSqlite}, pty.node=${replacedPty}, spawn-helper=${replacedSpawnHelper}`);
+  // 中文注释：注入 node-pty 原生二进制到指定包目录（支持 node-pty 和 node-pty-哈希目录）。
+  function injectNodePtyBinary(packageDir) {
+    const releaseDir = path.join(packageDir, 'build', 'Release');
+    fs.mkdirSync(releaseDir, { recursive: true });
+
+    const ptyTarget = path.join(releaseDir, 'pty.node');
+    fs.copyFileSync(rebuiltPtySource, ptyTarget);
+    injectedPty++;
+    console.log(`[afterPack] Injected ${ptyTarget}`);
+
+    const helperSource = path.join(projectDir, 'node_modules', 'node-pty', 'build', 'Release', 'spawn-helper');
+    if (fs.existsSync(helperSource)) {
+      const helperTarget = path.join(releaseDir, 'spawn-helper');
+      fs.copyFileSync(helperSource, helperTarget);
+      fs.chmodSync(helperTarget, 0o755);
+      injectedSpawnHelper++;
+      console.log(`[afterPack] Injected ${helperTarget}`);
+    }
+  }
+
+  // 中文注释：扫描 node_modules 与 .next/node_modules，覆盖 Next 打包后的哈希目录。
+  function injectNodePtyUnder(baseDir) {
+    if (!fs.existsSync(baseDir)) return;
+    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (!/^node-pty($|-)/.test(entry.name)) continue;
+      injectNodePtyBinary(path.join(baseDir, entry.name));
+    }
+  }
+
+  for (const root of searchRoots) {
+    injectNodePtyUnder(path.join(root, 'node_modules'));
+    injectNodePtyUnder(path.join(root, '.next', 'node_modules'));
+  }
+
+  if (replacedSqlite > 0 || replacedPty > 0 || injectedPty > 0) {
+    console.log(
+      `[afterPack] Successfully replaced better_sqlite3.node=${replacedSqlite}, pty.node=${replacedPty}, spawn-helper=${replacedSpawnHelper}; injected pty.node=${injectedPty}, injected spawn-helper=${injectedSpawnHelper}`
+    );
   } else {
     console.warn('[afterPack] WARNING: No rebuilt native binaries were found in standalone resources!');
     for (const root of searchRoots) {

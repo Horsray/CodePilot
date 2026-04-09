@@ -18,6 +18,7 @@ import {
   Terminal,
   WifiHigh,
   Package,
+  GitBranch,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,7 +74,7 @@ const quickNavItems = [
 export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatListPanelProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, workingDirectory, fileTreeOpen, setFileTreeOpen } = usePanel();
+  const { streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, workingDirectory, fileTreeOpen, setFileTreeOpen, gitPanelOpen, setGitPanelOpen, currentBranch, gitDirtyCount, bottomPanelOpen, setBottomPanelOpen, bottomPanelTab, setBottomPanelTab } = usePanel();
   const { splitSessions, isSplitActive, activeColumnId, addToSplit, removeFromSplit, setActiveColumn, isInSplit } = useSplit();
   const { t } = useTranslation();
   const { isElectron, openNativePicker } = useNativeFolderPicker();
@@ -465,39 +466,10 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         />
       </div>
 
-      {/* Header row: Connection + Gallery + New Chat + Search + File Tree */}
+      {/* Header row: Connection + File Tree + Git + Terminal */}
       <div className="flex h-12 shrink-0 items-center justify-between px-3 mt-2">
         <ConnectionStatus />
         <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9"
-                disabled={creatingChat}
-                onClick={handleNewChat}
-              >
-                <NotePencil size={20} />
-                <span className="sr-only">{t('chatList.newConversation')}</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{t('chatList.newConversation')}</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9"
-                onClick={() => setSearchDialogOpen(true)}
-              >
-                <MagnifyingGlass size={20} />
-                <span className="sr-only">{t('chatList.searchSessions')}</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{t('chatList.searchSessions')}</TooltipContent>
-          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -511,6 +483,49 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{t('topBar.fileTree')}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={gitPanelOpen ? "secondary" : "ghost"}
+                size="icon"
+                className={`relative h-9 w-9 ${gitPanelOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+                onClick={() => setGitPanelOpen(!gitPanelOpen)}
+              >
+                <GitBranch size={20} />
+                {currentBranch && (
+                  <span className="sr-only">{currentBranch}</span>
+                )}
+                {gitDirtyCount > 0 && (
+                  <span className="absolute -top-1 -right-1 flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-medium leading-4 text-white">
+                    {gitDirtyCount > 99 ? '99+' : gitDirtyCount}
+                  </span>
+                )}
+                <span className="sr-only">{t('topBar.git')}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t('topBar.git')}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={bottomPanelOpen && bottomPanelTab === "terminal" ? "secondary" : "ghost"}
+                size="icon"
+                className={bottomPanelOpen && bottomPanelTab === "terminal" ? "" : "h-9 w-9"}
+                onClick={() => {
+                  if (bottomPanelOpen && bottomPanelTab === "terminal") {
+                    setBottomPanelOpen(false);
+                  } else {
+                    setBottomPanelTab("terminal");
+                    setBottomPanelOpen(true);
+                  }
+                }}
+              >
+                <Terminal size={20} />
+                <span className="sr-only">{t('bottomPanel.terminal')}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t('bottomPanel.terminal')}</TooltipContent>
           </Tooltip>
         </div>
       </div>
@@ -549,15 +564,30 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         <span className="text-sm font-medium text-muted-foreground">
           {t('chatList.threads')}
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 gap-1.5 px-2 text-sm text-muted-foreground hover:text-foreground"
-          onClick={() => openFolderPicker()}
-        >
-          <FolderPlus size={14} />
-          {t('chatList.addProjectFolder')}
-        </Button>
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setSearchDialogOpen(true)}
+              >
+                <MagnifyingGlass size={16} />
+                <span className="sr-only">{t('chatList.searchSessions')}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t('chatList.searchSessions')}</TooltipContent>
+          </Tooltip>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 px-2 text-sm text-muted-foreground hover:text-foreground"
+            onClick={() => openFolderPicker()}
+          >
+            <FolderPlus size={14} />
+          </Button>
+        </div>
       </div>
 
       {/* Session list grouped by project */}
