@@ -448,7 +448,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
   }
 
   if (!runtime) {
-    runtime = resolveRuntime(getSetting('agent_runtime') || undefined);
+    runtime = resolveRuntime(getSetting('agent_runtime') || undefined, effectiveProvider || undefined);
   }
 
   console.log(`[streamClaude] Using runtime: ${runtime.id} (setting: ${getSetting('agent_runtime') || 'auto'})`);

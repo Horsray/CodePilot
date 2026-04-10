@@ -41,15 +41,25 @@ export function getAvailableRuntimes(): AgentRuntime[] {
  * This check prevents auto mode from selecting SDK when the user
  * has zero credentials configured (#456).
  */
-function hasAnyCredentials(): boolean {
+/**
+ * Check if the request's provider has credentials the SDK can use.
+ * When providerId is 'env' or empty, only checks env vars / legacy DB.
+ * When providerId points to a DB provider, checks that specific provider.
+ * When no providerId, checks all providers (any credential = true).
+ */
+function hasCredentialsForRequest(providerId?: string): boolean {
+  // Env vars and legacy DB — always checked (covers 'env' provider)
   if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return true;
   if (getSetting('anthropic_auth_token')) return true;
-  // Check ALL providers (not just active) — the request might use any of them
+
+  // If request explicitly uses 'env' provider, only env credentials matter
+  if (providerId === 'env') return false;
+
+  // Check DB providers
   try {
     const providers = getAllProviders();
     for (const p of providers) {
       if (p.api_key) return true;
-      // Bedrock/Vertex: env_only, no api_key
       if (p.extra_env?.includes('CLAUDE_CODE_USE_BEDROCK')) return true;
       if (p.extra_env?.includes('CLAUDE_CODE_USE_VERTEX')) return true;
     }
@@ -66,7 +76,7 @@ function hasAnyCredentials(): boolean {
  * 2. Global user setting (agent_runtime)
  * 3. Auto: native if available, else claude-code-sdk
  */
-export function resolveRuntime(overrideId?: string): AgentRuntime {
+export function resolveRuntime(overrideId?: string, providerId?: string): AgentRuntime {
   // 0. cli_enabled=false is an absolute constraint — never return SDK
   const cliDisabled = getSetting('cli_enabled') === 'false';
 
@@ -96,7 +106,7 @@ export function resolveRuntime(overrideId?: string): AgentRuntime {
   //    because CLI manages its own auth in many ways (OAuth, env, provider),
   //    and we only need this guard for AUTO mode, not explicit selection.
   const sdk = getRuntime('claude-code-sdk');
-  if (sdk?.isAvailable() && hasAnyCredentials()) return sdk;
+  if (sdk?.isAvailable() && hasCredentialsForRequest(providerId)) return sdk;
 
   const native = getRuntime('native');
   if (native?.isAvailable()) return native;
@@ -134,7 +144,7 @@ export function predictNativeRuntime(providerId?: string): boolean {
 
   // Auto: prefer SDK if CLI exists AND has Anthropic credentials
   const sdk = getRuntime('claude-code-sdk');
-  if (sdk?.isAvailable() && hasAnyCredentials()) return false;
+  if (sdk?.isAvailable() && hasCredentialsForRequest(providerId)) return false;
 
   return true; // SDK not available or no Anthropic creds → native
 }
