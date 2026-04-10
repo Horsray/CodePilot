@@ -303,16 +303,17 @@ export function StreamingMessage({
   // Filter out leaked SSE raw data that wasn't properly parsed
   const cleanContent = useMemo(() => {
     if (!content) return '';
-    // Line-by-line filter: remove any line that looks like raw JSON event data
-    const lines = content.split('\n');
-    const cleaned = lines.filter(line => {
+    // First pass: strip multi-line JSON blobs that look like SSE events
+    // e.g. {"type":"tool_result","tool_use_id":"...","content":"..."}
+    let cleaned = content.replace(/\{[^{}]*"type"\s*:\s*"[^"]*"[^{}]*\}/g, '');
+    // Second pass: line-by-line filter for remaining leaks
+    cleaned = cleaned.split('\n').filter(line => {
       const trimmed = line.trim();
+      if (!trimmed) return true;
       // Remove lines starting with $data or data: followed by JSON
       if (/^\$?data\s*:?\s*\{/.test(trimmed)) return false;
-      // Remove lines that are standalone JSON objects (SSE event leak)
+      // Remove lines that are standalone JSON objects with a "type" key
       if (/^\{.*"type"\s*:/.test(trimmed)) return false;
-      // Remove lines that are just a JSON object
-      if (/^\{.*\}$/.test(trimmed) && trimmed.length > 20) return false;
       return true;
     }).join('\n').trim();
     return cleaned;

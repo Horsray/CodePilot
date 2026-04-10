@@ -115,7 +115,9 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     sessionId: stream.sessionId,
     phase: stream.snapshot.phase,
     streamingContent: stream.accumulatedText,
-    streamingThinkingContent: stream.accumulatedThinking,
+    streamingThinkingContent: stream.fullThinking
+      ? stream.fullThinking + '\n\n---\n\n' + stream.accumulatedThinking
+      : stream.accumulatedThinking,
     toolUses: [...stream.toolUsesArray],
     toolResults: [...stream.toolResultsArray],
     streamingToolOutput: stream.toolOutputAccumulated,

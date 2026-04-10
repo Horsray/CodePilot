@@ -135,9 +135,10 @@ function extractDiff(t: ToolAction): DiffInfo | null {
 }
 
 // ─── Timeline segments ────────────────────────────────────────────────────────
-// Simple approach: thinking always appears at the BOTTOM of the timeline,
-// after all current tools. This way it naturally scrolls down with the flow
-// and shows "what the agent is thinking right now" — not a historical dump.
+// thinkingContent is "fullThinking\n\n---\n\naccumulatedThinking" — split by ---
+// and interleave with tool calls so thinking appears BEFORE the tool it preceded.
+//
+// Layout: think[0] → tool[0] → think[1] → tool[1] → … → think[N] (current)
 
 type Segment =
   | { type: 'thinking'; content: string; streaming: boolean }
@@ -152,17 +153,28 @@ function buildSegments(
   const segs: Segment[] = [];
   const lastRunningId = [...tools].reverse().find(t => t.result === undefined)?.id;
 
-  for (const t of tools) {
+  // Split thinking into phases separated by "---"
+  const phases = (thinkingContent || '')
+    .split(/\n\n---\n\n/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  // Interleave: phase[i] before tool[i], remaining phases after all tools
+  for (let i = 0; i < tools.length; i++) {
+    if (i < phases.length) {
+      // This phase preceded tool[i]
+      segs.push({ type: 'thinking', content: phases[i], streaming: false });
+    }
     segs.push({
-      type: 'tool', tool: t,
-      streamingOutput: t.id === lastRunningId ? streamingToolOutput : undefined,
+      type: 'tool', tool: tools[i],
+      streamingOutput: tools[i].id === lastRunningId ? streamingToolOutput : undefined,
     });
   }
 
-  // Thinking goes AFTER all tools — it represents "what the agent is thinking NOW"
-  const tc = (thinkingContent || '').trim();
-  if (tc) {
-    segs.push({ type: 'thinking', content: tc, streaming: isStreaming });
+  // Any remaining phases (current live thinking after last tool, or thinking with no tools yet)
+  for (let i = tools.length; i < phases.length; i++) {
+    const isLast = i === phases.length - 1;
+    segs.push({ type: 'thinking', content: phases[i], streaming: isLast && isStreaming });
   }
 
   return segs;
@@ -172,19 +184,19 @@ function buildSegments(
 /** Inline thinking row — always expanded, real-time, never truncated */
 function ThinkingRow({ content, streaming }: { content: string; streaming: boolean }) {
   return (
-    <div className="flex items-start gap-2.5 py-1">
+    <div className="flex items-start gap-2.5 py-1.5">
       <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-violet-500/10">
         {streaming
           ? <SpinnerGap size={11} className="animate-spin text-violet-400/60" />
-          : <Brain size={11} className="text-violet-400/70" />}
+          : <Brain size={11} className="text-violet-400/60" />}
       </div>
-      <div className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted-foreground/60 whitespace-pre-wrap break-words">
+      <div className="min-w-0 flex-1 text-[11.5px] leading-relaxed text-muted-foreground/50 whitespace-pre-wrap break-words italic">
         {!content && streaming && (
-          <span className="text-violet-400/50">思考中…</span>
+          <span className="text-violet-400/40 not-italic">思考中…</span>
         )}
         {content}
         {streaming && content && (
-          <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse rounded-sm bg-violet-400/40 align-middle" />
+          <span className="ml-0.5 inline-block h-2.5 w-0.5 animate-pulse rounded-sm bg-violet-400/40 align-middle not-italic" />
         )}
       </div>
     </div>
