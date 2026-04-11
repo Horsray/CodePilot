@@ -512,6 +512,20 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     return () => window.removeEventListener('dashboard-command', handler);
   }, []);
 
+  // Listen for chat retry events from timeline or error messages
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { stepId, messageId } = (e as CustomEvent).detail || {};
+      if (!sendMessageRef.current) return;
+      // The user wants to retry a failed step or message.
+      // We send a simple "继续" prompt to trigger the model to look at the
+      // previous context (which contains the tool error) and retry.
+      sendMessageRef.current("请根据上面的报错信息，重新尝试执行。", undefined, undefined, "重试");
+    };
+    window.addEventListener('chat-retry', handler);
+    return () => window.removeEventListener('chat-retry', handler);
+  }, []);
+
   const handleCommand = useChatCommands({ sessionId, messages, setMessages: cappedSetMessages, sendMessage });
 
   // Listen for image generation completion

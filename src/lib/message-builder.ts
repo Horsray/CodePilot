@@ -162,9 +162,8 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
         type: 'tool-result',
         toolCallId,
         toolName,
-        result: `[tool-error] ${toolName}: missing tool_result; previous run was interrupted or timed out.`,
-        isError: true,
-      } as any);
+        output: { type: 'text', value: `[tool-error] ${toolName}: missing tool_result; previous run was interrupted or timed out.` },
+      });
     }
     pendingToolCalls.clear();
     if (missing.length > 0) {
@@ -224,9 +223,8 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
           type: 'tool-result',
           toolCallId: block.tool_use_id,
           toolName: toolNameMap.get(block.tool_use_id) || 'unknown',
-          result: block.content,
-          isError: block.is_error || false,
-        } as any);
+          output: { type: 'text', value: block.content },
+        });
         break;
 
       case 'code':

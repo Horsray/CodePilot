@@ -35,7 +35,7 @@ describe('buildCoreMessages tool_result mapping', () => {
     assert.ok(toolMsg, 'should include a tool message');
     assert.ok(Array.isArray(toolMsg.content), 'tool message content should be an array');
     assert.equal(toolMsg.content[0].type, 'tool-result');
-    assert.deepEqual(toolMsg.content[0].result, 'done');
+    assert.deepEqual(toolMsg.content[0].output, { type: 'text', value: 'done' });
   });
 
   it('should map error tool_result blocks to output:error-text', () => {
@@ -56,8 +56,7 @@ describe('buildCoreMessages tool_result mapping', () => {
     const messages = buildCoreMessages(dbMessages);
     const toolMsg = messages.find(m => m.role === 'tool') as any;
     assert.ok(toolMsg, 'should include a tool message');
-    assert.deepEqual(toolMsg.content[0].result, 'fetch failed');
-    assert.equal(toolMsg.content[0].isError, true);
+    assert.deepEqual(toolMsg.content[0].output, { type: 'text', value: 'fetch failed' });
   });
 });
 

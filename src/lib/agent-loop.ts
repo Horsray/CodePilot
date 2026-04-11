@@ -596,8 +596,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
                        const normalized = normalizeToolResultOutput(part.result, part.toolName);
                        return {
                          ...part,
-                         result: normalized.content,
-                         isError: normalized.isError
+                         output: { type: 'text', value: normalized.content },
                        };
                     }
                   }
