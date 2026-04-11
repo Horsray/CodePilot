@@ -213,41 +213,30 @@ function createLanguageModel(config: AiSdkConfig, isThirdPartyProxy: boolean): L
               headers.set('chatgpt-account-id', accountId);
             }
 
-            // AbortController logic for proper timeouts during fetch
-            const controller = new AbortController();
-            let timeoutId: ReturnType<typeof setTimeout> | undefined;
-            
-            // If the parent already aborted, abort immediately
-            if (init?.signal?.aborted) {
-              controller.abort(init.signal.reason);
-            } else {
-              // Set a 5-minute connection timeout for large contexts (1M+ tokens)
-              timeoutId = setTimeout(() => {
-                controller.abort(new Error('Cannot connect to API: Connect Timeout Error'));
-              }, 300000);
-              
-              // Link to parent signal if provided
-              if (init?.signal) {
-                const parentSignal = init.signal;
-                parentSignal.addEventListener('abort', () => {
-                  controller.abort(parentSignal.reason);
-                }, { once: true });
-              }
-            }
+            // Timeout: 30s default, configurable via CODEX_TIMEOUT_MS
+            const timeoutMs = parseInt(process.env.CODEX_TIMEOUT_MS || '30000', 10);
+            const timeoutCtl = new AbortController();
+            const timer = setTimeout(() => timeoutCtl.abort(), timeoutMs);
+            const combinedSignal = init?.signal
+              ? AbortSignal.any([init.signal, timeoutCtl.signal])
+              : timeoutCtl.signal;
 
             try {
-              const resp = await fetch(targetUrl, { 
-                ...init, 
-                headers,
-                signal: controller.signal 
-              });
+              const resp = await fetch(targetUrl, { ...init, headers, signal: combinedSignal });
+              clearTimeout(timer);
               if (!resp.ok) {
                 const body = await resp.clone().text().catch(() => '');
                 console.error(`[openai-codex] ${resp.status} ${resp.statusText}:`, body.slice(0, 500));
               }
               return resp;
-            } finally {
-              if (timeoutId) clearTimeout(timeoutId);
+            } catch (err) {
+              clearTimeout(timer);
+              if (err instanceof Error && err.name === 'AbortError' && timeoutCtl.signal.aborted) {
+                throw new Error(
+                  `OpenAI Codex API 连接超时 (${timeoutMs}ms)。如果你在防火墙内，请配置系统代理或在设置中设置 HTTPS_PROXY。`
+                );
+              }
+              throw err;
             }
           },
         });

@@ -114,29 +114,39 @@ export function resolveProvider(opts: ResolveOptions = {}): ResolvedProvider {
 
     if (!provider) {
       // Requested provider not found (or inactive session provider),
-      // fall back to default → any active
+      // fall back to default → any active.
+      //
+      // NOTE: We intentionally do NOT check default_provider's is_active here.
+      // is_active is a "currently selected" marker (see activateProvider in
+      // db.ts — radio-button style, only one provider can have is_active=1),
+      // NOT an enabled/disabled flag. A user setting default_provider_id is
+      // an explicit choice that must be honored regardless of is_active.
+      // Ignoring it here is the root cause of "Default provider X is inactive,
+      // falling back" warnings that surface as "No provider credentials" for
+      // users who set a default but never clicked Activate.
       const defaultId = getDefaultProviderId();
       if (defaultId && defaultId !== effectiveProviderId) {
         const defaultProvider = getProvider(defaultId);
-        if (defaultProvider?.is_active) provider = defaultProvider;
+        if (defaultProvider) provider = defaultProvider;
       }
       if (!provider) {
         provider = getActiveProvider();
       }
     }
   } else if (!effectiveProviderId) {
-    // No provider specified — use global default
+    // No provider specified — use global default.
+    // See NOTE above: is_active is a UI selection marker, not an enable flag.
+    // The user's default_provider_id is an explicit choice; honor it even if
+    // the provider isn't currently the "active" one.
     const defaultId = getDefaultProviderId();
     if (defaultId) {
       const defaultProvider = getProvider(defaultId);
-      // Only use default if it's active
-      if (defaultProvider?.is_active) {
+      if (defaultProvider) {
         provider = defaultProvider;
-      } else if (defaultProvider) {
-        console.warn(`[provider-resolver] Default provider "${defaultProvider.name}" (${defaultId}) is inactive, falling back`);
       }
     }
-    // If no active default, try any active provider
+    // If no default configured, fall back to any provider that happens to be
+    // marked active (backwards compat with pre-default_provider_id installs)
     if (!provider) {
       provider = getActiveProvider();
     }
@@ -152,16 +162,21 @@ export function resolveProvider(opts: ResolveOptions = {}): ResolvedProvider {
  *
  * Important: if resolveProvider() intentionally returned provider=undefined (e.g. user
  * selected 'env'), we respect that and do NOT fall back to getActiveProvider().
+ *
+ * NOTE: When the caller already resolved a provider upstream and hands it to
+ * us, we trust it unconditionally. `is_active` is a radio-button "currently
+ * selected" marker in the DB (see activateProvider in db.ts), not an
+ * enable/disable flag — second-guessing the caller here would undo the
+ * upstream resolution and surface false-positive "inactive, re-resolving"
+ * warnings in doctor logs. Stale-session defense lives in resolveProvider()'s
+ * session-provider branch, not here.
  */
 export function resolveForClaudeCode(
   explicitProvider?: ApiProvider,
   opts: ResolveOptions = {},
 ): ResolvedProvider {
-  if (explicitProvider && explicitProvider.is_active) {
+  if (explicitProvider) {
     return buildResolution(explicitProvider, opts);
-  }
-  if (explicitProvider && !explicitProvider.is_active) {
-    console.warn(`[provider-resolver] Explicit provider "${explicitProvider.name}" is inactive, re-resolving`);
   }
   const resolved = resolveProvider(opts);
   // Only fall back to getActiveProvider() when NO provider resolution was attempted

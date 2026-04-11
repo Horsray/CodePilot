@@ -19,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { cn } from "@/lib/utils";
 import type { ChatSession } from "@/types";
 import type { TranslationKey } from "@/i18n";
@@ -60,6 +61,7 @@ export function SessionListItem({
   onAddToSplit,
 }: SessionListItemProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
   const showActions = isHovered || menuOpen || isDeleting;
 
   return (
@@ -132,12 +134,18 @@ export function SessionListItem({
             <Columns size={14} />
             <span>{t('chatList.splitScreen' as TranslationKey)}</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => {
-            const newTitle = prompt("Rename conversation:", session.title);
-            if (newTitle && newTitle !== session.title) {
-              onRename(session.id, newTitle);
-            }
-          }}>
+          <DropdownMenuItem
+            onSelect={(e) => {
+              // Prevent the default close-menu → focus-trigger behavior.
+              // Radix DropdownMenu tries to restore focus to the trigger
+              // when the menu closes, which fights with the dialog's
+              // autoFocus. Calling preventDefault lets us manage close
+              // independently and open the dialog cleanly.
+              e.preventDefault();
+              setMenuOpen(false);
+              setRenameOpen(true);
+            }}
+          >
             <PencilSimple size={14} />
             <span>{t('chatList.renameConversation' as TranslationKey)}</span>
           </DropdownMenuItem>
@@ -157,6 +165,23 @@ export function SessionListItem({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {/* Rename dialog — replaces window.prompt() which is unsupported in
+          Electron renderers (throws TypeError: prompt() is not supported).
+          See docs/exec-plans/active/v0.48-post-release-issues.md §5.6. */}
+      <PromptDialog
+        open={renameOpen}
+        onOpenChange={setRenameOpen}
+        title={t('prompt.rename.title' as TranslationKey)}
+        defaultValue={session.title}
+        placeholder={t('prompt.rename.placeholder' as TranslationKey)}
+        confirmLabel={t('common.confirm' as TranslationKey)}
+        cancelLabel={t('common.cancel' as TranslationKey)}
+        onConfirm={(value) => {
+          if (value !== session.title) {
+            onRename(session.id, value);
+          }
+        }}
+      />
     </div>
   );
 }

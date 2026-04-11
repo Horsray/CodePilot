@@ -13,6 +13,7 @@ import type { AgentRuntime, RuntimeStreamOptions } from './types';
 import type { ClaudeStreamOptions } from '@/types';
 import { findClaudeBinary } from '../platform';
 import { getConversation } from '../conversation-registry';
+import { getSetting, getActiveProvider } from '../db';
 
 export const sdkRuntime: AgentRuntime = {
   id: 'claude-code-sdk',
@@ -73,6 +74,14 @@ export const sdkRuntime: AgentRuntime = {
   },
 
   isAvailable(): boolean {
+    // SDK is available if the CLI binary exists. Authentication is managed
+    // by the CLI itself (OAuth session, env vars, provider config, etc.)
+    // and should fail at runtime with a clear error, not be pre-filtered here.
+    //
+    // Previous approach tried to check credentials in isAvailable(), but
+    // this couldn't cover all auth paths (CLI OAuth, ~/.claude session, etc.)
+    // and caused false negatives — users with valid CLI auth were routed
+    // to native runtime unexpectedly.
     return !!findClaudeBinary();
   },
 

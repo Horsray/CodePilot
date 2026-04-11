@@ -475,8 +475,8 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
 
           // Consume the fullStream
           let hasToolCalls = false;
-          const stepToolNames: string[] = [];
           let hasContent = false; // tracks whether any actual content was produced
+          const stepToolNames: string[] = [];
           let firstModelEventSeen = false;
           const firstEventStart = Date.now();
           perfTrace.start(`model.step_${step}.first_event`);
@@ -552,7 +552,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
 
           // If no tool calls, the model is done
           if (!hasToolCalls) {
-            // Detect empty response (proxy rejected or model returned nothing)
+            // Detect truly empty response (no text, no thinking, no tools)
             if (!hasContent) {
               const finishReason = await result.finishReason;
               console.error(`[agent-loop] Empty response: hasContent=false, finishReason=${finishReason}, model=${modelId}`);

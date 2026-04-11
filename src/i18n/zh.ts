@@ -425,12 +425,20 @@ const zh: Record<TranslationKey, string> = {
 
   // ── Common ──────────────────────────────────────────────────
   'common.cancel': '取消',
+  'common.confirm': '确定',
   'common.save': '保存',
   'common.delete': '删除',
   'common.loading': '加载中...',
   'common.close': '关闭',
   'common.enabled': '已启用',
   'common.disabled': '已禁用',
+
+  // ── Prompt dialog (replacement for window.prompt — not supported in Electron) ──
+  'prompt.rename.title': '重命名对话',
+  'prompt.rename.placeholder': '输入新标题',
+  'prompt.workspacePath.title': '工作区路径',
+  'prompt.workspacePath.description': '输入目录的绝对路径',
+  'prompt.workspacePath.placeholder': '/path/to/workspace',
 
   // ── Error boundary ────────────────────────────────────────
   'error.title': '出错了',

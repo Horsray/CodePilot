@@ -162,6 +162,142 @@ describe('Stale default_provider_id cleanup', () => {
     });
   });
 
+  // ── Resolver is_active semantic fix (5.2.1 in v0.48-post-release-issues.md) ──
+  //
+  // Regression guard for the fix that removes the is_active filter from the
+  // default_provider_id branch of resolveProvider(). is_active is a
+  // radio-button "currently selected" marker (see activateProvider in db.ts),
+  // not an enabled/disabled flag. A user's default_provider_id is an explicit
+  // choice and must be honored regardless of is_active.
+  describe('resolver honors default_provider_id regardless of is_active', () => {
+    /** Deactivate all non-test providers so resolver fallback is deterministic */
+    function isolateFromRealProviders(): string[] {
+      const existing = getAllProviders();
+      const deactivated: string[] = [];
+      for (const p of existing) {
+        if (p.is_active && !p.name.startsWith('__test_')) {
+          getDb().prepare('UPDATE api_providers SET is_active = 0 WHERE id = ?').run(p.id);
+          deactivated.push(p.id);
+        }
+      }
+      return deactivated;
+    }
+
+    function restoreRealProviders(ids: string[]) {
+      for (const pid of ids) {
+        getDb().prepare('UPDATE api_providers SET is_active = 1 WHERE id = ?').run(pid);
+      }
+    }
+
+    it('default path: returns default provider even when is_active=0', () => {
+      const deactivated = isolateFromRealProviders();
+      try {
+        const id = createTestProvider('__test_inactive_default');
+        // createProvider defaults is_active=0 already, but assert it
+        assert.equal(getProvider(id)?.is_active ? 1 : 0, 0, 'new providers start inactive');
+
+        setDefaultProviderId(id);
+
+        // No opts → walks the "no effectiveProviderId" default branch
+        const resolved = resolveProvider({});
+        assert.ok(resolved.provider, 'should return a provider, not undefined');
+        assert.equal(resolved.provider?.id, id, 'should return the default provider despite is_active=0');
+      } finally {
+        restoreRealProviders(deactivated);
+      }
+    });
+
+    it('default path: returns default provider when is_active=1 (control)', () => {
+      const deactivated = isolateFromRealProviders();
+      try {
+        const id = createTestProvider('__test_active_default');
+        getDb().prepare('UPDATE api_providers SET is_active = 1 WHERE id = ?').run(id);
+        setDefaultProviderId(id);
+
+        const resolved = resolveProvider({});
+        assert.equal(resolved.provider?.id, id);
+      } finally {
+        restoreRealProviders(deactivated);
+      }
+    });
+
+    it('default path: falls back to getActiveProvider when no default configured', () => {
+      const deactivated = isolateFromRealProviders();
+      try {
+        const id = createTestProvider('__test_only_active');
+        getDb().prepare('UPDATE api_providers SET is_active = 1 WHERE id = ?').run(id);
+        setDefaultProviderId(''); // no default
+
+        const resolved = resolveProvider({});
+        assert.equal(resolved.provider?.id, id, 'should find the sole active provider');
+      } finally {
+        restoreRealProviders(deactivated);
+      }
+    });
+
+    it('explicit providerId path: is_active=0 provider is returned (bypasses filter)', () => {
+      // This path is already working pre-fix because isExplicitRequest=true
+      // skips the inactive check. Regression guard to ensure the fix doesn't
+      // break this.
+      const deactivated = isolateFromRealProviders();
+      try {
+        const id = createTestProvider('__test_explicit_inactive');
+        // is_active=0 by default
+
+        const resolved = resolveProvider({ providerId: id });
+        assert.equal(resolved.provider?.id, id, 'explicit providerId should bypass is_active filter');
+      } finally {
+        restoreRealProviders(deactivated);
+      }
+    });
+
+    it('session providerId path: is_active=0 still triggers fallback (stale session guard)', () => {
+      // This path intentionally keeps the is_active filter because a stale
+      // session may point to a deactivated provider (the original comment in
+      // provider-resolver.ts line 107). Regression guard.
+      const deactivated = isolateFromRealProviders();
+      try {
+        const staleId = createTestProvider('__test_stale_session');
+        const fallbackId = createTestProvider('__test_session_fallback');
+        // staleId: is_active=0, not default
+        // fallbackId: mark active so fallback chain finds it
+        getDb().prepare('UPDATE api_providers SET is_active = 1 WHERE id = ?').run(fallbackId);
+
+        // No explicit providerId, only sessionProviderId → isExplicitRequest=false
+        const resolved = resolveProvider({ sessionProviderId: staleId });
+        assert.notEqual(
+          resolved.provider?.id,
+          staleId,
+          'stale session provider should be skipped when is_active=0',
+        );
+      } finally {
+        restoreRealProviders(deactivated);
+      }
+    });
+
+    it('inner default fallback (explicit providerId not found → default): honors is_active=0 default', () => {
+      // Covers the provider-resolver.ts line ~117 branch: requested provider
+      // not found, walks the inner default fallback. That branch also had a
+      // stale is_active check that the fix removes.
+      const deactivated = isolateFromRealProviders();
+      try {
+        const defaultId = createTestProvider('__test_inner_default');
+        // defaultId: is_active=0 by default
+        setDefaultProviderId(defaultId);
+
+        // Explicit ID that doesn't exist → inner fallback chain
+        const resolved = resolveProvider({ providerId: 'nonexistent_id_xyz' });
+        assert.equal(
+          resolved.provider?.id,
+          defaultId,
+          'inner fallback to default_provider_id should honor is_active=0',
+        );
+      } finally {
+        restoreRealProviders(deactivated);
+      }
+    });
+  });
+
   describe('error-classifier categorizes stale default correctly', () => {
     it('classifyError produces PROCESS_CRASH for exit code 1', async () => {
       const { classifyError } = await import('../../lib/error-classifier');

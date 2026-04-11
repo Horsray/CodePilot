@@ -428,12 +428,20 @@ const en = {
 
   // ── Common ──────────────────────────────────────────────────
   'common.cancel': 'Cancel',
+  'common.confirm': 'Confirm',
   'common.save': 'Save',
   'common.delete': 'Delete',
   'common.loading': 'Loading...',
   'common.close': 'Close',
   'common.enabled': 'Enabled',
   'common.disabled': 'Disabled',
+
+  // ── Prompt dialog (replacement for window.prompt — not supported in Electron) ──
+  'prompt.rename.title': 'Rename Conversation',
+  'prompt.rename.placeholder': 'Enter new title',
+  'prompt.workspacePath.title': 'Workspace Path',
+  'prompt.workspacePath.description': 'Enter the absolute path to the directory',
+  'prompt.workspacePath.placeholder': '/path/to/workspace',
 
   // ── Error boundary ────────────────────────────────────────
   'error.title': 'Something went wrong',

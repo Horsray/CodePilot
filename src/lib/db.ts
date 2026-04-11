@@ -390,20 +390,6 @@ function migrateDb(db: Database.Database): void {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_runtime_status ON chat_sessions(runtime_status)");
 
-  // Ensure file_checkpoints table exists
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS file_checkpoints (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      file_path TEXT NOT NULL,
-      original_content TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_session ON file_checkpoints(session_id);
-  `);
-
   // Migrate is_active provider to default_provider_id setting
   const defaultProviderSetting = db.prepare("SELECT value FROM settings WHERE key = 'default_provider_id'").get() as { value: string } | undefined;
   if (!defaultProviderSetting) {
@@ -652,19 +638,6 @@ function migrateDb(db: Database.Database): void {
       resolved_at TEXT,
       FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
     );
-
-    -- File checkpoints for session-based review/rollback
-    CREATE TABLE IF NOT EXISTS file_checkpoints (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      file_path TEXT NOT NULL,
-      original_content TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_session ON file_checkpoints(session_id);
-
     CREATE INDEX IF NOT EXISTS idx_permission_session_status ON permission_requests(session_id, status);
     CREATE INDEX IF NOT EXISTS idx_permission_expires_at ON permission_requests(expires_at);
   `);
@@ -1027,7 +1000,7 @@ export function deleteSession(id: string): boolean {
   const db = getDb();
   // Wrap in transaction: clean up tables without CASCADE before deleting session.
   // channel_outbound_refs has codepilot_session_id but no FK CASCADE constraint,
-  // causing FK errors when foreign_keys=ON.
+  // causing FK errors when foreign_keys=ON (#Sentry 40x SqliteError).
   const txn = db.transaction(() => {
     db.prepare('DELETE FROM channel_outbound_refs WHERE codepilot_session_id = ?').run(id);
     return db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id).changes > 0;

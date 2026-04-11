@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { getLocalDateString } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { SpinnerGap, CheckCircle, X, Trash } from "@/components/ui/icon";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { WorkspaceInspectResult, ScheduledTask } from "@/types";
@@ -48,6 +49,11 @@ export function AssistantWorkspaceSection() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogType | null>(null);
   const [inspecting, setInspecting] = useState(false);
+  // Web fallback for the native folder picker. Used when window.electronAPI
+  // isn't available (e.g. running the Next.js dev server in a browser tab).
+  // In Electron proper, handleSelectFolder always takes the electronAPI
+  // branch and this dialog is never shown.
+  const [pathPromptOpen, setPathPromptOpen] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const [summary, setSummary] = useState<WorkspaceSummary | null>(null);
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -299,11 +305,10 @@ export function AssistantWorkspaceSection() {
           validatePath(result.filePaths[0]);
         }
       } else {
-        const input = prompt("Enter workspace directory path:");
-        if (input) {
-          setPathInput(input);
-          validatePath(input);
-        }
+        // Web fallback (no Electron) — open the PromptDialog. Previously
+        // used window.prompt(), which throws TypeError in Electron renderers
+        // (see docs/exec-plans/active/v0.48-post-release-issues.md §5.6).
+        setPathPromptOpen(true);
       }
     } catch (e) {
       console.error("Failed to select folder:", e);
@@ -668,6 +673,26 @@ export function AssistantWorkspaceSection() {
           }}
         />
       )}
+
+      {/* Web fallback for the folder picker — only reachable when the page
+          is accessed outside Electron (no electronAPI). In Electron proper,
+          handleSelectFolder takes the native dialog branch. Replaces an old
+          window.prompt() call that threw TypeError in Electron renderers
+          even though the branch was never expected to fire there — keeping
+          the component robust across dev-server and packaged builds. */}
+      <PromptDialog
+        open={pathPromptOpen}
+        onOpenChange={setPathPromptOpen}
+        title={t('prompt.workspacePath.title' as TranslationKey)}
+        description={t('prompt.workspacePath.description' as TranslationKey)}
+        placeholder={t('prompt.workspacePath.placeholder' as TranslationKey)}
+        confirmLabel={t('common.confirm' as TranslationKey)}
+        cancelLabel={t('common.cancel' as TranslationKey)}
+        onConfirm={(value) => {
+          setPathInput(value);
+          validatePath(value);
+        }}
+      />
     </div>
   );
 }
