@@ -1,8 +1,9 @@
 /**
  * codepilot-memory MCP — in-process MCP server for memory search/retrieval.
  *
- * Provides 3 tools:
+ * Provides 4 tools:
  * - codepilot_memory_search: Search with temporal decay + optional tag/type filters
+ * - codepilot_kb_search: Search the Atomic Knowledge Base for technical concepts
  * - codepilot_memory_get: Read a specific file (path-safe, truncated)
  * - codepilot_memory_recent: Get recent daily memories without search (for context)
  *
@@ -110,6 +111,50 @@ export function createMemorySearchMcpServer(workspacePath: string) {
             return { content: [{ type: 'text' as const, text: `Search failed: ${err instanceof Error ? err.message : 'unknown error'}` }] };
           }
         },
+      ),
+
+      tool(
+        'codepilot_kb_search',
+        'Search the Atomic Knowledge Base for technical concepts, architecture decisions, and project structures.',
+        {
+          query: z.string().describe('Technical concept or project area to search for'),
+        },
+        async ({ query }) => {
+          try {
+            const graphJsonPath = path.join(workspacePath, 'graphify-out', 'graph.json');
+            if (!fs.existsSync(graphJsonPath)) {
+              return { content: [{ type: 'text' as const, text: 'Knowledge base not yet built. Please ask the user to "learn" knowledge first.' }] };
+            }
+
+            const graphData = JSON.parse(fs.readFileSync(graphJsonPath, 'utf-8'));
+            const q = query.toLowerCase();
+            
+            const results = graphData.nodes
+              .filter((n: any) => 
+                n.id?.toLowerCase().includes(q) || 
+                n.label?.toLowerCase().includes(q) || 
+                n.description?.toLowerCase().includes(q)
+              )
+              .slice(0, 10)
+              .map((n: any) => ({
+                label: n.label || n.id,
+                description: n.description,
+                type: n.level || 'EXTRACTED',
+                path: n.id
+              }));
+
+            if (results.length === 0) {
+              return { content: [{ type: 'text' as const, text: `No knowledge found for "${query}".` }] };
+            }
+
+            const formatted = `Found ${results.length} knowledge nodes:\n\n` + 
+              results.map((r: any) => `### ${r.label} [${r.type}]\n${r.description}\nPath: ${r.path}`).join('\n\n');
+
+            return { content: [{ type: 'text' as const, text: formatted }] };
+          } catch (e) {
+            return { content: [{ type: 'text' as const, text: 'Failed to search knowledge base: ' + String(e) }] };
+          }
+        }
       ),
 
       tool(

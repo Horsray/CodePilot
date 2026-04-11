@@ -227,6 +227,8 @@ export default function NewChatPage() {
   const { isElectron, openNativePicker } = useNativeFolderPicker();
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingContent, setStreamingContent] = useState('');
+  const [streamingThinkingContent, setStreamingThinkingContent] = useState('');
+  const [referencedContexts, setReferencedContexts] = useState<string[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolUses, setToolUses] = useState<ToolUseInfo[]>([]);
   const [toolResults, setToolResults] = useState<ToolResultInfo[]>([]);
@@ -762,6 +764,21 @@ export default function NewChatPage() {
                   setStreamingContent(accumulated);
                   break;
                 }
+                case 'thinking': {
+                  setStreamingThinkingContent((prev) => prev + event.data);
+                  break;
+                }
+                case 'referenced_contexts': {
+                  try {
+                    const data = JSON.parse(event.data);
+                    if (data.files) {
+                      setReferencedContexts(data.files);
+                    }
+                  } catch (e) {
+                    console.error('Failed to parse referenced_contexts:', e);
+                  }
+                  break;
+                }
                 case 'tool_use': {
                   try {
                     const toolData = JSON.parse(event.data);
@@ -1006,6 +1023,8 @@ export default function NewChatPage() {
         <MessageList
           messages={messages}
           streamingContent={streamingContent}
+          streamingThinkingContent={streamingThinkingContent}
+          referencedContexts={referencedContexts}
           isStreaming={isStreaming}
           sessionId={createdSessionId}
           toolUses={toolUses}

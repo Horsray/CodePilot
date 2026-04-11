@@ -16,6 +16,8 @@ export interface WorkspaceState {
   includeAgentsMd?: boolean;
   includeClaudeMd?: boolean;
   enableAgentsSkills?: boolean;
+  syncProjectRules?: boolean;
+  knowledgeBaseEnabled?: boolean;
 }
 
 export interface TaxonomyCategoryInfo {

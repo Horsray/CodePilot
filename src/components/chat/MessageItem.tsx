@@ -25,6 +25,7 @@ import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, RARITY_BG_GRADIENT, type Species, typ
 import { parseDBDate } from '@/lib/utils';
 import { usePanel } from '@/hooks/usePanel';
 import { extractTimelineStepsFromBlocks } from '@/lib/agent-timeline';
+import { ReferencedContexts } from '@/components/chat/ReferencedContexts';
 import type { PlannerOutput, MessageContentBlock } from '@/types';
 
 interface ImageGenRequest {
@@ -577,41 +578,6 @@ function DiffSummary({ files }: { files: Array<{ path: string; name: string }> }
   );
 }
 
-function ReferencedContexts({ files }: { files: string[] }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const { t } = useTranslation();
-
-  return (
-    <div className="mb-3">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded bg-muted/50 hover:bg-muted text-[11px] text-muted-foreground transition-colors border border-border/30"
-      >
-        {isOpen ? <CaretDown size={12} weight="bold" /> : <CaretRight size={12} weight="bold" />}
-        <span>{t('chat.referencedContexts', { count: files.length }) || `参考了 ${files.length} 个上下文`}</span>
-      </button>
-
-      {isOpen && (
-        <div className="mt-2 flex flex-wrap gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
-          {files.map((file, i) => {
-            const isAgents = file.includes('AGENTS.md');
-            const isClaude = file.includes('CLAUDE.md');
-            return (
-              <div
-                key={i}
-                className="flex items-center gap-1.5 px-2 py-1 rounded border border-border/50 bg-background/50 text-[10px] text-foreground/80"
-              >
-                <Book size={12} className={isAgents ? "text-blue-500" : isClaude ? "text-indigo-500" : "text-muted-foreground"} />
-                <span className="font-mono">{file}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export const MessageItem = memo(function MessageItem({ message, sessionId, rewindUserMessageId, isAssistantProject, assistantName }: MessageItemProps) {
   const isUser = message.role === 'user';
 
@@ -769,18 +735,19 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       <div className="flex-1 min-w-0">
     <AIMessage from={isUser ? 'user' : 'assistant'}>
       <MessageContent>
+        {/* Referenced Contexts (Rule tags) */}
+        {!isUser && referencedFiles.length > 0 && (
+          <ReferencedContexts files={referencedFiles} />
+        )}
+
         {/* File attachments for user messages */}
         {isUser && files.length > 0 && (
           <FileAttachmentDisplay files={files} />
         )}
 
-        {!isUser && referencedFiles.length > 0 && (
-          <ReferencedContexts files={referencedFiles} />
-        )}
-
         {/* Tool calls + thinking for assistant messages — single collapsible group */}
         {!isUser && timelineSteps.length > 0 && (
-          <AgentTimeline steps={timelineSteps} compact={true} showSummaryCard={true} />
+          <AgentTimeline steps={timelineSteps} compact={true} showSummaryCard={true} referencedFiles={referencedFiles} />
         )}
         {!isUser && timelineSteps.length === 0 && (pairedTools.length > 0 || thinking) && (
           <ToolActionsGroup
@@ -795,6 +762,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
             thinkingContent={thinking}
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
+            referencedFiles={referencedFiles}
             flat={true}
           />
         )}

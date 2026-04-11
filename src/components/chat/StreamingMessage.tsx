@@ -15,6 +15,7 @@ import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview';
 import { WidgetRenderer } from './WidgetRenderer';
 import { AgentTimeline } from '@/components/chat/AgentTimeline';
+import { ReferencedContexts } from './ReferencedContexts';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
   appendTimelineOutput,
@@ -122,6 +123,7 @@ interface StreamingMessageProps {
   toolUses?: ToolUseInfo[];
   toolResults?: ToolResultInfo[];
   streamingToolOutput?: string;
+  referencedFiles?: string[];
   thinkingContent?: string;
   statusText?: string;
   onForceStop?: () => void;
@@ -309,6 +311,7 @@ export function StreamingMessage({
   toolUses = [],
   toolResults = [],
   streamingToolOutput,
+  referencedFiles,
   thinkingContent,
   statusText,
   onForceStop,
@@ -680,6 +683,10 @@ export function StreamingMessage({
   return (
     <AIMessage from="assistant">
       <MessageContent>
+        {referencedFiles && referencedFiles.length > 0 && (
+          <ReferencedContexts files={referencedFiles} />
+        )}
+
         {/* 时间线渲染：按步骤递进展示，避免工具/思考混成一坨 */}
         {liveTimelineSteps.length > 0 ? (
           <AgentTimeline
@@ -687,6 +694,7 @@ export function StreamingMessage({
             compact={true}
             liveStatusText={statusText || getRunningCommandSummary()}
             showSummaryCard={false}
+            referencedFiles={referencedFiles}
           />
         ) : ((toolUses.length > 0 || thinkingContent) && (
           <ToolActionsGroup
@@ -707,6 +715,7 @@ export function StreamingMessage({
             statusText={statusText}
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
+            referencedFiles={referencedFiles}
           />
         ))}
 

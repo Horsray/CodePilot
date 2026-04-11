@@ -149,6 +149,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const toolResults = streamSnapshot?.toolResults ?? [];
   const streamingToolOutput = streamSnapshot?.streamingToolOutput ?? '';
   const streamingThinkingContent = streamSnapshot?.streamingThinkingContent ?? '';
+  const referencedContexts = streamSnapshot?.referencedContexts;
   const statusText = streamSnapshot?.statusText;
   const pendingPermission = streamSnapshot?.pendingPermission ?? null;
   const permissionResolved = streamSnapshot?.permissionResolved ?? null;
@@ -580,6 +581,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         toolResults={toolResults}
         streamingToolOutput={streamingToolOutput}
         streamingThinkingContent={streamingThinkingContent}
+        referencedContexts={referencedContexts}
         statusText={statusText}
         onForceStop={stopStreaming}
         hasMore={hasMore}

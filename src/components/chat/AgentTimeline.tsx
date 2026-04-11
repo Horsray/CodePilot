@@ -28,6 +28,7 @@ interface AgentTimelineProps {
   compact?: boolean;
   liveStatusText?: string;
   showSummaryCard?: boolean;
+  referencedFiles?: string[];
 }
 
 type TimelineOverallStatus = 'running' | 'completed' | 'failed' | 'stopped';
@@ -460,7 +461,7 @@ function TimelineStepCard({ step, compact, liveStatusText }: { step: TimelineSte
  * 中文注释：功能名称「智能体执行时间线」，用法是在流式消息和历史消息中复用同一组件，
  * 把统一的 TimelineStep[] 渲染成步骤卡片和执行链路。
  */
-export function AgentTimeline({ steps, compact = false, liveStatusText, showSummaryCard = false }: AgentTimelineProps) {
+export function AgentTimeline({ steps, compact = false, liveStatusText, showSummaryCard = false, referencedFiles }: AgentTimelineProps) {
   const visibleSteps = steps.filter((step) => {
     return step.reasoning.trim()
       || step.output.trim()
@@ -478,19 +479,21 @@ export function AgentTimeline({ steps, compact = false, liveStatusText, showSumm
 
   return (
     <div className="mt-3 group/timeline">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center gap-2 px-2 py-1 mb-2 rounded-md hover:bg-muted/30 transition-colors text-muted-foreground/70 hover:text-foreground"
-      >
-        <CaretDown size={14} className={cn("transition-transform duration-300", !isExpanded && "-rotate-90")} />
-        <span className="text-[12px] font-bold uppercase tracking-wider">思考过程</span>
-        {isRunning && (
-          <div className="flex items-center gap-1.5 ml-2">
-            <div className="flex h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
-            <span className="text-[10px] font-medium text-primary animate-pulse tracking-tight">执行中...</span>
-          </div>
-        )}
-      </button>
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-muted/30 transition-colors text-muted-foreground/70 hover:text-foreground"
+        >
+          <CaretDown size={14} className={cn("transition-transform duration-300", !isExpanded && "-rotate-90")} />
+          <span className="text-[12px] font-bold uppercase tracking-wider">思考过程</span>
+          {isRunning && (
+            <div className="flex items-center gap-1.5 ml-2">
+              <div className="flex h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+              <span className="text-[10px] font-medium text-primary animate-pulse tracking-tight">执行中...</span>
+            </div>
+          )}
+        </button>
+      </div>
 
       <AnimatePresence initial={false}>
         {isExpanded && (

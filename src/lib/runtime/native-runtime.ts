@@ -30,6 +30,7 @@ export const nativeRuntime: AgentRuntime = {
     const systemPromptResult = isImageAgentMode
       ? { prompt: options.systemPrompt || '', referencedFiles: [] }
       : buildSystemPrompt({
+          sessionId: options.sessionId,
           userPrompt: options.systemPrompt,
           workingDirectory: cwd,
           modelId: options.model,

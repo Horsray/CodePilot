@@ -245,12 +245,25 @@ const MAX_FILE_SIZE = 50 * 1024; // 50KB per file
  */
 function discoverKnowledgeBaseInstructions(cwd: string): { content: string, files: string[] } | null {
   const kbReportFile = path.join(cwd, 'graphify-out', 'GRAPH_REPORT.md');
+  const kbGraphJson = path.join(cwd, 'graphify-out', 'graph.json');
   
   if (fs.existsSync(kbReportFile)) {
     try {
       const content = fs.readFileSync(kbReportFile, 'utf-8');
+      const hasJson = fs.existsSync(kbGraphJson);
+
+      let instruction = `## Atomic Knowledge Base (graphify)\n\n`;
+      instruction += `A structured knowledge graph exists for this project in 'graphify-out/'.\n`;
+      instruction += `### Usage Guidelines:\n`;
+      instruction += `1. **Priority Search**: ALWAYS read 'graphify-out/GRAPH_REPORT.md' BEFORE performing broad searches (Grep/Glob). It contains the architectural 'God Nodes' and community clusters.\n`;
+      instruction += `2. **Understand "Why"**: Use the graph to understand design motivations and non-obvious relationships between components.\n`;
+      if (hasJson) {
+        instruction += `3. **Deep Exploration**: If you need to traverse relationships, you can read 'graphify-out/graph.json' to see raw nodes and edges.\n`;
+      }
+      instruction += `\n### Knowledge Report Content:\n\n${content}`;
+
       return {
-        content: `## Knowledge Graph Summary (graphify-out/GRAPH_REPORT.md)\n\n${content}`,
+        content: instruction,
         files: ['graphify-out/GRAPH_REPORT.md'],
       };
     } catch {
@@ -287,7 +300,7 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
     if (options.sessionId) {
       // Find the project name/path for this session to match against project_ids
       const db = getDb();
-      const session = db.prepare('SELECT working_directory FROM sessions WHERE id = ?').get(options.sessionId) as any;
+      const session = db.prepare('SELECT working_directory FROM chat_sessions WHERE id = ?').get(options.sessionId) as any;
       if (session) {
         const currentPath = session.working_directory;
         const projectRules = customRules.filter(r => {

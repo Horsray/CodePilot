@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useTheme } from "next-themes";
-import { X, Copy, Check, SpinnerGap } from "@/components/ui/icon";
+import { X, Copy, Check, SpinnerGap, PencilSimple, FloppyDisk } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import { useThemeFamily } from "@/lib/theme/context";
@@ -10,6 +10,7 @@ import { resolveCodeTheme, resolveHljsStyle } from "@/lib/theme/code-themes";
 import { usePanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview as FilePreviewType } from "@/types";
 
 // Lazy-load Streamdown and plugins — only loaded when rendered markdown is needed
@@ -100,6 +101,9 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [width, setWidth] = useState(PREVIEW_DEFAULT_WIDTH);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const handleResize = useCallback((delta: number) => {
     // Left-side handle: dragging left (negative delta) = wider
@@ -109,6 +113,7 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
   const filePath = filePathOverride || previewFile || "";
 
   useEffect(() => {
+    setIsEditing(false); // Reset editing mode when file changes
     if (!filePath || isMediaPreview(filePath)) {
       setLoading(false);
       return;
@@ -129,6 +134,7 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
         const data = await res.json();
         if (!cancelled) {
           setPreview(data.preview);
+          setEditedContent(data.preview.content);
         }
       } catch (err) {
         if (!cancelled) {
@@ -148,10 +154,32 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
   }, [filePath, workingDirectory]);
 
   const handleCopyContent = async () => {
-    const text = preview?.content || filePath;
+    const text = isEditing ? editedContent : (preview?.content || filePath);
     await navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleSave = async () => {
+    if (!filePath || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/files/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: filePath, content: editedContent }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to save file");
+      }
+      setPreview((prev) => prev ? { ...prev, content: editedContent } : null);
+      setIsEditing(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to save file");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleClose = () => {
@@ -201,6 +229,25 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
           <ViewModeToggle value={previewViewMode} onChange={setPreviewViewMode} />
         )}
 
+        {!isMedia && preview && (
+          <>
+            {isEditing ? (
+              <Button variant="ghost" size="icon-sm" onClick={handleSave} disabled={saving} className="text-primary">
+                {saving ? <SpinnerGap size={14} className="animate-spin" /> : <FloppyDisk size={14} />}
+                <span className="sr-only">Save</span>
+              </Button>
+            ) : (
+              <Button variant="ghost" size="icon-sm" onClick={() => {
+                setEditedContent(preview.content);
+                setIsEditing(true);
+              }}>
+                <PencilSimple size={14} />
+                <span className="sr-only">Edit</span>
+              </Button>
+            )}
+          </>
+        )}
+
         {!isMedia && (
           <Button variant="ghost" size="icon-sm" onClick={handleCopyContent}>
             {copied ? (
@@ -243,10 +290,30 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
             <p className="text-sm text-destructive">{error}</p>
           </div>
         ) : preview ? (
-          previewViewMode === "rendered" && canRender ? (
-            <RenderedView content={preview.content} filePath={filePath} />
+          isEditing ? (
+            <div className="h-full flex flex-col">
+              <textarea
+                value={editedContent}
+                onChange={(e) => setEditedContent(e.target.value)}
+                className="flex-1 w-full p-4 font-mono text-xs bg-muted/5 focus:outline-none resize-none border-0"
+                spellCheck={false}
+                autoFocus
+              />
+              <div className="p-2 border-t border-border/30 bg-muted/10 flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)} className="h-7 text-[10px]">
+                  Cancel
+                </Button>
+                <Button variant="primary" size="sm" onClick={handleSave} disabled={saving} className="h-7 text-[10px]">
+                  {saving ? "Saving..." : "Save Changes"}
+                </Button>
+              </div>
+            </div>
           ) : (
-            <SourceView preview={preview} isDark={isDark} />
+            previewViewMode === "rendered" && canRender ? (
+              <RenderedView content={preview.content} filePath={filePath} />
+            ) : (
+              <SourceView preview={preview} isDark={isDark} />
+            )
           )
         ) : null}
       </div>

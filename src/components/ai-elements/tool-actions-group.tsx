@@ -31,6 +31,7 @@ interface ToolActionsGroupProps {
   statusText?: string;
   sessionId?: string;
   rewindUserMessageId?: string;
+  referencedFiles?: string[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -518,6 +519,7 @@ export function ToolActionsGroup({
   statusText,
   sessionId,
   rewindUserMessageId,
+  referencedFiles,
 }: ToolActionsGroupProps) {
   const [expanded, setExpanded] = useState(true);
   const segments = useMemo(
@@ -563,23 +565,49 @@ export function ToolActionsGroup({
   return (
     <div className="py-2">
       {/* Trae style Accordion Header */}
-      <button 
-        type="button" 
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1 select-none"
-      >
-        <div className="flex h-5 w-5 items-center justify-center rounded bg-muted/30">
-          {running.length > 0 ? (
-            <SpinnerGap size={12} className="animate-spin text-blue-500/70" />
-          ) : errCount > 0 ? (
-            <Wrench size={12} className="text-red-500/70" />
-          ) : (
-            <Wrench size={12} className="text-emerald-500/70" />
-          )}
-        </div>
-        <span className="font-medium">{summaryText}</span>
-        <CaretDown size={10} className={cn("transition-transform duration-200", expanded ? "rotate-180" : "")} />
-      </button>
+      <div className="flex flex-wrap items-center gap-2 mb-1">
+        <button 
+          type="button" 
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors select-none"
+        >
+          <div className="flex h-5 w-5 items-center justify-center rounded bg-muted/30">
+            {running.length > 0 ? (
+              <SpinnerGap size={12} className="animate-spin text-blue-500/70" />
+            ) : errCount > 0 ? (
+              <Wrench size={12} className="text-red-500/70" />
+            ) : (
+              <Brain size={12} className="text-violet-500/70" />
+            )}
+          </div>
+          <span className="font-medium">{summaryText}</span>
+          <CaretDown size={10} className={cn("transition-transform duration-200", expanded ? "rotate-180" : "")} />
+        </button>
+
+        {/* Referenced Context Tags */}
+        {referencedFiles && referencedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 ml-1">
+            {referencedFiles.map((file, idx) => {
+              const isAgents = file.includes('AGENTS.md');
+              const isClaude = file.includes('CLAUDE.md');
+              const isRules = file.includes('rules.md');
+              return (
+                <div 
+                  key={idx}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-border/40 bg-muted/20 text-[10px] text-muted-foreground/80 font-medium"
+                >
+                  <Code size={10} className={cn(
+                    isAgents && "text-blue-500/70",
+                    isClaude && "text-indigo-500/70",
+                    isRules && "text-emerald-500/70"
+                  )} />
+                  <span>{fname(file)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <AnimatePresence initial={false}>
         {(expanded || isStreaming) && (

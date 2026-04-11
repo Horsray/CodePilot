@@ -102,6 +102,7 @@ const zh: Record<TranslationKey, string> = {
   'rules.cancel': '取消',
   'rules.learnMore': '了解更多',
   'rules.openFolder': '打开文件夹',
+  'rules.syncedReadOnly': '同步的规则是只读的',
   'rules.globalFile': '全局 RULES.md',
   'rules.globalFileDesc': '位于 ~/.codepilot/rules/RULES.md 的规则始终生效。',
   'rules.baseRules': '基础规则',

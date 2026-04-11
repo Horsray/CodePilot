@@ -103,6 +103,8 @@ export {
   Robot,
   DeviceMobile,
   ListBullets,
+  Database,
+  ChartLineUp
 } from "@phosphor-icons/react";
 
 export type { Icon, IconProps } from "@phosphor-icons/react";

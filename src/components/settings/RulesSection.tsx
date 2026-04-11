@@ -241,19 +241,6 @@ export function RulesSection() {
           </div>
           <div className="flex items-center justify-between p-4">
             <div className="space-y-0.5">
-              <Label className="text-sm font-medium">{t('assistant.settings.syncProjectRules')}</Label>
-              <p className="text-[11px] text-muted-foreground leading-normal">
-                {t('assistant.settings.syncProjectRulesDesc')}
-              </p>
-            </div>
-            <Switch
-              checked={syncProjectRules}
-              onCheckedChange={(checked) => handleBasicToggle('sync_project_rules', checked)}
-              disabled={basicSaving}
-            />
-          </div>
-          <div className="flex items-center justify-between p-4">
-            <div className="space-y-0.5">
               <Label className="text-sm font-medium">{t('assistant.settings.knowledgeBaseEnabled')}</Label>
               <p className="text-[11px] text-muted-foreground leading-normal">
                 {t('assistant.settings.knowledgeBaseEnabledDesc')}
@@ -315,20 +302,31 @@ export function RulesSection() {
             <Layout size={20} className="text-primary" />
             <h3 className="text-sm font-medium">{t('rules.project')}</h3>
           </div>
-          <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => {
-            setEditingRule({ type: 'project', name: '', content: '', enabled: true, project_ids: '[]' });
-            setDialogOpen(true);
-          }}>
-            <Plus size={14} />
-            {t('rules.create')}
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => {
+              setEditingRule({ type: 'project', name: '', content: '', enabled: true, project_ids: '[]' });
+              setDialogOpen(true);
+            }}>
+              <Plus size={14} />
+              {t('rules.create')}
+            </Button>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border/50 bg-muted/30">
+              <span className="text-xs font-medium whitespace-nowrap">{t('assistant.settings.syncProjectRules')}</span>
+              <Switch
+                checked={syncProjectRules}
+                onCheckedChange={(checked) => handleBasicToggle('sync_project_rules', checked)}
+                disabled={basicSaving}
+                className="scale-75 origin-right"
+              />
+            </div>
+          </div>
         </div>
 
         <div className={cn(
           "rounded-xl border border-border/50 bg-muted/20 overflow-hidden",
-          projectRules.length === 0 && "py-12 flex flex-col items-center justify-center text-center px-6"
+          (projectRules.length === 0 && (!syncProjectRules || discoveredRules.length === 0)) && "py-12 flex flex-col items-center justify-center text-center px-6"
         )}>
-          {projectRules.length === 0 ? (
+          {(projectRules.length === 0 && (!syncProjectRules || discoveredRules.length === 0)) ? (
             <>
               <Layout size={40} className="text-muted-foreground/30 mb-3" />
               <div className="max-w-[300px]">
@@ -346,38 +344,41 @@ export function RulesSection() {
             </>
           ) : (
             <div className="divide-y divide-border/30">
+              {/* Custom Project Rules from DB */}
               {projectRules.map(rule => (
                 <RuleItem key={rule.id} rule={rule} onEdit={() => { setEditingRule(rule); setDialogOpen(true); }} onDelete={() => handleDelete(rule.id)} />
+              ))}
+              
+              {/* Synced Rules from .trae/rules/rules.md */}
+              {syncProjectRules && discoveredRules.map((dr, i) => (
+                <div key={`synced-${i}`} className="flex items-center justify-between p-4 group hover:bg-muted/30 transition-colors border-t border-border/30 first:border-t-0">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-2 h-2 rounded-full bg-blue-500/50 shadow-[0_0_8px_rgba(59,130,246,0.3)]" />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-medium truncate">{dr.projectName}</h4>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-bold uppercase tracking-wider">Synced</span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] text-muted-foreground truncate max-w-[250px]">
+                          {dr.content.slice(0, 80)}...
+                        </span>
+                        <span className="text-[9px] text-muted-foreground font-mono bg-muted px-1 rounded">
+                          {dr.path.split('/').pop()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" disabled title={t('rules.syncedReadOnly') || "Synced rules are read-only"}>
+                      <FolderOpen size={14} />
+                    </Button>
+                  </div>
+                </div>
               ))}
             </div>
           )}
         </div>
-
-        {/* Discovered Project Rules (.trae/rules/rules.md) */}
-        {syncProjectRules && discoveredRules.length > 0 && (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center gap-2 px-1">
-              <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Synced from .trae/rules/rules.md</span>
-            </div>
-            <div className="grid grid-cols-1 gap-3">
-              {discoveredRules.map((dr, i) => (
-                <div key={i} className="flex flex-col gap-2 p-3 rounded-xl border border-blue-500/20 bg-blue-500/5 group hover:bg-blue-500/10 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Book size={14} className="text-blue-500 shrink-0" />
-                      <span className="text-xs font-semibold truncate">{dr.projectName}</span>
-                    </div>
-                    <span className="text-[10px] text-muted-foreground font-mono truncate ml-4 max-w-[200px]">{dr.path}</span>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground line-clamp-2 italic leading-relaxed">
-                    "{dr.content}"
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </section>
 
       {/* Editor Dialog */}

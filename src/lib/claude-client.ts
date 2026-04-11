@@ -475,6 +475,8 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     includeAgentsMd: options.includeAgentsMd,
     includeClaudeMd: options.includeClaudeMd,
     enableAgentsSkills: options.enableAgentsSkills,
+    syncProjectRules: options.syncProjectRules,
+    knowledgeBaseEnabled: options.knowledgeBaseEnabled,
 
     // Runtime-specific fields (SDK Runtime reads these from runtimeOptions)
     runtimeOptions: {
