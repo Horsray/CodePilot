@@ -7,16 +7,26 @@ import {
   MessageContent,
   MessageResponse,
 } from '@/components/ai-elements/message';
-import { ToolActionsGroup } from '@/components/ai-elements/tool-actions-group';
+import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
 import { Button } from '@/components/ui/button';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview';
 import { WidgetRenderer } from './WidgetRenderer';
+import { AgentTimeline } from '@/components/chat/AgentTimeline';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
+import {
+  appendTimelineOutput,
+  appendTimelineReasoning,
+  appendTimelineToolResult,
+  appendTimelineToolUse,
+  cloneTimelineSteps,
+  completeTimelineStep,
+  createTimelineAccumulator,
+} from '@/lib/agent-timeline';
 import { PENDING_KEY, buildReferenceImages } from '@/lib/image-ref-store';
-import type { PlannerOutput, MediaBlock } from '@/types';
+import type { PlannerOutput, MediaBlock, TimelineStep } from '@/types';
 
 interface ImageGenRequest {
   prompt: string;
@@ -115,6 +125,38 @@ interface StreamingMessageProps {
   thinkingContent?: string;
   statusText?: string;
   onForceStop?: () => void;
+}
+
+function splitThinkingPhases(raw?: string): string[] {
+  if (!raw) return [];
+  // 中文注释：功能名称「思考分段器」，用法是把流式思考按阶段分段，
+  // 再与工具调用按顺序配对，避免整段思考被塞进同一个 Step。
+  return raw
+    .split('\n\n---\n\n')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function hasStepPayload(step?: TimelineStep): boolean {
+  if (!step) return false;
+  return Boolean(
+    step.reasoning.trim()
+      || step.output.trim()
+      || step.toolCalls.length > 0
+      || step.fileChanges.length > 0
+      || step.error,
+  );
+}
+
+function toVisibleSteps(steps: TimelineStep[]): TimelineStep[] {
+  return steps.filter((step) => (
+    step.reasoning.trim()
+    || step.output.trim()
+    || step.toolCalls.length > 0
+    || step.fileChanges.length > 0
+    || step.error
+    || step.status !== 'pending'
+  ));
 }
 
 /**
@@ -272,6 +314,23 @@ export function StreamingMessage({
   onForceStop,
 }: StreamingMessageProps) {
   const { t } = useTranslation();
+  const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
+  const timelineStateRef = useRef<ReturnType<typeof createTimelineAccumulator> | null>(null);
+  const prevSnapshotRef = useRef<{
+    isStreaming: boolean;
+    thinking: string;
+    content: string;
+    toolUseIds: string[];
+    toolResults: Record<string, string>;
+    enteredSynthesis: boolean;
+  }>({
+    isStreaming: false,
+    thinking: '',
+    content: '',
+    toolUseIds: [],
+    toolResults: {},
+    enteredSynthesis: false,
+  });
   const bufferedContent = useBufferedContent(content, isStreaming);
   const runningTools = useMemo(
     () => toolUses.filter((tool) => !toolResults.some((r) => r.tool_use_id === tool.id)),
@@ -281,6 +340,126 @@ export function StreamingMessage({
     const allMedia = toolResults.flatMap((result) => result.media || []);
     return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
   }, [toolResults]);
+
+  const completionInfo = useMemo(() => {
+    if (isStreaming || toolUses.length === 0) return null;
+    const mappedTools = toolUses.map((tool) => {
+      const result = toolResults.find((r) => r.tool_use_id === tool.id);
+      return {
+        id: tool.id,
+        name: tool.name,
+        input: tool.input,
+        result: result?.content,
+        isError: result?.is_error,
+        media: result?.media,
+      };
+    });
+    const errCount = toolResults.filter(t => t.is_error).length;
+    const changedFiles = mappedTools
+      .map(t => ({ tool: t as any, diff: extractDiff(t as any) }))
+      .filter((x): x is { tool: any; diff: any } => x.diff !== null);
+    
+    return { errCount, changedFiles };
+  }, [isStreaming, toolUses, toolResults]);
+
+  useEffect(() => {
+    const prev = prevSnapshotRef.current;
+    const now = Date.now();
+
+    if (!timelineStateRef.current) {
+      timelineStateRef.current = createTimelineAccumulator(now);
+    }
+
+    // 新一轮流式：重置增量状态，避免沿用上一轮缓存。
+    if (isStreaming && !prev.isStreaming) {
+      timelineStateRef.current = createTimelineAccumulator(now);
+      prevSnapshotRef.current = {
+        isStreaming: true,
+        thinking: '',
+        content: '',
+        toolUseIds: [],
+        toolResults: {},
+        enteredSynthesis: false,
+      };
+    }
+
+    const currentState = timelineStateRef.current!;
+    const currentPrev = prevSnapshotRef.current;
+
+    // thinking 增量：不再整段重建，避免卡片位置固定只刷新旧内容。
+    const currentThinking = thinkingContent || '';
+    if (currentThinking && currentThinking !== currentPrev.thinking) {
+      if (currentThinking.startsWith(currentPrev.thinking)) {
+        const delta = currentThinking.slice(currentPrev.thinking.length);
+        if (delta.trim()) appendTimelineReasoning(currentState, delta, now);
+      } else {
+        const phases = splitThinkingPhases(currentThinking);
+        const fallback = phases[phases.length - 1] || currentThinking;
+        appendTimelineReasoning(currentState, `\n${fallback}`, now);
+      }
+    }
+
+    // tool_use 增量：每出现新工具，关闭上一步并开启新步骤。
+    toolUses.forEach((tool, index) => {
+      if (!currentPrev.toolUseIds.includes(tool.id)) {
+        const latest = cloneTimelineSteps(currentState).at(-1);
+        if (hasStepPayload(latest)) {
+          completeTimelineStep(currentState, undefined, now + index);
+        }
+        appendTimelineToolUse(currentState, tool, now + index);
+      }
+    });
+
+    // tool_result 增量更新
+    toolResults.forEach((result, index) => {
+      const key = result.tool_use_id;
+      const marker = `${result.content}::${result.is_error ? '1' : '0'}`;
+      if (currentPrev.toolResults[key] !== marker) {
+        appendTimelineToolResult(currentState, result, now + index);
+      }
+    });
+
+    // 输出阶段：所有工具结束后，进入单独的答案整理步骤。
+    const currentContent = content || '';
+    if (currentContent && currentContent !== currentPrev.content) {
+      const runningToolExists = toolUses.some((tool) => !toolResults.some((r) => r.tool_use_id === tool.id));
+      if (!runningToolExists && !currentPrev.enteredSynthesis) {
+        const latest = cloneTimelineSteps(currentState).at(-1);
+        if (hasStepPayload(latest)) {
+          completeTimelineStep(currentState, undefined, now + 1);
+        }
+        currentPrev.enteredSynthesis = true;
+      }
+
+      if (currentContent.startsWith(currentPrev.content)) {
+        const delta = currentContent.slice(currentPrev.content.length);
+        if (delta.trim()) appendTimelineOutput(currentState, delta, now + 2);
+      } else {
+        appendTimelineOutput(currentState, `\n${currentContent}`, now + 2);
+      }
+    }
+
+    if (!isStreaming && currentPrev.isStreaming) {
+      const latest = cloneTimelineSteps(currentState).at(-1);
+      if (hasStepPayload(latest)) {
+        completeTimelineStep(currentState, undefined, now + 3);
+      }
+    }
+
+    const nextSteps = toVisibleSteps(cloneTimelineSteps(currentState));
+    setLiveTimelineSteps(nextSteps);
+
+    prevSnapshotRef.current = {
+      isStreaming,
+      thinking: currentThinking,
+      content: currentContent,
+      toolUseIds: toolUses.map((t) => t.id),
+      toolResults: Object.fromEntries(
+        toolResults.map((r) => [r.tool_use_id, `${r.content}::${r.is_error ? '1' : '0'}`]),
+      ),
+      enteredSynthesis: currentPrev.enteredSynthesis,
+    };
+  }, [content, isStreaming, thinkingContent, toolResults, toolUses]);
 
   // Extract a human-readable summary of the running command
   const getRunningCommandSummary = (): string | undefined => {
@@ -501,8 +680,15 @@ export function StreamingMessage({
   return (
     <AIMessage from="assistant">
       <MessageContent>
-        {/* Tool calls + thinking — single collapsible group */}
-        {(toolUses.length > 0 || thinkingContent) && (
+        {/* 时间线渲染：按步骤递进展示，避免工具/思考混成一坨 */}
+        {liveTimelineSteps.length > 0 ? (
+          <AgentTimeline
+            steps={liveTimelineSteps}
+            compact={true}
+            liveStatusText={statusText || getRunningCommandSummary()}
+            showSummaryCard={false}
+          />
+        ) : ((toolUses.length > 0 || thinkingContent) && (
           <ToolActionsGroup
             tools={toolUses.map((tool) => {
               const result = toolResults.find((r) => r.tool_use_id === tool.id);
@@ -522,23 +708,33 @@ export function StreamingMessage({
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
           />
-        )}
+        ))}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
         {mediaPreview}
 
         {/* Streaming text content rendered via Streamdown */}
-        {renderedContent}
+        {liveTimelineSteps.length === 0 && renderedContent}
+
+        {/* Completion Bar rendered only once at the end of the message when done */}
+        {completionInfo && completionInfo.changedFiles.length > 0 && (
+          <CompletionBar
+            changedFiles={completionInfo.changedFiles}
+            errCount={completionInfo.errCount}
+            sessionId={sessionId}
+            rewindId={rewindUserMessageId}
+          />
+        )}
 
         {/* Loading indicator when no content yet and no thinking content — evolves over time */}
-        {isStreaming && !content && toolUses.length === 0 && !thinkingContent && (
+        {isStreaming && liveTimelineSteps.length === 0 && !content && toolUses.length === 0 && !thinkingContent && (
           <div className="py-2">
             <ThinkingPhaseLabel />
           </div>
         )}
 
-        {/* Status bar during streaming — priority: tool status > widget > generating > thinking */}
-        {isStreaming && <StreamingStatusBar statusText={
+        {/* Status bar during streaming — timeline 模式下由卡片内状态行承载，避免重复。 */}
+        {isStreaming && liveTimelineSteps.length === 0 && <StreamingStatusBar statusText={
           statusText
           || getRunningCommandSummary()
           || (content && /```show-widget/.test(content) ? (() => {

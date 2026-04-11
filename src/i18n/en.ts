@@ -63,6 +63,7 @@ const en = {
   // ── Streaming message ───────────────────────────────────────
   'streaming.thinking': 'Thinking...',
   'streaming.thinkingDeep': 'Thinking deeply...',
+  'streaming.verifying': 'Verifying connection...',
   'streaming.preparing': 'Preparing response...',
   'streaming.generating': 'Generating',
   'streaming.allowForSession': 'Allow for Session',

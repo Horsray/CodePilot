@@ -1,75 +1,14 @@
 /**
  * tools/bash.ts — Execute shell commands.
- *
- * Primary path: PTY session (interactive, supports terminal programs).
- * Fallback path: child_process.exec (when PTY is unavailable or fails).
  */
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { exec } from 'child_process';
+import { spawn } from 'child_process';
 import type { ToolContext } from './index';
-import { executeCommandInPtySession } from '@/lib/pty-manager';
 
 const MAX_OUTPUT_BYTES = 1024 * 1024; // 1MB
 const DEFAULT_TIMEOUT_MS = 120_000;   // 2 minutes
-
-function normalizePreviewUrl(candidate: string): string {
-  const trimmed = candidate.trim().replace(/[)\].,;]+$/, '');
-  return trimmed.replace('0.0.0.0', 'localhost');
-}
-
-function extractPreviewUrl(output: string): string | null {
-  const match = output.match(/\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s]*)?/i);
-  if (match?.[0]) return normalizePreviewUrl(match[0]);
-
-  const localhostOnly = output.match(/\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+(?:\/[^\s]*)?/i);
-  if (localhostOnly?.[0]) {
-    return normalizePreviewUrl(`http://${localhostOnly[0]}`);
-  }
-
-  return null;
-}
-
-/** Fallback: run command via child_process.exec when PTY is unavailable */
-function execFallback(
-  command: string,
-  cwd: string,
-  timeoutMs: number,
-  abortSignal?: AbortSignal,
-): Promise<string> {
-  return new Promise((resolve) => {
-    const child = exec(command, {
-      cwd,
-      timeout: timeoutMs,
-      maxBuffer: MAX_OUTPUT_BYTES,
-      env: { ...process.env, TERM: 'dumb' },
-    }, (error, stdout, stderr) => {
-      let output = '';
-      if (stdout) output += stdout;
-      if (stderr) output += (output ? '\n' : '') + stderr;
-      if (error && !output) {
-        output = `Error: ${error.message}`;
-      }
-      if (error && 'code' in error && error.code) {
-        output += `\n[Exit code: ${error.code}]`;
-      }
-      resolve(output || '(no output)');
-    });
-
-    if (abortSignal) {
-      const handleAbort = () => {
-        child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), 2000);
-      };
-      if (abortSignal.aborted) {
-        handleAbort();
-      } else {
-        abortSignal.addEventListener('abort', handleAbort, { once: true });
-      }
-    }
-  });
-}
 
 export function createBashTool(ctx: ToolContext) {
   return tool({
@@ -83,77 +22,66 @@ export function createBashTool(ctx: ToolContext) {
       timeout: z.number().int().positive().optional()
         .describe('Timeout in milliseconds (default 120000)'),
     }),
+    // 中文注释：功能名称「Bash 工具直连执行」，用法是直接通过 bash -c 执行命令，
+    // 不再接管到 PTY/WebTerminal，避免工具链被交互终端层干扰。
     execute: async ({ command, timeout }, { abortSignal }) => {
       const timeoutMs = timeout ?? DEFAULT_TIMEOUT_MS;
 
-      if (!ctx.sessionId) {
-        // No session — use fallback directly
-        return execFallback(command, ctx.workingDirectory, timeoutMs, abortSignal);
-      }
+      return new Promise<string>((resolve) => {
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let truncated = false;
 
-      const terminalId = `agent-terminal-${ctx.sessionId}`;
+        const proc = spawn('bash', ['-c', command], {
+          cwd: ctx.workingDirectory,
+          env: { ...process.env, TERM: 'dumb' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: timeoutMs,
+        });
 
-      ctx.emitSSE?.({
-        type: 'status',
-        data: JSON.stringify({
-          subtype: 'ui_action',
-          action: 'open_terminal',
-          tab: 'terminal',
-          terminalId,
-        }),
-      });
+        const collect = (data: Buffer) => {
+          if (truncated) return;
+          totalBytes += data.length;
+          if (totalBytes > MAX_OUTPUT_BYTES) {
+            truncated = true;
+            chunks.push(data.subarray(0, MAX_OUTPUT_BYTES - (totalBytes - data.length)));
+          } else {
+            chunks.push(data);
+          }
+        };
 
-      try {
-        const output = await executeCommandInPtySession(
-          terminalId,
-          ctx.workingDirectory,
-          command,
-          timeoutMs,
-          abortSignal,
-        );
+        proc.stdout?.on('data', collect);
+        proc.stderr?.on('data', collect);
 
-        if (output.length > MAX_OUTPUT_BYTES) {
-          return `${output.slice(0, MAX_OUTPUT_BYTES)}\n\n[Output truncated — exceeded 1MB limit]`;
-        }
+        const onAbort = () => {
+          proc.kill('SIGTERM');
+          setTimeout(() => proc.kill('SIGKILL'), 3000);
+        };
+        abortSignal?.addEventListener('abort', onAbort, { once: true });
 
-        const previewUrl = extractPreviewUrl(output);
-        if (previewUrl) {
-          ctx.emitSSE?.({
-            type: 'status',
-            data: JSON.stringify({
-              subtype: 'ui_action',
-              action: 'open_browser',
-              url: previewUrl,
-              newTab: true,
-            }),
-          });
-        }
+        proc.on('close', (code, signal) => {
+          abortSignal?.removeEventListener('abort', onAbort);
 
-        return output;
-      } catch (ptyError) {
-        // PTY failed — fallback to child_process.exec
-        console.warn('[bash-tool] PTY execution failed, falling back to exec:', ptyError);
-        try {
-          const output = await execFallback(command, ctx.workingDirectory, timeoutMs, abortSignal);
-
-          const previewUrl = extractPreviewUrl(output);
-          if (previewUrl) {
-            ctx.emitSSE?.({
-              type: 'status',
-              data: JSON.stringify({
-                subtype: 'ui_action',
-                action: 'open_browser',
-                url: previewUrl,
-                newTab: true,
-              }),
-            });
+          let output = Buffer.concat(chunks).toString('utf-8');
+          if (truncated) {
+            output += '\n\n[Output truncated — exceeded 1MB limit]';
           }
 
-          return output;
-        } catch (fallbackError) {
-          return `Error executing command: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`;
-        }
-      }
+          if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+            output += `\n\n[Process killed: ${signal}]`;
+          }
+
+          if (code !== null && code !== 0) {
+            output += `\n\n[Exit code: ${code}]`;
+          }
+
+          resolve(output || '(no output)');
+        });
+
+        proc.on('error', (err) => {
+          resolve(`Error executing command: ${err.message}`);
+        });
+      });
     },
   });
 }

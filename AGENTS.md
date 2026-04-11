@@ -206,3 +206,114 @@ CodePilot — 多模型 AI Agent 桌面客户端，基于 Electron + Next.js。
 | 调研文档 | `docs/research/` | 技术方案、可行性分析 |
 
 **检索前先读对应目录的 README.md；增删文件后更新索引。**
+
+---
+
+## 代码文件结构索引
+
+> 供 Agent 快速定位文件，最后更新：2026-04-10 v0.48.1
+
+### 核心数据流
+
+```
+用户请求
+  → src/app/api/chat/route.ts          # POST /api/chat 入口，cc-switch 在此注入 effectiveProvider
+  → src/lib/agent-loop.ts              # 推理主循环，streaming 事件处理，hasContent 判空
+  → src/lib/claude-client.ts           # AI SDK 封装，streamClaude，resolveRuntime 选运行时
+  → src/lib/runtime/registry.ts        # 运行时选择：auto/sdk/native，hasCredentialsForRequest
+      ├── src/lib/runtime/sdk-runtime.ts    # Claude Code SDK 路径
+      └── src/lib/runtime/native-runtime.ts # 直接 AI SDK 路径
+```
+
+### src/app — 页面与 API 路由
+
+| 路径 | 说明 |
+|------|------|
+| `src/app/chat/page.tsx` | 主聊天页面 |
+| `src/app/settings/page.tsx` | 设置页面 |
+| `src/app/git/page.tsx` | Git 操作页面（fork 新增） |
+| `src/app/api/chat/route.ts` | 聊天 API，cc-switch 相关改动 |
+| `src/app/api/sessions/route.ts` | 会话列表 CRUD |
+| `src/app/api/sessions/[id]/route.ts` | 单会话操作 |
+| `src/app/api/messages/route.ts` | 消息记录 |
+| `src/app/api/settings/app/route.ts` | 应用设置，ALLOWED_KEYS 白名单 |
+| `src/app/api/settings/providers/route.ts` | AI 服务商配置 |
+| `src/app/api/setup/route.ts` | 初始化向导状态 |
+| `src/app/api/mcp/route.ts` | MCP 工具管理 |
+| `src/app/api/terminal/route.ts` | 终端 PTY（fork 新增） |
+| `src/app/api/git/route.ts` | Git 操作 API（fork 新增） |
+| `src/app/api/image-gen/route.ts` | 图像生成 API（fork 新增） |
+
+### src/lib — 核心逻辑
+
+| 路径 | 说明 |
+|------|------|
+| `src/lib/agent-loop.ts` | AI 推理循环，streaming，空响应检测 |
+| `src/lib/claude-client.ts` | AI SDK 封装，运行时选择入口 |
+| `src/lib/ai-provider.ts` | 服务商管理，getAllProviders/getProvider |
+| `src/lib/cc-switch.ts` | 动态切换本地/API/中转平台（fork 新增） |
+| `src/lib/db.ts` | SQLite 全部 schema + 迁移逻辑 |
+| `src/lib/mcp-connection-manager.ts` | 外部 MCP server 连接管理 |
+| `src/lib/mcp-tool-executor.ts` | MCP 工具执行 |
+| `src/lib/pty-manager.ts` | 终端 PTY，node-pty（fork 新增） |
+| `src/lib/image-generator.ts` | 图像生成，多模型（fork 新增） |
+| `src/lib/widget-sanitizer.ts` | Widget HTML 沙箱化 |
+| `src/lib/settings.ts` | 应用设置读写 |
+| `src/lib/message-builder.ts` | 消息构建工具 |
+| `src/lib/runtime/registry.ts` | 运行时选择，hasCredentialsForRequest |
+| `src/lib/runtime/sdk-runtime.ts` | Claude Code SDK 运行时 |
+| `src/lib/runtime/native-runtime.ts` | Native AI SDK 运行时 |
+| `src/lib/tools/` | Agent 工具：bash/read/write/edit/glob/grep/browser/skill/agent |
+| `src/lib/builtin-tools/` | 内置 MCP 工具：cli-tools/dashboard/media/memory-search/notification |
+| `src/lib/bridge/` | IM 集成：Telegram/飞书/Discord/QQ/微信 |
+| `src/lib/channels/` | 飞书 channel 适配层 |
+| `src/lib/git/service.ts` | Git 操作服务（fork 新增） |
+| `src/lib/media/` | 媒体处理（fork 新增） |
+
+### src/components — UI 组件
+
+| 路径 | 说明 |
+|------|------|
+| `src/components/chat/` | 聊天 UI：MessageItem/MessageList/StreamingMessage/ChatInput |
+| `src/components/ai-elements/` | AI 渲染：conversation/tool-actions-group/widget-renderer |
+| `src/components/layout/` | 布局：AppShell/Sidebar/FeatureAnnouncementDialog |
+| `src/components/settings/` | 设置面板各子组件 |
+| `src/components/git/` | Git UI 组件（fork 新增） |
+| `src/components/terminal/` | 终端组件，xterm.js（fork 新增） |
+| `src/components/file-tree/` | 文件树，fork 改动了 UI 和交互 |
+| `src/components/ui/` | Radix UI 基础组件库 |
+
+### src/hooks — React Hooks
+
+| 路径 | 说明 |
+|------|------|
+| `src/hooks/useSSEStream.ts` | SSE 流式响应 |
+| `src/hooks/useSettings.ts` | 设置状态管理 |
+| `src/hooks/useTerminal.ts` | 终端状态（fork 新增） |
+| `src/hooks/useGitStatus.ts` | Git 状态（fork 新增） |
+| `src/hooks/useCCSwitch.ts` | cc-switch 状态（fork 新增） |
+| `src/hooks/` | 其余 ~30 个 hooks |
+
+### 其他关键文件
+
+| 路径 | 说明 |
+|------|------|
+| `src/types/index.ts` | 全局类型定义，新增类型必须在此更新 |
+| `src/i18n/en.ts` + `zh.ts` | 国际化，改动必须同步两个文件 |
+| `electron/main.ts` | Electron 主进程 |
+| `electron/preload.ts` | Electron preload 脚本 |
+| `next.config.ts` | Next.js 配置，版本号从 package.json 注入 |
+
+### Fork 新增 vs 官方原有
+
+| 功能 | 类型 | 关键文件 |
+|------|------|---------|
+| 终端支持 | fork 新增 | `src/lib/pty-manager.ts`, `src/components/terminal/`, `src/app/api/terminal/` |
+| 内置浏览器 | fork 新增 | `src/components/browser/`, `src/lib/tools/browser.ts` |
+| cc-switch | fork 新增 | `src/lib/cc-switch.ts`, `src/hooks/useCCSwitch.ts` |
+| 中转平台图像生成 | fork 新增 | `src/lib/image-generator.ts`, `src/app/api/image-gen/` |
+| Git 操作界面 | fork 新增 | `src/lib/git/`, `src/components/git/`, `src/app/git/` |
+| 文件树 UI 改动 | fork 修改 | `src/components/file-tree/` |
+| Runtime 选择 | 官方 v0.48.1 | `src/lib/runtime/registry.ts` |
+| 空响应检测 | 官方 v0.48.1 | `src/lib/agent-loop.ts` hasContent |
+| Widget 样式修复 | 官方 v0.48.1 | `src/lib/widget-sanitizer.ts` |

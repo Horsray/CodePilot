@@ -39,7 +39,7 @@ export function pruneOldToolResults(messages: ModelMessage[]): ModelMessage[] {
           if (part.type === 'tool-result') {
             return {
               ...part,
-              output: { type: 'text' as const, value: TRUNCATED_RESULT_MARKER },
+              output: { type: 'text', value: TRUNCATED_RESULT_MARKER },
             };
           }
           return part;

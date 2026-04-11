@@ -448,7 +448,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
   }
 
   if (!runtime) {
-    runtime = resolveRuntime(getSetting('agent_runtime') || undefined, options.imageAgentMode);
+    runtime = resolveRuntime(getSetting('agent_runtime') || undefined, effectiveProvider || undefined);
   }
 
   console.log(`[streamClaude] Using runtime: ${runtime.id} (setting: ${getSetting('agent_runtime') || 'auto'})`);
@@ -1077,19 +1077,44 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         // Wrap the iterator so we can detect resume failures on the first message
         if (shouldResume) {
           try {
-            // Peek at the first message to verify resume works
+            // Peek at the first message to verify resume works, but with a timeout
+            // to avoid blocking the UI on "Reconnecting..." if the SDK is just slow.
             const iter = conversation[Symbol.asyncIterator]();
-            const first = await iter.next();
+            const firstPromise = iter.next();
+            
+            const timeoutPromise = new Promise<any>((resolve) => 
+              setTimeout(() => resolve({ _timeout: true }), 3000)
+            );
+            
+            const first = await Promise.race([firstPromise, timeoutPromise]);
 
-            // Re-wrap into an async iterable that yields the first message then the rest
-            conversation = (async function* () {
-              if (!first.done) yield first.value;
-              while (true) {
-                const next = await iter.next();
-                if (next.done) break;
-                yield next.value;
-              }
-            })() as ReturnType<typeof query>;
+            if (first && first._timeout) {
+              // It took >3s. Clear "Reconnecting..." and assume resume is proceeding slowly.
+              controller.enqueue(formatSSE({
+                type: 'status',
+                data: JSON.stringify({ notification: true, message: 'session_resumed' })
+              }));
+              
+              conversation = (async function* () {
+                const actualFirst = await firstPromise;
+                if (!actualFirst.done) yield actualFirst.value;
+                while (true) {
+                  const next = await iter.next();
+                  if (next.done) break;
+                  yield next.value;
+                }
+              })() as ReturnType<typeof query>;
+            } else {
+              // Re-wrap into an async iterable that yields the first message then the rest
+              conversation = (async function* () {
+                if (!first.done) yield first.value;
+                while (true) {
+                  const next = await iter.next();
+                  if (next.done) break;
+                  yield next.value;
+                }
+              })() as ReturnType<typeof query>;
+            }
           } catch (resumeError) {
             const errMsg = resumeError instanceof Error ? resumeError.message : String(resumeError);
             console.warn('[claude-client] Resume failed, retrying without resume:', errMsg);

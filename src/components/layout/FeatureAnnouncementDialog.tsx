@@ -23,24 +23,34 @@ export function FeatureAnnouncementDialog() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    // Don't show if already dismissed
+    // Check both localStorage (fast) and DB (persistent across Electron restarts)
     if (localStorage.getItem(ANNOUNCEMENT_KEY)) return;
-    // Only show to users who finished setup — keyed off the same `completed`
-    // flag that AppShell uses to decide whether to open SetupCenter.
-    // This guarantees announcement and setup never appear together.
-    fetch('/api/setup')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data?.completed) {
-          setTimeout(() => setOpen(true), 800);
-        }
-      })
-      .catch(() => {});
+    // Check DB settings for dismiss state + setup completion in one call
+    Promise.all([
+      fetch('/api/settings/app').then(r => r.ok ? r.json() : null),
+      fetch('/api/setup').then(r => r.ok ? r.json() : null),
+    ]).then(([appData, setupData]) => {
+      // Already dismissed (persisted in DB)
+      if (appData?.settings?.[ANNOUNCEMENT_KEY]) {
+        localStorage.setItem(ANNOUNCEMENT_KEY, '1'); // sync to localStorage for fast check
+        return;
+      }
+      // Only show to users who finished setup
+      if (setupData?.completed) {
+        setTimeout(() => setOpen(true), 800);
+      }
+    }).catch(() => {});
   }, []);
 
   const handleDismiss = () => {
     setOpen(false);
     localStorage.setItem(ANNOUNCEMENT_KEY, '1');
+    // Persist to DB so it survives Electron restarts / localStorage clearing
+    fetch('/api/settings/app', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { [ANNOUNCEMENT_KEY]: 'true' } }),
+    }).catch(() => {});
   };
 
   const handleGoToSettings = () => {

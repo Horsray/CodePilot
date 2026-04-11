@@ -227,7 +227,7 @@ export function UnifiedTopBar() {
                   }}
                   className={`group flex h-8 min-w-0 shrink-0 items-center gap-2 rounded-md border px-3 text-xs transition-colors ${
                     isActive
-                      ? "border-border bg-accent text-foreground"
+                      ? "border-border bg-blue-500/20 text-blue-600 dark:text-blue-400"
                       : "border-transparent bg-muted/30 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                   }`}
                 >

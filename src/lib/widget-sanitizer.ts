@@ -262,7 +262,7 @@ parent.postMessage({type:'widget:ready'},'*');
 ${styleBlock}
 </style>
 </head>
-<body style="margin:0;padding:0;height:fit-content;overflow:hidden;">
+<body style="margin:0;padding:0;height:fit-content;">
 <div id="__root" style="height:fit-content;"></div>
 <script>${receiverScript}</script>
 </body>

@@ -16,6 +16,7 @@ import { createBrowserContextTool } from './browser-context';
 import { createEditTool } from './edit';
 import { createSkillTool } from './skill';
 import { createAgentTool } from './agent';
+import { createTodoWriteTool } from './todo-write';
 
 export interface ToolContext {
   /** Working directory for file operations */
@@ -60,5 +61,6 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
       emitSSE: ctx.emitSSE,
       abortSignal: ctx.abortSignal,
     }),
+    TodoWrite: createTodoWriteTool(ctx),
   };
 }

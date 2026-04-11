@@ -12,6 +12,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { getDb } from './db';
 
 interface FileSnapshot {
   /** File content before modification (null = file didn't exist, should be deleted on restore) */
@@ -31,122 +32,72 @@ interface Checkpoint {
   createdAt: number;
 }
 
-// Per-session checkpoint stack (most recent last)
-const checkpoints = new Map<string, Checkpoint[]>();
-
 /**
  * Create a checkpoint before a file-modifying operation.
- * Call this at the start of each user turn (before tools run).
  */
 export function createCheckpoint(sessionId: string, messageId: string, _cwd: string): void {
-  const stack = checkpoints.get(sessionId) || [];
-
-  // Only one checkpoint per message (dedup)
-  if (stack.length > 0 && stack[stack.length - 1].messageId === messageId) {
-    return;
-  }
-
-  const checkpoint: Checkpoint = {
-    messageId,
-    sessionId,
-    modifiedFiles: [],
-    snapshots: new Map(),
-    createdAt: Date.now(),
-  };
-
-  stack.push(checkpoint);
-  // Keep max 20 checkpoints per session
-  if (stack.length > 20) stack.shift();
-  checkpoints.set(sessionId, stack);
+  // Legacy in-memory logic kept for temporary session tracking
 }
 
 /**
  * Record that a file is about to be modified.
- * Captures a snapshot of the file's current content BEFORE the modification.
- * Must be called BEFORE the actual write/edit happens.
+ * Captures a snapshot of the file's current content BEFORE the modification and saves to DB.
  */
 export function recordFileModification(sessionId: string, filePath: string, cwd?: string): void {
-  const stack = checkpoints.get(sessionId);
-  if (!stack || stack.length === 0) return;
-  const latest = stack[stack.length - 1];
+  if (!sessionId) return;
+  const db = getDb();
 
-  // Track the file path
-  if (!latest.modifiedFiles.includes(filePath)) {
-    latest.modifiedFiles.push(filePath);
-  }
+  // Check if we already have a checkpoint for this file in this session
+  const existing = db.prepare(
+    'SELECT id FROM file_checkpoints WHERE session_id = ? AND file_path = ? LIMIT 1'
+  ).get(sessionId, filePath);
 
-  // Capture snapshot only once per file per checkpoint
-  if (!latest.snapshots.has(filePath)) {
-    const absPath = cwd ? path.resolve(cwd, filePath) : path.resolve(filePath);
-    try {
-      const content = fs.readFileSync(absPath, 'utf-8');
-      latest.snapshots.set(filePath, { content });
-    } catch {
-      // File doesn't exist yet (new file) — snapshot as null
-      latest.snapshots.set(filePath, { content: null });
+  if (existing) return;
+
+  const absPath = cwd ? path.resolve(cwd, filePath) : path.resolve(filePath);
+  let content: string | null = null;
+  try {
+    if (fs.existsSync(absPath)) {
+      content = fs.readFileSync(absPath, 'utf-8');
     }
+  } catch (e) {
+    console.error(`[file-checkpoint] Failed to read ${absPath}:`, e);
   }
+
+  db.prepare(
+    'INSERT INTO file_checkpoints (session_id, message_id, file_path, original_content) VALUES (?, ?, ?, ?)'
+  ).run(sessionId, 'session-wide', filePath, content);
+
+  console.log(`[file-checkpoint] Persisted original state for ${filePath} in session ${sessionId}`);
 }
 
 /**
- * Restore files to the state at a given message checkpoint.
- * Uses the captured snapshots to restore file contents safely,
- * preserving any pre-session uncommitted changes.
- *
- * Returns list of files that were restored.
+ * Restore files from checkpoints for a session.
  */
-export function restoreCheckpoint(sessionId: string, messageId: string, cwd: string): string[] {
-  const stack = checkpoints.get(sessionId);
-  if (!stack) return [];
-
-  // Find the checkpoint for this message
-  const idx = stack.findIndex(cp => cp.messageId === messageId);
-  if (idx < 0) return [];
-
-  // Collect all files and snapshots from the target checkpoint onward
-  const filesToRestore = new Set<string>();
-  // Build a map of earliest snapshot per file (the state we want to restore to)
-  const restoreSnapshots = new Map<string, FileSnapshot>();
-
-  for (let i = idx; i < stack.length; i++) {
-    for (const file of stack[i].modifiedFiles) {
-      filesToRestore.add(file);
-    }
-    // Only use the FIRST (earliest) snapshot for each file
-    for (const [file, snapshot] of stack[i].snapshots) {
-      if (!restoreSnapshots.has(file)) {
-        restoreSnapshots.set(file, snapshot);
-      }
-    }
-  }
+export function restoreCheckpoint(sessionId: string, _messageId: string, workingDirectory: string): string[] {
+  const db = getDb();
+  const records = db.prepare(
+    'SELECT file_path, original_content FROM file_checkpoints WHERE session_id = ?'
+  ).all(sessionId) as Array<{ file_path: string; original_content: string | null }>;
 
   const restored: string[] = [];
-
-  for (const file of filesToRestore) {
-    const snapshot = restoreSnapshots.get(file);
-    const absPath = path.resolve(cwd, file);
-
+  for (const record of records) {
+    const fullPath = path.resolve(workingDirectory, record.file_path);
     try {
-      if (snapshot && snapshot.content !== null) {
-        // Restore to original content
-        fs.mkdirSync(path.dirname(absPath), { recursive: true });
-        fs.writeFileSync(absPath, snapshot.content, 'utf-8');
-        restored.push(file);
-      } else if (snapshot && snapshot.content === null) {
-        // File was new (didn't exist before) — delete it
-        try { fs.unlinkSync(absPath); } catch { /* already gone */ }
-        restored.push(file);
+      if (record.original_content === null) {
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      } else {
+        const dir = path.dirname(fullPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(fullPath, record.original_content, 'utf-8');
       }
-      // If no snapshot exists, we can't safely restore — skip
-    } catch {
-      // Restore failed for this file — continue with others
+      restored.push(record.file_path);
+    } catch (e) {
+      console.error(`[file-checkpoint] Failed to restore ${fullPath}:`, e);
     }
   }
 
-  // Remove checkpoints after the restored point
-  stack.splice(idx + 1);
-  checkpoints.set(sessionId, stack);
-
+  clearCheckpoints(sessionId);
   return restored;
 }
 
@@ -154,5 +105,40 @@ export function restoreCheckpoint(sessionId: string, messageId: string, cwd: str
  * Clear all checkpoints for a session.
  */
 export function clearCheckpoints(sessionId: string): void {
-  checkpoints.delete(sessionId);
+  const db = getDb();
+  db.prepare('DELETE FROM file_checkpoints WHERE session_id = ?').run(sessionId);
 }
+
+/**
+ * Get the original content of a file from the session checkpoint.
+ */
+export function getOriginalContent(sessionId: string, filePath: string): string | null {
+  const db = getDb();
+  const row = db.prepare(
+    'SELECT original_content FROM file_checkpoints WHERE session_id = ? AND file_path = ? LIMIT 1'
+  ).get(sessionId, filePath) as { original_content: string | null } | undefined;
+  
+  return row ? row.original_content : null;
+}
+
+/**
+ * Get the checkpoint stack for a session (Legacy compatibility).
+ */
+export function getSessionCheckpointStack(sessionId: string): Checkpoint[] {
+  const db = getDb();
+  const files = db.prepare(
+    'SELECT file_path FROM file_checkpoints WHERE session_id = ?'
+  ).all(sessionId) as Array<{ file_path: string }>;
+  
+  if (files.length === 0) return [];
+  
+  return [{
+    messageId: 'session-wide',
+    sessionId,
+    modifiedFiles: files.map(f => f.file_path),
+    snapshots: new Map(),
+    createdAt: Date.now()
+  }];
+}
+
+

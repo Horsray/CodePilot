@@ -149,12 +149,55 @@ export interface MediaBlock {
   mediaId?: string;     // media_generations.id (after DB save)
 }
 
+export type TimelineStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'retrying' | 'stopped';
+
+export interface TimelineToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt: number | null;
+  result?: string;
+  isError: boolean;
+}
+
+export interface TimelineFileChange {
+  path: string;
+  fileName: string;
+  operation: 'create' | 'edit';
+  addedLines: number;
+  removedLines: number;
+  beforeText: string;
+  afterText: string;
+  diffText: string;
+}
+
+export interface TimelineStep {
+  id: string;
+  index: number;
+  title: string;
+  status: TimelineStepStatus;
+  startedAt: number;
+  completedAt: number | null;
+  reasoning: string;
+  output: string;
+  summary: string;
+  dependencies: string[];
+  toolCalls: TimelineToolCall[];
+  fileChanges: TimelineFileChange[];
+  usage: TokenUsage | null;
+  error: string | null;
+  retryCount: number;
+}
+
 // Structured message content blocks (stored as JSON in messages.content)
 export type MessageContentBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; media?: MediaBlock[] }
+  | { type: 'timeline'; steps: TimelineStep[] }
   | { type: 'code'; language: string; code: string };
 
 // Helper to parse message content - returns blocks or wraps plain text

@@ -27,9 +27,11 @@ export function createWriteTool(ctx: ToolContext) {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      fs.writeFileSync(resolved, content, 'utf-8');
-      recordFileModification(ctx.sessionId || '', path.relative(ctx.workingDirectory, resolved));
+      // Record modification BEFORE writing so we capture the "before" state
+      recordFileModification(ctx.sessionId || '', path.relative(ctx.workingDirectory, resolved), ctx.workingDirectory);
 
+      fs.writeFileSync(resolved, content, 'utf-8');
+      
       const lines = content.split('\n').length;
       return `Successfully wrote ${lines} lines to ${resolved}`;
     },

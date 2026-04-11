@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   File, FilePlus, NotePencil, Terminal, MagnifyingGlass,
   Wrench, SpinnerGap, CheckCircle, XCircle, CaretDown,
-  Brain, Eye, GitDiff, Check, X, ArrowSquareOut,
+  Brain, Eye, GitDiff, Check, X, ArrowSquareOut, Code,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useStickToBottomContext } from 'use-stick-to-bottom';
@@ -73,10 +73,13 @@ function stepLabel(t: ToolAction): string {
   const p = fp(t.input);
   const fn = p ? fname(p) : '';
 
+  // Return the raw tool name if it starts with mcp__ so it's readable
+  const name = t.name.startsWith('mcp__') ? t.name : t.name;
+
   // Handle abort/error results — show friendly message
   if (t.isError && t.result) {
     if (t.result.includes('aborted') || t.result.includes('abort')) {
-      return fn ? `${fn} — 已中断` : `${t.name} — 已中断`;
+      return fn ? `${fn} — 已中断` : `${name} — 已中断`;
     }
   }
 
@@ -92,7 +95,7 @@ function stepLabel(t: ToolAction): string {
       const cmd = sv(t.input, ['command', 'cmd', 'input']);
       return cmd ? `$ ${cmd.length > 42 ? cmd.slice(0, 39) + '…' : cmd}` : '执行命令';
     }
-    default: return t.name;
+    default: return name;
   }
 }
 
@@ -107,14 +110,14 @@ function stepStatus(t: ToolAction): StepStatus {
   return t.isError ? 'err' : 'ok';
 }
 
-interface DiffInfo {
+export interface DiffInfo {
   filename: string; fullPath: string; mode: 'edit' | 'create';
   added: number; removed: number;
   beforeLines: string[]; afterLines: string[];
   moreB: number; moreA: number;
 }
 
-function extractDiff(t: ToolAction): DiffInfo | null {
+export function extractDiff(t: ToolAction): DiffInfo | null {
   const k = toolKind(t.name);
   if (k !== 'write' && k !== 'create') return null;
   const p = fp(t.input);
@@ -125,8 +128,8 @@ function extractDiff(t: ToolAction): DiffInfo | null {
   if (k === 'create' && !content) return null;
   const added = k === 'create' ? countLines(content) : countLines(nw);
   const removed = k === 'create' ? 0 : countLines(old);
-  const { lines: bl, more: mb } = previewLines(old || '', 10);
-  const { lines: al, more: ma } = previewLines(k === 'create' ? content : nw, 10);
+  const { lines: bl, more: mb } = previewLines(old || '', 1000);
+  const { lines: al, more: ma } = previewLines(k === 'create' ? content : nw, 1000);
   return {
     filename: p ? fname(p) : 'file', fullPath: p,
     mode: k === 'create' ? 'create' : 'edit',
@@ -153,17 +156,15 @@ function buildSegments(
   const segs: Segment[] = [];
   const lastRunningId = [...tools].reverse().find(t => t.result === undefined)?.id;
 
-  // Split thinking into phases separated by "---"
   const phases = (thinkingContent || '')
     .split(/\n\n---\n\n/)
     .map(s => s.trim())
     .filter(Boolean);
 
-  // Interleave: phase[i] before tool[i], remaining phases after all tools
+  // Add all tools
   for (let i = 0; i < tools.length; i++) {
-    if (i < phases.length) {
-      // This phase preceded tool[i]
-      segs.push({ type: 'thinking', content: phases[i], streaming: false });
+    if (phases.length > 0) {
+      segs.push({ type: 'thinking', content: phases.shift()!, streaming: false });
     }
     segs.push({
       type: 'tool', tool: tools[i],
@@ -171,8 +172,8 @@ function buildSegments(
     });
   }
 
-  // Any remaining phases (current live thinking after last tool, or thinking with no tools yet)
-  for (let i = tools.length; i < phases.length; i++) {
+  // Any remaining thinking phases (or the current thinking if no tools are running)
+  for (let i = 0; i < phases.length; i++) {
     const isLast = i === phases.length - 1;
     segs.push({ type: 'thinking', content: phases[i], streaming: isLast && isStreaming });
   }
@@ -249,8 +250,15 @@ function ToolRow({ tool, streamingOutput }: { tool: ToolAction; streamingOutput?
         )}
       </div>
 
+      {/* error message block for non-bash tools */}
+      {s === 'err' && tool.result && !isBash && (
+        <div className="ml-[30px] mt-0.5 mb-1.5 rounded-md border border-red-500/20 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-500/80 leading-relaxed whitespace-pre-wrap break-all">
+          {tool.result.length > 200 ? tool.result.slice(0, 200) + '...' : tool.result}
+        </div>
+      )}
+
       {/* bash output — compact, right below the step */}
-      {hasBashOutput && <BashBlock output={bashOutput} live={!!streamingOutput} />}
+      {hasBashOutput && <BashBlock output={bashOutput} live={!!streamingOutput} isError={s === 'err'} />}
 
       {/* diff card — right below the edit/create step, even while running */}
       {showDiff && <DiffCard diff={diff} />}
@@ -259,7 +267,7 @@ function ToolRow({ tool, streamingOutput }: { tool: ToolAction; streamingOutput?
 }
 
 /** Compact bash output */
-function BashBlock({ output, live }: { output: string; live: boolean }) {
+function BashBlock({ output, live, isError }: { output: string; live: boolean; isError?: boolean }) {
   const [open, setOpen] = useState(false);
   const { lines: ls, more } = previewLines(output, live ? 4 : 8);
   const preview = ls[0]?.slice(0, 60) || '';
@@ -267,7 +275,12 @@ function BashBlock({ output, live }: { output: string; live: boolean }) {
   return (
     <div className="ml-[30px] mt-1 mb-1">
       <button type="button" onClick={() => setOpen(v => !v)}
-        className="flex w-full items-center gap-1.5 rounded-md border border-border/25 bg-zinc-950/50 px-2.5 py-1.5 text-left font-mono text-[11px] text-zinc-400/70 hover:bg-zinc-950/70 transition-colors">
+        className={cn(
+          "flex w-full items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-left font-mono text-[11px] transition-colors",
+          isError 
+            ? "border-red-500/25 bg-red-500/[0.03] text-red-400 hover:bg-red-500/[0.06] dark:bg-red-950/30 dark:hover:bg-red-950/50"
+            : "border-border/25 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 dark:bg-zinc-950/50 dark:hover:bg-zinc-950/70"
+        )}>
         <Terminal size={10} className="shrink-0 text-zinc-500/50" />
         <span className="flex-1 truncate">{preview}{output.length > 60 ? '…' : ''}</span>
         {live && <span className="inline-block h-2.5 w-1 animate-pulse rounded-sm bg-zinc-400/40" />}
@@ -277,8 +290,16 @@ function BashBlock({ output, live }: { output: string; live: boolean }) {
         {open && (
           <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }}
             transition={{ duration: 0.12 }} style={{ overflow: 'hidden' }}>
-            <div className="max-h-[120px] overflow-auto rounded-b-md border border-t-0 border-border/25 bg-zinc-950/50 px-2.5 py-2">
-              <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-[1.6] text-zinc-400/60">
+            <div className={cn(
+              "max-h-[120px] overflow-auto rounded-b-md border border-t-0 px-2.5 py-2",
+              isError
+                ? "border-red-500/25 bg-red-500/[0.03] dark:bg-red-950/30"
+                : "border-border/25 bg-zinc-900 dark:bg-zinc-950/50"
+            )}>
+              <pre className={cn(
+                "whitespace-pre-wrap break-all font-mono text-[11px] leading-[1.6]",
+                isError ? "text-red-400" : "text-zinc-300 dark:text-zinc-400/60"
+              )}>
                 {ls.join('\n')}
                 {more > 0 && `\n… +${more} lines`}
               </pre>
@@ -331,7 +352,7 @@ function DiffCard({ diff }: { diff: DiffInfo }) {
         {open && (
           <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }}
             transition={{ duration: 0.15 }} style={{ overflow: 'hidden' }}>
-            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/25 text-[11px]">
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/25 text-[11px] max-h-[400px] overflow-y-auto">
               {diff.mode === 'edit' && (
                 <div className="bg-red-500/[0.03] px-2.5 py-2">
                   <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-muted-foreground/55">
@@ -355,7 +376,7 @@ function DiffCard({ diff }: { diff: DiffInfo }) {
 }
 // ─── Completion summary ───────────────────────────────────────────────────────
 
-function CompletionBar({
+export function CompletionBar({
   changedFiles, errCount, sessionId, rewindId,
 }: {
   changedFiles: { tool: ToolAction; diff: DiffInfo }[];
@@ -363,96 +384,63 @@ function CompletionBar({
   sessionId?: string;
   rewindId?: string;
 }) {
-  const [allAccepted, setAllAccepted] = useState(false);
-  const [rewinding, setRewinding] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const totalAdded = changedFiles.reduce((acc, f) => acc + f.diff.added, 0);
+  const totalRemoved = changedFiles.reduce((acc, f) => acc + f.diff.removed, 0);
   const pending = changedFiles.length;
 
-  const handleRewindAll = async () => {
-    if (!sessionId || !rewindId) return;
-    setRewinding(true);
-    try {
-      const res = await fetch('/api/chat/rewind', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, userMessageId: rewindId }),
-      });
-      if (!res.ok) throw new Error('failed');
-      window.location.reload();
-    } catch { setRewinding(false); }
-  };
-
-  if (pending === 0 && errCount === 0) {
-    return (
-      <div className="mt-2 flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2.5 text-[12px] text-emerald-600/80">
-        <CheckCircle size={14} weight="fill" className="shrink-0" />
-        <span>任务完成</span>
-      </div>
-    );
-  }
+  if (pending === 0) return null;
 
   return (
-    <div className="mt-2 space-y-2">
-      {/* summary bar */}
-      <div className="flex items-center gap-2.5 rounded-lg border border-border/30 bg-muted/10 px-3 py-2.5">
-        <CheckCircle size={14} weight="fill" className="shrink-0 text-emerald-500/70" />
-        <span className="flex-1 text-[12px] text-foreground/80">
-          任务完成
-          {pending > 0 && <span className="ml-1.5 text-muted-foreground/60">· {pending} 个文件待审查</span>}
-          {errCount > 0 && <span className="ml-1.5 text-red-500/60">· {errCount} 个错误</span>}
-        </span>
-      </div>
-
-      {/* per-file review cards */}
-      {pending > 0 && !allAccepted && (
-        <div className="space-y-1.5">
-          {changedFiles.map(({ tool: t, diff: d }, i) => (
-            <FileReviewRow key={t.id || `fr-${i}`} diff={d} sessionId={sessionId} rewindId={rewindId} />
-          ))}
-
-          {/* batch actions */}
-          {sessionId && rewindId && (
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <button type="button" onClick={() => setAllAccepted(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-medium text-emerald-600/80 transition hover:bg-emerald-500/20">
-                <Check size={12} weight="bold" /> 全部采纳
-              </button>
-              <button type="button" onClick={handleRewindAll} disabled={rewinding}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border/40 px-3 py-1.5 text-[11px] font-medium text-muted-foreground/70 transition hover:bg-muted/30 disabled:opacity-50">
-                {rewinding ? <SpinnerGap size={11} className="animate-spin" /> : <X size={12} weight="bold" />}
-                全部撤销
-              </button>
+    <div className="mt-2 flex justify-start">
+      <div className="w-fit min-w-[320px] max-w-[90%] overflow-hidden rounded-lg border border-border/40 bg-muted/20 shadow-sm">
+        <div className="flex items-center gap-3 px-3 py-2">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+            <Code size={14} weight="bold" />
+          </div>
+          <div className="min-w-0 flex-1 text-[13px] text-foreground/90 flex items-center gap-2">
+            <span className="font-medium">{pending} 个文件已更改</span>
+            <div className="flex items-center gap-1.5 ml-1">
+              <span className="text-emerald-500 font-mono">+{totalAdded}</span>
+              <span className="text-red-500 font-mono">-{totalRemoved}</span>
             </div>
-          )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="inline-flex items-center gap-1.5 rounded-md bg-muted/50 px-2.5 py-1 text-[12px] font-medium text-foreground/70 transition hover:bg-muted hover:text-foreground"
+          >
+            <span>查看变更</span>
+            <CaretDown size={12} className={cn('transition-transform', expanded && 'rotate-180')} />
+          </button>
         </div>
-      )}
 
-      {allAccepted && (
-        <div className="flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-[11px] text-emerald-600/70">
-          <CheckCircle size={13} weight="fill" /> 已采纳全部 {pending} 个文件变更
-        </div>
-      )}
+        <AnimatePresence initial={false}>
+          {expanded && (
+            <motion.div
+              initial={{ height: 0 }}
+              animate={{ height: 'auto' }}
+              exit={{ height: 0 }}
+              transition={{ duration: 0.16 }}
+              style={{ overflow: 'hidden' }}
+            >
+              <div className="border-t border-border/20 max-h-[480px] overflow-y-auto bg-muted/5">
+                {changedFiles.map(({ tool: t, diff: d }, i) => (
+                  <FileReviewRow key={t.id || `fr-${i}`} diff={d} sessionId={sessionId} rewindId={rewindId} />
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
 
 /** Single file review row in completion section */
 function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionId?: string; rewindId?: string }) {
-  const [status, setStatus] = useState<'pending' | 'accepted' | 'rejected'>('pending');
   const [open, setOpen] = useState(false);
-  const [rewinding, setRewinding] = useState(false);
   const { stopScroll } = useStickToBottomContext();
-
-  const handleRewind = async () => {
-    if (!sessionId || !rewindId) return;
-    setRewinding(true);
-    try {
-      const res = await fetch('/api/chat/rewind', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, userMessageId: rewindId }),
-      });
-      if (!res.ok) throw new Error('failed');
-      window.location.reload();
-    } catch { setRewinding(false); }
-  };
 
   const openFile = () => {
     fetch('/api/open-file', {
@@ -462,66 +450,50 @@ function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionI
   };
 
   return (
-    <div className={cn(
-      'overflow-hidden rounded-lg border transition-colors',
-      status === 'accepted' && 'border-emerald-500/30 bg-emerald-500/5',
-      status === 'rejected' && 'border-red-500/25 bg-red-500/5 opacity-60',
-      status === 'pending'  && 'border-border/30',
-    )}>
-      <div className="flex items-center gap-2 px-2.5 py-2 text-[11px]">
+    <div className="border-t border-border/20 first:border-t-0">
+      <div className="flex items-center gap-2 px-4 py-3 text-[12px]">
         <div className={cn(
-          'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+          'flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
           diff.mode === 'create' ? 'bg-emerald-500/12' : 'bg-amber-500/12',
         )}>
           {diff.mode === 'create'
-            ? <FilePlus size={11} className="text-emerald-500/70" />
-            : <NotePencil size={11} className="text-amber-500/70" />}
+            ? <FilePlus size={12} className="text-emerald-500/70" />
+            : <NotePencil size={12} className="text-amber-500/70" />}
         </div>
-        <span className="flex-1 truncate font-mono text-foreground/70">{diff.filename}</span>
-        {diff.added > 0 && <span className="text-emerald-500/65">+{diff.added}</span>}
-        {diff.removed > 0 && <span className="text-red-400/55">-{diff.removed}</span>}
-
-        {status === 'pending' && sessionId && rewindId && (
-          <>
-            <button type="button" onClick={() => setStatus('accepted')} title="采纳"
-              className="flex h-5 w-5 items-center justify-center rounded-md border border-emerald-500/35 text-emerald-500/70 hover:bg-emerald-500/15 transition">
-              <Check size={10} weight="bold" />
-            </button>
-            <button type="button" onClick={handleRewind} disabled={rewinding} title="撤销"
-              className="flex h-5 w-5 items-center justify-center rounded-md border border-red-500/25 text-red-500/60 hover:bg-red-500/15 transition disabled:opacity-50">
-              {rewinding ? <SpinnerGap size={9} className="animate-spin" /> : <X size={10} weight="bold" />}
-            </button>
-          </>
-        )}
-        {status === 'accepted' && <span className="text-emerald-500/60">已采纳</span>}
-        {status === 'rejected' && <span className="text-red-500/50">已撤销</span>}
-
-        <button type="button" onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}
-          className="rounded px-1 text-muted-foreground/45 hover:text-muted-foreground/65 transition">
-          <Eye size={10} />
+        <button
+          type="button"
+          onClick={openFile}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left transition hover:text-foreground"
+        >
+          <span className="truncate font-mono text-[13px] text-foreground/78">{diff.filename}</span>
+          <span className="truncate text-[12px] text-muted-foreground/55">{shortP(diff.fullPath, 42)}</span>
         </button>
-        {diff.fullPath && (
-          <button type="button" onClick={openFile}
-            className="rounded px-1 text-muted-foreground/45 hover:text-muted-foreground/65 transition">
-            <ArrowSquareOut size={10} />
-          </button>
-        )}
+        {diff.added > 0 && <span className="text-emerald-500/70">+{diff.added}</span>}
+        {diff.removed > 0 && <span className="text-red-500/65">-{diff.removed}</span>}
+        <button
+          type="button"
+          onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}
+          className="rounded px-1 text-muted-foreground/45 transition hover:text-muted-foreground/70"
+          title={open ? '收起 diff' : '展开 diff'}
+        >
+          <CaretDown size={13} className={cn('transition-transform', open && 'rotate-180')} />
+        </button>
       </div>
 
       <AnimatePresence initial={false}>
         {open && (
           <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }}
             transition={{ duration: 0.15 }} style={{ overflow: 'hidden' }}>
-            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/20 border-t border-border/20 text-[11px]">
+            <div className="grid divide-y divide-border/20 border-t border-border/20 text-[11px] md:grid-cols-2 md:divide-x md:divide-y-0 max-h-[400px] overflow-y-auto">
               {diff.mode === 'edit' && (
-                <div className="bg-red-500/[0.03] px-2.5 py-2">
+                <div className="bg-red-500/[0.03] px-3 py-2.5">
                   <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-muted-foreground/50">
                     {diff.beforeLines.map((l, i) => <div key={i}><span className="mr-1 select-none text-red-400/30">−</span>{l}</div>)}
                     {diff.moreB > 0 && <div className="text-muted-foreground/25">… +{diff.moreB} lines</div>}
                   </pre>
                 </div>
               )}
-              <div className={cn('bg-emerald-500/[0.03] px-2.5 py-2', diff.mode === 'create' && 'md:col-span-2')}>
+              <div className={cn('bg-emerald-500/[0.03] px-3 py-2.5', diff.mode === 'create' && 'md:col-span-2')}>
                 <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-foreground/65">
                   {diff.afterLines.map((l, i) => <div key={i}><span className="mr-1 select-none text-emerald-500/30">+</span>{l}</div>)}
                   {diff.moreA > 0 && <div className="text-muted-foreground/25">… +{diff.moreA} lines</div>}
@@ -541,12 +513,13 @@ export function ToolActionsGroup({
   tools,
   isStreaming = false,
   streamingToolOutput,
-  flat: _flat = false,
+  flat = false,
   thinkingContent,
   statusText,
   sessionId,
   rewindUserMessageId,
 }: ToolActionsGroupProps) {
+  const [expanded, setExpanded] = useState(true);
   const segments = useMemo(
     () => buildSegments(tools, thinkingContent, isStreaming, streamingToolOutput),
     [tools, thinkingContent, isStreaming, streamingToolOutput],
@@ -554,6 +527,7 @@ export function ToolActionsGroup({
 
   const allDone = !isStreaming && tools.length > 0 && tools.every(t => t.result !== undefined);
   const errCount = tools.filter(t => t.isError).length;
+  const running = tools.filter(t => t.result === undefined);
   const changedFiles = useMemo(() => {
     return tools
       .map(t => ({ tool: t, diff: extractDiff(t) }))
@@ -562,41 +536,74 @@ export function ToolActionsGroup({
 
   if (segments.length === 0) return null;
 
-  return (
-    <div className="py-1">
-      {/* chronological timeline */}
-      <div className="space-y-0">
-        {segments.map((seg, i) => {
-          if (seg.type === 'thinking') {
-            return <ThinkingRow key={`think-${i}`} content={seg.content} streaming={seg.streaming} />;
-          }
-          return <ToolRow key={seg.tool.id || `tool-${i}`} tool={seg.tool} streamingOutput={seg.streamingOutput} />;
-        })}
-      </div>
-
-      {/* streaming status — real-time "what's happening now" */}
-      {isStreaming && (statusText || tools.some(t => t.result === undefined)) && (
-        <div className="flex items-center gap-2 py-1.5 pl-[30px] text-[11px] text-muted-foreground/50">
-          <SpinnerGap size={10} className="animate-spin text-blue-400/50" />
-          <span className="truncate">
-            {statusText || (() => {
-              const running = tools.filter(t => t.result === undefined);
-              if (running.length === 0) return '生成回复中…';
-              return stepLabel(running[running.length - 1]) + '…';
-            })()}
-          </span>
+  if (flat) {
+    return (
+      <div className="py-1">
+        <div className="relative pl-3 ml-2.5 border-l-2 border-border/30 pb-1">
+          {segments.map((seg, i) => (
+            <div key={i}>
+              {seg.type === 'thinking' ? (
+                <ThinkingRow content={seg.content} streaming={seg.streaming} />
+              ) : (
+                <ToolRow tool={seg.tool} streamingOutput={seg.streamingOutput} />
+              )}
+            </div>
+          ))}
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {/* completion summary */}
-      {allDone && (
-        <CompletionBar
-          changedFiles={changedFiles}
-          errCount={errCount}
-          sessionId={sessionId}
-          rewindId={rewindUserMessageId}
-        />
-      )}
+  // 功能：Trae 风格的工具调用折叠面板
+  // 用法：渲染一个按钮，在默认情况下仅展示工具总数和当前运行的工具状态，点击可展开完整的工具调用时间线
+  const summaryText = running.length > 0
+    ? `${stepLabel(running[running.length - 1])}…`
+    : `使用了 ${tools.length} 个工具`;
+
+  return (
+    <div className="py-2">
+      {/* Trae style Accordion Header */}
+      <button 
+        type="button" 
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1 select-none"
+      >
+        <div className="flex h-5 w-5 items-center justify-center rounded bg-muted/30">
+          {running.length > 0 ? (
+            <SpinnerGap size={12} className="animate-spin text-blue-500/70" />
+          ) : errCount > 0 ? (
+            <Wrench size={12} className="text-red-500/70" />
+          ) : (
+            <Wrench size={12} className="text-emerald-500/70" />
+          )}
+        </div>
+        <span className="font-medium">{summaryText}</span>
+        <CaretDown size={10} className={cn("transition-transform duration-200", expanded ? "rotate-180" : "")} />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {(expanded || isStreaming) && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="relative pl-3 ml-2.5 border-l-2 border-border/30 pb-2">
+              {segments.map((seg, i) => (
+                <div key={i}>
+                  {seg.type === 'thinking' ? (
+                    <ThinkingRow content={seg.content} streaming={seg.streaming} />
+                  ) : (
+                    <ToolRow tool={seg.tool} streamingOutput={seg.streamingOutput} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

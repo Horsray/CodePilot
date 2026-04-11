@@ -10,7 +10,6 @@ import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, Fil
 import { saveMediaToLibrary } from '@/lib/media-saver';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
 import { createPerfTrace, createPerfTraceId } from '@/lib/perf-trace';
-import { sanitizeToolCallBlocks } from '@/lib/tool-call-recovery';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
@@ -269,7 +268,7 @@ export async function POST(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { predictNativeRuntime } = require('@/lib/runtime') as typeof import('@/lib/runtime');
     const mcpServers = perfTrace.measure('mcp.config.load', () => (
-      predictNativeRuntime(effectiveProviderId, isImageAgentMode)
+      predictNativeRuntime(effectiveProviderId)
         ? loadAllMcpServers()
         : loadCodePilotMcpServers()
     ));
@@ -413,7 +412,12 @@ export async function POST(request: NextRequest) {
       clearInterval(lockRenewalInterval);
       releaseSessionLock(session_id, lockId);
       setSessionRuntimeStatus(session_id, 'idle');
-    }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger });
+    }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger }).catch((e) => {
+      console.error(`[chat API] Background collectStreamResponse failed for session ${session_id}:`, e);
+      clearInterval(lockRenewalInterval);
+      releaseSessionLock(session_id, lockId);
+      setSessionRuntimeStatus(session_id, 'idle', e instanceof Error ? e.message : 'Background stream error');
+    });
 
     // If auto-compression happened, prepend a notification event to the stream
     const responseStream = compressionOccurred
@@ -689,21 +693,14 @@ async function collectStreamResponse(
       const cleanedBlocks = contentBlocks.map(b =>
         b.type === 'text' && 'text' in b ? { ...b, text: (b.text as string).replace(heartbeatMarkerRe, '') } : b
       );
-      const repairedBlocks = sanitizeToolCallBlocks(
-        cleanedBlocks,
-        hasError
-          ? errorMessage || 'The tool call failed before returning a final result.'
-          : 'The tool call ended without a final result. A synthetic error result was inserted automatically.',
-      );
-
       // If it contains tool calls or thinking blocks, store as structured JSON.
-      const hasStructuredBlocks = repairedBlocks.some(
+      const hasStructuredBlocks = cleanedBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
       );
 
       const content = hasStructuredBlocks
-        ? JSON.stringify(repairedBlocks)
-        : repairedBlocks
+        ? JSON.stringify(cleanedBlocks)
+        : cleanedBlocks
             .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
             .map((b) => b.text)
             .join('')
@@ -734,16 +731,12 @@ async function collectStreamResponse(
       const errCleanedBlocks = contentBlocks.map(b =>
         b.type === 'text' && 'text' in b ? { ...b, text: (b.text as string).replace(hbRe, '') } : b
       );
-      const repairedBlocks = sanitizeToolCallBlocks(
-        errCleanedBlocks,
-        errorMessage || 'The stream stopped before the tool returned a final result.',
-      );
-      const hasStructuredBlocks = repairedBlocks.some(
+      const hasStructuredBlocks = errCleanedBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
       );
       const content = hasStructuredBlocks
-        ? JSON.stringify(repairedBlocks)
-        : repairedBlocks
+        ? JSON.stringify(errCleanedBlocks)
+        : errCleanedBlocks
             .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
             .map((b) => b.text)
             .join('')

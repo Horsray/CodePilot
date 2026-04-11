@@ -499,7 +499,8 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
   const handleCreateItem = useCallback(async () => {
     if (!newItemDialog.name.trim()) return;
 
-    const fullPath = `${newItemDialog.parentPath}/${newItemDialog.name}`;
+    const basePath = newItemDialog.parentPath || workingDirectory;
+    const fullPath = `${basePath}/${newItemDialog.name}`;
     try {
       const res = await fetch("/api/files/create", {
         method: "POST",
@@ -544,6 +545,10 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
   // 执行重命名
   const handleDoRename = useCallback(async () => {
     if (!renameDialog.newName.trim()) return;
+    if (!renameDialog.path) {
+      showToast({ type: "error", message: "缺少文件路径" });
+      return;
+    }
 
     const oldPath = renameDialog.path;
     const parentPath = oldPath.split("/").slice(0, -1).join("/");
@@ -554,8 +559,8 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          oldPath,
-          newPath,
+          path: oldPath,
+          newName: renameDialog.newName,
         }),
       });
 

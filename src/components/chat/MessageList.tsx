@@ -3,7 +3,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
-import { useStickToBottomContext } from 'use-stick-to-bottom';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ArrowCounterClockwise, SpinnerGap } from '@phosphor-icons/react';
@@ -14,37 +13,11 @@ import {
   ConversationScrollButton,
   ConversationEmptyState,
 } from '@/components/ai-elements/conversation';
+import { useStickToBottomContext } from "use-stick-to-bottom";
 import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
 import { CodePilotLogo } from './CodePilotLogo';
 import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, RARITY_BG_GRADIENT, type Species, type Rarity } from '@/lib/buddy';
-
-/**
- * Scrolls to bottom when streaming starts or new messages are appended.
- * Must be rendered inside <Conversation> (StickToBottom provider).
- */
-function ScrollOnStream({ isStreaming, messageCount }: { isStreaming: boolean; messageCount: number }) {
-  const { scrollToBottom } = useStickToBottomContext();
-  const wasStreaming = useRef(false);
-  const prevCount = useRef(messageCount);
-
-  // Scroll when new messages are appended (covers optimistic user message + assistant completion)
-  useEffect(() => {
-    if (messageCount > prevCount.current) {
-      scrollToBottom({ animation: 'instant', preserveScrollPosition: true });
-    }
-    prevCount.current = messageCount;
-  }, [messageCount, scrollToBottom]);
-
-  useEffect(() => {
-    if (isStreaming && !wasStreaming.current) {
-      scrollToBottom({ animation: 'instant', preserveScrollPosition: true });
-    }
-    wasStreaming.current = isStreaming;
-  }, [isStreaming, scrollToBottom]);
-
-  return null;
-}
 
 /**
  * Rewind button shown on user messages that have file checkpoints.
@@ -213,6 +186,29 @@ function getRewindTargetForMessage(messages: Message[], rewindPoints: RewindPoin
   return undefined;
 }
 
+/**
+ * Helper component to force scroll to bottom when new messages are added.
+ * This ensures the user's just-sent message or the AI's first response
+ * is immediately visible, even if layout shifts (like input shrinking) occur.
+ */
+function ScrollToBottomHelper({ messageCount }: { messageCount: number }) {
+  const { scrollToBottom } = useStickToBottomContext();
+  const lastCountRef = useRef(messageCount);
+
+  useEffect(() => {
+    if (messageCount > lastCountRef.current) {
+      // Small delay to ensure layout has settled (e.g. MessageInput shrunk)
+      const timer = setTimeout(() => {
+        scrollToBottom();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+    lastCountRef.current = messageCount;
+  }, [messageCount, scrollToBottom]);
+
+  return null;
+}
+
 export function MessageList({
   messages,
   streamingContent,
@@ -307,7 +303,7 @@ export function MessageList({
 
   return (
     <Conversation>
-      <ScrollOnStream isStreaming={isStreaming} messageCount={messages.length} />
+      <ScrollToBottomHelper messageCount={messages.length + (isStreaming ? 1 : 0)} />
       <ConversationContent className="mx-auto max-w-3xl px-4 py-6 gap-6">
         {hasMore && (
           <div className="flex justify-center">

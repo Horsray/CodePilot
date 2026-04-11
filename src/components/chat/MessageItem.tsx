@@ -9,20 +9,22 @@ import {
   MessageContent,
   MessageResponse,
 } from '@/components/ai-elements/message';
-import { ToolActionsGroup } from '@/components/ai-elements/tool-actions-group';
+import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
 import { Button } from "@/components/ui/button";
-import { Copy, Check, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple } from "@/components/ui/icon";
+import { Copy, Check, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise } from "@/components/ui/icon";
 import { FileAttachmentDisplay } from './FileAttachmentDisplay';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { ImageGenCard } from './ImageGenCard';
 import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview';
 import { WidgetRenderer } from './WidgetRenderer';
+import { AgentTimeline } from '@/components/chat/AgentTimeline';
 import { buildReferenceImages } from '@/lib/image-ref-store';
 import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, RARITY_BG_GRADIENT, type Species, type Rarity } from '@/lib/buddy';
 import { parseDBDate } from '@/lib/utils';
 import { usePanel } from '@/hooks/usePanel';
-import type { PlannerOutput } from '@/types';
+import { extractTimelineStepsFromBlocks } from '@/lib/agent-timeline';
+import type { PlannerOutput, MessageContentBlock } from '@/types';
 
 interface ImageGenRequest {
   prompt: string;
@@ -583,21 +585,101 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
   const contentRef = useRef<HTMLDivElement>(null);
 
 
-  // Memoize expensive parsing: parseToolBlocks + pairTools
-  const { text, pairedTools, thinking } = useMemo(() => {
+  // Use blocks directly for sequential rendering instead of grouping
+  const contentBlocks = useMemo<MessageContentBlock[]>(() => {
+    try {
+      const parsed = JSON.parse(message.content);
+      if (Array.isArray(parsed)) return parsed as MessageContentBlock[];
+    } catch {
+      // Not JSON
+    }
+    // Fallback to legacy parsing if not JSON array
     const { text, tools, thinking } = parseToolBlocks(message.content);
-    const pairedTools = pairTools(tools);
-    return { text, pairedTools, thinking };
+    const blocks: MessageContentBlock[] = [];
+    if (thinking) blocks.push({ type: 'thinking', thinking });
+    if (text) blocks.push({ type: 'text', text });
+    tools.forEach(t => {
+      if (t.type === 'tool_use') {
+        if (t.id && t.name) {
+          blocks.push({ type: 'tool_use', id: t.id, name: t.name, input: t.input });
+        }
+      } else if (t.id && typeof t.content === 'string') {
+        blocks.push({ type: 'tool_result', tool_use_id: t.id, content: t.content, is_error: t.is_error, media: t.media });
+      }
+    });
+    return blocks;
   }, [message.content]);
 
-  // Memoize file attachment parsing
+  const timelineSteps = useMemo(() => {
+    return isUser ? [] : extractTimelineStepsFromBlocks(contentBlocks);
+  }, [contentBlocks, isUser]);
+
+  const timelineCompletionInfo = useMemo(() => {
+    if (isUser || timelineSteps.length === 0) return null;
+    const changedFiles = timelineSteps.flatMap((step) => step.fileChanges.map((change, index) => ({
+      tool: {
+        id: `${step.id}-${index}`,
+        name: change.operation === 'create' ? 'write' : 'edit',
+        input: { path: change.path },
+        result: undefined,
+        isError: false,
+      },
+      diff: {
+        filename: change.fileName,
+        fullPath: change.path,
+        mode: change.operation,
+        added: change.addedLines,
+        removed: change.removedLines,
+        beforeLines: change.beforeText ? change.beforeText.replace(/\r\n/g, '\n').split('\n').slice(0, 1000) : [],
+        afterLines: change.afterText ? change.afterText.replace(/\r\n/g, '\n').split('\n').slice(0, 1000) : [],
+        moreB: Math.max(0, (change.beforeText ? change.beforeText.replace(/\r\n/g, '\n').split('\n').length : 0) - 1000),
+        moreA: Math.max(0, (change.afterText ? change.afterText.replace(/\r\n/g, '\n').split('\n').length : 0) - 1000),
+      },
+    })));
+    const errCount = timelineSteps.filter((step) => step.status === 'failed' || step.error).length;
+    return changedFiles.length > 0 ? { errCount, changedFiles } : null;
+  }, [isUser, timelineSteps]);
+
+  // Memoize expensive parsing: parseToolBlocks + pairTools
+  const { pairedTools, thinking } = useMemo(() => {
+    const { tools, thinking } = parseToolBlocks(message.content);
+    const pairedTools = pairTools(tools);
+    return { pairedTools, thinking };
+  }, [message.content]);
+
+  // Compute completion summary for assistant messages
+  const completionInfo = useMemo(() => {
+    if (isUser || pairedTools.length === 0) return null;
+    const mappedTools = pairedTools.map((tool, i) => ({
+      id: `hist-${i}`,
+      name: tool.name,
+      input: tool.input,
+      result: tool.result,
+      isError: tool.isError,
+      media: tool.media,
+    }));
+    const errCount = mappedTools.filter(t => t.isError).length;
+    const changedFiles = mappedTools
+      .map(t => ({ tool: t as any, diff: extractDiff(t as any) }))
+      .filter((x): x is { tool: any; diff: any } => x.diff !== null);
+    
+    return { errCount, changedFiles };
+  }, [isUser, pairedTools]);
+
+  // Memoize file attachment parsing for the FIRST text block of a user message
   const { files, displayText } = useMemo(() => {
     if (isUser) {
-      const { files, text: textWithoutFiles } = parseMessageFiles(text);
+      const firstText = contentBlocks.find(b => b.type === 'text')?.text || '';
+      const { files, text: textWithoutFiles } = parseMessageFiles(firstText);
       return { files, displayText: textWithoutFiles };
     }
+    const text = contentBlocks
+      .filter((block): block is Extract<MessageContentBlock, { type: 'text' }> => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n')
+      .trim();
     return { files: [] as FileAttachment[], displayText: text };
-  }, [text, isUser]);
+  }, [contentBlocks, isUser]);
 
   useEffect(() => {
     if (isUser && contentRef.current) {
@@ -649,7 +731,10 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
         )}
 
         {/* Tool calls + thinking for assistant messages — single collapsible group */}
-        {!isUser && (pairedTools.length > 0 || thinking) && (
+        {!isUser && timelineSteps.length > 0 && (
+          <AgentTimeline steps={timelineSteps} compact={true} showSummaryCard={true} />
+        )}
+        {!isUser && timelineSteps.length === 0 && (pairedTools.length > 0 || thinking) && (
           <ToolActionsGroup
             tools={pairedTools.map((tool, i) => ({
               id: `hist-${i}`,
@@ -662,6 +747,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
             thinkingContent={thinking}
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
+            flat={true}
           />
         )}
 
@@ -710,27 +796,29 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
                 </Button>
               )}
             </div>
-          ) : <AssistantContent displayText={displayText} messageId={message.id} sessionId={sessionId} />
+          ) : (
+            <AssistantContent displayText={displayText} messageId={message.id} sessionId={sessionId} />
+          )
+        )}
+
+        {/* Completion Bar rendered only once at the end of the message */}
+        {!isUser && timelineSteps.length === 0 && completionInfo && completionInfo.changedFiles.length > 0 && (
+          <CompletionBar
+            changedFiles={completionInfo.changedFiles}
+            errCount={completionInfo.errCount}
+            sessionId={sessionId}
+            rewindId={rewindUserMessageId}
+          />
+        )}
+        {!isUser && timelineSteps.length > 0 && timelineCompletionInfo && (
+          <CompletionBar
+            changedFiles={timelineCompletionInfo.changedFiles}
+            errCount={timelineCompletionInfo.errCount}
+            sessionId={sessionId}
+            rewindId={rewindUserMessageId}
+          />
         )}
       </MessageContent>
-
-      {/* Diff summary for assistant messages with file modifications */}
-      {!isUser && (() => {
-        const WRITE_TOOLS = new Set(['write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'notebookedit', 'notebook_edit']);
-        const modifiedFiles = pairedTools
-          .filter(t => WRITE_TOOLS.has(t.name.toLowerCase()) && !t.isError)
-          .map(t => {
-            const inp = t.input as Record<string, unknown> | undefined;
-            const filePath = (inp?.file_path || inp?.path || inp?.filePath || '') as string;
-            const parts = filePath.split('/');
-            return { path: filePath, name: parts[parts.length - 1] || filePath };
-          })
-          .filter(f => f.path);
-        if (modifiedFiles.length === 0) return null;
-        // Deduplicate by path
-        const unique = [...new Map(modifiedFiles.map(f => [f.path, f])).values()];
-        return <DiffSummary files={unique} />;
-      })()}
 
       {/* Footer with copy, timestamp and token usage */}
       <div className={`flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${isUser ? 'justify-end' : ''}`}>
@@ -836,6 +924,10 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
     const genResult = parseImageGenResult(displayText);
     if (genResult) {
       const { result } = genResult;
+      const handleRetry = () => {
+        window.dispatchEvent(new CustomEvent('chat-retry', { detail: { messageId } }));
+      };
+
       if (result.status === 'generating') {
         return (
           <>
@@ -853,7 +945,16 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
           <>
             {genResult.beforeText && <MessageResponse>{genResult.beforeText}</MessageResponse>}
             <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/30 p-3">
-              <p className="text-sm text-status-error-foreground">{result.error || 'Image generation failed'}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm text-status-error-foreground flex-1">{result.error || 'Image generation failed'}</p>
+                <button
+                  onClick={handleRetry}
+                  className="shrink-0 text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 hover:underline flex items-center gap-1"
+                >
+                  <ArrowsCounterClockwise size={12} />
+                  点击重试
+                </button>
+              </div>
             </div>
             {genResult.afterText && <MessageResponse>{genResult.afterText}</MessageResponse>}
           </>

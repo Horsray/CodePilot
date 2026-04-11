@@ -60,6 +60,7 @@ const zh: Record<TranslationKey, string> = {
   // ── Streaming message ───────────────────────────────────────
   'streaming.thinking': '思考中...',
   'streaming.thinkingDeep': '深度思考中...',
+  'streaming.verifying': '探测模型连通性...',
   'streaming.preparing': '组织回复中...',
   'streaming.generating': '生成中',
   'streaming.allowForSession': '本次会话允许',

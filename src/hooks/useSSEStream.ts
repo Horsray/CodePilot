@@ -31,6 +31,7 @@ export interface SSECallbacks {
   onThinking?: (delta: string) => void;
   onKeepAlive: () => void;
   onError: (accumulated: string) => void;
+  onStatusPayload?: (payload: Record<string, unknown>) => void;
   onInitMeta?: (meta: {
     tools?: unknown;
     slash_commands?: unknown;
@@ -41,6 +42,8 @@ export interface SSECallbacks {
   }) => void;
 }
 
+// 中文注释：功能名称「SSE 非正常断流识别」，用法是在流没有收到 done 终止事件就结束时抛出，
+// 让上层能够区分“正常完成”和“传输被静默掐断”，从而触发自动恢复而不是误判成功。
 /**
  * Parse a single SSE line (after stripping "data: " prefix) and dispatch
  * to the appropriate callback.  Returns the updated accumulated text.
@@ -110,8 +113,9 @@ function handleSSEEvent(
     case 'status': {
       try {
         const statusData = JSON.parse(event.data);
-        // Skip internal-only status events (e.g. resume fallback notifications)
-        if (statusData._internal || statusData.subtype === 'perf') {
+        callbacks.onStatusPayload?.(statusData);
+        // Skip internal-only status events (e.g. resume fallback notifications, perf)
+        if (statusData._internal || statusData.subtype === 'perf' || statusData.subtype === 'step_complete') {
           return accumulated;
         }
         if (statusData.subtype === 'ui_action' && statusData.action) {
@@ -336,6 +340,7 @@ export function useSSEStream() {
         onThinking: (d) => callbacksRef.current?.onThinking?.(d),
         onKeepAlive: () => callbacksRef.current?.onKeepAlive(),
         onError: (a) => callbacksRef.current?.onError(a),
+        onStatusPayload: (payload) => callbacksRef.current?.onStatusPayload?.(payload),
         onInitMeta: (m) => callbacksRef.current?.onInitMeta?.(m),
       };
 

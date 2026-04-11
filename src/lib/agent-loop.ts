@@ -14,7 +14,7 @@ import { streamText, type ToolSet, type ModelMessage } from 'ai';
 import type { SSEEvent, TokenUsage } from '@/types';
 import { createModel } from './ai-provider';
 import { assembleTools, READ_ONLY_TOOLS } from './agent-tools';
-import { reportNativeError } from './error-classifier';
+import { reportNativeError, classifyError, formatClassifiedError } from './error-classifier';
 import { pruneOldToolResults } from './context-pruner';
 import { emit as emitEvent } from './runtime/event-bus';
 import { createCheckpoint } from './file-checkpoint';
@@ -22,12 +22,6 @@ import type { PermissionMode } from './permission-checker';
 import { buildCoreMessages } from './message-builder';
 import { getMessages } from './db';
 import { createPerfTrace } from './perf-trace';
-import {
-  buildRecoveredToolResultText,
-  buildSyntheticToolRecoveryMessages,
-  extractMissingToolCallIds,
-  type ToolCallSnapshot,
-} from './tool-call-recovery';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -155,8 +149,69 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           mcpServerCount: mcpServers ? Object.keys(mcpServers).length : 0,
         });
 
-        // 0. Sync MCP servers before assembling tools (await to avoid race condition)
+        // 0. Pre-flight check: test model availability before expensive operations
+        // This ensures fast failure if API keys are invalid or network is down
+        controller.enqueue(formatSSE({
+          type: 'status',
+          data: JSON.stringify({ message: '探测模型连通性...' }),
+        }));
+        
+        try {
+          // Send a tiny prompt to verify the connection is alive
+          // Using streamText with maxTokens=1 to fail fast if unauthorized/unreachable
+          const { languageModel: testModel, config: modelConfig } = createModel({
+            providerId,
+            sessionProviderId,
+            model: modelOverride,
+            sessionModel,
+          });
+          
+          // Only do pre-flight for external models, local models might be slow to load
+          if (modelConfig.sdkType !== 'openai' || (!modelConfig.baseUrl?.includes('localhost') && !modelConfig.baseUrl?.includes('127.0.0.1'))) {
+            const preflightAbort = new AbortController();
+            const timeout = setTimeout(() => preflightAbort.abort(), 8000); // 8 seconds max for pre-flight
+            
+            // Link parent abort
+            const onParentAbort = () => preflightAbort.abort();
+            abortController.signal.addEventListener('abort', onParentAbort);
+
+            try {
+              // Wait for the stream to actually start yielding before declaring success
+              const { fullStream } = await streamText({
+                model: testModel,
+                messages: [{ role: 'user', content: 'ping' }],
+                maxOutputTokens: 1,
+                abortSignal: preflightAbort.signal,
+              });
+              
+              // Consume the first event to trigger network/auth failures
+              for await (const _ of fullStream) {
+                break; // Just need the first chunk
+              }
+            } finally {
+              clearTimeout(timeout);
+              abortController.signal.removeEventListener('abort', onParentAbort);
+            }
+          }
+        } catch (err: unknown) {
+          // If pre-flight fails, we throw immediately and skip MCP sync/history load
+          const isAbort = err instanceof Error && err.name === 'AbortError';
+          if (isAbort && !abortController.signal.aborted) {
+            // It was our 8-second timeout, not a user cancellation
+            const timeoutError = new Error('API 连接超时：模型服务器超过 8 秒未响应。请检查网络或 API 地址。');
+            timeoutError.name = 'PreflightTimeoutError';
+            throw timeoutError;
+          }
+          console.warn('[agent-loop] Pre-flight model connection failed:', err);
+          throw err;
+        }
+
+        // 0b. Sync MCP servers before assembling tools (await to avoid race condition)
         if (mcpServers && Object.keys(mcpServers).length > 0) {
+          controller.enqueue(formatSSE({
+            type: 'status',
+            data: JSON.stringify({ message: '同步工具中...' }),
+          }));
           console.log(`[agent-loop] Syncing ${Object.keys(mcpServers).length} MCP servers: ${Object.keys(mcpServers).join(', ')}`);
           try {
             const { syncMcpConnections } = await import('./mcp-connection-manager');
@@ -286,7 +341,14 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         let messages = historyMessages;
 
         while (step < maxSteps) {
+          if (abortController.signal.aborted) {
+            console.log(`[agentLoop] Session ${sessionId} aborted by controller at step ${step}`);
+            break;
+          }
+
           step++;
+          console.log(`[agentLoop] Session ${sessionId} starting step ${step}/${maxSteps}`);
+          onRuntimeStatusChange?.(`Thinking... (step ${step}/${maxSteps})`);
 
           // Build provider options (Anthropic-specific)
           // For third-party proxies: disable adaptive thinking (not widely supported).
@@ -351,6 +413,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             ...(activeToolNames ? { activeTools: activeToolNames } : {}),
             // toolChoice: auto by default, none if no tools
             toolChoice: hasTools ? 'auto' : 'none',
+            maxRetries: 2, // Auto-retry transient provider errors (502, 503, timeouts)
             providerOptions,
             abortSignal: abortController.signal,
             // Codex API doesn't support max_output_tokens
@@ -362,7 +425,9 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
                 totalUsage.input_tokens += stepUsage.inputTokens || 0;
                 totalUsage.output_tokens += stepUsage.outputTokens || 0;
               }
-              // Emit step progress for frontend token display
+              // We do NOT emit `step_complete` as a 'text' or raw string anymore.
+              // We emit it strictly as a valid `status` event so the frontend handles it cleanly
+              // via the Status block instead of appending it to the chat text.
               controller.enqueue(formatSSE({
                 type: 'status',
                 data: JSON.stringify({
@@ -411,16 +476,12 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           // Consume the fullStream
           let hasToolCalls = false;
           const stepToolNames: string[] = [];
-          const stepToolCalls: ToolCallSnapshot[] = [];
-          const resolvedToolCallIds = new Set<string>();
-          let stepTextBuffer = '';
-          let eventCount = 0;
+          let hasContent = false; // tracks whether any actual content was produced
           let firstModelEventSeen = false;
           const firstEventStart = Date.now();
           perfTrace.start(`model.step_${step}.first_event`);
 
           for await (const event of result.fullStream) {
-            eventCount++;
             if (!firstModelEventSeen) {
               firstModelEventSeen = true;
               perfTrace.end(`model.step_${step}.first_event`, { eventType: event.type });
@@ -431,22 +492,18 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             }
             switch (event.type) {
               case 'text-delta':
-                stepTextBuffer += event.text;
+                hasContent = true;
                 controller.enqueue(formatSSE({ type: 'text', data: event.text }));
                 break;
 
               case 'reasoning-delta':
+                hasContent = true;
                 controller.enqueue(formatSSE({ type: 'thinking', data: event.text }));
                 break;
 
               case 'tool-call':
                 hasToolCalls = true;
                 stepToolNames.push(event.toolName);
-                stepToolCalls.push({
-                  id: event.toolCallId,
-                  name: event.toolName,
-                  input: event.input,
-                });
                 controller.enqueue(formatSSE({
                   type: 'tool_use',
                   data: JSON.stringify({
@@ -458,9 +515,16 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
                 break;
 
               case 'tool-result':
-                resolvedToolCallIds.add(event.toolCallId);
-                {
-                  const normalizedOutput = normalizeToolResultOutput(event.output, event.toolName);
+                if (isGuardedToolError(event.output)) {
+                  console.warn(`[agent-loop] Tool error payload detected for ${event.toolName}:`, event.output);
+                }
+                const normalizedOutput = normalizeToolResultOutput(event.output, event.toolName);
+                
+                // Track tool execution failure to help avoid doom loops
+                if (normalizedOutput.isError) {
+                  console.warn(`[agent-loop] Tool ${event.toolName} failed:`, normalizedOutput.content);
+                }
+
                 controller.enqueue(formatSSE({
                   type: 'tool_result',
                   data: JSON.stringify({
@@ -469,7 +533,6 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
                     is_error: normalizedOutput.isError,
                   }),
                 }));
-                }
                 break;
 
               case 'error':
@@ -490,9 +553,9 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           // If no tool calls, the model is done
           if (!hasToolCalls) {
             // Detect empty response (proxy rejected or model returned nothing)
-            if (eventCount <= 3) {
+            if (!hasContent) {
               const finishReason = await result.finishReason;
-              console.error(`[agent-loop] Empty response: ${eventCount} events, finishReason=${finishReason}, model=${modelId}`);
+              console.error(`[agent-loop] Empty response: hasContent=false, finishReason=${finishReason}, model=${modelId}`);
               reportNativeError('EMPTY_RESPONSE', new Error(`Empty response: finishReason=${finishReason}`), { modelId, sessionId });
               controller.enqueue(formatSSE({
                 type: 'error',
@@ -516,46 +579,36 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           lastToolNames = stepToolNames;
 
           // Update messages for next iteration.
-          // streamText returns the full message list including our input + model response.
-          // Use response.messages which contains properly typed ModelMessage[].
-          try {
-            const responseData = await result.response;
-            messages = [...messages, ...responseData.messages] as ModelMessage[];
-          } catch (error) {
-            const missingIds = extractMissingToolCallIds(error);
-            const unresolvedToolCalls = stepToolCalls.filter((toolCall) => {
-              if (resolvedToolCallIds.has(toolCall.id)) return false;
-              return missingIds.length === 0 || missingIds.includes(toolCall.id);
-            });
-
-            if (unresolvedToolCalls.length === 0) {
-              throw error;
+          // streamText returns the newly generated messages in responseData.messages.
+          // We must append them to our existing messages array.
+          const responseData = await result.response;
+          
+          // Wash newly generated messages before next iteration to remove non-string outputs which cause 
+          // 'messages do not match the ModelMessage[] schema' errors
+          const newMessages = (responseData.messages as ModelMessage[]).map(msg => {
+            if (msg.role === 'tool' && Array.isArray(msg.content)) {
+              return {
+                ...msg,
+                content: msg.content.map(part => {
+                  if (part.type === 'tool-result') {
+                    // Check if result is a raw tool error object payload
+                    if ('result' in part && isGuardedToolError(part.result)) {
+                       const normalized = normalizeToolResultOutput(part.result, part.toolName);
+                       return {
+                         ...part,
+                         result: normalized.content,
+                         isError: normalized.isError
+                       };
+                    }
+                  }
+                  return part;
+                })
+              };
             }
+            return msg;
+          }) as ModelMessage[];
 
-            const recoveryReason = error instanceof Error
-              ? error.message
-              : 'Tool execution did not produce a final result.';
-
-            for (const toolCall of unresolvedToolCalls) {
-              controller.enqueue(formatSSE({
-                type: 'tool_result',
-                data: JSON.stringify({
-                  tool_use_id: toolCall.id,
-                  content: buildRecoveredToolResultText(toolCall.name, recoveryReason),
-                  is_error: true,
-                }),
-              }));
-            }
-
-            messages = [
-              ...messages,
-              ...buildSyntheticToolRecoveryMessages({
-                toolCalls: unresolvedToolCalls,
-                text: stepTextBuffer,
-                reason: recoveryReason,
-              }),
-            ] as ModelMessage[];
-          }
+          messages = [...messages, ...newMessages];
         }
 
         // 6. Emit result event
@@ -576,14 +629,47 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           abortController.signal.aborted
         );
 
-        if (!isAbort) {
+        if (!isAbort || (err instanceof Error && err.name === 'PreflightTimeoutError')) {
           console.error('[agent-loop] Error:', err instanceof Error ? err.message : err);
-          reportNativeError('NATIVE_STREAM_ERROR', err, { sessionId });
+          
+          const rawMessage = err instanceof Error ? err.message : String(err);
+          const isAuthError = /unauthorized|forbidden|401|403/i.test(rawMessage);
+          // Classify the error using structured pattern matching (same as SDK runtime)
+          const classified = classifyError({
+            error: err,
+            providerName: providerId || sessionProviderId,
+            thinkingEnabled: !!thinking,
+            context1mEnabled: !!context1m,
+            effortSet: !!effort,
+          });
+
+          // If classifyError falls back to UNKNOWN, we override the category for specific native errors
+          if (classified.category === 'UNKNOWN') {
+            classified.category = isAuthError ? 'OPENAI_AUTH_FAILED' : 'NATIVE_STREAM_ERROR';
+          }
+          
+          if (err instanceof Error && err.name === 'PreflightTimeoutError') {
+            classified.userMessage = err.message;
+            classified.category = 'NATIVE_STREAM_ERROR';
+            classified.actionHint = '重试连接';
+          }
+          
+          reportNativeError(classified.category, err, { sessionId, modelId: modelOverride || sessionModel });
+          
+          const errorMessage = formatClassifiedError(classified);
+
           controller.enqueue(formatSSE({
             type: 'error',
             data: JSON.stringify({
-              category: 'AGENT_ERROR',
-              userMessage: err instanceof Error ? err.message : String(err),
+              category: classified.category,
+              userMessage: classified.userMessage,
+              actionHint: classified.actionHint,
+              retryable: classified.retryable,
+              providerName: classified.providerName,
+              details: classified.details,
+              rawMessage: classified.rawMessage,
+              recoveryActions: classified.recoveryActions,
+              _formattedMessage: errorMessage,
             }),
           }));
         }
@@ -618,7 +704,7 @@ function normalizeToolResultOutput(output: unknown, toolName: string): { content
       ? `${output.message} Attempts: ${output.attempts}.`
       : output.message;
     return {
-      content: buildRecoveredToolResultText(output.toolName || toolName, detail),
+      content: `Tool "${output.toolName || toolName}" failed or was skipped. ${detail}`,
       isError: true,
     };
   }

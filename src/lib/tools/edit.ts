@@ -79,8 +79,10 @@ export function createEditTool(ctx: ToolContext) {
           'Please provide more surrounding context to uniquely identify the edit location.';
       }
 
+      // Record modification BEFORE writing so we capture the "before" state
+      recordFileModification(ctx.sessionId || '', path.relative(ctx.workingDirectory, resolved), ctx.workingDirectory);
+
       fs.writeFileSync(resolved, result.newContent, 'utf-8');
-      recordFileModification(ctx.sessionId || '', path.relative(ctx.workingDirectory, resolved));
       return `Successfully edited ${resolved}`;
     },
   });

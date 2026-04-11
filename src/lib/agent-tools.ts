@@ -10,7 +10,7 @@ import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 
 /** Tool names that are safe in read-only (plan) mode */
-export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'] as const;
+export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'TodoWrite'] as const;
 import { createBuiltinTools } from './tools';
 import { buildMcpToolSet } from './mcp-tool-adapter';
 import { getBuiltinTools } from './builtin-tools';
@@ -216,13 +216,14 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
  */
 function getToolGuardConfig(toolName: string): { timeoutMs: number; maxRetries: number } {
   if (toolName === 'Bash') {
-    return { timeoutMs: 130_000, maxRetries: 0 };
+    return { timeoutMs: 280_000, maxRetries: 0 };
   }
   if (toolName === 'Agent') {
     return { timeoutMs: 180_000, maxRetries: 0 };
   }
   if (toolName.startsWith('mcp__')) {
-    return { timeoutMs: 60_000, maxRetries: 0 };
+    // MCP tools usually shouldn't hang forever, but network requests can be slow
+    return { timeoutMs: 30_000, maxRetries: 0 };
   }
   return {
     timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,

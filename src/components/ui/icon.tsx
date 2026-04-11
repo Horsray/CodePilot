@@ -14,6 +14,7 @@ export {
   Brain,
   CaretDown,
   CaretUp,
+  CaretUpDown,
   CaretRight,
   ChartBar,
   ChatCircle,

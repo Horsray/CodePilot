@@ -57,7 +57,14 @@ function convertMcpTool(mcpTool: McpToolDefinition) {
           .join('\n');
 
         if (mcpResult.isError) {
-          return `Error: ${text || 'MCP tool returned an error'}`;
+          // Wrap in ToolFailurePayload format so the agent loop recognizes it as a soft error
+          return {
+            __codepilot_tool_error: true,
+            toolName: mcpTool.qualifiedName,
+            reason: 'error',
+            message: `Error: ${text || 'MCP tool returned an error'}`,
+            attempts: 1,
+          };
         }
 
         return text || JSON.stringify(result);

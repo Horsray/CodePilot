@@ -65,8 +65,16 @@ export class ClaudeCodeCompatModel implements LanguageModelV3 {
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '');
+      let parsedError = errorBody;
+      try {
+        const parsed = JSON.parse(errorBody);
+        if (parsed.error && parsed.error.message) {
+          parsedError = parsed.error.message;
+        }
+      } catch (e) { /* ignore */ }
+      
       throw new Error(
-        `Claude Code compat API error: ${response.status} ${response.statusText}\n${errorBody}`,
+        `Claude Code compat API error: ${response.status} ${response.statusText}\n${parsedError}`,
       );
     }
 

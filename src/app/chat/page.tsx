@@ -803,6 +803,8 @@ export default function NewChatPage() {
                     if (statusData.subtype === 'perf') {
                       const source = statusData.source === 'route' ? 'route' : 'native';
                       perfTrace.addServerPerf(source, statusData as Record<string, unknown>);
+                    } else if (statusData.subtype === 'step_complete') {
+                      // silently ignore internal step_complete payloads
                     } else if (statusData.subtype === 'ui_action' && statusData.action) {
                       if (statusData.action === 'open_browser' && typeof statusData.url === 'string') {
                         window.dispatchEvent(new CustomEvent('browser-navigate', {

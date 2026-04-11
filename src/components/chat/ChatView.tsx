@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
 import { PermissionPrompt } from './PermissionPrompt';
+import { FileReviewBar } from './FileReviewBar';
 import { BatchExecutionDashboard, BatchContextSync } from './batch-image-gen';
 import { setLastGeneratedImages, loadLastGenerated } from '@/lib/image-ref-store';
 import { useChatCommands } from '@/hooks/useChatCommands';
@@ -586,6 +587,9 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       {/* Batch image generation panels */}
       <BatchExecutionDashboard />
       <BatchContextSync />
+
+      {/* Global File Review Bar */}
+      <FileReviewBar sessionId={sessionId} />
 
       <MessageInput
         key={sessionId}

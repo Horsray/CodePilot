@@ -49,6 +49,7 @@ interface ActiveStream {
   toolResultsArray: ToolResultInfo[];
   toolOutputAccumulated: string;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
+  activeToolExecution: { toolId: string; toolName: string; startedAt: number } | null;
   abortReason: 'transport_idle' | 'no_meaningful_progress' | null;
   sendMessageFn: ((content: string, files?: FileAttachment[]) => void) | null;
   rewindPoints: Array<{ userMessageId: string }>;
@@ -88,8 +89,75 @@ export interface StartStreamParams {
 const GLOBAL_KEY = '__streamSessionManager__' as const;
 const LISTENERS_KEY = '__streamSessionListeners__' as const;
 const STREAM_IDLE_TIMEOUT_MS = 330_000;
-const STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS = 90_000;
+const STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS = 300_000; // Increased to 5 minutes to match backend
+const MCP_TOOL_TIMEOUT_MS = 60_000; // Increased to 1 minute
 const GC_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+
+function isMcpTool(toolName?: string | null): boolean {
+  return !!toolName && toolName.startsWith('mcp__');
+}
+
+function makeSyntheticToolErrorResult(
+  toolUseId: string,
+  toolName: string,
+  reason: string,
+): ToolResultInfo {
+  return {
+    tool_use_id: toolUseId,
+    content: `[tool-error] ${toolName}: ${reason}`,
+    is_error: true,
+  };
+}
+
+function upsertToolResult(stream: ActiveStream, res: ToolResultInfo): void {
+  const existingIdx = stream.toolResultsArray.findIndex((item) => item.tool_use_id === res.tool_use_id);
+  if (existingIdx >= 0) {
+    const next = [...stream.toolResultsArray];
+    next[existingIdx] = res;
+    stream.toolResultsArray = next;
+  } else {
+    stream.toolResultsArray = [...stream.toolResultsArray, res];
+  }
+}
+
+function buildStructuredFinalContent(stream: ActiveStream, textContent: string | null): string | null {
+  const allThinking = [stream.fullThinking, stream.accumulatedThinking]
+    .filter((s) => s.trim())
+    .join('\n\n---\n\n');
+
+  const blocks: Array<Record<string, unknown>> = [];
+  if (allThinking) {
+    blocks.push({ type: 'thinking', thinking: allThinking });
+  }
+  if (textContent) {
+    blocks.push({ type: 'text', text: textContent });
+  }
+  for (const tu of stream.toolUsesArray) {
+    blocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
+    const tr = stream.toolResultsArray.find((r) => r.tool_use_id === tu.id);
+    if (tr) {
+      blocks.push({
+        type: 'tool_result',
+        tool_use_id: tr.tool_use_id,
+        content: tr.content,
+        ...(tr.is_error ? { is_error: true } : {}),
+        ...(tr.media && tr.media.length > 0 ? { media: tr.media } : {}),
+      });
+    }
+  }
+
+  if (blocks.length === 0) return null;
+  if (blocks.length === 1 && blocks[0].type === 'text') return textContent;
+  return JSON.stringify(blocks);
+}
+
+function clearServerSdkSession(sessionId: string): void {
+  fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sdk_session_id: '' }),
+  }).catch(() => {});
+}
 
 function getStreamsMap(): Map<string, ActiveStream> {
   if (!(globalThis as Record<string, unknown>)[GLOBAL_KEY]) {
@@ -230,6 +298,7 @@ export function startStream(params: StartStreamParams): void {
     toolResultsArray: [],
     toolOutputAccumulated: '',
     toolTimeoutInfo: null,
+    activeToolExecution: null,
     abortReason: null,
     sendMessageFn: params.sendMessageFn ?? null,
     rewindPoints: [],
@@ -257,9 +326,31 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
   // 中文注释：功能名称「双层 watchdog」，用法是区分“连接断开”和“有心跳但无有效进展”两类卡死。
   stream.idleCheckTimer = setInterval(() => {
     const now = Date.now();
-    if (now - stream.lastMeaningfulEventTime >= STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS) {
+    const activeToolTimeoutMs = isMcpTool(stream.activeToolExecution?.toolName)
+      ? MCP_TOOL_TIMEOUT_MS
+      : STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS;
+
+    if (now - stream.lastMeaningfulEventTime >= activeToolTimeoutMs) {
       cleanupTimers(stream);
-      stream.abortReason = 'no_meaningful_progress';
+      // 中文注释：功能名称「工具卡死转工具超时」，用法是在某个工具运行中长时间无进展时，
+      // 优先走 tool-timeout 分支，把错误反馈给 AI 继续修复，而不是直接落成全局 90s 中止。
+      if (stream.activeToolExecution) {
+        stream.toolTimeoutInfo = {
+          toolName: stream.activeToolExecution.toolName,
+          elapsedSeconds: Math.max(1, Math.round((now - stream.activeToolExecution.startedAt) / 1000)),
+        };
+        upsertToolResult(
+          stream,
+          makeSyntheticToolErrorResult(
+            stream.activeToolExecution.toolId,
+            stream.activeToolExecution.toolName,
+            `timed out after ${Math.max(1, Math.round((now - stream.activeToolExecution.startedAt) / 1000))}s`,
+          ),
+        );
+        stream.abortReason = null;
+      } else {
+        stream.abortReason = 'no_meaningful_progress';
+      }
       stream.abortController.abort();
       return;
     }
@@ -363,6 +454,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         flushTextThrottle(); // Ensure text is up-to-date before tool events
         stream.thinkingPhaseEnded = true;
         stream.toolOutputAccumulated = '';
+        stream.activeToolExecution = {
+          toolId: tool.id,
+          toolName: tool.name,
+          startedAt: Date.now(),
+        };
         if (!stream.toolUsesArray.some(t => t.id === tool.id)) {
           stream.toolUsesArray = [...stream.toolUsesArray, tool];
         }
@@ -371,6 +467,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       onToolResult: (res) => {
         markMeaningfulProgress();
         stream.toolOutputAccumulated = '';
+        if (stream.activeToolExecution?.toolId === res.tool_use_id) {
+          stream.activeToolExecution = null;
+        }
         const existingIdx = stream.toolResultsArray.findIndex(r => r.tool_use_id === res.tool_use_id);
         if (existingIdx >= 0) {
           const next = [...stream.toolResultsArray];
@@ -440,6 +539,16 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       onToolTimeout: (toolName, elapsedSeconds) => {
         markMeaningfulProgress();
         stream.toolTimeoutInfo = { toolName, elapsedSeconds };
+        if (stream.activeToolExecution) {
+          upsertToolResult(
+            stream,
+            makeSyntheticToolErrorResult(
+              stream.activeToolExecution.toolId,
+              stream.activeToolExecution.toolName,
+              `timed out after ${elapsedSeconds}s`,
+            ),
+          );
+        }
       },
       onModeChanged: (sdkMode) => {
         markMeaningfulProgress();
@@ -498,34 +607,13 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     const finalToolResults = stream.toolResultsArray;
     const hasTools = finalToolUses.length > 0 || finalToolResults.length > 0;
 
-    let messageContent = accumulated.trim();
+    let messageContent: string | null = accumulated.trim();
     // Combine all thinking phases for persistence
     const allThinking = [stream.fullThinking, stream.accumulatedThinking]
       .filter(s => s.trim()).join('\n\n---\n\n');
     const hasThinking = allThinking.length > 0;
     if ((hasTools || hasThinking) && (messageContent || hasThinking)) {
-      const contentBlocks: Array<Record<string, unknown>> = [];
-      // Include thinking block if present — rendered as collapsed Reasoning in MessageItem
-      if (hasThinking) {
-        contentBlocks.push({ type: 'thinking', thinking: allThinking });
-      }
-      if (accumulated.trim()) {
-        contentBlocks.push({ type: 'text', text: accumulated.trim() });
-      }
-      for (const tu of finalToolUses) {
-        contentBlocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
-        const tr = finalToolResults.find(r => r.tool_use_id === tu.id);
-        if (tr) {
-          contentBlocks.push({
-            type: 'tool_result',
-            tool_use_id: tr.tool_use_id,
-            content: tr.content,
-            ...(tr.is_error ? { is_error: true } : {}),
-            ...(tr.media && tr.media.length > 0 ? { media: tr.media } : {}),
-          });
-        }
-      }
-      messageContent = JSON.stringify(contentBlocks);
+      messageContent = buildStructuredFinalContent(stream, accumulated.trim());
     }
 
     // Update snapshot with completion info
@@ -558,19 +646,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     flushTextThrottle();
     cleanupTimers(stream);
 
-    // Helper: build finalMessageContent preserving any accumulated thinking.
-    // On error/stop branches we previously only serialized accumulatedText,
-    // silently dropping reasoning blocks that the user had already seen.
-    const buildFinalContent = (textContent: string | null): string | null => {
-      const allThinking = [stream.fullThinking, stream.accumulatedThinking]
-        .filter(s => s.trim()).join('\n\n---\n\n');
-      if (!allThinking) return textContent;
-      // Wrap as content-block JSON so MessageItem can render the thinking block
-      const blocks: Array<Record<string, unknown>> = [];
-      blocks.push({ type: 'thinking', thinking: allThinking });
-      if (textContent) blocks.push({ type: 'text', text: textContent });
-      return JSON.stringify(blocks);
-    };
+    const buildFinalContent = (textContent: string | null): string | null => buildStructuredFinalContent(stream, textContent);
 
     if (error instanceof DOMException && error.name === 'AbortError') {
       if (stream.abortReason === 'no_meaningful_progress') {
@@ -601,6 +677,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolOutputAccumulated = '';
         stream.abortReason = null;
         emit(stream, 'completed');
+        clearServerSdkSession(stream.sessionId);
         scheduleGC(stream);
       } else if (stream.abortReason === 'transport_idle') {
         // Idle timeout
@@ -627,16 +704,21 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolOutputAccumulated = '';
         stream.abortReason = null;
         emit(stream, 'completed');
-        // Clear stale SDK session so next message starts fresh
-        fetch(`/api/chat/sessions/${encodeURIComponent(stream.sessionId)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sdk_session_id: '' }),
-        }).catch(() => {});
+        clearServerSdkSession(stream.sessionId);
         scheduleGC(stream);
       } else if (stream.toolTimeoutInfo) {
         // Tool timeout — auto-retry
         const timeoutInfo = stream.toolTimeoutInfo;
+        if (stream.activeToolExecution) {
+          upsertToolResult(
+            stream,
+            makeSyntheticToolErrorResult(
+              stream.activeToolExecution.toolId,
+              stream.activeToolExecution.toolName,
+              `timed out after ${timeoutInfo.elapsedSeconds}s`,
+            ),
+          );
+        }
         const textPart = stream.accumulatedText.trim()
           ? stream.accumulatedText.trim() + `\n\n*(tool ${timeoutInfo.toolName} timed out after ${timeoutInfo.elapsedSeconds}s)*`
           : null;
@@ -657,8 +739,10 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';
         stream.toolTimeoutInfo = null;
+        stream.activeToolExecution = null;
         stream.abortReason = null;
         emit(stream, 'completed');
+        clearServerSdkSession(stream.sessionId);
         scheduleGC(stream);
 
         // Auto-retry via sendMessageFn
@@ -666,7 +750,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           const fn = stream.sendMessageFn;
           streamTimeout(stream, () => {
             fn(
-              `The previous tool "${timeoutInfo.toolName}" timed out after ${timeoutInfo.elapsedSeconds} seconds. Please try a different approach to accomplish the task. Avoid repeating the same operation that got stuck.`
+              `上一个工具 "${timeoutInfo.toolName}" 在运行 ${timeoutInfo.elapsedSeconds} 秒后超时了。请检查当前执行状态，尝试改用不同的指令或优化方案，避免再次执行可能导致卡住的操作。`
             );
           }, 500);
         }
@@ -691,8 +775,10 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolUsesArray = [];
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';
+        stream.activeToolExecution = null;
         stream.abortReason = null;
         emit(stream, 'completed');
+        clearServerSdkSession(stream.sessionId);
         scheduleGC(stream);
       }
     } else {
@@ -714,8 +800,10 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       stream.toolUsesArray = [];
       stream.toolResultsArray = [];
       stream.toolOutputAccumulated = '';
+      stream.activeToolExecution = null;
       stream.abortReason = null;
       emit(stream, 'completed');
+      clearServerSdkSession(stream.sessionId);
       scheduleGC(stream);
     }
   }
