@@ -135,6 +135,7 @@ export interface Message {
   session_id: string;
   role: 'user' | 'assistant';
   content: string; // JSON string of MessageContentBlock[] for structured content
+  referenced_contexts?: string; // JSON string of string[]
   created_at: string;
   token_usage: string | null; // JSON string of TokenUsage
   is_heartbeat_ack?: number; // 1 = heartbeat ack (prunable from transcript), 0 = normal
@@ -535,6 +536,7 @@ export type SSEEventType =
   | 'task_update'        // SDK TodoWrite task sync
   | 'keep_alive'         // SDK keep-alive heartbeat (resets idle timer)
   | 'rewind_point'       // SDK user message with rewind checkpoint
+  | 'referenced_contexts' // List of files referenced in system prompt
   | 'done';              // stream complete
 
 export interface SSEEvent {
@@ -628,6 +630,11 @@ export const SETTING_KEYS = {
   PERMISSION_MODE: 'permission_mode',
   MAX_THINKING_TOKENS: 'max_thinking_tokens',
   ASSISTANT_WORKSPACE_PATH: 'assistant_workspace_path',
+  INCLUDE_AGENTS_MD: 'include_agents_md',
+  INCLUDE_CLAUDE_MD: 'include_claude_md',
+  ENABLE_AGENTS_SKILLS: 'enable_agents_skills',
+  SYNC_PROJECT_RULES: 'sync_project_rules',
+  KNOWLEDGE_BASE_ENABLED: 'knowledge_base_enabled',
 } as const;
 
 // ==========================================
@@ -669,6 +676,11 @@ export interface AssistantWorkspaceState {
     hatchedAt: string;
     buddyName?: string;
   };
+  includeAgentsMd?: boolean;
+  includeClaudeMd?: boolean;
+  enableAgentsSkills?: boolean;
+  syncProjectRules?: boolean;
+  knowledgeBaseEnabled?: boolean;
 }
 
 export interface AssistantWorkspaceFiles {
@@ -1021,6 +1033,8 @@ export interface SessionStreamSnapshot {
   startedAt: number;
   completedAt: number | null;
   error: string | null;
+  /** Files referenced in the system prompt for this turn */
+  referencedContexts?: string[];
   /** Final message content built at stream completion for ChatView to consume */
   finalMessageContent: string | null;
 }
@@ -1079,6 +1093,11 @@ export interface ClaudeStreamOptions {
   context1m?: boolean;
   /** Enable generative UI widget guidelines MCP server (default: true) */
   generativeUI?: boolean;
+  includeAgentsMd?: boolean;
+  includeClaudeMd?: boolean;
+  enableAgentsSkills?: boolean;
+  syncProjectRules?: boolean;
+  knowledgeBaseEnabled?: boolean;
 }
 
 // ==========================================
@@ -1248,6 +1267,23 @@ export interface WeixinContextTokenRecord {
   peerUserId: string;
   contextToken: string;
   updatedAt: string;
+}
+
+export interface CustomRule {
+  id: string;
+  type: 'personal' | 'project';
+  name: string;
+  content: string;
+  enabled: boolean;
+  project_ids: string; // JSON string of string[]
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InstructionSource {
+  filename: string;
+  content: string;
+  level: 'global' | 'personal' | 'user' | 'project' | 'workspace' | 'parent';
 }
 
 // ==========================================

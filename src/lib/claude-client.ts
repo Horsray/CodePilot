@@ -472,6 +472,9 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     onRuntimeStatusChange: options.onRuntimeStatusChange,
+    includeAgentsMd: options.includeAgentsMd,
+    includeClaudeMd: options.includeClaudeMd,
+    enableAgentsSkills: options.enableAgentsSkills,
 
     // Runtime-specific fields (SDK Runtime reads these from runtimeOptions)
     runtimeOptions: {

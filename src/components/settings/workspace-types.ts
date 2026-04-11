@@ -13,6 +13,9 @@ export interface WorkspaceState {
   heartbeatEnabled: boolean;
   /** @deprecated Use heartbeatEnabled instead */
   dailyCheckInEnabled?: boolean;
+  includeAgentsMd?: boolean;
+  includeClaudeMd?: boolean;
+  enableAgentsSkills?: boolean;
 }
 
 export interface TaxonomyCategoryInfo {

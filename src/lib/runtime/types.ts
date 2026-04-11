@@ -74,6 +74,13 @@ export interface RuntimeStreamOptions {
   // ── Callbacks ──
   onRuntimeStatusChange?: (status: string) => void;
 
+  // ── Context Inclusion ──
+  includeAgentsMd?: boolean;
+  includeClaudeMd?: boolean;
+  enableAgentsSkills?: boolean;
+  syncProjectRules?: boolean;
+  knowledgeBaseEnabled?: boolean;
+
   /**
    * Passthrough for runtime-specific options.
    *

@@ -42,6 +42,8 @@ export interface AgentLoopOptions {
   sessionModel?: string;
   /** System prompt string */
   systemPrompt?: string;
+  /** Files referenced in the system prompt */
+  referencedContexts?: string[];
   /** Working directory for tool execution */
   workingDirectory?: string;
   /** AbortController for cancellation */
@@ -103,6 +105,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
     model: modelOverride,
     sessionModel,
     systemPrompt,
+    referencedContexts,
     workingDirectory,
     abortController = new AbortController(),
     tools: toolsOverride,
@@ -307,6 +310,15 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         // 3. Emit status init event
         const toolNames = tools ? Object.keys(tools) : [];
         console.log(`[agent-loop] Session ${sessionId}: model=${modelId}, tools=[${toolNames.join(', ')}] (${toolNames.length} total)`);
+        
+        // Emit referenced contexts if any
+        if (referencedContexts?.length) {
+          controller.enqueue(formatSSE({
+            type: 'referenced_contexts',
+            data: JSON.stringify({ files: referencedContexts }),
+          }));
+        }
+
         controller.enqueue(formatSSE({
           type: 'status',
           data: JSON.stringify({

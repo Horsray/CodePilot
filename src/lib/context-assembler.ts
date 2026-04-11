@@ -42,6 +42,12 @@ export interface AssembledContext {
   assistantProjectInstructions: string;
   /** Whether this session is in the assistant workspace */
   isAssistantProject: boolean;
+  /** Context inclusion toggles */
+  includeAgentsMd?: boolean;
+  includeClaudeMd?: boolean;
+  enableAgentsSkills?: boolean;
+  syncProjectRules?: boolean;
+  knowledgeBaseEnabled?: boolean;
 }
 
 // ── Main function ────────────────────────────────────────────────────
@@ -54,6 +60,11 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   let memoryHint = '';
   let assistantProjectInstructions = '';
   let isAssistantProject = false;
+  let includeAgentsMd = getSetting('include_agents_md') !== 'false';
+  let includeClaudeMd = getSetting('include_claude_md') !== 'false';
+  let enableAgentsSkills = getSetting('enable_agents_skills') !== 'false';
+  let syncProjectRules = getSetting('sync_project_rules') !== 'false';
+  let knowledgeBaseEnabled = getSetting('knowledge_base_enabled') !== 'false';
 
   // ── Layer 1: Workspace prompt (if assistant project session) ──────
   // For imageAgentMode, we skip the workspace prompt and assistant instructions
@@ -105,6 +116,13 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
           }
 
           const state = loadState(workspacePath);
+
+          // Project-level settings override global ones
+          if (state.includeAgentsMd !== undefined) includeAgentsMd = state.includeAgentsMd;
+          if (state.includeClaudeMd !== undefined) includeClaudeMd = state.includeClaudeMd;
+          if (state.enableAgentsSkills !== undefined) enableAgentsSkills = state.enableAgentsSkills;
+          if (state.syncProjectRules !== undefined) syncProjectRules = state.syncProjectRules;
+          if (state.knowledgeBaseEnabled !== undefined) knowledgeBaseEnabled = state.knowledgeBaseEnabled;
 
           // Detect heartbeat auto-trigger by checking the actual prompt content,
           // not just the autoTrigger flag (which is also true for buddy-welcome).
@@ -251,6 +269,11 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     generativeUIEnabled,
     assistantProjectInstructions,
     isAssistantProject,
+    includeAgentsMd,
+    includeClaudeMd,
+    enableAgentsSkills,
+    syncProjectRules,
+    knowledgeBaseEnabled,
   };
 }
 

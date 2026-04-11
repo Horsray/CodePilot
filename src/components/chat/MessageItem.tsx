@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
+import { useTranslation } from "@/hooks/useTranslation";
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
 import type { Message, TokenUsage, FileAttachment, MediaBlock } from '@/types';
@@ -12,7 +13,7 @@ import {
 import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
 import { Button } from "@/components/ui/button";
-import { Copy, Check, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise } from "@/components/ui/icon";
+import { Copy, Check, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise, Book } from "@/components/ui/icon";
 import { FileAttachmentDisplay } from './FileAttachmentDisplay';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { ImageGenCard } from './ImageGenCard';
@@ -576,6 +577,41 @@ function DiffSummary({ files }: { files: Array<{ path: string; name: string }> }
   );
 }
 
+function ReferencedContexts({ files }: { files: string[] }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const { t } = useTranslation();
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-1.5 px-2 py-1 rounded bg-muted/50 hover:bg-muted text-[11px] text-muted-foreground transition-colors border border-border/30"
+      >
+        {isOpen ? <CaretDown size={12} weight="bold" /> : <CaretRight size={12} weight="bold" />}
+        <span>{t('chat.referencedContexts', { count: files.length }) || `参考了 ${files.length} 个上下文`}</span>
+      </button>
+
+      {isOpen && (
+        <div className="mt-2 flex flex-wrap gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+          {files.map((file, i) => {
+            const isAgents = file.includes('AGENTS.md');
+            const isClaude = file.includes('CLAUDE.md');
+            return (
+              <div
+                key={i}
+                className="flex items-center gap-1.5 px-2 py-1 rounded border border-border/50 bg-background/50 text-[10px] text-foreground/80"
+              >
+                <Book size={12} className={isAgents ? "text-blue-500" : isClaude ? "text-indigo-500" : "text-muted-foreground"} />
+                <span className="font-mono">{file}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const MessageItem = memo(function MessageItem({ message, sessionId, rewindUserMessageId, isAssistantProject, assistantName }: MessageItemProps) {
   const isUser = message.role === 'user';
 
@@ -584,6 +620,14 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
   const [isOverflowing, setIsOverflowing] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
+  const referencedFiles = useMemo(() => {
+    if (!message.referenced_contexts) return [];
+    try {
+      return JSON.parse(message.referenced_contexts) as string[];
+    } catch {
+      return [];
+    }
+  }, [message.referenced_contexts]);
 
   // Use blocks directly for sequential rendering instead of grouping
   const contentBlocks = useMemo<MessageContentBlock[]>(() => {
@@ -728,6 +772,10 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
         {/* File attachments for user messages */}
         {isUser && files.length > 0 && (
           <FileAttachmentDisplay files={files} />
+        )}
+
+        {!isUser && referencedFiles.length > 0 && (
+          <ReferencedContexts files={referencedFiles} />
         )}
 
         {/* Tool calls + thinking for assistant messages — single collapsible group */}

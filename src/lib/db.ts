@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
-import type { ChatSession, Message, SettingsMap, TaskItem, TaskStatus, ApiProvider, CreateProviderRequest, UpdateProviderRequest, MediaJob, MediaJobStatus, MediaJobItem, MediaJobItemStatus, MediaContextEvent, BatchConfig, CustomCliTool, ScheduledTask } from '@/types';
+import type { ChatSession, Message, SettingsMap, TaskItem, TaskStatus, ApiProvider, CreateProviderRequest, UpdateProviderRequest, MediaJob, MediaJobStatus, MediaJobItem, MediaJobItemStatus, MediaContextEvent, BatchConfig, CustomCliTool, ScheduledTask, CustomRule } from '@/types';
 import type { ChannelType, ChannelBinding } from './bridge/types';
 import { getLocalDateString, localDayStartAsUTC } from './utils';
 
@@ -312,6 +312,18 @@ function initDb(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_perm_links_request ON channel_permission_links(permission_request_id);
+
+    -- Custom Context Rules
+    CREATE TABLE IF NOT EXISTS custom_rules (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK(type IN ('personal', 'project')),
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      project_ids TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Run migrations for existing databases
@@ -410,6 +422,10 @@ function migrateDb(db: Database.Database): void {
 
   if (!msgColNames.includes('is_heartbeat_ack')) {
     safeAddColumn(db, "ALTER TABLE messages ADD COLUMN is_heartbeat_ack INTEGER NOT NULL DEFAULT 0");
+  }
+
+  if (!msgColNames.includes('referenced_contexts')) {
+    safeAddColumn(db, "ALTER TABLE messages ADD COLUMN referenced_contexts TEXT");
   }
 
   // Ensure tasks table exists for databases created before this migration
@@ -1116,14 +1132,15 @@ export function addMessage(
   role: 'user' | 'assistant',
   content: string,
   tokenUsage?: string | null,
+  referencedContexts?: string | null,
 ): Message {
   const db = getDb();
   const id = crypto.randomBytes(16).toString('hex');
   const now = new Date().toISOString().replace('T', ' ').split('.')[0];
 
   db.prepare(
-    'INSERT INTO messages (id, session_id, role, content, created_at, token_usage) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, sessionId, role, content, now, tokenUsage || null);
+    'INSERT INTO messages (id, session_id, role, content, created_at, token_usage, referenced_contexts) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, sessionId, role, content, now, tokenUsage || null, referencedContexts || null);
 
   updateSessionTimestamp(sessionId);
 
@@ -2677,6 +2694,70 @@ export function insertTaskRunLog(log: { task_id: string; status: string; result?
 export function deleteScheduledTask(id: string): boolean {
   const db = getDb();
   const result = db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+// ==========================================
+// Custom Rule Operations
+// ==========================================
+
+export function getAllCustomRules(): CustomRule[] {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM custom_rules ORDER BY created_at DESC').all() as any[];
+  return rows.map(r => ({ ...r, enabled: r.enabled === 1 }));
+}
+
+export function getCustomRule(id: string): CustomRule | undefined {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM custom_rules WHERE id = ?').get(id) as any;
+  if (!row) return undefined;
+  return { ...row, enabled: row.enabled === 1 };
+}
+
+export function createCustomRule(data: Omit<CustomRule, 'id' | 'created_at' | 'updated_at'>): CustomRule {
+  const db = getDb();
+  const id = crypto.randomBytes(16).toString('hex');
+  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+
+  db.prepare(
+    'INSERT INTO custom_rules (id, type, name, content, enabled, project_ids, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, data.type, data.name, data.content, data.enabled ? 1 : 0, data.project_ids || '[]', now, now);
+
+  return getCustomRule(id)!;
+}
+
+export function updateCustomRule(id: string, updates: Partial<CustomRule>): CustomRule | undefined {
+  const db = getDb();
+  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+  const existing = getCustomRule(id);
+  if (!existing) return undefined;
+
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (['id', 'created_at', 'updated_at'].includes(key)) continue;
+    fields.push(`${key} = ?`);
+    if (key === 'enabled') {
+      values.push(value ? 1 : 0);
+    } else {
+      values.push(value);
+    }
+  }
+
+  if (fields.length > 0) {
+    fields.push('updated_at = ?');
+    values.push(now);
+    values.push(id);
+    db.prepare(`UPDATE custom_rules SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  return getCustomRule(id);
+}
+
+export function deleteCustomRule(id: string): boolean {
+  const db = getDb();
+  const result = db.prepare('DELETE FROM custom_rules WHERE id = ?').run(id);
   return result.changes > 0;
 }
 

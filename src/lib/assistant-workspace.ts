@@ -8,7 +8,12 @@ const DEFAULT_STATE: AssistantWorkspaceState = {
   onboardingComplete: false,
   lastHeartbeatDate: null,
   heartbeatEnabled: false,
-  schemaVersion: 5,
+  includeAgentsMd: true,
+  includeClaudeMd: true,
+  enableAgentsSkills: true,
+  syncProjectRules: true,
+  knowledgeBaseEnabled: true,
+  schemaVersion: 8,
 };
 
 const STATE_DIR = '.assistant';
@@ -219,6 +224,74 @@ function migrateStateV4ToV5(dir: string): void {
   saveState(dir, state);
 }
 
+/**
+ * v5→v6 migration: add instruction inclusion toggles.
+ * Default all to true for existing users to match previous implicit behavior.
+ */
+function migrateStateV5ToV6(dir: string): void {
+  let state: AssistantWorkspaceState;
+  try {
+    const statePath = path.join(dir, STATE_DIR, STATE_FILE);
+    const fileContent = fs.readFileSync(statePath, 'utf-8');
+    state = JSON.parse(fileContent) as AssistantWorkspaceState;
+  } catch {
+    return;
+  }
+
+  if (state.schemaVersion >= 6) return;
+
+  if (state.includeAgentsMd === undefined) state.includeAgentsMd = true;
+  if (state.includeClaudeMd === undefined) state.includeClaudeMd = true;
+  if (state.enableAgentsSkills === undefined) state.enableAgentsSkills = true;
+
+  state.schemaVersion = 6;
+  saveState(dir, state);
+}
+
+/**
+ * v6→v7 migration: add syncProjectRules toggle.
+ * Default to true for existing users.
+ */
+function migrateStateV6ToV7(dir: string): void {
+  let state: AssistantWorkspaceState;
+  try {
+    const statePath = path.join(dir, STATE_DIR, STATE_FILE);
+    const fileContent = fs.readFileSync(statePath, 'utf-8');
+    state = JSON.parse(fileContent) as AssistantWorkspaceState;
+  } catch {
+    return;
+  }
+
+  if (state.schemaVersion >= 7) return;
+
+  if (state.syncProjectRules === undefined) state.syncProjectRules = true;
+
+  state.schemaVersion = 7;
+  saveState(dir, state);
+}
+
+/**
+ * v7→v8 migration: add knowledgeBaseEnabled toggle.
+ * Default to true for existing users.
+ */
+function migrateStateV7ToV8(dir: string): void {
+  let state: AssistantWorkspaceState;
+  try {
+    const statePath = path.join(dir, STATE_DIR, STATE_FILE);
+    const fileContent = fs.readFileSync(statePath, 'utf-8');
+    state = JSON.parse(fileContent) as AssistantWorkspaceState;
+  } catch {
+    return;
+  }
+
+  if (state.schemaVersion >= 8) return;
+
+  if (state.knowledgeBaseEnabled === undefined) state.knowledgeBaseEnabled = true;
+
+  state.schemaVersion = 8;
+  saveState(dir, state);
+}
+
 // ==========================================
 // Root Docs
 // ==========================================
@@ -384,6 +457,9 @@ export function initializeWorkspace(dir: string): string[] {
     migrateStateV2ToV3(dir);
     migrateStateV3ToV4(dir);
     migrateStateV4ToV5(dir);
+    migrateStateV5ToV6(dir);
+    migrateStateV6ToV7(dir);
+    migrateStateV7ToV8(dir);
   }
 
   // For existing directories, generate root docs and infer taxonomy
@@ -533,6 +609,18 @@ export function loadState(dir: string): AssistantWorkspaceState {
     }
     if (state.schemaVersion < 5) {
       migrateStateV4ToV5(dir);
+      migrated = true;
+    }
+    if (state.schemaVersion < 6) {
+      migrateStateV5ToV6(dir);
+      migrated = true;
+    }
+    if (state.schemaVersion < 7) {
+      migrateStateV6ToV7(dir);
+      migrated = true;
+    }
+    if (state.schemaVersion < 8) {
+      migrateStateV7ToV8(dir);
       migrated = true;
     }
     if (migrated) {

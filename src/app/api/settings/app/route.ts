@@ -18,6 +18,13 @@ const ALLOWED_KEYS = [
   'default_panel',
   'agent_runtime',
   'cli_enabled',
+  'max_thinking_tokens',
+  'assistant_workspace_path',
+  'include_agents_md',
+  'include_claude_md',
+  'enable_agents_skills',
+  'sync_project_rules',
+  'knowledge_base_enabled',
   // Feature announcement dismiss flags (persist across Electron restarts)
   'codepilot:announcement:v0.48-agent-engine',
 ];

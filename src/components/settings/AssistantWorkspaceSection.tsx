@@ -14,6 +14,7 @@ import { WorkspaceConfirmDialogs, type ConfirmDialogType } from "./WorkspaceConf
 import { OnboardingCard, CheckInCard } from "./WorkspaceStatusCards";
 import { OnboardingWizard } from "@/components/assistant/OnboardingWizard";
 import { AssistantAvatar } from "@/components/ui/AssistantAvatar";
+import { AssistantSettingsCard } from "./AssistantSettingsCard";
 import type { TranslationKey } from "@/i18n/en";
 import type { TaxonomyCategoryInfo, IndexStats, WorkspaceInfo, TabId, PathValidationStatus } from "./workspace-types";
 
@@ -515,6 +516,33 @@ export function AssistantWorkspaceSection() {
             {t('assistant.editSoulHint')}
           </p>
         </div>
+      )}
+
+      {/* Assistant Context Settings */}
+      {workspace?.path && workspace.valid !== false && (
+        <AssistantSettingsCard
+          initialState={{
+            includeAgentsMd: workspace.state?.includeAgentsMd ?? true,
+            includeClaudeMd: workspace.state?.includeClaudeMd ?? true,
+            enableAgentsSkills: workspace.state?.enableAgentsSkills ?? true,
+            syncProjectRules: workspace.state?.syncProjectRules ?? true,
+            knowledgeBaseEnabled: workspace.state?.knowledgeBaseEnabled ?? true,
+          }}
+          onUpdate={async (updates) => {
+            try {
+              const res = await fetch('/api/settings/workspace', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updates),
+              });
+              if (!res.ok) return;
+              setWorkspace((prev) => prev && prev.state ? {
+                ...prev,
+                state: { ...prev.state, ...updates },
+              } : prev);
+            } catch { /* ignore */ }
+          }}
+        />
       )}
 
       {/* Daily Check-in Card */}

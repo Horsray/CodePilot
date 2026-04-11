@@ -261,6 +261,11 @@ export async function POST(request: NextRequest) {
     const generativeUIEnabled = assembled.generativeUIEnabled;
     const assistantProjectInstructions = assembled.assistantProjectInstructions;
     const isAssistantProject = assembled.isAssistantProject;
+    const includeAgentsMd = assembled.includeAgentsMd;
+    const includeClaudeMd = assembled.includeClaudeMd;
+    const enableAgentsSkills = assembled.enableAgentsSkills;
+    const syncProjectRules = assembled.syncProjectRules;
+    const knowledgeBaseEnabled = assembled.knowledgeBaseEnabled;
 
     // Load MCP servers for the predicted runtime:
     // - SDK Runtime: only needs servers with ${...} env placeholders (SDK loads the rest via settingSources)
@@ -396,6 +401,11 @@ export async function POST(request: NextRequest) {
       onRuntimeStatusChange: (status: string) => {
         try { setSessionRuntimeStatus(session_id, status); } catch { /* best effort */ }
       },
+      includeAgentsMd,
+      includeClaudeMd,
+      enableAgentsSkills,
+      syncProjectRules,
+      knowledgeBaseEnabled,
     }));
 
     // Tee the stream: one for client, one for collecting the response
@@ -522,6 +532,7 @@ async function collectStreamResponse(
   /** Tracks whether non-thinking content arrived since last thinking delta (for phase separation) */
   let thinkingPhaseEnded = false;
   let tokenUsage: TokenUsage | null = null;
+  let referencedContexts: string[] | null = null;
   let hasError = false;
   let errorMessage = '';
   let lastSavedAssistantMsgId: string | null = null;
@@ -538,7 +549,14 @@ async function collectStreamResponse(
         if (line.startsWith('data: ')) {
           try {
             const event: SSEEvent = JSON.parse(line.slice(6));
-            if (event.type === 'permission_request' || event.type === 'tool_output') {
+            if (event.type === 'referenced_contexts') {
+              try {
+                const refData = JSON.parse(event.data);
+                if (Array.isArray(refData.files)) {
+                  referencedContexts = refData.files;
+                }
+              } catch { /* skip malformed */ }
+            } else if (event.type === 'permission_request' || event.type === 'tool_output') {
               // Skip permission_request and tool_output events - not saved as message content
             } else if (event.type === 'thinking') {
               // Accumulate thinking content with phase separation (--- between phases)
@@ -712,6 +730,7 @@ async function collectStreamResponse(
           'assistant',
           content,
           tokenUsage ? JSON.stringify(tokenUsage) : null,
+          referencedContexts ? JSON.stringify(referencedContexts) : null,
         );
         lastSavedAssistantMsgId = savedMsg.id;
       }

@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
+import { getDb, getAllCustomRules } from './db';
 
 // ── Section: Identity ──────────────────────────────────────────
 
@@ -99,16 +100,27 @@ If you can say it in one sentence, don't use three. Prefer short, direct sentenc
 // ── Assembly ───────────────────────────────────────────────────
 
 export interface SystemPromptOptions {
-  userPrompt?: string;
+  sessionId?: string;
   workingDirectory?: string;
+  userPrompt?: string;
   contextSnippets?: string[];
   modelId?: string;
+  includeAgentsMd?: boolean;
+  includeClaudeMd?: boolean;
+  enableAgentsSkills?: boolean;
+  syncProjectRules?: boolean;
+  knowledgeBaseEnabled?: boolean;
+}
+
+export interface SystemPromptResult {
+  prompt: string;
+  referencedFiles: string[];
 }
 
 /**
  * Build the complete system prompt for the native Agent Loop.
  */
-export function buildSystemPrompt(options: SystemPromptOptions = {}): string {
+export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemPromptResult {
   const parts: string[] = [
     IDENTITY_SECTION,
     DOING_TASKS_SECTION,
@@ -118,17 +130,29 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): string {
     OUTPUT_SECTION,
   ];
 
+  const referencedFiles: string[] = [];
+
   // Environment section (platform, shell, working directory, git)
   const envSection = buildEnvironmentSection(options);
   if (envSection) {
     parts.push(envSection);
   }
 
-  // Project instructions (CLAUDE.md, AGENTS.md)
+  // Project instructions (CLAUDE.md, AGENTS.md, skills)
   if (options.workingDirectory) {
-    const projectInstructions = discoverProjectInstructions(options.workingDirectory);
+    const projectInstructions = discoverProjectInstructions(options.workingDirectory, options);
     if (projectInstructions) {
-      parts.push(`# Project Instructions\n\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\n${projectInstructions}`);
+      parts.push(`# Project Instructions\n\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\n${projectInstructions.content}`);
+      referencedFiles.push(...projectInstructions.files);
+    }
+  }
+
+  // Knowledge Base instructions (graphify)
+  if (options.workingDirectory && options.knowledgeBaseEnabled !== false) {
+    const kbInstructions = discoverKnowledgeBaseInstructions(options.workingDirectory);
+    if (kbInstructions) {
+      parts.push(`# Knowledge Base (Atomic Knowledge Graph)\n\nA Knowledge Graph built via 'graphify' exists for this workspace. Use it to understand architecture, god nodes, and community structures before searching raw files. This will significantly reduce token usage and improve accuracy.\n\n${kbInstructions.content}`);
+      referencedFiles.push(...kbInstructions.files);
     }
   }
 
@@ -146,7 +170,10 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): string {
     parts.push(`# User Instructions\n\n${options.userPrompt}`);
   }
 
-  return parts.join('\n\n');
+  return {
+    prompt: parts.join('\n\n'),
+    referencedFiles,
+  };
 }
 
 // ── Environment Section ────────────────────────────────────────
@@ -202,7 +229,7 @@ function buildEnvironmentSection(options: SystemPromptOptions): string | null {
 // Modeled after Claude Code's claudemd.ts priority system.
 // Priority (lower = higher precedence): user > project > workspace > parent
 
-type InstructionLevel = 'user' | 'project' | 'workspace' | 'parent';
+type InstructionLevel = 'global' | 'personal' | 'user' | 'project' | 'workspace' | 'parent';
 
 interface InstructionSource {
   level: InstructionLevel;
@@ -210,40 +237,134 @@ interface InstructionSource {
   content: string;
 }
 
-const PROJECT_FILES = ['CLAUDE.md', 'AGENTS.md', '.claude/settings.md', '.claude/CLAUDE.md'];
+const PROJECT_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/settings.md', '.claude/CLAUDE.md', '.trae/rules/rules.md'];
 const MAX_FILE_SIZE = 50 * 1024; // 50KB per file
+
+/**
+ * Discover Knowledge Base instructions (graphify-out/GRAPH_REPORT.md).
+ */
+function discoverKnowledgeBaseInstructions(cwd: string): { content: string, files: string[] } | null {
+  const kbReportFile = path.join(cwd, 'graphify-out', 'GRAPH_REPORT.md');
+  
+  if (fs.existsSync(kbReportFile)) {
+    try {
+      const content = fs.readFileSync(kbReportFile, 'utf-8');
+      return {
+        content: `## Knowledge Graph Summary (graphify-out/GRAPH_REPORT.md)\n\n${content}`,
+        files: ['graphify-out/GRAPH_REPORT.md'],
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
 
 /**
  * Discover project instructions with formal priority hierarchy.
  * Each source is tagged with its level for transparency.
  */
-function discoverProjectInstructions(cwd: string): string | null {
+function discoverProjectInstructions(cwd: string, options: SystemPromptOptions = {}): { content: string, files: string[] } | null {
   const sources: InstructionSource[] = [];
   const seen = new Set<string>(); // dedup by resolved path
 
-  // 1. User-level (~/.claude/CLAUDE.md)
-  const userFile = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-  addSource(sources, seen, userFile, 'user', 'CLAUDE.md (user)');
+  // 1. Custom Database Rules (Personal & Project)
+  try {
+    const customRules = getAllCustomRules().filter(r => r.enabled);
+    
+    // Personal rules (apply to all)
+    const personalRules = customRules.filter(r => r.type === 'personal');
+    for (const rule of personalRules) {
+      sources.push({
+        filename: `Rule: ${rule.name} (Global)`,
+        content: rule.content,
+        level: 'global'
+      });
+    }
 
-  // 2. Project-level (working directory)
+    // Project rules (apply if matched)
+    if (options.sessionId) {
+      // Find the project name/path for this session to match against project_ids
+      const db = getDb();
+      const session = db.prepare('SELECT working_directory FROM sessions WHERE id = ?').get(options.sessionId) as any;
+      if (session) {
+        const currentPath = session.working_directory;
+        const projectRules = customRules.filter(r => {
+          if (r.type !== 'project') return false;
+          try {
+            const targetPaths = JSON.parse(r.project_ids);
+            return Array.isArray(targetPaths) && targetPaths.includes(currentPath);
+          } catch { return false; }
+        });
+
+        for (const rule of projectRules) {
+          sources.push({
+            filename: `Rule: ${rule.name} (Project)`,
+            content: rule.content,
+            level: 'project'
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[agent-system-prompt] Failed to load custom rules from DB:', err);
+  }
+
+  // 2. User-level (~/.claude/CLAUDE.md)
+  if (options.includeClaudeMd !== false) {
+    const userFile = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+    addSource(sources, seen, userFile, 'user', 'CLAUDE.md (user)');
+  }
+
+  // 3. Project-level (working directory)
   for (const filename of PROJECT_FILES) {
+    const isClaude = filename.includes('CLAUDE.md') || filename === 'CLAUDE.local.md';
+    const isAgents = filename.includes('AGENTS.md');
+    const isTraeRules = filename === '.trae/rules/rules.md';
+
+    if (isClaude && options.includeClaudeMd === false) continue;
+    if (isAgents && options.includeAgentsMd === false) continue;
+    if (isTraeRules && options.syncProjectRules === false) continue;
+
     addSource(sources, seen, path.join(cwd, filename), 'project', filename);
   }
 
-  // 3. Parent directory (monorepo root)
+  // 4. Parent directory (monorepo root)
   const parent = path.dirname(cwd);
   if (parent !== cwd) {
-    for (const filename of ['CLAUDE.md', 'AGENTS.md']) {
-      addSource(sources, seen, path.join(parent, filename), 'parent', `${filename} (parent)`);
+    if (options.includeClaudeMd !== false) {
+      addSource(sources, seen, path.join(parent, 'CLAUDE.md'), 'parent', 'CLAUDE.md (parent)');
     }
+    if (options.includeAgentsMd !== false) {
+      addSource(sources, seen, path.join(parent, 'AGENTS.md'), 'parent', 'AGENTS.md (parent)');
+    }
+  }
+
+  // 5. Custom Skills (.agents/skills/*.md)
+  if (options.enableAgentsSkills !== false) {
+    const skillsDir = path.join(cwd, '.agents', 'skills');
+    try {
+      if (fs.existsSync(skillsDir) && fs.statSync(skillsDir).isDirectory()) {
+        const files = fs.readdirSync(skillsDir);
+        for (const file of files) {
+          if (file.endsWith('.md')) {
+            addSource(sources, seen, path.join(skillsDir, file), 'project', `.agents/skills/${file}`);
+          }
+        }
+      }
+    } catch { /* ignore readdir/stat errors */ }
   }
 
   if (sources.length === 0) return null;
 
   // Format with level tags
-  return sources
-    .map(s => `## ${s.filename} [${s.level}]\n\n${s.content}`)
-    .join('\n\n');
+  return {
+    content: sources
+      .map(s => `## ${s.filename} [${s.level}]\n\n${s.content}`)
+      .join('\n\n'),
+    files: sources.map(s => s.filename),
+  };
 }
 
 function addSource(

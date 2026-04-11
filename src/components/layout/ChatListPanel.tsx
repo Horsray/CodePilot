@@ -17,6 +17,7 @@ import {
   Gear,
   Globe,
   ListBullets,
+  BookOpen,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -457,6 +458,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     { href: "/mcp", label: t('nav.mcp' as TranslationKey), icon: Plug },
     { href: "/cli-tools", label: t('nav.cliTools' as TranslationKey), icon: Terminal },
     { href: "/gallery", label: t('nav.gallery' as TranslationKey), icon: Image },
+    { href: "/knowledge-base", label: t('nav.knowledgeBase' as TranslationKey), icon: BookOpen },
     { href: "/bridge", label: t('nav.bridge' as TranslationKey), icon: WifiHigh },
   ];
 

@@ -202,6 +202,18 @@ export async function PATCH(request: NextRequest) {
     if ('heartbeatEnabled' in body && typeof body.heartbeatEnabled === 'boolean') {
       state.heartbeatEnabled = body.heartbeatEnabled;
     }
+    if ('includeAgentsMd' in body && typeof body.includeAgentsMd === 'boolean') {
+      state.includeAgentsMd = body.includeAgentsMd;
+    }
+    if ('includeClaudeMd' in body && typeof body.includeClaudeMd === 'boolean') {
+      state.includeClaudeMd = body.includeClaudeMd;
+    }
+    if ('enableAgentsSkills' in body && typeof body.enableAgentsSkills === 'boolean') {
+      state.enableAgentsSkills = body.enableAgentsSkills;
+    }
+    if ('syncProjectRules' in body && typeof body.syncProjectRules === 'boolean') {
+      state.syncProjectRules = body.syncProjectRules;
+    }
     // Reset buddy so user can hatch a new one
     if (body.resetBuddy === true) {
       state.buddy = undefined;

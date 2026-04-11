@@ -17,6 +17,7 @@ const en = {
   'nav.skills': 'Skills',
   'nav.mcp': 'MCP',
   'nav.gallery': 'Gallery',
+  'nav.knowledgeBase': 'Knowledge Base',
 
   // ── Chat list panel ─────────────────────────────────────────
   'chatList.justNow': 'just now',
@@ -72,6 +73,9 @@ const en = {
 
   // ── Chat view / session page ────────────────────────────────
   'chat.newConversation': 'New Conversation',
+  'chat.referencedContexts': 'Referenced {{count}} contexts',
+  'chat.deleteConfirm': 'Are you sure you want to delete this message?',
+  'chat.searchPlaceholder': 'Search history...',
 
   // ── Settings: General ───────────────────────────────────────
   'settings.title': 'Settings',
@@ -79,8 +83,33 @@ const en = {
   'settings.general': 'General',
   'settings.providers': 'Providers',
   'settings.claudeCli': 'Claude Code',
-  'settings.codepilot': 'CodePilot',
-  'settings.version': 'Version {version}',
+  'settings.assistant': 'Assistant',
+  'settings.rules': 'Context Rules',
+  'rules.title': 'Context Rules',
+  'rules.description': 'Manage global and project-specific instructions for the AI.',
+  'rules.personal': 'Personal Rules',
+  'rules.personalDesc': 'Create and manage user-defined rules. CodePilot will follow these rules during chat process...',
+  'rules.project': 'Project Rules',
+  'rules.projectDesc': 'Create rules dedicated to specific projects.',
+  'rules.create': 'Create',
+  'rules.edit': 'Edit',
+  'rules.delete': 'Delete',
+  'rules.name': 'Rule Name',
+  'rules.content': 'Rule Content (Markdown)',
+  'rules.type': 'Rule Type',
+  'rules.enabled': 'Enabled',
+  'rules.targetProjects': 'Target Projects',
+  'rules.allProjects': 'All Projects',
+  'rules.noRules': 'No rules yet',
+  'rules.save': 'Save',
+  'rules.cancel': 'Cancel',
+  'rules.learnMore': 'Learn More',
+  'rules.openFolder': 'Open Folder',
+  'rules.globalFile': 'Global RULES.md',
+  'rules.globalFileDesc': 'Rules in ~/.codepilot/rules/RULES.md are always active.',
+  'rules.baseRules': 'Base Rules',
+  'rules.baseRulesDesc': 'Always reads AGENTS.md, CLAUDE.md and skills from project root.',
+  'settings.codepilot': 'CodePilot', 'settings.version': 'Version {version}',
   'settings.checkForUpdates': 'Check for Updates',
   'settings.checking': 'Checking...',
   'settings.updateAvailable': 'Update available: v{version}',
@@ -896,7 +925,6 @@ const en = {
   'weixin.mediaEnabledDesc': 'Download and process media attachments from WeChat messages',
 
   // ── Assistant Workspace ──────────────────────────────
-  'settings.assistant': 'Assistant',
   'assistant.workspaceTitle': 'Assistant Workspace',
   'assistant.workspaceDesc': 'Configure a directory for persistent AI personality and memory',
   'assistant.workspacePath': 'Workspace Path',
@@ -924,6 +952,16 @@ const en = {
   'assistant.refreshDocs': 'Refresh Directory Docs',
   'assistant.refreshingDocs': 'Refreshing...',
   'assistant.docsRefreshed': 'Directory docs refreshed',
+  'assistant.settings.includeAgentsMd': 'Include AGENTS.md in context',
+  'assistant.settings.includeAgentsMdDesc': 'The agent will read AGENTS.md from the root directory and add it to the context.',
+  'assistant.settings.includeClaudeMd': 'Include CLAUDE.md in context',
+  'assistant.settings.includeClaudeMdDesc': 'The agent will read CLAUDE.md and CLAUDE.local.md from the root directory and add them to the context.',
+  'assistant.settings.enableAgentsSkills': 'Enable .agents skills directory',
+  'assistant.settings.enableAgentsSkillsDesc': 'When enabled, the agent will automatically load custom skills from the .agents/skills path.',
+  'assistant.settings.syncProjectRules': 'Sync rules from project',
+  'assistant.settings.syncProjectRulesDesc': 'When enabled, the agent will automatically load rules from .trae/rules/rules.md within the project.',
+  'assistant.settings.knowledgeBaseEnabled': 'Enable Atomic Knowledge Base',
+  'assistant.settings.knowledgeBaseEnabledDesc': 'When enabled, the agent will prioritize retrieving information from the knowledge base and follow its graph structure.',
 
   // ── Taxonomy ──────────────────────────────────────────
   'assistant.taxonomyTitle': 'Taxonomy',
@@ -1103,7 +1141,8 @@ const en = {
   'settings.defaultModelAuto': 'Auto (first in list)',
 
   // ── SDK Capabilities: Account ─────────────────────────────
-  'settings.accountInfo': 'Account Information',
+  'settings.accountInfo': 'Account Info',
+  'settings.assistantContext': 'Assistant Context Rules (Global)',
   'settings.email': 'Email',
   'settings.organization': 'Organization',
   'settings.subscription': 'Subscription',

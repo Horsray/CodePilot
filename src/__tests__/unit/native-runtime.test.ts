@@ -230,26 +230,26 @@ describe('Claude Code compat SSE parser', () => {
 describe('System prompt builder', () => {
   it('includes base prompt', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
-    const prompt = buildSystemPrompt();
-    assert.ok(prompt.includes('CodePilot'));
+    const result = buildSystemPrompt();
+    assert.ok(result.prompt.includes('CodePilot'));
   });
 
   it('includes working directory', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
-    const prompt = buildSystemPrompt({ workingDirectory: '/test/dir' });
-    assert.ok(prompt.includes('/test/dir'));
+    const result = buildSystemPrompt({ workingDirectory: '/test/dir' });
+    assert.ok(result.prompt.includes('/test/dir'));
   });
 
   it('includes user prompt', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
-    const prompt = buildSystemPrompt({ userPrompt: 'Be concise' });
-    assert.ok(prompt.includes('Be concise'));
+    const result = buildSystemPrompt({ userPrompt: 'Be concise' });
+    assert.ok(result.prompt.includes('Be concise'));
   });
 
   it('includes context snippets', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
-    const prompt = buildSystemPrompt({ contextSnippets: ['Custom context here'] });
-    assert.ok(prompt.includes('Custom context here'));
+    const result = buildSystemPrompt({ contextSnippets: ['Custom context here'] });
+    assert.ok(result.prompt.includes('Custom context here'));
   });
 });
 

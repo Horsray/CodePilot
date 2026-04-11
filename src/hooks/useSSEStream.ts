@@ -27,6 +27,7 @@ export interface SSECallbacks {
   onModeChanged: (mode: string) => void;
   onTaskUpdate: (sessionId: string) => void;
   onRewindPoint: (sdkUserMessageId: string) => void;
+  onReferencedContexts?: (files: string[]) => void;
   onUiAction?: (action: { action: string; url?: string; tab?: string; terminalId?: string; newTab?: boolean }) => void;
   onThinking?: (delta: string) => void;
   onKeepAlive: () => void;
@@ -207,6 +208,18 @@ function handleSSEEvent(
       return accumulated;
     }
 
+    case 'referenced_contexts': {
+      try {
+        const refData = JSON.parse(event.data);
+        if (Array.isArray(refData.files)) {
+          callbacks.onReferencedContexts?.(refData.files);
+        }
+      } catch {
+        // skip malformed referenced_contexts data
+      }
+      return accumulated;
+    }
+
     case 'keep_alive': {
       callbacks.onKeepAlive();
       return accumulated;
@@ -336,6 +349,7 @@ export function useSSEStream() {
         onModeChanged: (m) => callbacksRef.current?.onModeChanged(m),
         onTaskUpdate: (s) => callbacksRef.current?.onTaskUpdate(s),
         onRewindPoint: (id) => callbacksRef.current?.onRewindPoint(id),
+        onReferencedContexts: (f) => callbacksRef.current?.onReferencedContexts?.(f),
         onUiAction: (action) => callbacksRef.current?.onUiAction?.(action),
         onThinking: (d) => callbacksRef.current?.onThinking?.(d),
         onKeepAlive: () => callbacksRef.current?.onKeepAlive(),

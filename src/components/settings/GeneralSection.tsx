@@ -129,6 +129,10 @@ export function GeneralSection() {
   const [generativeUI, setGenerativeUI] = useState(true);
   const [generativeUISaving, setGenerativeUISaving] = useState(false);
   const [defaultPanel, setDefaultPanel] = useState('file_tree');
+  const [includeAgentsMd, setIncludeAgentsMd] = useState(true);
+  const [includeClaudeMd, setIncludeClaudeMd] = useState(true);
+  const [enableAgentsSkills, setEnableAgentsSkills] = useState(true);
+  const [assistantSaving, setAssistantSaving] = useState(false);
   const { accountInfo } = useAccountInfo();
   const { t, locale, setLocale } = useTranslation();
 
@@ -143,6 +147,10 @@ export function GeneralSection() {
         setGenerativeUI(appSettings.generative_ui_enabled !== "false");
         // default_panel defaults to 'file_tree' when not set
         setDefaultPanel(appSettings.default_panel || 'file_tree');
+        
+        setIncludeAgentsMd(appSettings.include_agents_md !== "false");
+        setIncludeClaudeMd(appSettings.include_claude_md !== "false");
+        setEnableAgentsSkills(appSettings.enable_agents_skills !== "false");
       }
     } catch {
       // ignore
@@ -212,6 +220,28 @@ export function GeneralSection() {
       // ignore
     } finally {
       setGenerativeUISaving(false);
+    }
+  };
+
+  const handleAssistantSettingToggle = async (key: string, value: boolean) => {
+    setAssistantSaving(true);
+    try {
+      const res = await fetch("/api/settings/app", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: { [key]: value ? "" : "false" },
+        }),
+      });
+      if (res.ok) {
+        if (key === 'include_agents_md') setIncludeAgentsMd(value);
+        if (key === 'include_claude_md') setIncludeClaudeMd(value);
+        if (key === 'enable_agents_skills') setEnableAgentsSkills(value);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setAssistantSaving(false);
     }
   };
 

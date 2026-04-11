@@ -53,6 +53,7 @@ interface ActiveStream {
   abortReason: 'transport_idle' | 'no_meaningful_progress' | null;
   sendMessageFn: ((content: string, files?: FileAttachment[]) => void) | null;
   rewindPoints: Array<{ userMessageId: string }>;
+  referencedContexts: string[];
 }
 
 export interface StartStreamParams {
@@ -196,6 +197,7 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     startedAt: stream.snapshot.startedAt,
     completedAt: stream.snapshot.completedAt,
     error: stream.snapshot.error,
+    referencedContexts: [...stream.referencedContexts],
     finalMessageContent: stream.snapshot.finalMessageContent,
   };
 }
@@ -302,6 +304,7 @@ export function startStream(params: StartStreamParams): void {
     abortReason: null,
     sendMessageFn: params.sendMessageFn ?? null,
     rewindPoints: [],
+    referencedContexts: [],
   };
 
   map.set(params.sessionId, stream);
@@ -563,6 +566,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       onRewindPoint: (sdkUserMessageId) => {
         markMeaningfulProgress();
         stream.rewindPoints = [...stream.rewindPoints, { userMessageId: sdkUserMessageId }];
+      },
+      onReferencedContexts: (files) => {
+        markMeaningfulProgress();
+        stream.referencedContexts = files;
+        emit(stream, 'snapshot-updated');
       },
       onUiAction: (action) => {
         markMeaningfulProgress();

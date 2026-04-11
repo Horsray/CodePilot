@@ -27,12 +27,17 @@ export const nativeRuntime: AgentRuntime = {
 
     // Use a custom system prompt for image agent mode (Design Agent) to avoid
     // the heavy software engineering persona and instructions.
-    const systemPrompt = isImageAgentMode
-      ? (options.systemPrompt || '')
+    const systemPromptResult = isImageAgentMode
+      ? { prompt: options.systemPrompt || '', referencedFiles: [] }
       : buildSystemPrompt({
           userPrompt: options.systemPrompt,
           workingDirectory: cwd,
           modelId: options.model,
+          includeAgentsMd: options.includeAgentsMd,
+          includeClaudeMd: options.includeClaudeMd,
+          enableAgentsSkills: options.enableAgentsSkills,
+          syncProjectRules: options.syncProjectRules,
+          knowledgeBaseEnabled: options.knowledgeBaseEnabled,
         });
 
     // Create or reuse abort controller
@@ -49,7 +54,8 @@ export const nativeRuntime: AgentRuntime = {
       providerId: options.providerId,
       sessionProviderId: options.sessionProviderId,
       model: options.model,
-      systemPrompt,
+      systemPrompt: systemPromptResult.prompt,
+      referencedContexts: systemPromptResult.referencedFiles,
       workingDirectory: cwd,
       abortController,
       // tools assembled inside agent-loop with permission context
