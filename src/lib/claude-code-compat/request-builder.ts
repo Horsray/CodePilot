@@ -114,14 +114,77 @@ function convertUserContent(content: unknown): unknown {
   if (!Array.isArray(content)) return content;
 
   return content.map((part: Record<string, unknown>) => {
-    if (part.type === 'text') return { type: 'text', text: part.text };
+    if (part.type === 'text') return { type: 'text', text: part.text as string };
     if (part.type === 'image') {
+      const imagePart = part as { image: unknown; mimeType?: string };
       // AI SDK image → Anthropic image
-      if (part.image instanceof URL || typeof part.image === 'string') {
-        return { type: 'image', source: { type: 'url', url: String(part.image) } };
+      if (imagePart.image instanceof URL) {
+        return { type: 'image', source: { type: 'url', url: imagePart.image.toString() } };
       }
-      return { type: 'image', source: { type: 'base64', media_type: part.mimeType || 'image/png', data: part.image } };
+      
+      if (typeof imagePart.image === 'string') {
+        // If it starts with http, it's a URL
+        if (imagePart.image.startsWith('http')) {
+          return { type: 'image', source: { type: 'url', url: imagePart.image } };
+        }
+        // Otherwise assume base64
+        return {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: imagePart.mimeType || 'image/png',
+            data: imagePart.image,
+          },
+        };
+      }
+      
+      // Buffer/Uint8Array
+      const base64Data = Buffer.from(imagePart.image as Uint8Array | Buffer).toString('base64');
+      return {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: imagePart.mimeType || 'image/png',
+          data: base64Data,
+        },
+      };
     }
+
+    // Handle 'file' type (new in AI SDK 3.x)
+    if (part.type === 'file') {
+      const filePart = part as { mimeType?: string; contentType?: string; data: unknown };
+      const mimeType = filePart.mimeType || filePart.contentType || '';
+      const data = filePart.data;
+      let base64Data = '';
+
+      if (typeof data === 'string') {
+        base64Data = data;
+      } else if (data instanceof Uint8Array || data instanceof Buffer) {
+        base64Data = Buffer.from(data).toString('base64');
+      } else if (data instanceof ArrayBuffer) {
+        base64Data = Buffer.from(new Uint8Array(data)).toString('base64');
+      }
+
+      if (mimeType.startsWith('image/') || (!mimeType && base64Data.length > 100)) {
+        // Anthropic supports: image/jpeg, image/png, image/gif, image/webp
+        const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        const effectiveMimeType = supportedTypes.includes(mimeType) ? mimeType : 'image/png';
+        
+        return {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: effectiveMimeType,
+            data: base64Data,
+          },
+        };
+      }
+
+      // Non-image files: if they are text-like, we could potentially read them, 
+      // but for now let's just indicate a file was attached.
+      return { type: 'text', text: `[File attachment: ${mimeType || 'unknown'}]` };
+    }
+
     return part; // pass through unknown types
   });
 }
@@ -152,16 +215,42 @@ function convertToolContent(content: unknown): unknown {
 
   return content.map((part: Record<string, unknown>) => {
     if (part.type === 'tool-result') {
-      const output = part.output as { type?: string; value?: unknown } | undefined;
-      let resultContent: string;
-      if (output?.type === 'text') resultContent = String(output.value);
-      else if (typeof output === 'string') resultContent = output;
-      else resultContent = JSON.stringify(output);
+      const resultContent = typeof part.result === 'string'
+        ? part.result
+        : JSON.stringify(part.result, null, 2);
+
+      // Note: Anthropic tool_result content can be a string or array of blocks
+      const toolContent: Array<Record<string, unknown>> = [{ type: 'text', text: resultContent }];
+
+      // If the tool result has experimental_attachments (AI SDK feature),
+      // we should convert them to images if they are images.
+      const experimentalAttachments = (part as { experimental_attachments?: Array<Record<string, unknown>> }).experimental_attachments;
+      if (Array.isArray(experimentalAttachments)) {
+        for (const attachment of experimentalAttachments) {
+          if (attachment.type === 'image' || (attachment.type === 'file' && (attachment.mimeType as string | undefined)?.startsWith('image/'))) {
+            const data = attachment.image || attachment.data;
+            let base64Data = '';
+            if (typeof data === 'string') base64Data = data;
+            else if (data instanceof Uint8Array || data instanceof Buffer) base64Data = Buffer.from(data).toString('base64');
+            
+            if (base64Data) {
+              toolContent.push({
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: attachment.mimeType || 'image/png',
+                  data: base64Data,
+                },
+              });
+            }
+          }
+        }
+      }
 
       return {
         type: 'tool_result',
         tool_use_id: part.toolCallId,
-        content: [{ type: 'text', text: resultContent }],
+        content: toolContent,
       };
     }
     return part;

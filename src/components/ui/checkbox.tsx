@@ -1,8 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { Checkbox as CheckboxPrimitive } from "radix-ui"
-import { Check } from "@/components/ui/icon"
+import * as CheckboxPrimitive from "@radix-ui/react-checkbox"
+import { Check } from "@phosphor-icons/react"
 
 import { cn } from "@/lib/utils"
 

@@ -22,13 +22,11 @@ export function ProjectDirCard({ status, onStatusChange, defaultProject }: Proje
   const [selectedPath, setSelectedPath] = useState<string>(defaultProject || '');
 
   // Sync selectedPath when defaultProject prop arrives asynchronously
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (defaultProject && !selectedPath) {
       setSelectedPath(defaultProject);
     }
   }, [defaultProject, selectedPath]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     fetch('/api/setup/recent-projects')

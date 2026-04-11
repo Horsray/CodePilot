@@ -17,6 +17,7 @@ import { createEditTool } from './edit';
 import { createSkillTool } from './skill';
 import { createAgentTool } from './agent';
 import { createTodoWriteTool } from './todo-write';
+import { createAskUserQuestionTool } from './ask-user-question';
 
 export interface ToolContext {
   /** Working directory for file operations */
@@ -62,5 +63,6 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
       abortSignal: ctx.abortSignal,
     }),
     TodoWrite: createTodoWriteTool(ctx),
+    AskUserQuestion: createAskUserQuestionTool(ctx),
   };
 }

@@ -37,6 +37,7 @@ export function createBashTool(ctx: ToolContext) {
           env: { ...process.env, TERM: 'dumb' },
           stdio: ['ignore', 'pipe', 'pipe'],
           timeout: timeoutMs,
+          detached: process.platform !== 'win32', // Detach to kill the process group
         });
 
         const collect = (data: Buffer) => {
@@ -54,8 +55,17 @@ export function createBashTool(ctx: ToolContext) {
         proc.stderr?.on('data', collect);
 
         const onAbort = () => {
-          proc.kill('SIGTERM');
-          setTimeout(() => proc.kill('SIGKILL'), 3000);
+          // Kill the process group to ensure child processes are also killed
+          try {
+            if (proc.pid) {
+              process.kill(-proc.pid, 'SIGTERM');
+              setTimeout(() => {
+                try { process.kill(-proc.pid!, 'SIGKILL'); } catch {}
+              }, 2000);
+            }
+          } catch {
+            proc.kill('SIGTERM');
+          }
         };
         abortSignal?.addEventListener('abort', onAbort, { once: true });
 

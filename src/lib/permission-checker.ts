@@ -39,6 +39,11 @@ const EXPLORE_RULES: PermissionRule[] = [
   { permission: 'Read', pattern: '*', action: 'allow' },
   { permission: 'Glob', pattern: '*', action: 'allow' },
   { permission: 'Grep', pattern: '*', action: 'allow' },
+  // Allow read-only MCP tools
+  { permission: 'mcp__*__read*', pattern: '*', action: 'allow' },
+  { permission: 'mcp__*__list*', pattern: '*', action: 'allow' },
+  { permission: 'mcp__*__get*', pattern: '*', action: 'allow' },
+  { permission: 'mcp__*__search*', pattern: '*', action: 'allow' },
   { permission: 'Write', pattern: '*', action: 'deny' },
   { permission: 'Edit', pattern: '*', action: 'deny' },
   { permission: 'Bash', pattern: '*', action: 'deny' },
@@ -52,15 +57,22 @@ const EXPLORE_RULES: PermissionRule[] = [
   { permission: 'Bash', pattern: 'git status*', action: 'allow' },
   { permission: 'Bash', pattern: 'git diff*', action: 'allow' },
   { permission: 'Bash', pattern: 'git show*', action: 'allow' },
+  { permission: 'AskUserQuestion', pattern: '*', action: 'ask' },
 ];
 
 const NORMAL_RULES: PermissionRule[] = [
   { permission: 'Read', pattern: '*', action: 'allow' },
   { permission: 'Glob', pattern: '*', action: 'allow' },
   { permission: 'Grep', pattern: '*', action: 'allow' },
+  // Allow read-only MCP tools
+  { permission: 'mcp__*__read*', pattern: '*', action: 'allow' },
+  { permission: 'mcp__*__list*', pattern: '*', action: 'allow' },
+  { permission: 'mcp__*__get*', pattern: '*', action: 'allow' },
+  { permission: 'mcp__*__search*', pattern: '*', action: 'allow' },
   { permission: 'Write', pattern: '*', action: 'allow' },
   { permission: 'Edit', pattern: '*', action: 'allow' },
   { permission: 'Bash', pattern: '*', action: 'ask' },
+  { permission: 'AskUserQuestion', pattern: '*', action: 'ask' },
   // Common safe bash commands auto-allowed
   { permission: 'Bash', pattern: 'npm *', action: 'allow' },
   { permission: 'Bash', pattern: 'npx *', action: 'allow' },

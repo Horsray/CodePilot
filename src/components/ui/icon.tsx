@@ -85,6 +85,7 @@ export {
   Terminal,
   Trash,
   TreeStructure,
+  UploadSimple,
   UserCircle,
   Warning,
   WarningCircle,

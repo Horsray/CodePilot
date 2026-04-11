@@ -17,6 +17,7 @@ interface QueuedNotification {
   title: string;
   body: string;
   priority: 'low' | 'normal' | 'urgent';
+  sound?: boolean;
   timestamp: number;
 }
 
@@ -31,13 +32,14 @@ function getQueue(): QueuedNotification[] {
 }
 
 /** Push a notification into the server-side queue for frontend polling. */
-export function enqueueNotification(title: string, body: string, priority: 'low' | 'normal' | 'urgent'): void {
+export function enqueueNotification(title: string, body: string, priority: 'low' | 'normal' | 'urgent', sound?: boolean): void {
   const queue = getQueue();
   queue.push({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     title,
     body,
     priority,
+    sound,
     timestamp: Date.now(),
   });
   // Ring buffer: drop oldest if over limit
@@ -62,12 +64,13 @@ export async function sendNotification(opts: {
   title: string;
   body: string;
   priority: 'low' | 'normal' | 'urgent';
+  sound?: boolean;
   action?: { type: string; payload: string };
 }): Promise<{ sent: string[] }> {
   const sent: string[] = [];
 
   // Channel 1: Queue for frontend polling (all priorities)
-  enqueueNotification(opts.title, opts.body, opts.priority);
+  enqueueNotification(opts.title, opts.body, opts.priority, opts.sound);
   sent.push('queued');
 
   // Channel 2: Telegram for urgent (direct server-side call)

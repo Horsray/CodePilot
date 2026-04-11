@@ -2703,15 +2703,15 @@ export function deleteScheduledTask(id: string): boolean {
 
 export function getAllCustomRules(): CustomRule[] {
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM custom_rules ORDER BY created_at DESC').all() as any[];
-  return rows.map(r => ({ ...r, enabled: r.enabled === 1 }));
+  const rows = db.prepare('SELECT * FROM custom_rules ORDER BY created_at DESC').all() as Array<Record<string, unknown>>;
+  return rows.map(r => ({ ...r, enabled: r.enabled === 1 } as unknown as CustomRule));
 }
 
 export function getCustomRule(id: string): CustomRule | undefined {
   const db = getDb();
-  const row = db.prepare('SELECT * FROM custom_rules WHERE id = ?').get(id) as any;
+  const row = db.prepare('SELECT * FROM custom_rules WHERE id = ?').get(id) as Record<string, unknown> | undefined;
   if (!row) return undefined;
-  return { ...row, enabled: row.enabled === 1 };
+  return { ...row, enabled: row.enabled === 1 } as unknown as CustomRule;
 }
 
 export function createCustomRule(data: Omit<CustomRule, 'id' | 'created_at' | 'updated_at'>): CustomRule {

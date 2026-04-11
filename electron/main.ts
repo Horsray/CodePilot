@@ -251,10 +251,10 @@ function destroyTray(): void {
 /**
  * Parse notification API response. Canonical version: src/lib/bg-notify-parser.ts
  */
-function parseBgNotifications(json: string): Array<{ title: string; body: string; priority: string }> {
+function parseBgNotifications(json: string): Array<{ title: string; body: string; priority: string; sound?: boolean }> {
   try {
     const parsed = JSON.parse(json);
-    const notifications: Array<{ title: string; body: string; priority: string }> = parsed.notifications || [];
+    const notifications: Array<{ title: string; body: string; priority: string; sound?: boolean }> = parsed.notifications || [];
     return notifications.filter((n: { title: string }) => n.title);
   } catch {
     return [];
@@ -291,6 +291,9 @@ function startBgNotifyPoll(): void {
 
       const notifications = parseBgNotifications(data);
       for (const notif of notifications) {
+        if (notif.sound) {
+          shell.beep();
+        }
         try {
           const notification = new Notification({
             title: notif.title,

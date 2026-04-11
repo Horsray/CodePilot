@@ -26,6 +26,7 @@ import { findClaudeBinary, findGitBash, getExpandedPath, invalidateClaudePathCac
 import { notifyPermissionRequest, notifyGeneric } from './telegram-bot';
 import { classifyError, formatClassifiedError } from './error-classifier';
 import { resolveWorkingDirectory } from './working-directory';
+import { sendNotification } from './notification-manager';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -996,26 +997,24 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           }
 
           if (imageFiles.length > 0) {
-            // Limit media items: keep the MOST RECENT images (drop oldest first),
-            // consistent with "preserve recent context" strategy.
-            const MAX_MEDIA_ITEMS = 100;
-            const limitedImages = imageFiles.length > MAX_MEDIA_ITEMS
-              ? imageFiles.slice(-MAX_MEDIA_ITEMS)
-              : imageFiles;
+            // Performance Optimization: Only keep the 2 most recent images
+            // to prevent the payload from ballooning and slowing down connections.
+            // This is consistent with our "preserve recent context" strategy.
+            const MAX_RECENT_IMAGES = 2;
+            const limitedImages = imageFiles.slice(-MAX_RECENT_IMAGES);
             const droppedCount = imageFiles.length - limitedImages.length;
 
-            // In imageAgentMode, skip file path references so Claude doesn't
-            // try to use built-in tools to analyze images from disk. It will
-            // see the images via vision (base64 content blocks) and follow the
-            // IMAGE_AGENT_SYSTEM_PROMPT to output image-gen-request blocks.
-            // In normal mode, append disk paths — only for the images actually included.
+            // In resumed sessions, we only need to send the pixels for images
+            // that the agent hasn't seen yet. However, to be safe and compatible
+            // with all providers, we send the last N images.
+            
             const textWithImageRefs = imageAgentMode
               ? textPrompt
               : (() => {
                   const workDir = resolvedWorkingDirectory.path;
-                  const imagePaths = getUploadedFilePaths(limitedImages, workDir);
-                  const imageReferences = imagePaths
-                    .map((p, i) => `[User attached image: ${p} (${limitedImages[i].name})]`)
+                  const allImagePaths = getUploadedFilePaths(imageFiles, workDir);
+                  const imageReferences = allImagePaths
+                    .map((p, i) => `[User attached image: ${p} (${imageFiles[i].name})]`)
                     .join('\n');
                   return `${imageReferences}\n\n${textPrompt}`;
                 })();
@@ -1036,18 +1035,23 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                 }
               }
               if (!imgData) continue;
+
+              // Ensure we use a supported media type
+              const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+              const effectiveMimeType = (img.type && supportedTypes.includes(img.type)) ? img.type : 'image/png';
+
               contentBlocks.push({
                 type: 'image',
                 source: {
                   type: 'base64',
-                  media_type: (img.type || 'image/png') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+                  media_type: effectiveMimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
                   data: imgData,
                 },
               });
             }
 
             if (droppedCount > 0) {
-              contentBlocks.push({ type: 'text', text: `[Note: ${droppedCount} older image(s) were omitted due to the ${MAX_MEDIA_ITEMS}-image limit per request.]` });
+              contentBlocks.push({ type: 'text', text: `[Note: ${droppedCount} older image(s) were omitted to optimize performance.]` });
             }
             contentBlocks.push({ type: 'text', text: textWithImageRefs });
 
@@ -1087,13 +1091,13 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             const iter = conversation[Symbol.asyncIterator]();
             const firstPromise = iter.next();
             
-            const timeoutPromise = new Promise<any>((resolve) => 
+            const timeoutPromise = new Promise<{ _timeout: boolean }>((resolve) => 
               setTimeout(() => resolve({ _timeout: true }), 3000)
             );
             
-            const first = await Promise.race([firstPromise, timeoutPromise]);
+            const first = await Promise.race([firstPromise, timeoutPromise]) as IteratorResult<SDKAssistantMessage | SDKUserMessage | SDKResultMessage | SDKResultSuccess | SDKPartialAssistantMessage | SDKSystemMessage | SDKToolProgressMessage, void> | { _timeout: boolean };
 
-            if (first && first._timeout) {
+            if (first && '_timeout' in first && (first as { _timeout: boolean })._timeout) {
               // It took >3s. Clear "Reconnecting..." and assume resume is proceeding slowly.
               controller.enqueue(formatSSE({
                 type: 'status',
@@ -1109,10 +1113,11 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                   yield next.value;
                 }
               })() as ReturnType<typeof query>;
-            } else {
+            } else if (first && 'done' in first) {
               // Re-wrap into an async iterable that yields the first message then the rest
+              const iterResult = first as IteratorResult<SDKAssistantMessage | SDKUserMessage | SDKResultMessage | SDKResultSuccess | SDKPartialAssistantMessage | SDKSystemMessage | SDKToolProgressMessage, void>;
               conversation = (async function* () {
-                if (!first.done) yield first.value;
+                if (!iterResult.done) yield iterResult.value;
                 while (true) {
                   const next = await iter.next();
                   if (next.done) break;
@@ -1416,6 +1421,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                   }));
                   if (!autoTrigger) {
                     notifyGeneric(title, taskMsg.summary || '', telegramOpts).catch(() => {});
+                    sendNotification({
+                      title,
+                      body: taskMsg.summary || '',
+                      priority: taskMsg.status === 'completed' ? 'normal' : 'urgent',
+                      sound: true,
+                    }).catch(() => {});
                   }
                 }
               }
@@ -1472,6 +1483,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                 // Skip Telegram for auto-trigger turns (onboarding/heartbeat)
                 if (!autoTrigger) {
                   notifyGeneric(errTitle, errMsg, telegramOpts).catch(() => {});
+                  sendNotification({
+                    title: errTitle,
+                    body: errMsg,
+                    priority: 'urgent',
+                    sound: true,
+                  }).catch(() => {});
                 }
               }
               break;
@@ -1705,6 +1722,17 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         // Send structured error JSON so frontend can parse category + hints
         // Falls back gracefully for older frontends that only read raw text
         const errorMessage = formatClassifiedError(classified);
+
+        // Send system notification for error/abnormal disconnection
+        if (!autoTrigger) {
+          sendNotification({
+            title: '会话异常中断',
+            body: classified.userMessage || '与 AI 代理的连接已断开。',
+            priority: 'urgent',
+            sound: true,
+          }).catch(() => {});
+        }
+
         controller.enqueue(formatSSE({
           type: 'error',
           data: JSON.stringify({

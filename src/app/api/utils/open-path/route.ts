@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
-import { shell } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+
+// Mark as dynamic to avoid build-time static analysis of electron imports
+export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
   try {
@@ -22,6 +24,8 @@ export async function POST(req: Request) {
       }
     }
 
+    // Use dynamic import for electron as it only works at runtime within Electron
+    const { shell } = await import('electron');
     shell.openPath(targetPath);
     return NextResponse.json({ success: true });
   } catch (err) {

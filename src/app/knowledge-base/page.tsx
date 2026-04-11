@@ -200,7 +200,7 @@ export default function KnowledgeBasePage() {
             <Input 
               value={importValue}
               onChange={(e) => setImportValue(e.target.value)}
-              placeholder="输入文件路径、URL 或直接拖入文件..."
+              placeholder="输入文件路径、URL 或点击右侧上传按钮..."
               className="pl-10 h-10 bg-background/50 border-border/50 focus:ring-1 focus:ring-primary/30"
             />
             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -213,11 +213,12 @@ export default function KnowledgeBasePage() {
               />
               <Button 
                 variant="ghost" 
-                size="icon-sm" 
-                className="h-7 w-7 text-muted-foreground hover:text-primary"
+                size="sm" 
+                className="h-7 px-2 text-muted-foreground hover:text-primary gap-1.5"
                 onClick={() => document.getElementById('kb-file-upload')?.click()}
               >
                 <UploadSimple size={14} />
+                <span className="text-[10px] font-medium">上传</span>
               </Button>
             </div>
           </div>

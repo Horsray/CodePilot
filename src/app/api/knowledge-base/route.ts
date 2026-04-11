@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSetting } from '@/lib/db';
 import { SETTING_KEYS } from '@/types';
 import fs from 'fs';
@@ -39,20 +39,21 @@ export async function GET(request: NextRequest) {
       reportMd = fs.readFileSync(reportMdPath, 'utf-8');
     }
 
-    // Fallback: If no graphify data, look for skills or other knowledge files
-    if (!graphData || graphData.nodes?.length === 0) {
-      const knowledgeDirs = ['skills', 'docs', 'knowledge', 'specs', 'architecture', 'notes', 'reference', 'manuals'];
-      const nodes: any[] = [];
-      
-      // 1. Check common directories
-      for (const dirName of knowledgeDirs) {
-        const dirPath = path.join(workspacePath, dirName);
-        if (fs.existsSync(dirPath)) {
-          try {
-            const files = fs.readdirSync(dirPath);
-            for (const file of files) {
-              if (file.endsWith('.md')) {
-                const fullPath = path.join(dirPath, file);
+    // Merge logic: Start with graphify data if it exists
+    const nodes: any[] = graphData?.nodes || [];
+    
+    // Supplement with local markdown files from common directories
+    const knowledgeDirs = ['skills', 'docs', 'knowledge', 'specs', 'architecture', 'notes', 'reference', 'manuals'];
+    for (const dirName of knowledgeDirs) {
+      const dirPath = path.join(workspacePath, dirName);
+      if (fs.existsSync(dirPath)) {
+        try {
+          const files = fs.readdirSync(dirPath);
+          for (const file of files) {
+            if (file.endsWith('.md')) {
+              const fullPath = path.join(dirPath, file);
+              // Only add if not already present (avoid duplicates)
+              if (!nodes.some(n => n.id === fullPath || n.path === fullPath)) {
                 const content = fs.readFileSync(fullPath, 'utf-8');
                 nodes.push({
                   id: fullPath,
@@ -64,17 +65,19 @@ export async function GET(request: NextRequest) {
                 });
               }
             }
-          } catch (e) { /* ignore */ }
-        }
+          }
+        } catch (e) { /* ignore */ }
       }
+    }
 
-      // 2. Check root for other .md files (excluding common ones)
-      const exclude = ['AGENTS.md', 'CLAUDE.md', 'README.md', 'RULES.md'];
-      try {
-        const rootFiles = fs.readdirSync(workspacePath);
-        for (const file of rootFiles) {
-          if (file.endsWith('.md') && !exclude.includes(file)) {
-            const fullPath = path.join(workspacePath, file);
+    // Always include root .md files (excluding system files)
+    const exclude = ['AGENTS.md', 'CLAUDE.md', 'README.md', 'RULES.md', 'RELEASE_NOTES.md'];
+    try {
+      const rootFiles = fs.readdirSync(workspacePath);
+      for (const file of rootFiles) {
+        if (file.endsWith('.md') && !exclude.includes(file)) {
+          const fullPath = path.join(workspacePath, file);
+          if (!nodes.some(n => n.id === fullPath || n.path === fullPath)) {
             const content = fs.readFileSync(fullPath, 'utf-8');
             nodes.push({
               id: fullPath,
@@ -86,14 +89,13 @@ export async function GET(request: NextRequest) {
             });
           }
         }
-      } catch (e) { /* ignore */ }
-      
-      if (nodes.length > 0) {
-        graphData = { nodes };
       }
-    } else {
-      // Enhance graphify nodes with real paths if they are local files
-      graphData.nodes = graphData.nodes.map((n: any) => {
+    } catch (e) { /* ignore */ }
+
+    // Final graphData construction
+    graphData = {
+      nodes: nodes.map((n: any) => {
+        // Ensure path exists for local files
         if (n.type === 'file' && !n.path) {
           const possiblePath = path.join(workspacePath, n.id);
           if (fs.existsSync(possiblePath)) {
@@ -101,8 +103,9 @@ export async function GET(request: NextRequest) {
           }
         }
         return n;
-      });
-    }
+      }),
+      links: graphData?.links || []
+    };
 
     return NextResponse.json({ 
       graphData, 

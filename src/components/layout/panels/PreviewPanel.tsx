@@ -303,7 +303,7 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
                 <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)} className="h-7 text-[10px]">
                   Cancel
                 </Button>
-                <Button variant="primary" size="sm" onClick={handleSave} disabled={saving} className="h-7 text-[10px]">
+                <Button variant="default" size="sm" onClick={handleSave} disabled={saving} className="h-7 text-[10px]">
                   {saving ? "Saving..." : "Save Changes"}
                 </Button>
               </div>

@@ -251,7 +251,6 @@ export function InstallWizard({
   // Auto-check when dialog opens
   useEffect(() => {
     if (open) {
-      setPhase("checking"); // eslint-disable-line react-hooks/set-state-in-effect -- reset state before async check
       setLogs([]);
       setProgress(null);
       setCopied(false);

@@ -128,22 +128,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Sync with viewport after hydration to avoid SSR mismatch
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setChatListOpenRaw(window.matchMedia(`(min-width: ${LG_BREAKPOINT}px)`).matches);
   }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Panel width state with localStorage persistence
   const [chatListWidth, setChatListWidth] = useState(240);
 
   // Restore persisted width after hydration
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const saved = localStorage.getItem("codepilot_chatlist_width");
     if (saved) setChatListWidth(parseInt(saved));
   }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleChatListResize = useCallback((delta: number) => {
     setChatListWidth((w) => Math.min(CHATLIST_MAX, Math.max(CHATLIST_MIN, w + delta)));
@@ -198,7 +194,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const handler = () => {
       const activeIds = getActiveSessionIds();
-      setActiveStreamingSessions(activeIds.length > 0 ? new Set(activeIds) : EMPTY_SET);
+      
+      setActiveStreamingSessions(prev => {
+        if (prev.size !== activeIds.length) return new Set(activeIds);
+        for (const id of activeIds) {
+          if (!prev.has(id)) return new Set(activeIds);
+        }
+        return prev;
+      });
 
       const approvals = new Set<string>();
       for (const sid of activeIds) {
@@ -207,7 +210,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           approvals.add(sid);
         }
       }
-      setPendingApprovalSessionIds(approvals.size > 0 ? approvals : EMPTY_SET);
+      
+      setPendingApprovalSessionIds(prev => {
+        if (prev.size !== approvals.size) return approvals;
+        for (const id of approvals) {
+          if (!prev.has(id)) return approvals;
+        }
+        return prev;
+      });
     };
     window.addEventListener('stream-session-event', handler);
     return () => window.removeEventListener('stream-session-event', handler);
@@ -317,7 +327,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isSplitActive && !pathname.startsWith("/chat")) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSplitSessions([]);
       setActiveColumnIdRaw("");
     }
@@ -363,12 +372,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Reset doc preview and panels when navigating between pages/sessions
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setPreviewFileRaw(null);
     setPreviewOpen(false);
   }, [pathname]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const setActiveWorkspaceTabId = useCallback((id: string | null) => {
     setActiveWorkspaceTabIdRaw(id);

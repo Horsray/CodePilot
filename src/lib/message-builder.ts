@@ -35,16 +35,25 @@ interface FileMeta {
   type: string;
   size: number;
   filePath?: string;
+  data?: string;
 }
 
 export function buildCoreMessages(dbMessages: Message[]): ModelMessage[] {
   const raw: ModelMessage[] = [];
 
-  for (const msg of dbMessages) {
+  // Pruning: Only keep full image data for the last 2 user messages to reduce payload size.
+  // Older images will be replaced with a text placeholder.
+  const userMessageIndices = dbMessages
+    .map((m, i) => (m.role === 'user' && m.is_heartbeat_ack !== 1 ? i : -1))
+    .filter(i => i !== -1);
+  const messagesToKeepImages = new Set(userMessageIndices.slice(-2));
+
+  for (let i = 0; i < dbMessages.length; i++) {
+    const msg = dbMessages[i];
     if (msg.is_heartbeat_ack === 1) continue;
 
     if (msg.role === 'user') {
-      raw.push(buildUserMessage(msg.content));
+      raw.push(buildUserMessage(msg.content, messagesToKeepImages.has(i)));
     } else {
       const blocks = parseMessageContent(msg.content);
       const converted = convertAssistantBlocks(blocks);
@@ -89,7 +98,7 @@ function mergeUserContent(a: any, b: any): any {
   return merged;
 }
 
-function buildUserMessage(content: string): ModelMessage {
+function buildUserMessage(content: string, keepImages: boolean = true): ModelMessage {
   const match = content.match(/^<!--files:(\[.*?\])-->([\s\S]*)$/);
   if (!match) {
     return { role: 'user', content };
@@ -110,20 +119,53 @@ function buildUserMessage(content: string): ModelMessage {
   }
 
   for (const meta of fileMetas) {
-    if (!meta.filePath || !meta.type) continue;
+    if (!meta.type) continue;
 
     if (meta.type.startsWith('image/')) {
       try {
-        const data = fs.readFileSync(meta.filePath);
-        const base64 = data.toString('base64');
-        parts.push({ type: 'image', image: base64, mimeType: meta.type, mediaType: meta.type });
-      } catch {
-        parts.push({ type: 'text', text: `[Attached file: ${meta.name} (no longer available)]` });
+        let buffer: Buffer | undefined;
+        const filePath = meta.filePath;
+
+        if (meta.data) {
+          buffer = Buffer.from(meta.data, 'base64');
+        } else if (filePath) {
+          buffer = fs.readFileSync(filePath);
+        }
+
+        if (!buffer) continue;
+        
+        // Standard AI SDK ImagePart format expects Uint8Array or Buffer for data
+        const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        const mimeType = supportedTypes.includes(meta.type) ? meta.type : 'image/png';
+        
+        // Use a descriptive hint for the agent, matching Claude Code SDK style
+        const pathHint = filePath ? `[User attached image: ${filePath} (${meta.name})]` : `[User attached image: (clipboard) (${meta.name})]`;
+        
+        // Add text hint first so the agent knows the file's "identity" on disk
+        parts.push({ type: 'text', text: pathHint });
+
+        if (!keepImages) continue;
+        
+        // Add actual vision block
+        parts.push({ 
+          type: 'image', 
+          image: buffer, 
+          mimeType: mimeType
+        } as unknown as { type: 'image'; image: Buffer | Uint8Array; mimeType: string });
+      } catch (err) {
+        console.error(`[message-builder] Failed to process image:`, err);
+        parts.push({ type: 'text', text: `[Image attachment: ${meta.name} (failed to read)]` });
       }
     } else {
       try {
-        const fileContent = fs.readFileSync(meta.filePath, 'utf-8');
-        parts.push({ type: 'text', text: `\n--- ${meta.name} ---\n${fileContent.slice(0, 50000)}\n--- end ---` });
+        if (meta.filePath) {
+          const fileContent = fs.readFileSync(meta.filePath, 'utf-8');
+          parts.push({ type: 'text', text: `\n--- ${meta.name} ---\n${fileContent.slice(0, 50000)}\n--- end ---` });
+        } else if (meta.data) {
+          // If it's text data but no filePath, decode base64
+          const fileContent = Buffer.from(meta.data, 'base64').toString('utf-8');
+          parts.push({ type: 'text', text: `\n--- ${meta.name} ---\n${fileContent.slice(0, 50000)}\n--- end ---` });
+        }
       } catch {
         parts.push({ type: 'text', text: `[Attached file: ${meta.name}]` });
       }

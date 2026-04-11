@@ -32,6 +32,8 @@ export interface AssembleToolsOptions {
   model?: string;
   /** Session ID — always required for tool execution */
   sessionId?: string;
+  /** Tool execution timeout in seconds */
+  toolTimeoutSeconds?: number;
   /** Permission context — when set, tools are wrapped with permission checks */
   permissionContext?: {
     permissionMode: PermissionMode;
@@ -89,6 +91,7 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
     {
       emitSSE: options.permissionContext?.emitSSE,
       abortSignal: options.permissionContext?.abortSignal,
+      toolTimeoutSeconds: options.toolTimeoutSeconds,
     },
   );
 
@@ -111,6 +114,7 @@ const RETRYABLE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'Skill', 'Agent', 'code
 interface ToolGuardOptions {
   emitSSE?: (event: { type: string; data: string }) => void;
   abortSignal?: AbortSignal;
+  toolTimeoutSeconds?: number;
 }
 
 interface ToolFailurePayload {
@@ -139,6 +143,9 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
         }
 
         const config = getToolGuardConfig(name);
+        if (options.toolTimeoutSeconds && options.toolTimeoutSeconds > 0) {
+          config.timeoutMs = options.toolTimeoutSeconds * 1000;
+        }
         const totalAttempts = config.maxRetries + 1;
         let lastFailure: ToolFailurePayload | null = null;
 
@@ -150,6 +157,7 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
 
           let didTimeout = false;
           let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
           const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutHandle = setTimeout(() => {
               didTimeout = true;
@@ -157,6 +165,18 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
               reject(new Error(`Tool "${name}" timed out after ${config.timeoutMs}ms`));
             }, config.timeoutMs);
           });
+
+          // Emit progress every 5 seconds for long-running tools
+          const start = Date.now();
+          const progressTimer = setInterval(() => {
+            const elapsed = Math.round((Date.now() - start) / 1000);
+            if (elapsed >= 5) {
+              options.emitSSE?.({
+                type: 'status',
+                data: JSON.stringify({ message: `Running ${name}... (${elapsed}s)` }),
+              });
+            }
+          }, 5000);
 
           try {
             const result = await Promise.race([
@@ -192,6 +212,7 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
             }
           } finally {
             if (timeoutHandle) clearTimeout(timeoutHandle);
+            clearInterval(progressTimer);
             parentAbortSignal?.removeEventListener('abort', handleParentAbort);
           }
         }
@@ -222,8 +243,8 @@ function getToolGuardConfig(toolName: string): { timeoutMs: number; maxRetries: 
     return { timeoutMs: 180_000, maxRetries: 0 };
   }
   if (toolName.startsWith('mcp__')) {
-    // MCP tools usually shouldn't hang forever, but network requests can be slow
-    return { timeoutMs: 30_000, maxRetries: 0 };
+    // MCP tools are usually fast unless they are truly processing something big
+    return { timeoutMs: 45_000, maxRetries: 0 };
   }
   return {
     timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
@@ -295,7 +316,13 @@ function wrapWithPermissions(
 
           emitEvent('permission:request', { sessionId, toolName: name, permissionId: permId });
 
-          // Emit SSE
+          // Emit SSE to inform UI that we are waiting for permission
+          permissionContext.emitSSE({
+            type: 'status',
+            data: JSON.stringify({ message: `Waiting for permission to run ${name}...` }),
+          });
+
+          // Emit SSE for actual permission dialog
           permissionContext.emitSSE({
             type: 'permission_request',
             data: JSON.stringify({

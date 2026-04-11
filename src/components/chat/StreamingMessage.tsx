@@ -182,14 +182,12 @@ function useBufferedContent(rawContent: string, isStreaming: boolean): string {
   // Effect: sync bypass state when conditions are met (one-way latch, safe)
   useEffect(() => {
     if (shouldBypass && !bypassed && isStreaming && rawContent) {
-      setBypassed(true); // eslint-disable-line react-hooks/set-state-in-effect
     }
   }, [shouldBypass, bypassed, isStreaming, rawContent]);
 
   // Effect: reset on new turn (content emptied)
   useEffect(() => {
     if (!rawContent && !isStreaming) {
-      setBypassed(false); // eslint-disable-line react-hooks/set-state-in-effect
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -692,9 +690,6 @@ export function StreamingMessage({
           <AgentTimeline
             steps={liveTimelineSteps}
             compact={true}
-            liveStatusText={statusText || getRunningCommandSummary()}
-            showSummaryCard={false}
-            referencedFiles={referencedFiles}
           />
         ) : ((toolUses.length > 0 || thinkingContent) && (
           <ToolActionsGroup

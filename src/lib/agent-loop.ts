@@ -22,6 +22,7 @@ import type { PermissionMode } from './permission-checker';
 import { buildCoreMessages } from './message-builder';
 import { getMessages } from './db';
 import { createPerfTrace } from './perf-trace';
+import { sendNotification } from './notification-manager';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -152,63 +153,9 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           mcpServerCount: mcpServers ? Object.keys(mcpServers).length : 0,
         });
 
-        // 0. Pre-flight check: test model availability before expensive operations
-        // This ensures fast failure if API keys are invalid or network is down
-        controller.enqueue(formatSSE({
-          type: 'status',
-          data: JSON.stringify({ message: '探测模型连通性...' }),
-        }));
+        // 0. Pre-flight check removed to speed up first-turn response.
+        // We now rely on streamText's own error handling and maxRetries.
         
-        try {
-          // Send a tiny prompt to verify the connection is alive
-          // Using streamText with maxTokens=1 to fail fast if unauthorized/unreachable
-          const { languageModel: testModel, config: modelConfig } = createModel({
-            providerId,
-            sessionProviderId,
-            model: modelOverride,
-            sessionModel,
-          });
-          
-          // Only do pre-flight for external models, local models might be slow to load
-          if (modelConfig.sdkType !== 'openai' || (!modelConfig.baseUrl?.includes('localhost') && !modelConfig.baseUrl?.includes('127.0.0.1'))) {
-            const preflightAbort = new AbortController();
-            const timeout = setTimeout(() => preflightAbort.abort(), 8000); // 8 seconds max for pre-flight
-            
-            // Link parent abort
-            const onParentAbort = () => preflightAbort.abort();
-            abortController.signal.addEventListener('abort', onParentAbort);
-
-            try {
-              // Wait for the stream to actually start yielding before declaring success
-              const { fullStream } = await streamText({
-                model: testModel,
-                messages: [{ role: 'user', content: 'ping' }],
-                maxOutputTokens: 1,
-                abortSignal: preflightAbort.signal,
-              });
-              
-              // Consume the first event to trigger network/auth failures
-              for await (const _ of fullStream) {
-                break; // Just need the first chunk
-              }
-            } finally {
-              clearTimeout(timeout);
-              abortController.signal.removeEventListener('abort', onParentAbort);
-            }
-          }
-        } catch (err: unknown) {
-          // If pre-flight fails, we throw immediately and skip MCP sync/history load
-          const isAbort = err instanceof Error && err.name === 'AbortError';
-          if (isAbort && !abortController.signal.aborted) {
-            // It was our 8-second timeout, not a user cancellation
-            const timeoutError = new Error('API 连接超时：模型服务器超过 8 秒未响应。请检查网络或 API 地址。');
-            timeoutError.name = 'PreflightTimeoutError';
-            throw timeoutError;
-          }
-          console.warn('[agent-loop] Pre-flight model connection failed:', err);
-          throw err;
-        }
-
         // 0b. Sync MCP servers before assembling tools (await to avoid race condition)
         if (mcpServers && Object.keys(mcpServers).length > 0) {
           controller.enqueue(formatSSE({
@@ -632,6 +579,16 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           }),
         }));
 
+        // Send system notification for task completion
+        if (!autoTrigger) {
+          sendNotification({
+            title: '任务已完成',
+            body: `Agent 已完成当前任务，共执行 ${step} 步。`,
+            priority: 'normal',
+            sound: true,
+          }).catch(() => {});
+        }
+
         emitEvent('session:end', { sessionId, steps: step });
         onRuntimeStatusChange?.('idle');
       } catch (err: unknown) {
@@ -668,6 +625,16 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           reportNativeError(classified.category, err, { sessionId, modelId: modelOverride || sessionModel });
           
           const errorMessage = formatClassifiedError(classified);
+
+          // Send system notification for error/abnormal disconnection
+          if (!autoTrigger) {
+            sendNotification({
+              title: '任务执行异常',
+              body: classified.userMessage || 'Agent 在执行过程中遇到未知错误，已中断。',
+              priority: 'urgent',
+              sound: true,
+            }).catch(() => {});
+          }
 
           controller.enqueue(formatSSE({
             type: 'error',

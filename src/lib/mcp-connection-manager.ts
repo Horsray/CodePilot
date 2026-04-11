@@ -51,9 +51,9 @@ export interface McpSyncResult {
   servers: McpSyncServerResult[];
 }
 
-const MCP_CONNECT_TIMEOUT_MS = 4_000;
-const MCP_LIST_TOOLS_TIMEOUT_MS = 2_000;
-const MCP_CALL_TOOL_TIMEOUT_MS = 30_000;
+const MCP_CONNECT_TIMEOUT_MS = 10_000;
+const MCP_LIST_TOOLS_TIMEOUT_MS = 5_000;
+const MCP_CALL_TOOL_TIMEOUT_MS = 45_000;
 const MCP_FAILED_RETRY_COOLDOWN_MS = 60_000;
 
 // ── Singleton pool ──────────────────────────────────────────────

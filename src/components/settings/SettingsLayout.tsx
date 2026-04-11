@@ -46,7 +46,6 @@ function subscribeToHash(callback: () => void) {
 
 export function SettingsLayout() {
   // useSyncExternalStore subscribes to hash changes without triggering
-  // the react-hooks/set-state-in-effect lint rule.
   const hashSection = useSyncExternalStore(subscribeToHash, getSectionFromHash, () => "general" as Section);
 
   // Local state allows immediate UI update on click before the hash updates.

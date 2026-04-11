@@ -1,43 +1,33 @@
-'use client';
-
-import { useMemo, useState, useEffect } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Brain,
   CaretDown,
   CheckCircle,
   ClockCounterClockwise,
-  Code,
-  Eye,
   Gear,
-  GitDiff,
-  Link,
-  MagicWand,
   MagnifyingGlass,
   PencilSimple,
   SpinnerGap,
   TerminalWindow,
-  WarningCircle,
   XCircle,
+  PushPin,
+  ArrowsCounterClockwise,
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { TimelineFileChange, TimelineStep } from '@/types';
 
 interface AgentTimelineProps {
   steps: TimelineStep[];
   compact?: boolean;
-  liveStatusText?: string;
-  showSummaryCard?: boolean;
-  referencedFiles?: string[];
 }
-
-type TimelineOverallStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 function getStepIcon(status: TimelineStep['status']) {
   if (status === 'running' || status === 'retrying') return <SpinnerGap size={13} className="animate-spin text-blue-500/70" />;
   if (status === 'completed') return <CheckCircle size={13} weight="fill" className="text-emerald-500/70" />;
   if (status === 'failed') return <XCircle size={13} weight="fill" className="text-red-500/70" />;
-  if (status === 'stopped') return <WarningCircle size={13} weight="fill" className="text-amber-500/70" />;
   return <ClockCounterClockwise size={13} className="text-muted-foreground/60" />;
 }
 
@@ -50,37 +40,6 @@ function getStepStatusLabel(status: TimelineStep['status']): string {
     case 'stopped': return '已停止';
     default: return '等待中';
   }
-}
-
-function getOverallStatus(steps: TimelineStep[]): TimelineOverallStatus {
-  if (steps.some((step) => step.status === 'failed' || step.error)) return 'failed';
-  if (steps.some((step) => step.status === 'retrying' || step.status === 'stopped')) return 'stopped';
-  if (steps.some((step) => step.status === 'running')) return 'running';
-  return 'completed';
-}
-
-function getOverallTitle(steps: TimelineStep[], liveStatusText?: string): string {
-  const lastMeaningful = [...steps].reverse().find((step) => step.title?.trim() || step.output.trim() || step.toolCalls.length > 0);
-  if (lastMeaningful?.title?.trim()) return lastMeaningful.title;
-  if (liveStatusText?.trim()) return extractStatusMessage(liveStatusText);
-  return '执行过程';
-}
-
-function getOverallMeta(steps: TimelineStep[]): string {
-  const toolCount = steps.reduce((sum, step) => sum + step.toolCalls.length, 0);
-  const fileCount = steps.reduce((sum, step) => sum + step.fileChanges.length, 0);
-  const stepCount = steps.length;
-  const parts = [`${stepCount} 个步骤`];
-  if (toolCount > 0) parts.push(`${toolCount} 次工具调用`);
-  if (fileCount > 0) parts.push(`${fileCount} 个文件变更`);
-  return parts.join(' · ');
-}
-
-function getOverallStatusClass(status: TimelineOverallStatus): string {
-  if (status === 'failed') return 'bg-red-500/10 text-red-600 dark:text-red-400';
-  if (status === 'stopped') return 'bg-amber-500/10 text-amber-600 dark:text-amber-400';
-  if (status === 'running') return 'bg-blue-500/10 text-blue-600 dark:text-blue-400';
-  return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
 }
 
 function formatObject(value: unknown): string {
@@ -98,16 +57,6 @@ function cleanReasoningText(value: string): string {
     .replace(/^\s*---+\s*$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-}
-
-function extractStatusMessage(value?: string): string {
-  if (!value) return '连接模型 / 加载工具中';
-  try {
-    const parsed = JSON.parse(value) as { message?: string; title?: string };
-    return parsed.message || parsed.title || value;
-  } catch {
-    return value;
-  }
 }
 
 function summarizeToolInput(toolName: string, input: unknown, compact?: boolean): string {
@@ -137,26 +86,10 @@ function formatResultText(raw: string, compact?: boolean): string {
   return previewText(text, compact ? 180 : 360);
 }
 
-function normalizeText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function buildDependencyLabel(step: TimelineStep): string {
-  return step.dependencies.length > 0 ? '等待前置步骤完成后继续执行' : '依赖上一个操作结果继续推进';
-}
-
-function openFile(path: string): void {
-  fetch('/api/open-file', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  }).catch(() => {});
-}
-
 function DiffPreview({ change }: { change: TimelineFileChange }) {
   const [open, setOpen] = useState(false);
-  const beforeLines = useMemo(() => change.beforeText.replace(/\r\n/g, '\n').split('\n'), [change.beforeText]);
-  const afterLines = useMemo(() => change.afterText.replace(/\r\n/g, '\n').split('\n'), [change.afterText]);
+  const beforeLines = change.beforeText.replace(/\r\n/g, '\n').split('\n');
+  const afterLines = change.afterText.replace(/\r\n/g, '\n').split('\n');
   const beforePreview = open ? beforeLines : beforeLines.slice(0, 4);
   const afterPreview = open ? afterLines : afterLines.slice(0, 4);
 
@@ -289,7 +222,7 @@ function getActivityInfo(step: TimelineStep) {
   };
 }
 
-function TimelineStepCard({ step, compact, liveStatusText }: { step: TimelineStep; compact?: boolean; liveStatusText?: string }) {
+const TimelineStepCard = memo(function TimelineStepCard({ step, compact }: { step: TimelineStep; compact?: boolean }) {
   const [open, setOpen] = useState(step.status === 'running' || step.status === 'retrying');
   const activity = getActivityInfo(step);
   const reasoningText = cleanReasoningText(step.reasoning);
@@ -309,6 +242,36 @@ function TimelineStepCard({ step, compact, liveStatusText }: { step: TimelineSte
     || step.status === 'failed'
     || step.status === 'stopped',
   );
+
+  // Background run timer
+  const [showBgAction, setShowBgAction] = useState(false);
+  const startTimeRef = useRef<number>(Date.now());
+  
+  useEffect(() => {
+    if (step.status !== 'running') {
+      setShowBgAction(false);
+      return;
+    }
+    
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - startTimeRef.current;
+      if (elapsed > 20000) { // 20 seconds
+        setShowBgAction(true);
+        clearInterval(interval);
+      }
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [step.status]);
+
+  const handleBgRun = () => {
+    // This is a UI-only hint for CodePilot since our backend always runs in background.
+    // We just inform the user and hide the prompt.
+    setShowBgAction(false);
+    window.dispatchEvent(new CustomEvent('chat-status-message', { 
+      detail: { message: '任务已转入后台持续处理，你可以继续提问。' } 
+    }));
+  };
 
   return (
     <div className="relative group">
@@ -333,10 +296,10 @@ function TimelineStepCard({ step, compact, liveStatusText }: { step: TimelineSte
           )}
         </div>
 
-        <div className="flex-1 pb-4">
+        <div className="flex-1 min-w-0 pb-4">
           <div className={cn(
             "rounded-xl border border-border/30 bg-background/60 transition-all duration-300",
-            open ? "shadow-md ring-1 ring-border/20 translate-x-0.5" : "hover:bg-muted/10"
+            open ? "shadow-md ring-1 ring-border/20" : "hover:bg-muted/10"
           )}>
             <button
               type="button"
@@ -356,7 +319,25 @@ function TimelineStepCard({ step, compact, liveStatusText }: { step: TimelineSte
                 ) : (
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex flex-col min-w-0">
-                      <span className="truncate text-[13px] font-bold text-foreground/90 leading-tight">{activity.label}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-[13px] font-bold text-foreground/90 leading-tight">{activity.label}</span>
+                        {/* Whitelist badge (Trae-like) - Matches agent-tools.ts logic */}
+                        {step.status === 'running' && step.toolCalls.length > 0 && step.toolCalls.every(t => 
+                          ['Read', 'Glob', 'Grep', 'Skill', 'Agent', 'TodoWrite'].includes(t.name) || 
+                          t.name.startsWith('codepilot_') ||
+                          (t.name.startsWith('mcp__') && /read|list|get|search/i.test(t.name))
+                        ) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="flex items-center gap-0.5 rounded bg-emerald-500/10 px-1 py-0.5 text-[9px] font-bold text-emerald-600">
+                                <CheckCircle size={10} weight="bold" />
+                                <span>白名单</span>
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>此工具已在安全白名单中，自动批准执行</TooltipContent>
+                          </Tooltip>
+                        )}
+                      </div>
                       <span className="truncate text-[10px] text-muted-foreground/60 font-medium tracking-tight">{activity.subtitle}</span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -384,6 +365,17 @@ function TimelineStepCard({ step, compact, liveStatusText }: { step: TimelineSte
 
             {open && hasDetails && (
               <div className="space-y-3 border-t border-border/10 px-3 py-2.5 bg-muted/[0.03]">
+                {/* Background run hint */}
+                {showBgAction && (
+                  <div className="flex items-center justify-between rounded-lg bg-blue-500/5 p-2 border border-blue-500/10">
+                    <span className="text-[11px] text-blue-600 font-medium">任务执行较慢，是否转入后台？</span>
+                    <Button variant="outline" size="sm" onClick={handleBgRun} className="h-6 px-2 text-[10px] border-blue-200 text-blue-600 hover:bg-blue-500/10">
+                      <PushPin size={10} className="mr-1" />
+                      后台运行
+                    </Button>
+                  </div>
+                )}
+
                 {reasoningText && (
                   <div className="rounded-lg bg-muted/20 p-2.5">
                     <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-bold text-violet-500/70 uppercase tracking-wider">
@@ -442,7 +434,7 @@ function TimelineStepCard({ step, compact, liveStatusText }: { step: TimelineSte
                         onClick={() => window.dispatchEvent(new CustomEvent('chat-retry', { detail: { stepId: step.id } }))}
                         className="shrink-0 rounded-md bg-red-500/10 px-2 py-1 text-[10px] font-bold text-red-600 hover:bg-red-500/20 transition-colors flex items-center gap-1"
                       >
-                        <ClockCounterClockwise size={12} weight="bold" />
+                        <ArrowsCounterClockwise size={12} weight="bold" />
                         重试
                       </button>
                     </div>
@@ -455,13 +447,21 @@ function TimelineStepCard({ step, compact, liveStatusText }: { step: TimelineSte
       </div>
     </div>
   );
-}
+}, (prev, next) => {
+  // Custom equality check to prevent re-renders unless meaningful data changes
+  return prev.step.status === next.step.status &&
+         prev.step.output === next.step.output &&
+         prev.step.error === next.step.error &&
+         prev.step.reasoning === next.step.reasoning &&
+         prev.step.toolCalls.length === next.step.toolCalls.length &&
+         prev.step.retryCount === next.step.retryCount;
+});
 
 /**
  * 中文注释：功能名称「智能体执行时间线」，用法是在流式消息和历史消息中复用同一组件，
  * 把统一的 TimelineStep[] 渲染成步骤卡片和执行链路。
  */
-export function AgentTimeline({ steps, compact = false, liveStatusText, showSummaryCard = false, referencedFiles }: AgentTimelineProps) {
+export const AgentTimeline = memo(function AgentTimeline({ steps, compact = false }: AgentTimelineProps) {
   const visibleSteps = steps.filter((step) => {
     return step.reasoning.trim()
       || step.output.trim()
@@ -510,7 +510,6 @@ export function AgentTimeline({ steps, compact = false, liveStatusText, showSumm
                   key={step.id}
                   step={step}
                   compact={compact}
-                  liveStatusText={liveStatusText}
                 />
               ))}
             </div>
@@ -519,4 +518,7 @@ export function AgentTimeline({ steps, compact = false, liveStatusText, showSumm
       </AnimatePresence>
     </div>
   );
-}
+}, (prev, next) => {
+  return prev.steps.length === next.steps.length &&
+         prev.steps.every((s, i) => s.status === next.steps[i].status && s.reasoning === next.steps[i].reasoning);
+});

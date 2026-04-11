@@ -12,6 +12,31 @@ const PRIORITY_TO_TOAST: Record<string, ToastType> = {
 };
 
 /**
+ * Play a simple notification sound (beep) in the renderer process.
+ */
+function playNotificationSound() {
+  try {
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(880, audioContext.currentTime); // A5
+    gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.1, audioContext.currentTime + 0.05);
+    gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.3);
+
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.3);
+  } catch {
+    // Best effort — browser might block audio without user interaction
+  }
+}
+
+/**
  * Polls GET /api/tasks/notify to drain server-side notification queue
  * and display them as toasts + system notifications via Electron IPC.
  */
@@ -39,6 +64,11 @@ export function useNotificationPoll() {
         const notifications = data.notifications || [];
 
         for (const notif of notifications) {
+          // Play sound if requested
+          if (notif.sound) {
+            playNotificationSound();
+          }
+
           // In-app toast for all priorities
           showToast({
             type: PRIORITY_TO_TOAST[notif.priority] || 'info',
