@@ -327,9 +327,9 @@ ChatView.tsx (addEventListener('skill-nudge') → setSkillNudge state → 渲染
 
 | 键 | 中文 | 英文 |
 |----|------|------|
-| `skillNudge.message` | 本次工作流使用了 {step} 个步骤和 {toolCount} 种工具... | This workflow involved {step} steps across {toolCount} distinct tools... |
+| `skillNudge.message` | 本次工作流使用了 {step} 个步骤和 {toolCount} 种工具，可以保存为 Skill 以便一键复用。 | This workflow involved {step} steps across {toolCount} distinct tools. Save as a Skill for one-click replay. |
 | `skillNudge.saveButton` | 保存为 Skill | Save as Skill |
-| `skillNudge.savePrompt` | 请帮我把这次对话中的工作流程保存为一个可复用的 Skill。 | Please help me save the workflow... |
+| `skillNudge.savePrompt` | 请帮我把这次对话中的工作流程保存为一个可复用的 Skill。 | Please help me save the workflow from this conversation as a reusable Skill. |
 
 ### 关键设计决策
 
