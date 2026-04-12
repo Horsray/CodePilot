@@ -106,7 +106,8 @@ function initDb(db: Database.Database): void {
       working_directory TEXT NOT NULL DEFAULT '',
       sdk_session_id TEXT NOT NULL DEFAULT '',
       team_mode TEXT NOT NULL DEFAULT 'on' CHECK(team_mode IN ('off', 'on', 'auto')),
-      orchestration_tier TEXT NOT NULL DEFAULT 'multi' CHECK(orchestration_tier IN ('single', 'dual', 'multi'))
+      orchestration_tier TEXT NOT NULL DEFAULT 'multi' CHECK(orchestration_tier IN ('single', 'multi')),
+      orchestration_profile_id TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -422,6 +423,9 @@ function migrateDb(db: Database.Database): void {
   }
   if (!colNames.includes('orchestration_tier')) {
     safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN orchestration_tier TEXT NOT NULL DEFAULT 'single'");
+  }
+  if (!colNames.includes('orchestration_profile_id')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN orchestration_profile_id TEXT NOT NULL DEFAULT ''");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_runtime_status ON chat_sessions(runtime_status)");
 
@@ -1015,7 +1019,8 @@ export function createSession(
   providerId?: string,
   permissionProfile?: string,
   teamMode?: 'off' | 'on' | 'auto',
-  orchestrationTier?: 'single' | 'dual' | 'multi',
+  orchestrationTier?: 'single' | 'multi',
+  orchestrationProfileId?: string,
 ): ChatSession {
   const db = getDb();
   const id = crypto.randomBytes(16).toString('hex');
@@ -1025,7 +1030,7 @@ export function createSession(
 
   // 中文注释：功能名称「创建会话并持久化编排配置」，用法是在新会话创建时同时保存 team_mode 和 orchestration_tier。
   db.prepare(
-    'INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, sdk_session_id, project_name, status, mode, sdk_cwd, provider_id, permission_profile, team_mode, orchestration_tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, sdk_session_id, project_name, status, mode, sdk_cwd, provider_id, permission_profile, team_mode, orchestration_tier, orchestration_profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     id,
     title || 'New Chat',
@@ -1043,6 +1048,7 @@ export function createSession(
     permissionProfile || 'default',
     teamMode || 'on',
     orchestrationTier || 'multi',
+    orchestrationProfileId || '',
   );
 
   return getSession(id)!;
@@ -1139,9 +1145,14 @@ export function updateSessionTeamMode(id: string, mode: 'off' | 'on' | 'auto'): 
   db.prepare('UPDATE chat_sessions SET team_mode = ? WHERE id = ?').run(mode, id);
 }
 
-export function updateSessionOrchestrationTier(id: string, tier: 'single' | 'dual' | 'multi'): void {
+export function updateSessionOrchestrationTier(id: string, tier: 'single' | 'multi'): void {
   const db = getDb();
   db.prepare('UPDATE chat_sessions SET orchestration_tier = ? WHERE id = ?').run(tier, id);
+}
+
+export function updateSessionOrchestrationProfileId(id: string, profileId: string): void {
+  const db = getDb();
+  db.prepare('UPDATE chat_sessions SET orchestration_profile_id = ? WHERE id = ?').run(profileId, id);
 }
 
 /**
@@ -1291,6 +1302,101 @@ export function clearSessionMessages(sessionId: string): void {
   db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
   // Reset SDK session ID so next message starts fresh
   db.prepare('UPDATE chat_sessions SET sdk_session_id = ? WHERE id = ?').run('', sessionId);
+}
+
+// ==========================================
+// Session History Search
+// ==========================================
+
+export interface SessionSearchResult {
+  messageId: string;
+  sessionId: string;
+  sessionTitle: string;
+  role: 'user' | 'assistant';
+  createdAt: string;
+  snippet: string;
+}
+
+/**
+ * 中文注释：功能名称「历史消息搜索」。
+ * 用法：在本地消息历史中按关键字搜索，返回命中消息所属会话与片段摘要，供后续会话检索工具或 UI 复用。
+ */
+export function searchMessages(
+  query: string,
+  options: { sessionId?: string; limit?: number } = {},
+): SessionSearchResult[] {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(options.limit ?? 5, 100));
+
+  if (!query || query.trim() === '') return [];
+
+  const escapedQuery = query.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  const pattern = `%${escapedQuery}%`;
+
+  let hasAckColumn = false;
+  try {
+    const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
+    hasAckColumn = cols.some(c => c.name === 'is_heartbeat_ack');
+  } catch {
+    // ignore — assume column does not exist on older schemas
+  }
+
+  const ackFilter = hasAckColumn ? ' AND (m.is_heartbeat_ack = 0 OR m.is_heartbeat_ack IS NULL)' : '';
+
+  let sql = `
+    SELECT
+      m.id AS messageId,
+      m.session_id AS sessionId,
+      COALESCE(s.title, '(untitled)') AS sessionTitle,
+      m.role AS role,
+      m.created_at AS createdAt,
+      m.content AS content
+    FROM messages m
+    LEFT JOIN chat_sessions s ON s.id = m.session_id
+    WHERE m.content LIKE ? ESCAPE '\\'${ackFilter}
+  `;
+  const params: unknown[] = [pattern];
+
+  if (options.sessionId) {
+    sql += ' AND m.session_id = ?';
+    params.push(options.sessionId);
+  }
+
+  sql += ' ORDER BY m.created_at DESC LIMIT ?';
+  params.push(limit);
+
+  const rows = db.prepare(sql).all(...params) as Array<{
+    messageId: string;
+    sessionId: string;
+    sessionTitle: string;
+    role: 'user' | 'assistant';
+    createdAt: string;
+    content: string;
+  }>;
+
+  const lowerQuery = query.toLowerCase();
+  return rows.map((row) => ({
+    messageId: row.messageId,
+    sessionId: row.sessionId,
+    sessionTitle: row.sessionTitle,
+    role: row.role,
+    createdAt: row.createdAt,
+    snippet: buildSearchSnippet(row.content, lowerQuery),
+  }));
+}
+
+function buildSearchSnippet(content: string, lowerQuery: string): string {
+  if (!content) return '';
+  const lowerContent = content.toLowerCase();
+  const idx = lowerContent.indexOf(lowerQuery);
+  if (idx === -1) {
+    return content.length > 200 ? `${content.slice(0, 200)}…` : content;
+  }
+  const start = Math.max(0, idx - 80);
+  const end = Math.min(content.length, idx + lowerQuery.length + 120);
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < content.length ? '…' : '';
+  return prefix + content.slice(start, end) + suffix;
 }
 
 // ==========================================

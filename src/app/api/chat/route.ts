@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
   const perfTrace = createPerfTrace('chat-route', { id: traceId });
 
   try {
-    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean; team_mode?: 'off' | 'on' | 'auto'; orchestration_tier?: 'single' | 'dual' | 'multi' } = await perfTrace.measureAsync('request.parse', () => request.json());
+    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean; team_mode?: 'off' | 'on' | 'auto'; orchestration_tier?: 'single' | 'multi'; orchestration_profile_id?: string } = await perfTrace.measureAsync('request.parse', () => request.json());
     const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m, team_mode, orchestration_tier } = body;
     perfTrace.annotate('request.received', {
       contentLength: content?.length || 0,
@@ -84,7 +84,13 @@ export async function POST(request: NextRequest) {
           releaseSessionLock(session_id, lockId);
           setSessionRuntimeStatus(session_id, 'idle');
           const sseData = `data: ${JSON.stringify({ type: 'text', data: msg })}\n\ndata: ${JSON.stringify({ type: 'done' })}\n\n`;
-          return new Response(sseData, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+          return new Response(sseData, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'X-CodePilot-Trace-Id': traceId,
+            },
+          });
         }
 
         const msgData = allMsgs.map(m => ({ role: m.role, content: m.content }));
@@ -102,12 +108,24 @@ export async function POST(request: NextRequest) {
         releaseSessionLock(session_id, lockId);
         setSessionRuntimeStatus(session_id, 'idle');
         const sseData = `data: ${JSON.stringify({ type: 'text', data: msg })}\n\ndata: ${JSON.stringify({ type: 'done' })}\n\n`;
-        return new Response(sseData, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+        return new Response(sseData, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'X-CodePilot-Trace-Id': traceId,
+          },
+        });
       } catch (compactErr) {
         console.error('[chat API] /compact failed:', compactErr);
         releaseSessionLock(session_id, lockId);
         setSessionRuntimeStatus(session_id, 'idle');
-        return new Response(JSON.stringify({ error: 'Compression failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ error: 'Compression failed' }), {
+          status: 500,
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CodePilot-Trace-Id': traceId,
+          },
+        });
       }
     }
 
@@ -179,7 +197,8 @@ export async function POST(request: NextRequest) {
       const leadBinding = resolveCollaborationBinding({
         strategy,
         tier: effectiveTier,
-        role: effectiveTier === 'dual' ? 'lead' : 'architect',
+        role: 'team-leader',
+        profileId: body.orchestration_profile_id || session.orchestration_profile_id || '',
         fallbackProviderId: effectiveProviderId || undefined,
         fallbackModel: effectiveModel,
       });
@@ -301,6 +320,7 @@ export async function POST(request: NextRequest) {
     let activeSessionSummary = sessionSummaryData.summary || undefined;
     let fallbackTokenBudget: number | undefined;
     let compressionOccurred = false;
+    let compressionStats: { messagesCompressed: number; tokensSaved: number } | null = null;
 
     try {
       perfTrace.start('context.compress.check');
@@ -369,6 +389,10 @@ export async function POST(request: NextRequest) {
             );
             // Flag so we can notify frontend via a leading SSE event
             compressionOccurred = true;
+            compressionStats = {
+              messagesCompressed: result.messagesCompressed,
+              tokensSaved: result.estimatedTokensSaved,
+            };
             console.log(`[chat API] Compressed ${result.messagesCompressed} messages, saved ~${result.estimatedTokensSaved} tokens`);
           } catch (compErr) {
             console.warn('[chat API] Compression failed, proceeding without:', compErr);
@@ -426,6 +450,7 @@ export async function POST(request: NextRequest) {
       knowledgeBaseEnabled,
       teamMode: effectiveTeamMode,
       orchestrationTier: effectiveTier,
+      orchestrationProfileId: body.orchestration_profile_id || session.orchestration_profile_id || '',
     }));
 
     // Tee the stream: one for client, one for collecting the response
@@ -453,7 +478,20 @@ export async function POST(request: NextRequest) {
     const responseStream = compressionOccurred
       ? new ReadableStream<string>({
           async start(controller) {
-            controller.enqueue(`data: ${JSON.stringify({ type: 'status', data: JSON.stringify({ notification: true, message: 'context_compressed' }) })}\n\n`);
+            const msgCount = compressionStats?.messagesCompressed ?? 0;
+            const tokensSaved = compressionStats?.tokensSaved ?? 0;
+            const displayMessage = tokensSaved > 0
+              ? `上下文已压缩：总结了 ${msgCount} 条较早消息，约节省 ${Math.round(tokensSaved / 1000)}K tokens`
+              : `上下文已压缩：总结了 ${msgCount} 条较早消息`;
+            controller.enqueue(`data: ${JSON.stringify({
+              type: 'status',
+              data: JSON.stringify({
+                notification: true,
+                subtype: 'context_compressed',
+                message: displayMessage,
+                stats: compressionStats,
+              }),
+            })}\n\n`);
             const reader = streamForClient.getReader();
             try {
               while (true) {

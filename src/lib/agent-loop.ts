@@ -23,6 +23,7 @@ import { buildCoreMessages } from './message-builder';
 import { getMessages, getProvider } from './db';
 import { createPerfTrace } from './perf-trace';
 import { sendNotification } from './notification-manager';
+import { buildSkillNudgeStatusEvent, shouldSuggestSkill } from './skill-nudge';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -73,8 +74,9 @@ export interface AgentLoopOptions {
   onRuntimeStatusChange?: (status: string) => void;
   /** Team mode configuration */
   teamMode?: 'off' | 'on' | 'auto';
-  orchestrationTier?: 'single' | 'dual' | 'multi';
-  // 中文注释：当前执行角色名称，用法是在流式状态事件里标识是 lead 还是某个子 Agent。
+  orchestrationTier?: 'single' | 'multi';
+  orchestrationProfileId?: string;
+  // 中文注释：当前执行角色名称，用法是在流式状态事件里标识是 team-leader 还是某个子 Agent。
   agentName?: string;
 }
 
@@ -126,7 +128,8 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
     bypassPermissions,
     teamMode: _teamMode = 'on',
     orchestrationTier = 'multi',
-    agentName = 'lead',
+    orchestrationProfileId = '',
+    agentName = 'team-leader',
   } = options;
 
   const _unused_files = options.files;
@@ -211,6 +214,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             sessionProviderId,
             model: modelOverride || sessionModel,
             orchestrationTier,
+            orchestrationProfileId,
             permissionContext: bypassPermissions ? undefined : {
               permissionMode: (permissionMode || 'normal') as PermissionMode,
               emitSSE: (event) => {
@@ -310,6 +314,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         let step = 0;
         const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
         let lastToolNames: string[] = []; // for doom loop detection
+        const distinctTools = new Set<string>();
         let messages = historyMessages;
 
         while (step < maxSteps) {
@@ -493,6 +498,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
               case 'tool-call':
                 hasToolCalls = true;
                 stepToolNames.push(event.toolName);
+                distinctTools.add(event.toolName);
                 controller.enqueue(formatSSE({
                   type: 'tool_use',
                   data: JSON.stringify({
@@ -597,6 +603,13 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           }) as ModelMessage[];
 
           messages = [...messages, ...newMessages];
+        }
+
+        if (shouldSuggestSkill({ step, distinctTools })) {
+          controller.enqueue(formatSSE({
+            type: 'status',
+            data: JSON.stringify(buildSkillNudgeStatusEvent({ step, distinctTools })),
+          }));
         }
 
         // 6. Emit result event

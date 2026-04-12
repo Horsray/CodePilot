@@ -102,6 +102,7 @@ export function ProviderForm({
   const [headersJson, setHeadersJson] = useState("{}");
   const [envOverridesJson, setEnvOverridesJson] = useState("");
   const [roleModelsJson, setRoleModelsJson] = useState("{}");
+  const [optionsJson, setOptionsJson] = useState("{}");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -127,6 +128,7 @@ export function ProviderForm({
       setHeadersJson(provider.headers_json || "{}");
       setEnvOverridesJson(provider.env_overrides_json || "");
       setRoleModelsJson(provider.role_models_json || "{}");
+      setOptionsJson(provider.options_json || "{}");
       setNotes(provider.notes || "");
       // Show advanced if extra_env or new fields have content
       try {
@@ -134,7 +136,8 @@ export function ProviderForm({
         const hasHeaders = provider.headers_json && provider.headers_json !== "{}";
         const hasEnvOverrides = provider.env_overrides_json && provider.env_overrides_json !== "";
         const hasRoleModels = provider.role_models_json && provider.role_models_json !== "{}";
-        setShowAdvanced(Object.keys(parsed).length > 0 || !!hasHeaders || !!hasEnvOverrides || !!hasRoleModels);
+        const hasOptions = provider.options_json && provider.options_json !== "{}";
+        setShowAdvanced(Object.keys(parsed).length > 0 || !!hasHeaders || !!hasEnvOverrides || !!hasRoleModels || !!hasOptions);
       } catch {
         setShowAdvanced(true);
       }
@@ -164,6 +167,7 @@ export function ProviderForm({
       setHeadersJson("{}");
       setEnvOverridesJson("");
       setRoleModelsJson("{}");
+      setOptionsJson("{}");
       setNotes("");
       setShowAdvanced(false);
     }
@@ -196,6 +200,7 @@ export function ProviderForm({
       ["Extra environment variables", extraEnv],
       ["Headers", headersJson],
       ["Role models", roleModelsJson],
+      ["Options", optionsJson],
     ] as const) {
       if (val && val.trim()) {
         try { JSON.parse(val); } catch {
@@ -234,6 +239,7 @@ export function ProviderForm({
         headers_json: headersJson.trim() || "{}",
         env_overrides_json: envOverridesJson.trim() || "",
         role_models_json: roleModelsJson.trim() || "{}",
+        options_json: optionsJson.trim() || "{}",
         notes: notes.trim(),
       });
       onOpenChange(false);
@@ -432,6 +438,20 @@ export function ProviderForm({
                   placeholder='{"default": "sonnet", "reasoning": "opus", "small": "haiku"}'
                   value={roleModelsJson}
                   onChange={(e) => setRoleModelsJson(e.target.value)}
+                  className="font-mono text-sm min-h-[60px]"
+                  rows={2}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="provider-options-json" className="text-xs text-muted-foreground">
+                  Options (JSON)
+                </Label>
+                <Textarea
+                  id="provider-options-json"
+                  placeholder='{"thinking_mode": "adaptive"}'
+                  value={optionsJson}
+                  onChange={(e) => setOptionsJson(e.target.value)}
                   className="font-mono text-sm min-h-[60px]"
                   rows={2}
                 />

@@ -5,8 +5,9 @@
  * messages into a summary stored in the session. Subsequent fallback contexts
  * use "summary + recent messages" instead of raw full history.
  *
- * Uses the same lightweight LLM call pattern as memory-extractor.ts:
- * generateTextFromProvider + resolveProvider({ useCase: 'small' }).
+ * Uses the same lightweight LLM call pattern as memory-extractor.ts,
+ * but routes compression through the auxiliary-model chain so it can
+ * prefer cheaper/smaller models across providers when available.
  */
 
 import { roughTokenEstimate } from './context-estimator';
@@ -84,12 +85,12 @@ export async function compressConversation(params: CompressParams): Promise<Comp
 
   try {
     const { generateTextViaSdk } = await import('./claude-client');
-    const { resolveProvider } = await import('./provider-resolver');
+    const { resolveAuxiliaryModel } = await import('./provider-resolver');
     const { normalizeMessageContent } = await import('./message-normalizer');
 
-    // Resolve model via provider-aware chain: roleModels.small → catalog upstreamModelId → fallback
-    const resolved = resolveProvider({ useCase: 'small', providerId, sessionModel });
-    const effectiveModel = resolved.upstreamModel || resolved.model || sessionModel || 'haiku';
+    // 中文注释：功能名称「压缩辅助模型选择」，用法是在上下文压缩时优先使用辅助路由选出的轻量模型，而不是总落到主模型。
+    const auxiliary = resolveAuxiliaryModel('compact', { providerId, sessionModel });
+    const effectiveModel = auxiliary.modelId || sessionModel || 'haiku';
 
     // Clean messages before summarizing: strip file metadata, extract tool summaries
     const formatted = messages.map(m => {
@@ -120,7 +121,7 @@ Summary:`;
     // SDK subprocess for transport (compatible with third-party proxies),
     // but model selected via provider resolver (respects roleModels.small + upstreamModelId).
     const result = await generateTextViaSdk({
-      providerId: providerId || undefined,
+      providerId: auxiliary.providerId === 'env' ? undefined : auxiliary.providerId,
       model: effectiveModel,
       system,
       prompt,

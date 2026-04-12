@@ -60,7 +60,9 @@ export function UnifiedTopBar() {
   }, [isAssistantWorkspace]);
   const pathname = usePathname();
 
-  const isChatRoute = pathname.startsWith("/chat");
+  // 中文注释：功能名称「聊天详情顶栏显示判定」。
+  // 用法：沿用官方仅在真正聊天详情页显示顶栏的交互，同时保留当前分支在工作区标签页打开时仍需显示顶栏的能力。
+  const isChatRoute = pathname.startsWith("/chat/") || workspaceTabs.length > 0;
 
   // --- Title editing ---
   const [isEditingTitle, setIsEditingTitle] = useState(false);

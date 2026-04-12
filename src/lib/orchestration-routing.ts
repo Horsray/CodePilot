@@ -4,11 +4,11 @@
  * Shared routing helpers for Team Mode orchestration.
  */
 
-export type OrchestrationTier = 'single' | 'dual' | 'multi';
+export type OrchestrationTier = 'single' | 'multi';
 
 /**
  * 中文注释：功能名称「按协作层级解析角色模型」。
- * 用法：single 返回当前会话模型，dual/multi 返回用于 role mapping 的语义别名（opus/sonnet/haiku）或本地验证模型。
+ * 用法：single 返回当前会话模型，多模型返回用于角色映射的语义别名槽位。
  */
 export function resolveAgentModelForTier(
   agentId: string,
@@ -17,20 +17,23 @@ export function resolveAgentModelForTier(
 ): { model?: string } {
   if (tier === 'single') return { model: parentModel };
 
-  if (tier === 'dual') {
-    if (agentId === 'verifier') return { model: 'Qwen3.5-35B-A3B-8bit' };
-    return { model: 'opus' };
-  }
-
   if (tier === 'multi') {
     switch (agentId) {
-      case 'architect':
+      case 'team-leader':
         return { model: 'opus' };
-      case 'researcher':
+      case 'knowledge-searcher':
+      case 'search':
+      case 'explore':
         return { model: 'haiku' };
-      case 'verifier':
+      case 'vision-understanding':
+      case 'vision':
+        return { model: 'vision' };
+      case 'expert-consultant':
+      case 'expert':
+        return { model: 'opus' };
+      case 'quality-inspector':
         return { model: 'Qwen3.5-35B-A3B-8bit' };
-      case 'executor':
+      case 'worker-executor':
       case 'general':
       default:
         return { model: 'sonnet' };
@@ -39,4 +42,3 @@ export function resolveAgentModelForTier(
 
   return { model: parentModel };
 }
-

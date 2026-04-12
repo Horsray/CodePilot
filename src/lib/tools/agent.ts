@@ -10,10 +10,10 @@ import { z } from 'zod';
 import { getAgent, getSubAgents } from '../agent-registry';
 import { runAgentLoop } from '../agent-loop';
 import { assembleTools } from '../agent-tools';
-import { findProviderIdByModel, getProviderOptions } from '../db';
+import { findProviderIdByModel, getProvider, getProviderOptions } from '../db';
 import type { SSEEvent } from '@/types';
 import { resolveAgentModelForTier } from '../orchestration-routing';
-import { resolveCollaborationBinding } from '../collaboration-strategy';
+import { getCollaborationProfileLabel, resolveCollaborationBinding } from '../collaboration-strategy';
 
 export interface AgentToolOptions {
   workingDirectory: string;
@@ -25,8 +25,9 @@ export interface AgentToolOptions {
   permissionMode?: string;
   /** Parent session ID — sub-agent inherits permission context */
   parentSessionId?: string;
-  /** Orchestration tier (single/dual/multi) */
-  orchestrationTier?: 'single' | 'dual' | 'multi';
+  /** Orchestration tier (single/multi) */
+  orchestrationTier?: 'single' | 'multi';
+  orchestrationProfileId?: string;
   /** Callback to forward SSE events to the parent stream */
   emitSSE?: (event: SSEEvent) => void;
   /** Abort signal from parent */
@@ -58,19 +59,12 @@ export function createAgentTool(ctx: AgentToolOptions) {
       // Use agent's model or resolve based on tier
       const fallback = resolveAgentModelForTier(agentId || 'general', ctx.orchestrationTier || 'single', ctx.parentModel);
       const strategy = getProviderOptions('__global__').collaboration_strategy;
-      const role = (ctx.orchestrationTier || 'single') === 'dual'
-        ? ((agentId || 'general') === 'verifier' ? 'verifier' : 'lead')
-        : ((agentId || 'general') === 'researcher'
-          ? 'researcher'
-          : (agentId || 'general') === 'architect'
-            ? 'architect'
-            : (agentId || 'general') === 'verifier'
-              ? 'verifier'
-              : 'executor');
+      const role = resolveSubAgentRole(agentId || 'general', ctx.orchestrationTier || 'single');
       const binding = resolveCollaborationBinding({
         strategy,
         tier: ctx.orchestrationTier || 'single',
         role,
+        profileId: ctx.orchestrationProfileId,
         fallbackProviderId: ctx.providerId || ctx.sessionProviderId,
         fallbackModel: fallback.model || agentDef.model || ctx.parentModel,
       });
@@ -81,6 +75,8 @@ export function createAgentTool(ctx: AgentToolOptions) {
         const specializedProviderId = findProviderIdByModel(model);
         if (specializedProviderId) providerId = specializedProviderId;
       }
+      const providerName = providerId ? (getProvider(providerId)?.name || providerId) : undefined;
+      const profileName = getCollaborationProfileLabel(strategy, ctx.orchestrationProfileId);
 
       // Build restricted tool set — inherit permission context from parent
       const permissionContext = (ctx.parentSessionId && ctx.emitSSE && ctx.permissionMode)
@@ -97,6 +93,7 @@ export function createAgentTool(ctx: AgentToolOptions) {
         sessionProviderId: providerId,
         model: model,
         orchestrationTier: ctx.orchestrationTier,
+        orchestrationProfileId: ctx.orchestrationProfileId,
         permissionContext,
       });
       const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
@@ -112,10 +109,13 @@ export function createAgentTool(ctx: AgentToolOptions) {
         ctx.emitSSE({
           type: 'status',
           data: JSON.stringify({
-            message: `Sub-agent ${agentId || 'general'} is working...`,
-            agent: agentId || 'general',
+            message: `Sub-agent ${(agentId || 'general')} -> ${role} is working...`,
+            agent: role,
+            requestedAgent: agentId || 'general',
             model,
             providerId,
+            providerName,
+            orchestrationProfileName: profileName,
           }),
         });
       }
@@ -125,7 +125,7 @@ export function createAgentTool(ctx: AgentToolOptions) {
         providerId: providerId,
         sessionProviderId: providerId,
         model,
-        agentName: agentId || 'general',
+        agentName: role,
         systemPrompt,
         workingDirectory: ctx.workingDirectory,
         tools: subTools,
@@ -202,4 +202,29 @@ function filterTools(
   }
 
   return allTools;
+}
+
+function resolveSubAgentRole(
+  agentId: string,
+  tier: 'single' | 'multi',
+): import('@/types').CollaborationRole {
+  const normalized = agentId.toLowerCase();
+
+  if (tier === 'single') return 'team-leader';
+  if (normalized === 'explore' || normalized === 'researcher' || normalized === 'knowledge-searcher' || normalized === 'search') {
+    return 'knowledge-searcher';
+  }
+  if (normalized === 'vision' || normalized === 'vision-understanding' || normalized === 'vlm') {
+    return 'vision-understanding';
+  }
+  if (normalized === 'expert' || normalized === 'expert-consultant' || normalized === 'consultant') {
+    return 'expert-consultant';
+  }
+  if (normalized === 'verifier' || normalized === 'quality-inspector') {
+    return 'quality-inspector';
+  }
+  if (normalized === 'executor' || normalized === 'worker-executor' || normalized === 'general') {
+    return 'worker-executor';
+  }
+  return 'team-leader';
 }

@@ -68,12 +68,26 @@ function cleanReasoningText(value: string): string {
 function summarizeToolInput(toolName: string, input: unknown, compact?: boolean): string {
   if (!input || typeof input !== 'object') return previewText(formatObject(input), compact ? 60 : 120);
   const data = input as Record<string, unknown>;
+  if (toolName === 'Agent') {
+    const agent = typeof data.agent === 'string' ? data.agent : 'general';
+    const prompt = typeof data.prompt === 'string' ? data.prompt : '';
+    const inline = `${agent}: ${prompt}`.trim();
+    return previewText(inline, compact ? 120 : 240);
+  }
   const command = typeof data.command === 'string' ? data.command : '';
   const path = typeof data.path === 'string' ? data.path : typeof data.file_path === 'string' ? data.file_path : '';
   const pattern = typeof data.pattern === 'string' ? data.pattern : '';
   const query = typeof data.query === 'string' ? data.query : '';
   const inline = command || path || pattern || query || formatObject(input);
   return previewText(inline, compact ? 72 : 140);
+}
+
+function renderAgentToolInput(input: unknown): { agent: string; prompt: string } | null {
+  if (!input || typeof input !== 'object') return null;
+  const data = input as Record<string, unknown>;
+  const agent = typeof data.agent === 'string' ? data.agent : 'general';
+  const prompt = typeof data.prompt === 'string' ? data.prompt : '';
+  return { agent, prompt };
 }
 
 function formatResultText(raw: string, compact?: boolean): string {
@@ -436,14 +450,26 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, sessionId, compa
                   </div>
                 )}
 
-                {(step.agent || step.providerName || step.model) && (
+                {(step.requestedAgent || step.agent || step.providerName || step.model || step.orchestrationProfileName) && (
                   <div className="rounded-lg border border-border/20 bg-background/40 p-2.5">
                     <div className="mb-1.5 text-[11px] font-bold text-foreground/60 uppercase tracking-wider">实际命中</div>
                     <div className="flex flex-wrap gap-2">
+                      {step.requestedAgent && (
+                        <div className="rounded-md border border-violet-500/10 bg-violet-500/5 px-2 py-1 text-[11px]">
+                          <span className="text-muted-foreground/70">Requested: </span>
+                          <span className="font-mono text-violet-600">{step.requestedAgent}</span>
+                        </div>
+                      )}
                       {step.agent && (
                         <div className="rounded-md border border-blue-500/10 bg-blue-500/5 px-2 py-1 text-[11px]">
-                          <span className="text-muted-foreground/70">Agent: </span>
+                          <span className="text-muted-foreground/70">Resolved: </span>
                           <span className="font-mono text-blue-600">{step.agent}</span>
+                        </div>
+                      )}
+                      {step.orchestrationProfileName && (
+                        <div className="rounded-md border border-amber-500/10 bg-amber-500/5 px-2 py-1 text-[11px]">
+                          <span className="text-muted-foreground/70">Profile: </span>
+                          <span className="font-mono text-amber-600">{step.orchestrationProfileName}</span>
                         </div>
                       )}
                       {step.providerName && (
@@ -466,6 +492,10 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, sessionId, compa
                   <div className="space-y-2">
                     {step.toolCalls.map((tool) => (
                       <div key={tool.id} className="rounded-lg border border-border/20 bg-background/40 overflow-hidden">
+                        {(() => {
+                          const agentInput = tool.name === 'Agent' ? renderAgentToolInput(tool.input) : null;
+                          return (
+                            <>
                         <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-muted/10">
                           <div className="flex items-center gap-2 overflow-hidden">
                             <Gear size={12} weight="bold" className="text-primary/60 shrink-0" />
@@ -474,9 +504,21 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, sessionId, compa
                             </span>
                           </div>
                           {tool.status !== 'completed' && (
-                            <span className="text-[10px] text-muted-foreground/50 italic">{tool.status === 'running' ? '运行中...' : '失败'}</span>
+                            <span className="text-[10px] text-muted-foreground/50 italic">{tool.status === 'running' ? (tool.name === 'Agent' ? '子 Agent 执行中...' : '运行中...') : '失败'}</span>
                           )}
                         </div>
+                        {agentInput && (
+                          <div className="border-t border-border/10 bg-background/30 px-2.5 py-2 space-y-1.5">
+                            <div className="text-[10px] text-muted-foreground/70">
+                              <span className="font-semibold">目标 Agent:</span> <span className="font-mono">{agentInput.agent}</span>
+                            </div>
+                            {agentInput.prompt && (
+                              <pre className="whitespace-pre-wrap break-words text-[11px] leading-5 text-foreground/75 font-mono">
+                                {agentInput.prompt}
+                              </pre>
+                            )}
+                          </div>
+                        )}
                         {tool.result && (
                           <div className="p-2 overflow-x-auto">
                             <pre className={cn(
@@ -487,6 +529,9 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, sessionId, compa
                             </pre>
                           </div>
                         )}
+                            </>
+                          );
+                        })()}
                       </div>
                     ))}
                   </div>

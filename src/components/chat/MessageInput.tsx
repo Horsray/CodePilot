@@ -38,6 +38,7 @@ import { useCliToolsFetch } from '@/hooks/useCliToolsFetch';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { resolveKeyAction, cycleIndex, resolveDirectSlash, dispatchBadge, buildCliAppend } from '@/lib/message-input-logic';
 import { QuickActions } from './QuickActions';
+import { ensureCollaborationStrategyShape, getCollaborationProfileLabel } from '@/lib/collaboration-strategy';
 
 interface MessageInputProps {
   onSend: (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => void;
@@ -64,6 +65,8 @@ interface MessageInputProps {
   /** Orchestration tier selection */
   orchestrationTier?: OrchestrationTier;
   onOrchestrationTierChange?: (tier: OrchestrationTier) => void;
+  orchestrationProfileId?: string;
+  onOrchestrationProfileChange?: (profileId: string) => void;
   /** SDK init metadata — when available, used to validate command/skill availability */
   sdkInitMeta?: { tools?: unknown; slash_commands?: unknown; skills?: unknown } | null;
   /** Initial value to prefill in the input */
@@ -95,6 +98,8 @@ export function MessageInput({
   onTeamModeChange,
   orchestrationTier = 'multi',
   onOrchestrationTierChange,
+  orchestrationProfileId,
+  onOrchestrationProfileChange,
   sdkInitMeta,
   initialValue,
   isAssistantProject,
@@ -118,6 +123,10 @@ export function MessageInput({
     () => providerRecords.find((provider) => provider.id === currentProviderIdValue || provider.id === providerId) || null,
     [providerId, providerRecords, currentProviderIdValue],
   );
+  const collaborationProfiles = useMemo(
+    () => ensureCollaborationStrategyShape(collaborationStrategy || undefined).profiles,
+    [collaborationStrategy],
+  );
   const collaborationSummary = useMemo(() => {
     const currentLabel = currentProvider?.name ? `${currentProvider.name} / ${modelName || currentModelOption?.value || '未选择'}` : (modelName || currentModelOption?.value || '未选择');
     const format = (model?: string) => model || '未配置';
@@ -126,19 +135,21 @@ export function MessageInput({
     if (orchestrationTier === 'single') {
       return [{ role: '单模型', model: modelName || currentModelOption?.value || currentLabel }];
     }
-    if (orchestrationTier === 'dual') {
-      return [
-        { role: '主执行', model: format(collaborationStrategy?.dual?.lead?.model) },
-        { role: '验证者', model: format(collaborationStrategy?.dual?.verifier?.model) },
-      ];
-    }
+    const strategy = ensureCollaborationStrategyShape(collaborationStrategy || undefined);
+    const activeProfile =
+      strategy.profiles.find((profile) => profile.id === orchestrationProfileId) ||
+      strategy.profiles.find((profile) => profile.id === strategy.defaultProfileId) ||
+      strategy.profiles[0];
     return [
-      { role: '研究员', model: format(collaborationStrategy?.multi?.researcher?.model) },
-      { role: '架构师', model: format(collaborationStrategy?.multi?.architect?.model) },
-      { role: '执行者', model: format(collaborationStrategy?.multi?.executor?.model) },
-      { role: '验证者', model: format(collaborationStrategy?.multi?.verifier?.model) },
+      { role: `多模型-${getCollaborationProfileLabel(collaborationStrategy || undefined, orchestrationProfileId)}`, model: '' },
+      { role: '总指挥', model: format(activeProfile?.roles?.['team-leader']?.model) },
+      { role: '知识检索', model: format(activeProfile?.roles?.['knowledge-searcher']?.model) },
+      { role: '视觉理解', model: format(activeProfile?.roles?.['vision-understanding']?.model) },
+      { role: '工作执行', model: format(activeProfile?.roles?.['worker-executor']?.model) },
+      { role: '质量检验', model: format(activeProfile?.roles?.['quality-inspector']?.model) },
+      { role: '专家顾问', model: format(activeProfile?.roles?.['expert-consultant']?.model) },
     ];
-  }, [collaborationStrategy, currentModelOption?.value, currentProvider, modelName, orchestrationTier, teamMode]);
+  }, [collaborationStrategy, currentModelOption?.value, currentProvider, modelName, orchestrationProfileId, orchestrationTier, teamMode]);
 
   // Auto-correct model when it doesn't exist in the current provider's model list.
   // This prevents sending an unsupported model name (e.g. 'opus' to MiniMax which only has 'sonnet').
@@ -182,6 +193,12 @@ export function MessageInput({
       window.removeEventListener('provider-changed', handler);
     };
   }, []);
+
+  useEffect(() => {
+    if (teamMode === 'off' || orchestrationTier !== 'multi') return;
+    if (orchestrationProfileId || collaborationProfiles.length === 0) return;
+    onOrchestrationProfileChange?.(collaborationProfiles[0].id);
+  }, [collaborationProfiles, onOrchestrationProfileChange, orchestrationProfileId, orchestrationTier, teamMode]);
 
   const { badge, setBadge, cliBadge, setCliBadge, removeBadge, removeCliBadge, hasBadge } = useCommandBadge(textareaRef);
 
@@ -528,6 +545,9 @@ export function MessageInput({
                 <OrchestrationTierSelector
                   value={orchestrationTier}
                   onChange={(v) => onOrchestrationTierChange?.(v)}
+                  profiles={collaborationProfiles.map((profile) => ({ id: profile.id, name: profile.name }))}
+                  profileId={orchestrationProfileId}
+                  onProfileChange={(value) => onOrchestrationProfileChange?.(value)}
                 />
 
                 {/* Model selector */}
@@ -568,7 +588,7 @@ export function MessageInput({
       {teamMode !== 'off' && (
         <div className="mx-auto mt-2 flex flex-wrap items-center gap-2 px-1">
           <Badge variant="outline" className="text-[10px]">
-            {`Team ${teamMode} / ${orchestrationTier}`}
+            {`Team ${teamMode} / ${orchestrationTier === 'multi' ? `多模型-${getCollaborationProfileLabel(collaborationStrategy || undefined, orchestrationProfileId)}` : 'single'}`}
           </Badge>
           {currentProvider && (
             <Badge variant="secondary" className="text-[10px]">

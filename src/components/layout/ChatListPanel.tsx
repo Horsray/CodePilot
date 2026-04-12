@@ -60,6 +60,15 @@ interface ChatListPanelProps {
   readyToInstall?: boolean;
 }
 
+interface SessionSearchResult {
+  messageId: string;
+  sessionId: string;
+  sessionTitle: string;
+  role: 'user' | 'assistant';
+  createdAt: string;
+  snippet: string;
+}
+
 
 export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatListPanelProps) {
   const pathname = usePathname();
@@ -84,6 +93,8 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
   const [deletingSession, setDeletingSession] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchDialogOpen, setSearchDialogOpen] = useState(false);
+  const [messageSearchResults, setMessageSearchResults] = useState<SessionSearchResult[]>([]);
+  const [messageSearchLoading, setMessageSearchLoading] = useState(false);
   const [expandedSessionGroups, setExpandedSessionGroups] = useState<Set<string>>(new Set());
   const SESSION_TRUNCATE_LIMIT = 10;
   // importDialogOpen removed — Import CLI moved to Settings
@@ -413,6 +424,38 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     }
     return result;
   }, [sessions, searchQuery, isSplitActive, splitSessionIds]);
+
+  useEffect(() => {
+    if (!searchDialogOpen || searchQuery.trim().length < 2) {
+      setMessageSearchResults([]);
+      setMessageSearchLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setMessageSearchLoading(true);
+      try {
+        const res = await fetch(`/api/chat/search?q=${encodeURIComponent(searchQuery.trim())}&limit=10`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error('search failed');
+        const data = await res.json();
+        setMessageSearchResults(Array.isArray(data.results) ? data.results : []);
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          setMessageSearchResults([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) setMessageSearchLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [searchDialogOpen, searchQuery]);
 
   const projectGroups = useMemo(() => {
     const groups = groupSessionsByProject(filteredSessions);
@@ -769,7 +812,14 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       </div>
 
       {/* Search Dialog */}
-      <Dialog open={searchDialogOpen} onOpenChange={(open) => { setSearchDialogOpen(open); if (!open) setSearchQuery(""); }}>
+      <Dialog open={searchDialogOpen} onOpenChange={(open) => {
+        setSearchDialogOpen(open);
+        if (!open) {
+          setSearchQuery("");
+          setMessageSearchResults([]);
+          setMessageSearchLoading(false);
+        }
+      }}>
         <DialogContent className="sm:max-w-md p-0 max-h-[60vh] flex flex-col overflow-hidden" showCloseButton={false}>
           <div className="p-3 shrink-0">
             <div className="relative">
@@ -788,33 +838,68 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
           </div>
           {searchQuery && (
             <div className="overflow-y-auto px-3 pb-3 flex-1 min-h-0">
-              {filteredSessions.length === 0 ? (
+              {filteredSessions.length === 0 && !messageSearchLoading && messageSearchResults.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-3 text-center">
                   {t('chatList.noSessions')}
                 </p>
               ) : (
-                <div className="flex flex-col gap-0.5">
-                  {filteredSessions.slice(0, 20).map((session) => (
-                    <button
-                      key={session.id}
-                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent transition-colors"
-                      onClick={() => {
-                        router.push(`/chat/${session.id}`);
-                        setSearchDialogOpen(false);
-                        setSearchQuery("");
-                      }}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="truncate text-sm">{session.title}</p>
-                        {session.project_name && (
-                          <p className="truncate text-xs text-muted-foreground">{session.project_name}</p>
-                        )}
+                <div className="flex flex-col gap-3">
+                  {filteredSessions.length > 0 && (
+                    <div className="flex flex-col gap-0.5">
+                      {filteredSessions.slice(0, 20).map((session) => (
+                        <button
+                          key={session.id}
+                          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent transition-colors"
+                          onClick={() => {
+                            router.push(`/chat/${session.id}`);
+                            setSearchDialogOpen(false);
+                            setSearchQuery("");
+                          }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="truncate text-sm">{session.title}</p>
+                            {session.project_name && (
+                              <p className="truncate text-xs text-muted-foreground">{session.project_name}</p>
+                            )}
+                          </div>
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {formatRelativeTime(session.updated_at, t)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {searchQuery.trim().length >= 2 && (
+                    <div className="space-y-2">
+                      <div className="px-2 text-[11px] font-medium text-muted-foreground">
+                        {messageSearchLoading ? t('chatList.searchingMessages') : t('chatList.messageMatches')}
                       </div>
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {formatRelativeTime(session.updated_at, t)}
-                      </span>
-                    </button>
-                  ))}
+                      {!messageSearchLoading && messageSearchResults.length > 0 && (
+                        <div className="flex flex-col gap-1">
+                          {messageSearchResults.map((item) => (
+                            <button
+                              key={`${item.sessionId}-${item.messageId}`}
+                              className="rounded-md border border-border/40 px-2 py-2 text-left hover:bg-accent transition-colors"
+                              onClick={() => {
+                                router.push(`/chat/${item.sessionId}`);
+                                setSearchDialogOpen(false);
+                                setSearchQuery("");
+                              }}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-sm font-medium">{item.sessionTitle}</p>
+                                <span className="shrink-0 text-[11px] text-muted-foreground">
+                                  {formatRelativeTime(item.createdAt, t)}
+                                </span>
+                              </div>
+                              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.snippet}</p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

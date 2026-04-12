@@ -10,14 +10,23 @@ import {
   CommandListItem,
 } from '@/components/patterns';
 
-export type OrchestrationTier = 'single' | 'dual' | 'multi';
+export type OrchestrationTier = 'single' | 'multi';
 
 interface OrchestrationTierSelectorProps {
   value: OrchestrationTier;
   onChange: (tier: OrchestrationTier) => void;
+  profiles?: Array<{ id: string; name: string }>;
+  profileId?: string;
+  onProfileChange?: (profileId: string) => void;
 }
 
-export function OrchestrationTierSelector({ value, onChange }: OrchestrationTierSelectorProps) {
+export function OrchestrationTierSelector({
+  value,
+  onChange,
+  profiles = [],
+  profileId,
+  onProfileChange,
+}: OrchestrationTierSelectorProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
 
@@ -45,18 +54,17 @@ export function OrchestrationTierSelector({ value, onChange }: OrchestrationTier
       description: '所有角色共用当前选择的主模型' 
     },
     { 
-      value: 'dual', 
-      label: '双模型 (Dual)', 
-      description: '主模型用 MiniMax，验证者用本地 Qwen' 
-    },
-    { 
       value: 'multi', 
       label: '多模型 (Multi)', 
-      description: '架构师 Opus，执行者 MiniMax，验证者 Qwen' 
+      description: '总指挥按任务类型调度知识检索、视觉理解、执行和质检角色' 
     },
   ];
 
   const currentOption = options.find(o => o.value === value) || options[0];
+  const activeProfile = profiles.find((profile) => profile.id === profileId) || profiles[0];
+  const buttonLabel = value === 'multi' && activeProfile
+    ? `Tier: 多模型-${activeProfile.name}`
+    : `Tier: ${currentOption.label.split(' ')[0]}`;
 
   return (
     <div className="relative" ref={menuRef}>
@@ -65,7 +73,7 @@ export function OrchestrationTierSelector({ value, onChange }: OrchestrationTier
         className={cn(value !== 'single' && "text-primary bg-primary/5 border-primary/20")}
       >
         <Layout size={14} className={cn(value !== 'single' && "text-primary")} />
-        <span className="text-xs font-medium ml-1">Tier: {currentOption.label.split(' ')[0]}</span>
+        <span className="text-xs font-medium ml-1">{buttonLabel}</span>
         <CaretDown size={10} className={cn("transition-transform duration-200 ml-0.5", open && "rotate-180")} />
       </PromptInputButton>
 
@@ -89,6 +97,30 @@ export function OrchestrationTierSelector({ value, onChange }: OrchestrationTier
                   </span>
                 </CommandListItem>
               ))}
+
+              {value === 'multi' && profiles.length > 0 && (
+                <>
+                  <div className="px-2 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                    多模型配置
+                  </div>
+                  {profiles.map((profile) => (
+                    <CommandListItem
+                      key={profile.id}
+                      active={profile.id === activeProfile?.id}
+                      onClick={() => {
+                        onProfileChange?.(profile.id);
+                        setOpen(false);
+                      }}
+                      className="py-2"
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs font-bold">{`多模型-${profile.name}`}</span>
+                        {profile.id === activeProfile?.id && <span className="text-xs text-primary">&#10003;</span>}
+                      </div>
+                    </CommandListItem>
+                  ))}
+                </>
+              )}
             </div>
           </CommandListItems>
         </CommandList>
@@ -97,7 +129,6 @@ export function OrchestrationTierSelector({ value, onChange }: OrchestrationTier
   );
 }
 
-// 中文注释：模型协同等级选择器。允许用户切换单模型、双模型或多模型协同策略。
+// 中文注释：模型协同等级选择器。允许用户切换单模型或多模型协同策略。
 // 单模型：全部使用主模型。
-// 双模型：MiniMax + 本地 Qwen。
-// 多模型：Opus + MiniMax + Qwen。
+// 多模型：由总指挥编排多个专门角色。

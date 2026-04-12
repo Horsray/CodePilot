@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
       body.permission_profile,
       body.team_mode,
       body.orchestration_tier,
+      body.orchestration_profile_id,
     );
     const response: SessionResponse = { session };
     return Response.json(response, { status: 201 });

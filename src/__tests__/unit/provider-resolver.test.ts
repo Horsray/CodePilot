@@ -152,6 +152,11 @@ describe('Provider Catalog', () => {
       assert.equal(inferProtocolFromLegacy('custom', 'https://my-server.example.com/v1'), 'anthropic');
     });
 
+    it('custom type + oLMX localhost url → anthropic protocol', () => {
+      assert.equal(inferProtocolFromLegacy('custom', 'http://127.0.0.1:8000'), 'anthropic');
+      assert.equal(inferProtocolFromLegacy('custom', 'http://127.0.0.1:8000/v1'), 'anthropic');
+    });
+
     it('custom type + URL containing /anthropic → anthropic protocol', () => {
       assert.equal(inferProtocolFromLegacy('custom', 'https://proxy.example.com/anthropic'), 'anthropic');
     });
@@ -214,6 +219,13 @@ describe('Provider Catalog', () => {
       const models = getDefaultModelsForProvider('openai-compatible', 'https://example.com/v1');
       assert.equal(models.length, 0);
     });
+
+    it('oLMX localhost root and /v1 urls resolve to oLMX default models', () => {
+      const rootModels = getDefaultModelsForProvider('anthropic', 'http://127.0.0.1:8000');
+      const v1Models = getDefaultModelsForProvider('anthropic', 'http://127.0.0.1:8000/v1');
+      assert.ok(rootModels.some(m => m.modelId === 'Qwen3.5-35B-A3B-8bit'));
+      assert.ok(v1Models.some(m => m.modelId === 'Qwen3.5-35B-A3B-8bit'));
+    });
   });
 
   describe('findPresetForLegacy', () => {
@@ -240,12 +252,21 @@ describe('Provider Catalog', () => {
       assert.ok(preset);
       assert.equal(preset.key, 'anthropic-official');
     });
+
+    it('finds oLMX preset by localhost root and /v1 urls', () => {
+      const rootPreset = findPresetForLegacy('http://127.0.0.1:8000', 'custom');
+      const v1Preset = findPresetForLegacy('http://127.0.0.1:8000/v1', 'custom');
+      assert.ok(rootPreset);
+      assert.ok(v1Preset);
+      assert.equal(rootPreset?.key, 'olmx');
+      assert.equal(v1Preset?.key, 'olmx');
+    });
   });
 });
 
 // ── Provider Resolver Tests ─────────────────────────────────────
 
-import { resolveProvider, toClaudeCodeEnv, toAiSdkConfig } from '../../lib/provider-resolver';
+import { resolveProvider, toClaudeCodeEnv, toAiSdkConfig, routeAuxiliaryModel } from '../../lib/provider-resolver';
 import type { ResolvedProvider } from '../../lib/provider-resolver';
 
 describe('Provider Resolver', () => {
@@ -262,6 +283,111 @@ describe('Provider Resolver', () => {
       const resolved = resolveProvider({});
       // provider may be undefined or the default — depends on DB state
       assert.equal(resolved.protocol, 'anthropic');
+    });
+  });
+
+  describe('routeAuxiliaryModel', () => {
+    const baseMain: ResolvedProvider = {
+      provider: {
+        id: 'main-provider',
+        name: 'Main',
+        provider_type: 'anthropic',
+        protocol: 'anthropic',
+        base_url: 'https://api.example.com',
+        api_key: 'key',
+        is_active: 1,
+        sort_order: 0,
+        extra_env: '{}',
+        headers_json: '{}',
+        env_overrides_json: '',
+        role_models_json: '{}',
+        notes: '',
+        created_at: '',
+        updated_at: '',
+        options_json: '{}',
+      },
+      protocol: 'anthropic',
+      authStyle: 'api_key',
+      model: 'sonnet',
+      modelDisplayName: 'Sonnet',
+      upstreamModel: 'sonnet',
+      headers: {},
+      envOverrides: {},
+      roleModels: {},
+      hasCredentials: true,
+      availableModels: [],
+      settingSources: ['project', 'local'],
+    };
+
+    it('prefers explicit env override first', () => {
+      const resolved = routeAuxiliaryModel('compact', {
+        main: {
+          ...baseMain,
+          roleModels: { small: 'main-small', haiku: 'main-haiku' },
+        },
+        isMainSdkProxyOnly: false,
+        others: [],
+        envOverride: {
+          providerId: 'override-provider',
+          modelId: 'override-model',
+        },
+      });
+
+      assert.deepEqual(resolved, {
+        providerId: 'override-provider',
+        modelId: 'override-model',
+        source: 'env_override',
+      });
+    });
+
+    it('prefers main provider small model before other fallbacks', () => {
+      const resolved = routeAuxiliaryModel('compact', {
+        main: {
+          ...baseMain,
+          roleModels: { small: 'main-small', haiku: 'main-haiku' },
+        },
+        isMainSdkProxyOnly: false,
+        others: [
+          { id: 'other-provider', roleModels: { small: 'other-small' }, isSdkProxyOnly: false },
+        ],
+      });
+
+      assert.equal(resolved.providerId, 'main-provider');
+      assert.equal(resolved.modelId, 'main-small');
+      assert.equal(resolved.source, 'main_small');
+    });
+
+    it('falls back to another provider small model when main is sdk-proxy-only', () => {
+      const resolved = routeAuxiliaryModel('compact', {
+        main: {
+          ...baseMain,
+          roleModels: { small: 'main-small', haiku: 'main-haiku' },
+        },
+        isMainSdkProxyOnly: true,
+        others: [
+          { id: 'other-provider', roleModels: { small: 'other-small' }, isSdkProxyOnly: false },
+        ],
+      });
+
+      assert.equal(resolved.providerId, 'other-provider');
+      assert.equal(resolved.modelId, 'other-small');
+      assert.equal(resolved.source, 'fallback_provider_small');
+    });
+
+    it('falls back to main floor model when no small or haiku route exists', () => {
+      const resolved = routeAuxiliaryModel('compact', {
+        main: {
+          ...baseMain,
+          roleModels: {},
+          upstreamModel: 'main-upstream',
+        },
+        isMainSdkProxyOnly: false,
+        others: [],
+      });
+
+      assert.equal(resolved.providerId, 'main-provider');
+      assert.equal(resolved.modelId, 'main-upstream');
+      assert.equal(resolved.source, 'main_floor');
     });
   });
 

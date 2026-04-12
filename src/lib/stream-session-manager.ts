@@ -85,7 +85,8 @@ export interface StartStreamParams {
   /** Team mode configuration */
   teamMode?: 'off' | 'on' | 'auto';
   /** Orchestration tier for sub-agents */
-  orchestrationTier?: 'single' | 'dual' | 'multi';
+  orchestrationTier?: 'single' | 'multi';
+  orchestrationProfileId?: string;
   /** Called when init status event provides metadata (tools, slash_commands, skills) */
   onInitMeta?: (meta: { tools?: unknown; slash_commands?: unknown; skills?: unknown }) => void;
   /** Display-only content for user message (e.g. /skillName instead of expanded prompt) */
@@ -436,6 +437,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         ...(params.context1m ? { context_1m: true } : {}),
         ...(params.teamMode ? { team_mode: params.teamMode } : {}),
         ...(params.orchestrationTier ? { orchestration_tier: params.orchestrationTier } : {}),
+        ...(params.orchestrationProfileId ? { orchestration_profile_id: params.orchestrationProfileId } : {}),
         ...(params.displayOverride ? { displayOverride: params.displayOverride } : {}),
       }),
       signal: stream.abortController.signal,
@@ -530,6 +532,32 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         markMeaningfulProgress();
         stream.snapshot = { ...stream.snapshot, statusText: `Running ${toolName}... (${elapsed}s)` };
         emit(stream, 'snapshot-updated');
+      },
+      onSkillNudge: (data) => {
+        // 中文注释：功能名称「技能提示广播」，用法是在复杂多步工作流结束后向聊天页派发持久横幅提示。
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('skill-nudge', {
+            detail: { sessionId: params.sessionId, ...data },
+          }));
+        }
+      },
+      onContextCompressed: (data) => {
+        markMeaningfulProgress();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('context-compressed', {
+            detail: { sessionId: params.sessionId, ...data },
+          }));
+        }
+        if (data.message) {
+          stream.snapshot = { ...stream.snapshot, statusText: data.message };
+          emit(stream, 'snapshot-updated');
+          streamTimeout(stream, () => {
+            if (stream.snapshot.statusText === data.message) {
+              stream.snapshot = { ...stream.snapshot, statusText: undefined };
+              emit(stream, 'snapshot-updated');
+            }
+          }, 5000);
+        }
       },
       onStatus: (text) => {
         markMeaningfulProgress();

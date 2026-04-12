@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 
 function predictNativeRuntime(
   providerId: string | undefined,
+  teamMode: 'off' | 'on' | 'auto' | undefined,
   cliEnabled: boolean,
   agentRuntime: string,
   sdkAvailable: boolean,
@@ -23,6 +24,7 @@ function predictNativeRuntime(
 ): boolean {
   if (providerId === 'openai-oauth') return true;
   if (!cliEnabled) return true;
+  if (teamMode && teamMode !== 'off') return true;
   if (agentRuntime === 'native') return true;
   if (agentRuntime === 'claude-code-sdk') return !sdkAvailable; // fallback if no CLI
   // auto: SDK only if CLI + has credentials
@@ -32,28 +34,32 @@ function predictNativeRuntime(
 
 describe('predictNativeRuntime (mirrors registry.ts)', () => {
   it('openai-oauth → always native', () => {
-    assert.equal(predictNativeRuntime('openai-oauth', true, 'auto', true, true), true);
+    assert.equal(predictNativeRuntime('openai-oauth', 'off', true, 'auto', true, true), true);
   });
   it('cli disabled → always native', () => {
-    assert.equal(predictNativeRuntime(undefined, false, 'auto', true, true), true);
+    assert.equal(predictNativeRuntime(undefined, 'off', false, 'auto', true, true), true);
+  });
+  it('team mode enabled → always native', () => {
+    assert.equal(predictNativeRuntime(undefined, 'on', true, 'auto', true, true), true);
+    assert.equal(predictNativeRuntime(undefined, 'auto', true, 'claude-code-sdk', true, true), true);
   });
   it('setting=native → native', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'native', true, true), true);
+    assert.equal(predictNativeRuntime(undefined, 'off', true, 'native', true, true), true);
   });
   it('setting=claude-code-sdk + CLI → not native', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'claude-code-sdk', true, true), false);
+    assert.equal(predictNativeRuntime(undefined, 'off', true, 'claude-code-sdk', true, true), false);
   });
   it('setting=claude-code-sdk + no CLI → native (fallback)', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'claude-code-sdk', false, true), true);
+    assert.equal(predictNativeRuntime(undefined, 'off', true, 'claude-code-sdk', false, true), true);
   });
   it('auto + SDK + has creds → not native', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'auto', true, true), false);
+    assert.equal(predictNativeRuntime(undefined, 'off', true, 'auto', true, true), false);
   });
   it('auto + SDK + no creds → native (#456)', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'auto', true, false), true);
+    assert.equal(predictNativeRuntime(undefined, 'off', true, 'auto', true, false), true);
   });
   it('auto + no SDK → native', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'auto', false, true), true);
+    assert.equal(predictNativeRuntime(undefined, 'off', true, 'auto', false, true), true);
   });
 });
 
@@ -61,12 +67,13 @@ describe('predictNativeRuntime (mirrors registry.ts)', () => {
 
 function resolveRuntime(
   cliDisabled: boolean,
+  teamMode: 'off' | 'on' | 'auto' | undefined,
   overrideId: string | undefined,
   settingId: string | undefined,
   sdkAvailable: boolean,
   hasAnyCreds: boolean,
 ): string {
-  if (cliDisabled) return 'native';
+  if (cliDisabled || (teamMode && teamMode !== 'off')) return 'native';
   // Explicit override — respected directly (user chose it)
   if (overrideId && overrideId !== 'auto') return overrideId;
   // Explicit setting — respected if SDK is available
@@ -81,25 +88,29 @@ function resolveRuntime(
 
 describe('resolveRuntime (mirrors registry.ts)', () => {
   it('cli disabled → native regardless', () => {
-    assert.equal(resolveRuntime(true, 'claude-code-sdk', 'claude-code-sdk', true, true), 'native');
+    assert.equal(resolveRuntime(true, 'off', 'claude-code-sdk', 'claude-code-sdk', true, true), 'native');
+  });
+  it('team mode enabled → native regardless of sdk setting', () => {
+    assert.equal(resolveRuntime(false, 'on', undefined, 'claude-code-sdk', true, true), 'native');
+    assert.equal(resolveRuntime(false, 'auto', undefined, undefined, true, true), 'native');
   });
   it('explicit override takes precedence', () => {
-    assert.equal(resolveRuntime(false, 'native', 'claude-code-sdk', true, true), 'native');
+    assert.equal(resolveRuntime(false, 'off', 'native', 'claude-code-sdk', true, true), 'native');
   });
   it('explicit claude-code-sdk + no CLI → fallback native', () => {
-    assert.equal(resolveRuntime(false, undefined, 'claude-code-sdk', false, true), 'native');
+    assert.equal(resolveRuntime(false, 'off', undefined, 'claude-code-sdk', false, true), 'native');
   });
   it('setting takes precedence over auto', () => {
-    assert.equal(resolveRuntime(false, undefined, 'native', true, true), 'native');
+    assert.equal(resolveRuntime(false, 'off', undefined, 'native', true, true), 'native');
   });
   it('auto + SDK + has creds → sdk', () => {
-    assert.equal(resolveRuntime(false, undefined, undefined, true, true), 'claude-code-sdk');
+    assert.equal(resolveRuntime(false, 'off', undefined, undefined, true, true), 'claude-code-sdk');
   });
   it('auto + SDK + no creds → native (#456)', () => {
-    assert.equal(resolveRuntime(false, undefined, undefined, true, false), 'native');
+    assert.equal(resolveRuntime(false, 'off', undefined, undefined, true, false), 'native');
   });
   it('auto + no SDK → native', () => {
-    assert.equal(resolveRuntime(false, undefined, undefined, false, true), 'native');
+    assert.equal(resolveRuntime(false, 'off', undefined, undefined, false, true), 'native');
   });
 });
 

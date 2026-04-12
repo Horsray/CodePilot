@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,7 +27,14 @@ import {
   findMatchingPreset,
   type QuickPreset,
 } from "./provider-presets";
-import type { ApiProvider, ProviderModelGroup, CollaborationBinding, CollaborationStrategy } from "@/types";
+import type {
+  ApiProvider,
+  ProviderModelGroup,
+  CollaborationBinding,
+  CollaborationProfile,
+  CollaborationRole,
+  CollaborationStrategy,
+} from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
 import Anthropic from "@lobehub/icons/es/Anthropic";
@@ -41,59 +49,108 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  createDefaultCollaborationProfiles,
+  ensureCollaborationStrategyShape,
+  getCollaborationRoles,
+} from "@/lib/collaboration-strategy";
 
-type RoleKey = 'lead' | 'verifier' | 'researcher' | 'architect' | 'executor';
+const ROLE_META: Array<{ key: CollaborationRole; label: string; alias: string; hint: string }> = [
+  { key: 'team-leader', label: '总指挥', alias: 'opus', hint: '主任务理解、编排与汇总' },
+  { key: 'knowledge-searcher', label: '知识检索', alias: 'haiku', hint: '文档、资料、互联网检索' },
+  { key: 'vision-understanding', label: '视觉理解', alias: 'vision', hint: '截图、图片、界面、OCR' },
+  { key: 'worker-executor', label: '工作执行', alias: 'sonnet', hint: '实现、修改、落地' },
+  { key: 'quality-inspector', label: '质量检验', alias: 'verifier', hint: '测试、验证、回归检查' },
+  { key: 'expert-consultant', label: '专家顾问', alias: 'expert', hint: '复杂疑难、连续失败、争议判断升级' },
+];
 
 function createEmptyStrategy(): CollaborationStrategy {
-  return {
-    dual: {
-      lead: {},
-      verifier: {},
-    },
-    multi: {
-      researcher: {},
-      architect: {},
-      executor: {},
-      verifier: {},
-    },
-  };
-}
-
-function ensureStrategyShape(strategy?: CollaborationStrategy): CollaborationStrategy {
-  const base = createEmptyStrategy();
-  return {
-    dual: { ...base.dual, ...(strategy?.dual || {}) },
-    multi: { ...base.multi, ...(strategy?.multi || {}) },
-  };
+  const profiles = createDefaultCollaborationProfiles();
+  return { profiles, defaultProfileId: profiles[0]?.id };
 }
 
 function updateStrategyBinding(
   strategy: CollaborationStrategy,
-  tier: 'dual' | 'multi',
-  role: RoleKey,
+  profileId: string,
+  role: CollaborationRole,
   patch: Partial<CollaborationBinding>,
 ): CollaborationStrategy {
-  const next = ensureStrategyShape(strategy);
-  if (tier === 'dual' && (role === 'lead' || role === 'verifier')) {
-    return {
-      ...next,
-      dual: {
-        ...next.dual,
-        [role]: { ...(next.dual?.[role] || {}), ...patch },
-      },
-    };
-  }
-  if (tier === 'multi' && (role === 'researcher' || role === 'architect' || role === 'executor' || role === 'verifier')) {
-    return {
-      ...next,
-      multi: {
-        ...next.multi,
-        [role]: { ...(next.multi?.[role] || {}), ...patch },
-      },
-    };
-  }
-  return next;
+  const next = ensureCollaborationStrategyShape(strategy);
+  return {
+    ...next,
+    profiles: next.profiles.map((profile) => (
+      profile.id === profileId
+        ? {
+            ...profile,
+            roles: {
+              ...profile.roles,
+              [role]: { ...(profile.roles?.[role] || {}), ...patch },
+            },
+          }
+        : profile
+    )),
+  };
 }
+
+function renameStrategyProfile(
+  strategy: CollaborationStrategy,
+  profileId: string,
+  name: string,
+): CollaborationStrategy {
+  const next = ensureCollaborationStrategyShape(strategy);
+  return {
+    ...next,
+    profiles: next.profiles.map((profile) => (
+      profile.id === profileId ? { ...profile, name } : profile
+    )),
+  };
+}
+
+function addStrategyProfile(strategy: CollaborationStrategy): CollaborationStrategy {
+  const next = ensureCollaborationStrategyShape(strategy);
+  const newIndex = next.profiles.length + 1;
+  const profile: CollaborationProfile = {
+    id: `custom-${Date.now()}`,
+    name: `自定义配置${newIndex}`,
+    roles: createDefaultCollaborationProfiles()[0].roles,
+  };
+  return { ...next, profiles: [...next.profiles, profile] };
+}
+
+type CollaborationCheckResult = {
+  provider: { id: string; name: string; defaultModel: string };
+  matrix: {
+    single: Array<{ role: string; profileName: string; providerName: string; resolvedModel: string; apiModel: string }>;
+    multi: Array<{ role: string; profileName: string; providerName: string; resolvedModel: string; apiModel: string }>;
+  };
+  warnings: string[];
+};
+
+type CollaborationProbeResult = {
+  profileId: string;
+  profileName: string;
+  total: number;
+  successCount: number;
+  failedCount: number;
+  unconfiguredCount: number;
+  health: 'healthy' | 'degraded' | 'failing';
+  summary: string;
+  results: Array<{
+    role: string;
+    providerName: string;
+    resolvedModel: string;
+    apiModel: string;
+    success: boolean;
+    status: 'success' | 'failed' | 'unconfigured';
+    note?: string;
+    error?: {
+      code: string;
+      message: string;
+      suggestion?: string;
+      recoveryActions?: Array<{ label: string; url?: string; action?: string }>;
+    };
+  }>;
+};
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -133,6 +190,8 @@ export function ProviderManager() {
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [globalDefaultProvider, setGlobalDefaultProvider] = useState('');
   const [collaborationStrategy, setCollaborationStrategy] = useState<CollaborationStrategy>(createEmptyStrategy());
+  const [collaborationChecks, setCollaborationChecks] = useState<Record<string, { loading: boolean; result?: CollaborationCheckResult; error?: string }>>({});
+  const [collaborationProbes, setCollaborationProbes] = useState<Record<string, { loading: boolean; result?: CollaborationProbeResult; error?: string }>>({});
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -175,7 +234,7 @@ export function ProviderManager() {
           setGlobalDefaultModel(data.options.default_model);
           setGlobalDefaultProvider(data.options.default_model_provider || '');
         }
-        setCollaborationStrategy(ensureStrategyShape(data?.options?.collaboration_strategy));
+        setCollaborationStrategy(ensureCollaborationStrategyShape(data?.options?.collaboration_strategy));
       })
       .catch(() => {});
   }, []);
@@ -393,13 +452,65 @@ export function ProviderManager() {
   }, []);
 
   const updateBinding = useCallback(async (
-    tier: 'dual' | 'multi',
-    role: RoleKey,
+    profileId: string,
+    role: CollaborationRole,
     patch: Partial<CollaborationBinding>,
   ) => {
-    const next = updateStrategyBinding(collaborationStrategy, tier, role, patch);
+    const next = updateStrategyBinding(collaborationStrategy, profileId, role, patch);
     await saveCollaborationStrategy(next);
   }, [collaborationStrategy, saveCollaborationStrategy]);
+
+  const verifyCollaborationProfile = useCallback(async (profileId: string) => {
+    const baseProviderId = globalDefaultProvider || collaborationGroups[0]?.provider_id || '';
+    if (!baseProviderId) {
+      setCollaborationChecks((prev) => ({
+        ...prev,
+        [profileId]: { loading: false, error: '请先至少配置一个可用 Provider，并设置默认模型或默认 Provider。' },
+      }));
+      return;
+    }
+
+    setCollaborationChecks((prev) => ({ ...prev, [profileId]: { loading: true } }));
+    try {
+      const res = await fetch(`/api/providers/collaboration-check?providerId=${encodeURIComponent(baseProviderId)}&profileId=${encodeURIComponent(profileId)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '验证失败');
+      setCollaborationChecks((prev) => ({ ...prev, [profileId]: { loading: false, result: data } }));
+    } catch (err) {
+      setCollaborationChecks((prev) => ({
+        ...prev,
+        [profileId]: { loading: false, error: err instanceof Error ? err.message : '验证失败' },
+      }));
+    }
+  }, [collaborationGroups, globalDefaultProvider]);
+
+  const probeCollaborationProfile = useCallback(async (profileId: string) => {
+    const baseProviderId = globalDefaultProvider || collaborationGroups[0]?.provider_id || '';
+    if (!baseProviderId) {
+      setCollaborationProbes((prev) => ({
+        ...prev,
+        [profileId]: { loading: false, error: '请先至少配置一个可用 Provider，并设置默认模型或默认 Provider。' },
+      }));
+      return;
+    }
+
+    setCollaborationProbes((prev) => ({ ...prev, [profileId]: { loading: true } }));
+    try {
+      const res = await fetch('/api/providers/collaboration-probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId, providerId: baseProviderId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '探测失败');
+      setCollaborationProbes((prev) => ({ ...prev, [profileId]: { loading: false, result: data } }));
+    } catch (err) {
+      setCollaborationProbes((prev) => ({
+        ...prev,
+        [profileId]: { loading: false, error: err instanceof Error ? err.message : '探测失败' },
+      }));
+    }
+  }, [collaborationGroups, globalDefaultProvider]);
 
   const getGroupByProviderId = useCallback((providerId?: string) => {
     return collaborationGroups.find((group) => group.provider_id === providerId);
@@ -480,135 +591,244 @@ export function ProviderManager() {
         </div>
       </div>
 
-      {/* 中文注释：功能名称「全局协作策略配置面板」，用法是在一个面板里配置双模型/多模型各角色使用哪个服务商与模型。 */}
+      {/* 中文注释：功能名称「全局协作策略配置面板」，用法是在一个面板里配置多模型配置集及五角色路由。 */}
       {!loading && (
         <div className="rounded-lg border border-border/50 p-4 space-y-4">
           <div>
             <h3 className="text-sm font-medium">协作策略配置</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              单模型不需要配置；双模型和多模型在这里直接指定每个角色使用哪个服务商和哪个模型，数据联动下方已连接的聊天服务商。
+              单模型不需要配置；多模型模式在这里直接配置多套方案。每套方案都可以重命名，并为五个角色分别指定服务商与模型。
             </p>
           </div>
 
           {collaborationGroups.length > 0 ? (
             <>
-              <div className="rounded-md border border-border/30 bg-muted/10 p-3 space-y-3">
-                <div className="text-xs font-medium">双模型策略</div>
-                {([
-                  { key: 'lead' as const, label: '主执行', hint: '主脑/主执行模型' },
-                  { key: 'verifier' as const, label: '验证者', hint: '验证/复核模型' },
-                ]).map((item) => {
-                  const binding = collaborationStrategy.dual?.[item.key] || {};
-                  const group = getGroupByProviderId(binding.providerId);
-                  return (
-                    <div key={`dual-${item.key}`} className="grid gap-2 md:grid-cols-[120px_1fr_1fr] items-center">
-                      <div>
-                        <div className="text-xs font-medium">{item.label}</div>
-                        <div className="text-[10px] text-muted-foreground">{item.hint}</div>
-                      </div>
-                      <Select
-                        value={binding.providerId || '__none__'}
-                        onValueChange={(value) => {
-                          const selected = collaborationGroups.find((g) => g.provider_id === value);
-                          void updateBinding('dual', item.key, {
-                            providerId: value === '__none__' ? '' : value,
-                            model: selected?.models[0]?.value || '',
-                          });
-                        }}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="选择服务商" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">未配置</SelectItem>
-                          {collaborationGroups.map((group) => (
-                            <SelectItem key={`dual-provider-${item.key}-${group.provider_id}`} value={group.provider_id}>
-                              {group.provider_name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Select
-                        value={binding.model || '__none__'}
-                        onValueChange={(value) => void updateBinding('dual', item.key, { model: value === '__none__' ? '' : value })}
-                        disabled={!group}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="选择模型" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">未配置</SelectItem>
-                          {(group?.models || []).map((model) => (
-                            <SelectItem key={`dual-model-${item.key}-${model.value}`} value={model.value}>
-                              {model.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  );
-                })}
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-muted-foreground">
+                  默认预置两套方案：多模型-低成本、多模型-高性能。你也可以继续新增自定义配置。
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => void saveCollaborationStrategy(addStrategyProfile(collaborationStrategy))}
+                >
+                  新增自定义配置
+                </Button>
               </div>
 
-              <div className="rounded-md border border-border/30 bg-muted/10 p-3 space-y-3">
-                <div className="text-xs font-medium">多模型策略</div>
-                {([
-                  { key: 'researcher' as const, label: '研究员', hint: '检索/调研' },
-                  { key: 'architect' as const, label: '架构师', hint: '规划/主脑' },
-                  { key: 'executor' as const, label: '执行者', hint: '开发/实施' },
-                  { key: 'verifier' as const, label: '验证者', hint: '验证/复核' },
-                ]).map((item) => {
-                  const binding = collaborationStrategy.multi?.[item.key] || {};
-                  const group = getGroupByProviderId(binding.providerId);
-                  return (
-                    <div key={`multi-${item.key}`} className="grid gap-2 md:grid-cols-[120px_1fr_1fr] items-center">
-                      <div>
-                        <div className="text-xs font-medium">{item.label}</div>
-                        <div className="text-[10px] text-muted-foreground">{item.hint}</div>
-                      </div>
-                      <Select
-                        value={binding.providerId || '__none__'}
-                        onValueChange={(value) => {
-                          const selected = collaborationGroups.find((g) => g.provider_id === value);
-                          void updateBinding('multi', item.key, {
-                            providerId: value === '__none__' ? '' : value,
-                            model: selected?.models[0]?.value || '',
-                          });
-                        }}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="选择服务商" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">未配置</SelectItem>
-                          {collaborationGroups.map((group) => (
-                            <SelectItem key={`multi-provider-${item.key}-${group.provider_id}`} value={group.provider_id}>
-                              {group.provider_name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Select
-                        value={binding.model || '__none__'}
-                        onValueChange={(value) => void updateBinding('multi', item.key, { model: value === '__none__' ? '' : value })}
-                        disabled={!group}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="选择模型" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">未配置</SelectItem>
-                          {(group?.models || []).map((model) => (
-                            <SelectItem key={`multi-model-${item.key}-${model.value}`} value={model.value}>
-                              {model.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+              {ensureCollaborationStrategyShape(collaborationStrategy).profiles.map((profile) => (
+                <div key={profile.id} className="rounded-md border border-border/30 bg-muted/10 p-3 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-medium">多模型-{profile.name}</div>
+                      <div className="text-[10px] text-muted-foreground">会话选择框里会显示为“多模型-{profile.name}”</div>
                     </div>
-                  );
-                })}
-              </div>
+                    <Input
+                      value={profile.name}
+                      onChange={(e) => {
+                        void saveCollaborationStrategy(renameStrategyProfile(collaborationStrategy, profile.id, e.target.value));
+                      }}
+                      className="h-8 w-[180px] text-xs"
+                      placeholder="配置名称"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-border/20 bg-background/40 px-3 py-2">
+                    <div className="text-[11px] text-muted-foreground">
+                      验证这套配置会告诉你六个角色最终命中的 Provider、解析模型和 API 模型；测试模型连通性会真实探测这些角色模型是否可用。
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => void verifyCollaborationProfile(profile.id)}
+                      >
+                        {collaborationChecks[profile.id]?.loading ? '验证中...' : '验证此配置'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => void probeCollaborationProfile(profile.id)}
+                      >
+                        {collaborationProbes[profile.id]?.loading ? '探测中...' : '测试模型连通性'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {ROLE_META.map((item) => {
+                    const binding = profile.roles?.[item.key] || {};
+                    const group = getGroupByProviderId(binding.providerId);
+                    return (
+                      <div key={`${profile.id}-${item.key}`} className="grid gap-2 md:grid-cols-[180px_1fr_1fr] items-center">
+                        <div>
+                          <div className="text-xs font-medium">{item.label}</div>
+                          <div className="text-[10px] text-muted-foreground">
+                            别名：{item.alias}，{item.hint}
+                          </div>
+                        </div>
+                        <Select
+                          value={binding.providerId || '__none__'}
+                          onValueChange={(value) => {
+                            const selected = collaborationGroups.find((g) => g.provider_id === value);
+                            void updateBinding(profile.id, item.key, {
+                              providerId: value === '__none__' ? '' : value,
+                              model: selected?.models[0]?.value || '',
+                            });
+                          }}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="选择服务商" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">未配置</SelectItem>
+                            {collaborationGroups.map((group) => (
+                              <SelectItem key={`${profile.id}-${item.key}-${group.provider_id}`} value={group.provider_id}>
+                                {group.provider_name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Select
+                          value={binding.model || '__none__'}
+                          onValueChange={(value) => void updateBinding(profile.id, item.key, { model: value === '__none__' ? '' : value })}
+                          disabled={!group}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="选择模型" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">未配置</SelectItem>
+                            {(group?.models || []).map((model) => (
+                              <SelectItem key={`${profile.id}-${item.key}-${model.value}`} value={model.value}>
+                                {model.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    );
+                  })}
+
+                  {collaborationChecks[profile.id]?.error && (
+                    <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                      {collaborationChecks[profile.id]?.error}
+                    </div>
+                  )}
+
+                  {collaborationProbes[profile.id]?.error && (
+                    <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                      {collaborationProbes[profile.id]?.error}
+                    </div>
+                  )}
+
+                  {collaborationChecks[profile.id]?.result && (
+                    <div className="rounded-md border border-border/20 bg-background/40 overflow-hidden">
+                      <div className="border-b border-border/10 px-3 py-2 text-xs font-medium">
+                        {`验证结果：多模型-${profile.name}`}
+                      </div>
+                      <div className="divide-y divide-border/10">
+                        {collaborationChecks[profile.id]!.result!.matrix.multi.map((row) => (
+                          <div key={`${profile.id}-${row.role}`} className="grid grid-cols-[100px_1fr_1fr_1fr] gap-3 px-3 py-2 text-xs">
+                            <div className="font-medium">{row.role}</div>
+                            <div className="text-muted-foreground">
+                              <span className="mr-1">Provider:</span>
+                              <span className="font-mono text-foreground/80">{row.providerName}</span>
+                            </div>
+                            <div className="text-muted-foreground">
+                              <span className="mr-1">Model:</span>
+                              <span className="font-mono text-foreground/80">{row.resolvedModel}</span>
+                            </div>
+                            <div className="text-muted-foreground">
+                              <span className="mr-1">API:</span>
+                              <span className="font-mono text-foreground/80">{row.apiModel}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {collaborationChecks[profile.id]!.result!.warnings.length > 0 && (
+                        <div className="border-t border-border/10 px-3 py-2 text-[11px] text-amber-600 space-y-1">
+                          {collaborationChecks[profile.id]!.result!.warnings.map((warning, idx) => (
+                            <div key={`${profile.id}-warning-${idx}`}>{warning}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {collaborationProbes[profile.id]?.result && (
+                    <div className="rounded-md border border-border/20 bg-background/40 overflow-hidden">
+                      <div className="border-b border-border/10 px-3 py-2 text-xs font-medium flex items-center justify-between">
+                        <span>{`连通性探测：多模型-${profile.name}`}</span>
+                        <Badge
+                          variant={
+                            collaborationProbes[profile.id]!.result!.health === 'healthy'
+                              ? 'default'
+                              : collaborationProbes[profile.id]!.result!.health === 'degraded'
+                                ? 'secondary'
+                                : 'destructive'
+                          }
+                          className="text-[10px]"
+                        >
+                          {collaborationProbes[profile.id]!.result!.health === 'healthy'
+                            ? '生产可用'
+                            : collaborationProbes[profile.id]!.result!.health === 'degraded'
+                              ? '需补配置'
+                              : '需修复'}
+                        </Badge>
+                      </div>
+                      <div className="border-b border-border/10 px-3 py-2 text-[11px] text-muted-foreground flex flex-wrap gap-3">
+                        <span>{`成功 ${collaborationProbes[profile.id]!.result!.successCount}`}</span>
+                        <span>{`失败 ${collaborationProbes[profile.id]!.result!.failedCount}`}</span>
+                        <span>{`未配置 ${collaborationProbes[profile.id]!.result!.unconfiguredCount}`}</span>
+                        <span>{collaborationProbes[profile.id]!.result!.summary}</span>
+                      </div>
+                      <div className="divide-y divide-border/10">
+                        {collaborationProbes[profile.id]!.result!.results.map((row) => (
+                          <div key={`${profile.id}-probe-${row.role}`} className="px-3 py-2 text-xs space-y-1.5">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="font-medium">{row.role}</div>
+                              <Badge
+                                variant={row.status === 'success' ? 'default' : row.status === 'unconfigured' ? 'secondary' : 'destructive'}
+                                className="text-[10px]"
+                              >
+                                {row.status === 'success' ? '已连通' : row.status === 'unconfigured' ? '未配置' : '失败'}
+                              </Badge>
+                            </div>
+                            <div className="grid grid-cols-[1fr_1fr_1fr] gap-3 text-muted-foreground">
+                              <div><span className="mr-1">Provider:</span><span className="font-mono text-foreground/80">{row.providerName}</span></div>
+                              <div><span className="mr-1">Model:</span><span className="font-mono text-foreground/80">{row.resolvedModel}</span></div>
+                              <div><span className="mr-1">API:</span><span className="font-mono text-foreground/80">{row.apiModel}</span></div>
+                            </div>
+                            {row.note && (
+                              <div className="text-[11px] text-amber-600">{row.note}</div>
+                            )}
+                            {!row.success && row.error && (
+                              <div className="rounded-md border border-destructive/20 bg-destructive/5 px-2.5 py-2 space-y-1">
+                                <div className="text-destructive font-medium">{row.error.message}</div>
+                                {row.error.suggestion && (
+                                  <div className="text-muted-foreground">{`建议：${row.error.suggestion}`}</div>
+                                )}
+                                {row.error.recoveryActions && row.error.recoveryActions.length > 0 && (
+                                  <div className="flex flex-wrap gap-2">
+                                    {row.error.recoveryActions.map((action, idx) => (
+                                      <span key={`${profile.id}-probe-action-${row.role}-${idx}`} className="rounded border border-border/20 px-2 py-0.5 text-[11px] text-muted-foreground">
+                                        {action.label}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
             </>
           ) : (
             <div className="rounded-md border border-dashed border-border/50 p-4 text-xs text-muted-foreground">

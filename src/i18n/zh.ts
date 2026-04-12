@@ -30,6 +30,8 @@ const zh: Record<TranslationKey, string> = {
   'chatList.openFolder': '打开文件夹',
   'chatList.copyFolderPath': '复制文件夹路径',
   'chatList.searchSessions': '搜索会话...',
+  'chatList.searchingMessages': '搜索消息内容中...',
+  'chatList.messageMatches': '消息内容命中',
   'chatList.noSessions': '暂无会话',
   'chatList.importFromCli': '从 Claude Code 导入',
   'chatList.addProjectFolder': '新建项目',
@@ -73,6 +75,9 @@ const zh: Record<TranslationKey, string> = {
   'chat.referencedContexts': '参考了 {{count}} 个上下文',
   'chat.deleteConfirm': '确定要删除这条消息吗？',
   'chat.searchPlaceholder': '搜索历史对话...',
+  'skillNudge.message': '本次工作流在第 {step} 步前后使用了至少 {toolCount} 个不同工具，建议沉淀为可复用 Skill。',
+  'skillNudge.saveButton': '保存为 Skill',
+  'skillNudge.savePrompt': '请帮我把我们刚完成的工作流整理成一个可复用的 Skill，包括清晰的名称、描述以及分步骤实现方式。',
 
   // ── Settings: General ───────────────────────────────────────
   'settings.title': '设置',

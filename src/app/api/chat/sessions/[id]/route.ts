@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { deleteSession, getSession, updateSessionWorkingDirectory, updateSessionTitle, updateSessionMode, updateSessionModel, updateSessionProviderId, clearSessionMessages, updateSdkSessionId, updateSessionPermissionProfile, updateSessionTeamMode, updateSessionOrchestrationTier } from '@/lib/db';
+import { deleteSession, getSession, updateSessionWorkingDirectory, updateSessionTitle, updateSessionMode, updateSessionModel, updateSessionProviderId, clearSessionMessages, updateSdkSessionId, updateSessionPermissionProfile, updateSessionTeamMode, updateSessionOrchestrationTier, updateSessionOrchestrationProfileId } from '@/lib/db';
 import { autoApprovePendingForSession } from '@/lib/bridge/permission-broker';
 
 export async function GET(
@@ -47,12 +47,15 @@ export async function PATCH(
       }
       updateSessionTeamMode(id, body.team_mode);
     }
-    // 中文注释：功能名称「更新会话编排层级」，用法是在用户切换 single/dual/multi 后持久化选择。
+    // 中文注释：功能名称「更新会话编排层级」，用法是在用户切换 single/multi 后持久化选择。
     if (body.orchestration_tier !== undefined) {
-      if (body.orchestration_tier !== 'single' && body.orchestration_tier !== 'dual' && body.orchestration_tier !== 'multi') {
-        return Response.json({ error: 'orchestration_tier must be "single", "dual", or "multi"' }, { status: 400 });
+      if (body.orchestration_tier !== 'single' && body.orchestration_tier !== 'multi') {
+        return Response.json({ error: 'orchestration_tier must be "single" or "multi"' }, { status: 400 });
       }
       updateSessionOrchestrationTier(id, body.orchestration_tier);
+    }
+    if (body.orchestration_profile_id !== undefined) {
+      updateSessionOrchestrationProfileId(id, body.orchestration_profile_id || '');
     }
     // Track whether provider or model actually changed — if so, the old
     // sdk_session_id is stale and must be cleared to prevent resume failures

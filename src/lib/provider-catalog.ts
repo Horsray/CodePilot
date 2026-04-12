@@ -627,11 +627,11 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   {
     key: 'olmx',
     name: 'oLMX',
-    description: 'oLMX — run local OpenAI-compatible models',
-    descriptionZh: 'oLMX — 本地运行 OpenAI 兼容模型',
-    protocol: 'openai-compatible',
+    description: 'oLMX — run local Anthropic-compatible models',
+    descriptionZh: 'oLMX — 本地运行 Anthropic 兼容模型',
+    protocol: 'anthropic',
     authStyle: 'api_key',
-    baseUrl: 'http://127.0.0.1:8000/v1',
+    baseUrl: 'http://127.0.0.1:8000',
     defaultEnvOverrides: {},
     defaultModels: [
       { modelId: 'Qwen3.5-35B-A3B-8bit', displayName: 'Qwen 3.5 35B' },
@@ -754,6 +754,8 @@ export function inferProtocolFromLegacy(
       'dashscope.aliyuncs.com',         // Bailian
       'xiaomimimo.com',                 // Xiaomi MiMo
       'localhost:11434',                // Ollama
+      '127.0.0.1:8000',                // oLMX
+      'localhost:8000',                // oLMX
     ];
     const urlLower = baseUrl.toLowerCase();
     if (anthropicUrls.some(u => urlLower.includes(u))) {
@@ -798,7 +800,9 @@ export function inferAuthStyleFromLegacy(
 export function findPresetForLegacy(baseUrl: string, providerType: string, protocol?: Protocol): VendorPreset | undefined {
   // Exact base_url match (most specific)
   if (baseUrl) {
-    const match = VENDOR_PRESETS.find(p => p.baseUrl === baseUrl);
+    const normalizeBaseUrl = (value: string) => value.replace(/\/v1\/?$/i, '').replace(/\/+$/g, '').toLowerCase();
+    const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    const match = VENDOR_PRESETS.find(p => p.baseUrl && normalizeBaseUrl(p.baseUrl) === normalizedBaseUrl);
     if (match) return match;
 
     // Fuzzy match: legacy entries may have old URLs (e.g. minimaxi.com/anthropic
@@ -808,8 +812,8 @@ export function findPresetForLegacy(baseUrl: string, providerType: string, proto
       if (!p.baseUrl) return false;
       if (protocol && p.protocol !== protocol) return false;
       try {
-        const presetHost = new URL(p.baseUrl).hostname;
-        return urlLower.includes(presetHost);
+        const presetUrl = new URL(p.baseUrl);
+        return urlLower.includes(presetUrl.origin.toLowerCase()) || urlLower.includes(presetUrl.hostname.toLowerCase());
       } catch { return false; }
     });
     if (fuzzy) return fuzzy;
@@ -839,7 +843,8 @@ export function getDefaultModelsForProvider(
   baseUrl: string,
 ): CatalogModel[] {
   // Try to find a preset by exact base_url
-  const preset = VENDOR_PRESETS.find(p => p.baseUrl && p.baseUrl === baseUrl);
+  const normalizeBaseUrl = (value: string) => value.replace(/\/v1\/?$/i, '').replace(/\/+$/g, '').toLowerCase();
+  const preset = VENDOR_PRESETS.find(p => p.baseUrl && normalizeBaseUrl(p.baseUrl) === normalizeBaseUrl(baseUrl));
   if (preset) {
     // Preset matched — return its models even if empty (e.g. Volcengine
     // requires users to specify their own model names, so defaultModels is []).
@@ -855,8 +860,8 @@ export function getDefaultModelsForProvider(
     const fuzzy = VENDOR_PRESETS.find(p => {
       if (!p.baseUrl || p.protocol !== protocol) return false;
       try {
-        const presetHost = new URL(p.baseUrl).hostname;
-        return urlLower.includes(presetHost);
+        const presetUrl = new URL(p.baseUrl);
+        return urlLower.includes(presetUrl.origin.toLowerCase()) || urlLower.includes(presetUrl.hostname.toLowerCase());
       } catch { return false; }
     });
     if (fuzzy) return fuzzy.defaultModels;

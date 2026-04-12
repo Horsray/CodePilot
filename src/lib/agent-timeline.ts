@@ -25,6 +25,8 @@ interface StepCompletePayload {
   agent?: string;
   providerId?: string;
   providerName?: string;
+  requestedAgent?: string;
+  orchestrationProfileName?: string;
 }
 
 function makeStepTitle(index: number): string {
@@ -300,7 +302,7 @@ export function appendTimelineToolResult(state: TimelineAccumulatorState, result
  */
 export function updateTimelineStatus(
   state: TimelineAccumulatorState,
-  payload: { message: string; step?: number; model?: string; agent?: string; providerId?: string; providerName?: string },
+  payload: { message: string; step?: number; model?: string; agent?: string; providerId?: string; providerName?: string; requestedAgent?: string; orchestrationProfileName?: string },
   now = Date.now(),
 ): void {
   const step = ensureActiveStep(state, now);
@@ -309,6 +311,8 @@ export function updateTimelineStatus(
   if (payload.agent) step.agent = payload.agent;
   if (payload.providerId) step.providerId = payload.providerId;
   if (payload.providerName) step.providerName = payload.providerName;
+  if (payload.requestedAgent) step.requestedAgent = payload.requestedAgent;
+  if (payload.orchestrationProfileName) step.orchestrationProfileName = payload.orchestrationProfileName;
   // If the message contains specific status info, update the step activity
   if (payload.message && payload.message.includes('Thinking')) {
     step.reasoning = payload.message;
@@ -330,6 +334,8 @@ export function completeTimelineStep(
   if (payload?.agent) step.agent = payload.agent;
   if (payload?.providerId) step.providerId = payload.providerId;
   if (payload?.providerName) step.providerName = payload.providerName;
+  if (payload?.requestedAgent) step.requestedAgent = payload.requestedAgent;
+  if (payload?.orchestrationProfileName) step.orchestrationProfileName = payload.orchestrationProfileName;
   if (payload?.finishReason && !step.summary) step.summary = payload.finishReason;
   if (payload?.toolsUsed && payload.toolsUsed.length > 0 && !step.summary) step.summary = payload.toolsUsed.join(', ');
   refreshStepMetadata(step);

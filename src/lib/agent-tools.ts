@@ -11,7 +11,7 @@ import { z } from 'zod';
 import type { SSEEvent } from '@/types';
 
 /** Tool names that are safe in read-only (plan) mode */
-export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'TodoWrite'] as const;
+export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'SearchHistory', 'TodoWrite'] as const;
 import { createBuiltinTools } from './tools';
 import { buildMcpToolSet } from './mcp-tool-adapter';
 import { getBuiltinTools } from './builtin-tools';
@@ -43,7 +43,8 @@ export interface AssembleToolsOptions {
     emitSSE: (event: SSEEvent) => void;
     abortSignal?: AbortSignal;
   };
-  orchestrationTier?: 'single' | 'dual' | 'multi';
+  orchestrationTier?: 'single' | 'multi';
+  orchestrationProfileId?: string;
 }
 
 export interface AssembleToolsResult {
@@ -69,6 +70,7 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
     model: options.model,
     permissionMode: options.permissionContext?.permissionMode,
     orchestrationTier: options.orchestrationTier,
+    orchestrationProfileId: options.orchestrationProfileId,
     emitSSE: options.permissionContext?.emitSSE,
     abortSignal: options.permissionContext?.abortSignal,
   });
@@ -76,7 +78,7 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
   // In 'plan' mode, restrict to read-only tools
   if (options.mode === 'plan') {
     return {
-      tools: { Read: builtinTools.Read, Glob: builtinTools.Glob, Grep: builtinTools.Grep },
+      tools: { Read: builtinTools.Read, Glob: builtinTools.Glob, Grep: builtinTools.Grep, SearchHistory: builtinTools.SearchHistory },
       systemPrompts: [],
     };
   }

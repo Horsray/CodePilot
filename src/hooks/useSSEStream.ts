@@ -14,6 +14,13 @@ interface ToolResultInfo {
   media?: MediaBlock[];
 }
 
+interface SkillNudgeData {
+  message: string;
+  step: number;
+  distinctToolCount: number;
+  toolNames: string[];
+}
+
 export interface SSECallbacks {
   onText: (accumulated: string, model?: string) => void;
   onToolUse: (tool: ToolUseInfo, model?: string) => void;
@@ -32,6 +39,8 @@ export interface SSECallbacks {
   onThinking?: (delta: string, model?: string) => void;
   onKeepAlive: () => void;
   onError: (accumulated: string) => void;
+  onSkillNudge?: (data: SkillNudgeData) => void;
+  onContextCompressed?: (data: { message: string; messagesCompressed: number; tokensSaved: number }) => void;
   onStatusPayload?: (payload: Record<string, unknown>) => void;
   onInitMeta?: (meta: {
     tools?: unknown;
@@ -126,6 +135,23 @@ function handleSSEEvent(
             tab: statusData.tab,
             terminalId: statusData.terminalId,
             newTab: statusData.newTab,
+          });
+          return accumulated;
+        }
+        if (statusData.subtype === 'skill_nudge' && statusData.payload) {
+          callbacks.onSkillNudge?.({
+            message: statusData.message || statusData.payload.message || '',
+            step: statusData.payload.reason?.step || 0,
+            distinctToolCount: statusData.payload.reason?.distinctToolCount || 0,
+            toolNames: statusData.payload.reason?.toolNames || [],
+          });
+          return accumulated;
+        }
+        if (statusData.subtype === 'context_compressed') {
+          callbacks.onContextCompressed?.({
+            message: statusData.message || '',
+            messagesCompressed: statusData.stats?.messagesCompressed || 0,
+            tokensSaved: statusData.stats?.tokensSaved || 0,
           });
           return accumulated;
         }

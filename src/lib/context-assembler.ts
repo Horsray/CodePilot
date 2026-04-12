@@ -11,10 +11,11 @@
  */
 
 import type { ChatSession, CollaborationDecision } from '@/types';
-import { getSetting } from '@/lib/db';
+import { getProviderOptions, getSetting } from '@/lib/db';
 import { EGG_IMAGE_URL } from '@/lib/buddy';
 import { buildSystemPrompt } from './agent-system-prompt';
 import { analyzeCollaborationNeed } from './collaboration-decision';
+import { getCollaborationProfileLabel } from './collaboration-strategy';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ export interface ContextAssemblyConfig {
   /** Team mode configuration */
   teamMode?: 'off' | 'on' | 'auto';
   /** Orchestration tier configuration */
-  orchestrationTier?: 'single' | 'dual' | 'multi';
+  orchestrationTier?: 'single' | 'multi';
   /** User attachments for complexity analysis */
   files?: import('@/types').FileAttachment[];
 }
@@ -59,6 +60,14 @@ export interface AssembledContext {
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
   collaborationDecision?: CollaborationDecision;
+  phaseRunnerPayload?: {
+    phases: Array<{
+      name: string;
+      parallel: boolean;
+      objective: string;
+      tasks: Array<{ agent: string; prompt: string }>;
+    }>;
+  };
 }
 
 // ── Main function ────────────────────────────────────────────────────
@@ -84,7 +93,14 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     orchestrationTier: orchestrationTier || session.orchestration_tier || 'multi',
     files,
     conversationHistoryCount: conversationHistory?.length || 0,
+    conversationHistory: conversationHistory?.filter((item): item is { role: 'user' | 'assistant'; content: string } =>
+      item.role === 'user' || item.role === 'assistant'
+    ),
   });
+  const orchestrationProfileName = getCollaborationProfileLabel(
+    getProviderOptions('__global__').collaboration_strategy,
+    session.orchestration_profile_id || undefined,
+  );
 
   // ── Layer 1: Workspace prompt (if assistant project session) ──────
   // For imageAgentMode, we skip the workspace prompt and assistant instructions
@@ -243,6 +259,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     modelId: session.model,
     teamMode: config.teamMode || session.team_mode || 'on',
     orchestrationTier: orchestrationTier || session.orchestration_tier || 'multi',
+    orchestrationProfileName,
     collaborationDecision,
   });
   staticParts.push(basePromptResult.prompt);
@@ -307,6 +324,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     syncProjectRules,
     knowledgeBaseEnabled,
     collaborationDecision,
+    phaseRunnerPayload: basePromptResult.phaseRunnerPayload,
   };
 }
 

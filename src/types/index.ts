@@ -40,7 +40,8 @@ export interface ChatSession {
   context_summary?: string;
   context_summary_updated_at?: string;
   team_mode?: 'off' | 'on' | 'auto';
-  orchestration_tier?: 'single' | 'dual' | 'multi';
+  orchestration_tier?: 'single' | 'multi';
+  orchestration_profile_id?: string;
 }
 
 // ==========================================
@@ -214,6 +215,10 @@ export interface TimelineStep {
   providerId?: string;
   // 中文注释：当前步骤命中的 Provider 名称，用法是在时间线中给用户展示更易读的渠道名称。
   providerName?: string;
+  // 中文注释：请求的目标角色，用法是在时间线中区分“想调谁”和“实际命中谁”。
+  requestedAgent?: string;
+  // 中文注释：当前步骤使用的多模型配置名称，用法是在时间线中显示来自哪套 profile。
+  orchestrationProfileName?: string;
 }
 
 // Structured message content blocks (stored as JSON in messages.content)
@@ -351,25 +356,39 @@ export interface CollaborationBinding {
   model?: string;
 }
 
+export type CollaborationRole =
+  | 'team-leader'
+  | 'knowledge-searcher'
+  | 'vision-understanding'
+  | 'worker-executor'
+  | 'quality-inspector'
+  | 'expert-consultant';
+
+export interface CollaborationProfile {
+  id: string;
+  name: string;
+  roles: Record<CollaborationRole, CollaborationBinding>;
+}
+
 export interface CollaborationStrategy {
-  dual?: {
-    lead?: CollaborationBinding;
-    verifier?: CollaborationBinding;
-  };
-  multi?: {
-    researcher?: CollaborationBinding;
-    architect?: CollaborationBinding;
-    executor?: CollaborationBinding;
-    verifier?: CollaborationBinding;
-  };
+  profiles: CollaborationProfile[];
+  defaultProfileId?: string;
 }
 
 export interface CollaborationDecision {
   shouldCollaborate: boolean;
-  mode: 'direct' | 'lead_plus_verifier' | 'team_workflow';
+  mode: 'direct' | 'team_workflow';
   leadMayImplementDirectly: boolean;
   reasons: string[];
-  suggestedRoles: Array<'lead' | 'researcher' | 'architect' | 'executor' | 'verifier'>;
+  suggestedRoles: Array<CollaborationRole>;
+  phases?: Array<{
+    id: string;
+    name: string;
+    roles: Array<CollaborationRole>;
+    dependsOn?: string[];
+    parallel: boolean;
+    objective: string;
+  }>;
   summary: string;
 }
 
@@ -406,8 +425,9 @@ export interface CreateSessionRequest {
   provider_id?: string;
   permission_profile?: string;
   team_mode?: 'off' | 'on' | 'auto';
-  // 中文注释：会话编排层级，用法是在新建会话时持久化 single/dual/multi 选择。
-  orchestration_tier?: 'single' | 'dual' | 'multi';
+  // 中文注释：会话编排层级，用法是在新建会话时持久化 single/multi 选择。
+  orchestration_tier?: 'single' | 'multi';
+  orchestration_profile_id?: string;
 }
 
 export interface SendMessageRequest {
@@ -416,6 +436,7 @@ export interface SendMessageRequest {
   model?: string;
   mode?: string;
   provider_id?: string;
+  orchestration_profile_id?: string;
 }
 
 export interface UpdateMCPConfigRequest {
@@ -739,7 +760,8 @@ export interface AssistantWorkspaceState {
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
   teamMode?: 'off' | 'on' | 'auto';
-  orchestrationTier?: 'single' | 'dual' | 'multi';
+  orchestrationTier?: 'single' | 'multi';
+  orchestrationProfileId?: string;
 }
 
 export interface AssistantWorkspaceFiles {
@@ -1160,8 +1182,9 @@ export interface ClaudeStreamOptions {
   knowledgeBaseEnabled?: boolean;
   // 中文注释：团队模式开关，用法是在运行时决定是否启用协作策略。
   teamMode?: 'off' | 'on' | 'auto';
-  // 中文注释：模型编排层级，用法是在运行时决定单模型/双模型/多模型路由。
-  orchestrationTier?: 'single' | 'dual' | 'multi';
+  // 中文注释：模型编排层级，用法是在运行时决定单模型/多模型路由。
+  orchestrationTier?: 'single' | 'multi';
+  orchestrationProfileId?: string;
 }
 
 // ==========================================

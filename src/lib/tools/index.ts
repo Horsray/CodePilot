@@ -17,10 +17,13 @@ import { createBrowserContextTool } from './browser-context';
 import { createEditTool } from './edit';
 import { createSkillTool } from './skill';
 import { createAgentTool } from './agent';
+import { createParallelAgentsTool } from './parallel-agents';
+import { createPhaseRunnerTool } from './phase-runner';
 import { createTodoWriteTool } from './todo-write';
 import { createAskUserQuestionTool } from './ask-user-question';
 import { createCheckBackgroundJobTool } from './background-job';
 import { createGetDiagnosticsTool } from './get-diagnostics';
+import { createSearchHistoryTool } from './search-history';
 
 export interface ToolContext {
   /** Working directory for file operations */
@@ -36,7 +39,8 @@ export interface ToolContext {
   /** Permission mode (for sub-agents) */
   permissionMode?: string;
   /** Orchestration tier for sub-agents */
-  orchestrationTier?: 'single' | 'dual' | 'multi';
+  orchestrationTier?: 'single' | 'multi';
+  orchestrationProfileId?: string;
   /** SSE emitter callback — passed to sub-agents for permission forwarding */
   emitSSE?: (event: SSEEvent) => void;
   /** Abort signal from parent */
@@ -56,6 +60,7 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
     codepilot_browser_context: createBrowserContextTool(ctx),
     Glob: createGlobTool(ctx),
     Grep: createGrepTool(ctx),
+    SearchHistory: createSearchHistoryTool(ctx),
     Skill: createSkillTool(ctx.workingDirectory),
     Agent: createAgentTool({
       workingDirectory: ctx.workingDirectory,
@@ -64,8 +69,33 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
       parentModel: ctx.model,
       permissionMode: ctx.permissionMode,
       parentSessionId: ctx.sessionId,
-      // 中文注释：功能名称「向子 Agent 透传编排层级」，用法是让 dual/multi 路由在子智能体中真正生效。
+      // 中文注释：功能名称「向子 Agent 透传编排配置」，用法是让当前多模型方案在子智能体中真正生效。
       orchestrationTier: ctx.orchestrationTier,
+      orchestrationProfileId: ctx.orchestrationProfileId,
+      emitSSE: ctx.emitSSE,
+      abortSignal: ctx.abortSignal,
+    }),
+    ParallelAgents: createParallelAgentsTool({
+      workingDirectory: ctx.workingDirectory,
+      providerId: ctx.providerId,
+      sessionProviderId: ctx.sessionProviderId,
+      parentModel: ctx.model,
+      permissionMode: ctx.permissionMode,
+      parentSessionId: ctx.sessionId,
+      orchestrationTier: ctx.orchestrationTier,
+      orchestrationProfileId: ctx.orchestrationProfileId,
+      emitSSE: ctx.emitSSE,
+      abortSignal: ctx.abortSignal,
+    }),
+    PhaseRunner: createPhaseRunnerTool({
+      workingDirectory: ctx.workingDirectory,
+      providerId: ctx.providerId,
+      sessionProviderId: ctx.sessionProviderId,
+      parentModel: ctx.model,
+      permissionMode: ctx.permissionMode,
+      parentSessionId: ctx.sessionId,
+      orchestrationTier: ctx.orchestrationTier,
+      orchestrationProfileId: ctx.orchestrationProfileId,
       emitSSE: ctx.emitSSE,
       abortSignal: ctx.abortSignal,
     }),

@@ -33,6 +33,8 @@ const en = {
   'chatList.openFolder': 'Open Folder',
   'chatList.copyFolderPath': 'Copy Folder Path',
   'chatList.searchSessions': 'Search sessions...',
+  'chatList.searchingMessages': 'Searching message contents...',
+  'chatList.messageMatches': 'Message Matches',
   'chatList.noSessions': 'No sessions yet',
   'chatList.importFromCli': 'Import from Claude Code',
   'chatList.addProjectFolder': 'New Project',
@@ -76,6 +78,9 @@ const en = {
   'chat.referencedContexts': 'Referenced {{count}} contexts',
   'chat.deleteConfirm': 'Are you sure you want to delete this message?',
   'chat.searchPlaceholder': 'Search history...',
+  'skillNudge.message': 'This workflow used at least {toolCount} distinct tools by step {step}. Consider saving it as a reusable Skill.',
+  'skillNudge.saveButton': 'Save as Skill',
+  'skillNudge.savePrompt': 'Please help me turn the workflow we just completed into a reusable Skill, including a clear name, description, and step-by-step implementation.',
 
   // ── Settings: General ───────────────────────────────────────
   'settings.title': 'Settings',

@@ -21,6 +21,7 @@ import {
   getProvider,
   getDefaultProviderId,
   getActiveProvider,
+  getAllProviders,
   getSetting,
   getModelsForProvider,
   getProviderOptions,
@@ -873,3 +874,174 @@ function safeParseCapabilities(json: string | undefined | null): CatalogModel['c
 
 // ApiProvider now includes protocol, headers_json, env_overrides_json, role_models_json
 // directly — no type augmentation needed.
+
+// ── Auxiliary model routing ─────────────────────────────────────
+
+export type AuxiliaryTask = 'compact' | 'vision' | 'summarize' | 'web_extract';
+
+export type AuxiliaryResolutionSource =
+  | 'env_override'
+  | 'main_small'
+  | 'main_haiku'
+  | 'fallback_provider_small'
+  | 'fallback_provider_haiku'
+  | 'main_floor';
+
+export interface AuxiliaryModelResolution {
+  providerId: string;
+  modelId: string;
+  source: AuxiliaryResolutionSource;
+}
+
+export interface AuxiliaryRoutingContext {
+  main: ResolvedProvider;
+  isMainSdkProxyOnly: boolean;
+  others: ReadonlyArray<{
+    id: string;
+    roleModels: RoleModels;
+    isSdkProxyOnly: boolean;
+  }>;
+  envOverride?: { providerId?: string; modelId?: string };
+}
+
+/**
+ * 中文注释：功能名称「辅助模型纯路由函数」。
+ * 用法：为压缩、视觉、摘要等辅助任务在小模型、Haiku、其他 Provider 之间做 5 级回退选择。
+ */
+export function routeAuxiliaryModel(
+  task: AuxiliaryTask,
+  ctx: AuxiliaryRoutingContext,
+): AuxiliaryModelResolution {
+  void task;
+
+  const env = ctx.envOverride;
+  if (env?.providerId && env?.modelId) {
+    return {
+      providerId: env.providerId,
+      modelId: env.modelId,
+      source: 'env_override',
+    };
+  }
+
+  const main = ctx.main;
+  const mainId = main.provider?.id ?? 'env';
+
+  if (!ctx.isMainSdkProxyOnly && main.roleModels.small) {
+    return {
+      providerId: mainId,
+      modelId: main.roleModels.small,
+      source: 'main_small',
+    };
+  }
+
+  if (!ctx.isMainSdkProxyOnly && main.roleModels.haiku) {
+    return {
+      providerId: mainId,
+      modelId: main.roleModels.haiku,
+      source: 'main_haiku',
+    };
+  }
+
+  for (const other of ctx.others) {
+    if (other.isSdkProxyOnly) continue;
+    if (other.roleModels.small) {
+      return {
+        providerId: other.id,
+        modelId: other.roleModels.small,
+        source: 'fallback_provider_small',
+      };
+    }
+    if (other.roleModels.haiku) {
+      return {
+        providerId: other.id,
+        modelId: other.roleModels.haiku,
+        source: 'fallback_provider_haiku',
+      };
+    }
+  }
+
+  return {
+    providerId: mainId,
+    modelId: main.upstreamModel || main.model || '',
+    source: 'main_floor',
+  };
+}
+
+/**
+ * 中文注释：功能名称「解析辅助任务模型」。
+ * 用法：为上下文压缩等辅助任务根据主 Provider、其他 Provider 和环境覆盖自动挑选更便宜/更合适的模型。
+ */
+export function resolveAuxiliaryModel(
+  task: AuxiliaryTask,
+  opts: ResolveOptions = {},
+): AuxiliaryModelResolution {
+  const main = resolveProvider(opts);
+
+  let isMainSdkProxyOnly = false;
+  if (main.provider) {
+    const preset = findPresetForLegacy(
+      main.provider.base_url,
+      main.provider.provider_type,
+      main.protocol,
+    );
+    isMainSdkProxyOnly = preset?.sdkProxyOnly ?? false;
+  }
+
+  const others: Array<{ id: string; roleModels: RoleModels; isSdkProxyOnly: boolean }> = [];
+  if (main.provider) {
+    try {
+      const allProviders = getAllProviders();
+      for (const p of allProviders) {
+        if (p.id === main.provider.id) continue;
+        const hydrated = hydrateCCSwitchProvider(p) || p;
+        const protocol = (hydrated.protocol as Protocol) || inferProtocolFromLegacy(hydrated.provider_type, hydrated.base_url);
+        const preset = findPresetForLegacy(hydrated.base_url, hydrated.provider_type, protocol);
+        others.push({
+          id: hydrated.id,
+          roleModels: computeEffectiveRoleModels(hydrated, preset, protocol),
+          isSdkProxyOnly: preset?.sdkProxyOnly ?? false,
+        });
+      }
+    } catch (err) {
+      console.warn('[resolveAuxiliaryModel] getAllProviders failed:', err);
+    }
+  }
+
+  const envKey = task.toUpperCase();
+  return routeAuxiliaryModel(task, {
+    main,
+    isMainSdkProxyOnly,
+    others,
+    envOverride: {
+      providerId: process.env[`AUXILIARY_${envKey}_PROVIDER`],
+      modelId: process.env[`AUXILIARY_${envKey}_MODEL`],
+    },
+  });
+}
+
+/**
+ * 中文注释：功能名称「计算 Provider 的有效角色模型」。
+ * 用法：把 provider 自身 role_models_json 与 preset 默认角色模型合并，供辅助模型路由和其他轻量任务复用。
+ */
+export function computeEffectiveRoleModels(
+  provider: ApiProvider,
+  preset: ReturnType<typeof findPresetForLegacy>,
+  _protocol: Protocol,
+): RoleModels {
+  let roleModels = safeParseRoleModels(provider.role_models_json);
+  if (!roleModels.default && !roleModels.sonnet && preset?.defaultRoleModels) {
+    roleModels = { ...preset.defaultRoleModels, ...roleModels };
+  }
+  return roleModels;
+}
+
+function safeParseRoleModels(json: string | undefined | null): RoleModels {
+  if (!json) return {};
+  try {
+    const parsed = JSON.parse(json);
+    if (typeof parsed === 'object' && parsed !== null) return parsed as RoleModels;
+  } catch {
+    // ignore invalid JSON
+  }
+  return {};
+}

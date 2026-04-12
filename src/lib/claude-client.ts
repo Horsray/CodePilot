@@ -480,6 +480,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     knowledgeBaseEnabled: options.knowledgeBaseEnabled,
     teamMode: options.teamMode,
     orchestrationTier: options.orchestrationTier,
+    orchestrationProfileId: options.orchestrationProfileId,
 
     // Runtime-specific fields (SDK Runtime reads these from runtimeOptions)
     runtimeOptions: {
