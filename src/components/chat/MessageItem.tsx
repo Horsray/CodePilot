@@ -747,7 +747,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
 
         {/* Tool calls + thinking for assistant messages — single collapsible group */}
         {!isUser && timelineSteps.length > 0 && (
-          <AgentTimeline steps={timelineSteps} compact={true} />
+          <AgentTimeline steps={timelineSteps} compact={true} sessionId={sessionId} />
         )}
         {!isUser && timelineSteps.length === 0 && (pairedTools.length > 0 || thinking) && (
           <ToolActionsGroup

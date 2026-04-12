@@ -364,15 +364,18 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      // 中文注释：功能名称「MiniMax 三模型预设」，用法是在模型选择与协作映射中同时暴露 M2.7、VLM、Search。
+      { modelId: 'MiniMax-M2.7', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      { modelId: 'coding-plan-vlm', upstreamModelId: 'coding-plan-vlm', displayName: 'coding-plan-vlm', role: 'sonnet' },
+      { modelId: 'coding-plan-search', upstreamModelId: 'coding-plan-search', displayName: 'coding-plan-search', role: 'haiku' },
     ],
     defaultRoleModels: {
       default: 'MiniMax-M2.7',
-      sonnet: 'MiniMax-M2.7',
+      sonnet: 'coding-plan-vlm',
       opus: 'MiniMax-M2.7',
-      haiku: 'MiniMax-M2.7',
+      haiku: 'coding-plan-search',
     },
-    fields: ['api_key'],
+    fields: ['api_key', 'model_names', 'model_mapping'],
     iconKey: 'minimax',
     sdkProxyOnly: true,
     meta: {
@@ -396,15 +399,18 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      // 中文注释：功能名称「MiniMax 三模型预设」，用法是在模型选择与协作映射中同时暴露 M2.7、VLM、Search。
+      { modelId: 'MiniMax-M2.7', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      { modelId: 'coding-plan-vlm', upstreamModelId: 'coding-plan-vlm', displayName: 'coding-plan-vlm', role: 'sonnet' },
+      { modelId: 'coding-plan-search', upstreamModelId: 'coding-plan-search', displayName: 'coding-plan-search', role: 'haiku' },
     ],
     defaultRoleModels: {
       default: 'MiniMax-M2.7',
-      sonnet: 'MiniMax-M2.7',
+      sonnet: 'coding-plan-vlm',
       opus: 'MiniMax-M2.7',
-      haiku: 'MiniMax-M2.7',
+      haiku: 'coding-plan-search',
     },
-    fields: ['api_key'],
+    fields: ['api_key', 'model_names', 'model_mapping'],
     iconKey: 'minimax',
     sdkProxyOnly: true,
     meta: {
@@ -614,6 +620,27 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     meta: {
       docsUrl: 'https://docs.litellm.ai/docs/',
       billingModel: 'self_hosted',
+    },
+  },
+
+  // ── oLMX (Local) ──
+  {
+    key: 'olmx',
+    name: 'oLMX',
+    description: 'oLMX — run local OpenAI-compatible models',
+    descriptionZh: 'oLMX — 本地运行 OpenAI 兼容模型',
+    protocol: 'openai-compatible',
+    authStyle: 'api_key',
+    baseUrl: 'http://127.0.0.1:8000/v1',
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: 'Qwen3.5-35B-A3B-8bit', displayName: 'Qwen 3.5 35B' },
+    ],
+    fields: ['name', 'api_key', 'base_url', 'model_names'],
+    iconKey: 'server',
+    meta: {
+      billingModel: 'self_hosted',
+      notes: ['需要本地运行 oLMX 实例', '默认地址为 http://127.0.0.1:8000'],
     },
   },
 

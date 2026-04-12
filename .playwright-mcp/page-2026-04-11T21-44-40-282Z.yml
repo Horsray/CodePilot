@@ -1,0 +1,132 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e5]:
+        - img "CodePilot"
+      - generic [ref=e6]:
+        - button "New Conversation" [ref=e7]:
+          - img
+          - generic [ref=e8]: New Conversation
+        - button "Browser" [ref=e9]:
+          - img
+          - generic [ref=e10]: Browser
+        - button "Terminal" [ref=e11]:
+          - img
+          - generic [ref=e12]: Terminal
+        - button "Console" [ref=e13]:
+          - img
+          - generic [ref=e14]: Console
+        - button "Search sessions..." [ref=e15]:
+          - img
+          - generic [ref=e16]: Search sessions...
+      - generic [ref=e18]:
+        - link "Skills" [ref=e19] [cursor=pointer]:
+          - /url: /skills
+          - button "Skills" [ref=e20]:
+            - img
+            - text: Skills
+        - link "MCP" [ref=e21] [cursor=pointer]:
+          - /url: /mcp
+          - button "MCP" [ref=e22]:
+            - img
+            - text: MCP
+        - link "CLI Tools" [ref=e23] [cursor=pointer]:
+          - /url: /cli-tools
+          - button "CLI Tools" [ref=e24]:
+            - img
+            - text: CLI Tools
+        - link "Gallery" [ref=e25] [cursor=pointer]:
+          - /url: /gallery
+          - button "Gallery" [ref=e26]:
+            - img
+            - text: Gallery
+        - link "Knowledge Base" [ref=e27] [cursor=pointer]:
+          - /url: /knowledge-base
+          - button "Knowledge Base" [ref=e28]:
+            - img
+            - text: Knowledge Base
+        - link "Bridge" [ref=e29] [cursor=pointer]:
+          - /url: /bridge
+          - button "Bridge" [ref=e30]:
+            - img
+            - text: Bridge
+      - generic [ref=e32]:
+        - generic [ref=e33]: Threads
+        - button "New Project" [ref=e34]:
+          - img
+          - text: New Project
+      - paragraph [ref=e39]: No sessions yet
+      - link "Settings" [ref=e41] [cursor=pointer]:
+        - /url: /settings
+        - button "Settings" [ref=e42]:
+          - img
+          - text: Settings
+    - generic [ref=e45]:
+      - generic [ref=e47]:
+        - button "Git" [ref=e48]:
+          - img
+          - generic [ref=e49]: Git
+        - button "File Tree" [ref=e50]:
+          - img
+          - generic [ref=e51]: File Tree
+        - button "Dashboard" [ref=e52]:
+          - img
+          - generic [ref=e53]: Dashboard
+      - main [ref=e56]:
+        - generic [ref=e58]:
+          - generic [ref=e60]:
+            - generic [ref=e61]:
+              - generic [ref=e62] [cursor=pointer]:
+                - generic [ref=e63]:
+                  - generic [ref=e64]:
+                    - img [ref=e65]
+                    - generic [ref=e67]: Project Chat
+                  - generic [ref=e68]: Open a project folder, AI helps you code, debug and refactor
+                - button "Select Folder" [ref=e70]:
+                  - img
+                  - text: Select Folder
+              - generic [ref=e71] [cursor=pointer]:
+                - generic [ref=e72]:
+                  - generic [ref=e74]: Personal Assistant
+                  - generic [ref=e75]: Set up an AI that remembers you, manages schedule, assists creation
+                - button "Set Up Assistant" [ref=e77]
+            - paragraph [ref=e78]: Project Chat works within a codebase folder. Personal Assistant works across all your tasks without a specific project.
+          - group [ref=e83]:
+            - textbox "Message Claude..." [disabled] [ref=e84]
+            - group [ref=e85]:
+              - generic [ref=e86]:
+                - button [ref=e87]:
+                  - img
+                - button [ref=e88]:
+                  - img
+                - button [ref=e89]:
+                  - img
+                - 'button "Team: 关闭" [ref=e91]':
+                  - img
+                  - generic [ref=e92]: "Team: 关闭"
+                  - img
+                - 'button "Tier: 单模型" [ref=e94]':
+                  - img
+                  - generic [ref=e95]: "Tier: 单模型"
+                  - img
+                - button "Sonnet 4.6" [ref=e97]:
+                  - generic [ref=e98]: Sonnet 4.6
+                  - img
+              - button "Submit" [disabled]:
+                - img
+          - generic [ref=e100]:
+            - tablist [ref=e102]:
+              - tab "Code" [selected] [ref=e103]:
+                - img
+                - text: Code
+              - tab "Plan" [ref=e104]:
+                - img
+                - text: Plan
+            - button "Design Agent" [ref=e105]:
+              - img
+              - text: Design Agent
+            - button "Default" [ref=e106]:
+              - img
+              - generic [ref=e107]: Default
+              - img
+  - alert [ref=e108]

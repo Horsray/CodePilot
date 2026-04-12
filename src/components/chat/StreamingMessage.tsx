@@ -24,6 +24,7 @@ import {
   appendTimelineToolUse,
   cloneTimelineSteps,
   completeTimelineStep,
+  updateTimelineStatus,
   createTimelineAccumulator,
 } from '@/lib/agent-timeline';
 import { PENDING_KEY, buildReferenceImages } from '@/lib/image-ref-store';
@@ -126,6 +127,7 @@ interface StreamingMessageProps {
   referencedFiles?: string[];
   thinkingContent?: string;
   statusText?: string;
+  statusPayload?: Record<string, any>;
   onForceStop?: () => void;
 }
 
@@ -312,6 +314,7 @@ export function StreamingMessage({
   referencedFiles,
   thinkingContent,
   statusText,
+  statusPayload,
   onForceStop,
 }: StreamingMessageProps) {
   const { t } = useTranslation();
@@ -324,6 +327,7 @@ export function StreamingMessage({
     toolUseIds: string[];
     toolResults: Record<string, string>;
     enteredSynthesis: boolean;
+    lastStatusPayload: any;
   }>({
     isStreaming: false,
     thinking: '',
@@ -331,6 +335,7 @@ export function StreamingMessage({
     toolUseIds: [],
     toolResults: {},
     enteredSynthesis: false,
+    lastStatusPayload: null,
   });
   const bufferedContent = useBufferedContent(content, isStreaming);
   const runningTools = useMemo(
@@ -374,6 +379,7 @@ export function StreamingMessage({
     // 新一轮流式：重置增量状态，避免沿用上一轮缓存。
     if (isStreaming && !prev.isStreaming) {
       timelineStateRef.current = createTimelineAccumulator(now);
+      // 中文注释：功能名称「重置流式时间线快照」，用法是在新一轮消息开始时同步清空状态与模型上下文。
       prevSnapshotRef.current = {
         isStreaming: true,
         thinking: '',
@@ -381,11 +387,17 @@ export function StreamingMessage({
         toolUseIds: [],
         toolResults: {},
         enteredSynthesis: false,
+        lastStatusPayload: null,
       };
     }
 
     const currentState = timelineStateRef.current!;
     const currentPrev = prevSnapshotRef.current;
+
+    // status payload 增量：更新模型勋章和状态
+    if (statusPayload && statusPayload !== currentPrev.lastStatusPayload) {
+      updateTimelineStatus(currentState, statusPayload as any, now);
+    }
 
     // thinking 增量：不再整段重建，避免卡片位置固定只刷新旧内容。
     const currentThinking = thinkingContent || '';
@@ -459,8 +471,9 @@ export function StreamingMessage({
         toolResults.map((r) => [r.tool_use_id, `${r.content}::${r.is_error ? '1' : '0'}`]),
       ),
       enteredSynthesis: currentPrev.enteredSynthesis,
+      lastStatusPayload: statusPayload,
     };
-  }, [content, isStreaming, thinkingContent, toolResults, toolUses]);
+  }, [content, isStreaming, thinkingContent, toolResults, toolUses, statusPayload]);
 
   // Extract a human-readable summary of the running command
   const getRunningCommandSummary = (): string | undefined => {
@@ -690,6 +703,7 @@ export function StreamingMessage({
           <AgentTimeline
             steps={liveTimelineSteps}
             compact={true}
+            sessionId={sessionId}
           />
         ) : ((toolUses.length > 0 || thinkingContent) && (
           <ToolActionsGroup

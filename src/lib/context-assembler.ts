@@ -10,9 +10,11 @@
  *   Bridge:  workspace + session + assistant instructions + CLI tools (no widget)
  */
 
-import type { ChatSession } from '@/types';
+import type { ChatSession, CollaborationDecision } from '@/types';
 import { getSetting } from '@/lib/db';
 import { EGG_IMAGE_URL } from '@/lib/buddy';
+import { buildSystemPrompt } from './agent-system-prompt';
+import { analyzeCollaborationNeed } from './collaboration-decision';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -31,11 +33,19 @@ export interface ContextAssemblyConfig {
   imageAgentMode?: boolean;
   /** Whether this is an auto-trigger turn (heartbeat, onboarding hook, etc.) */
   autoTrigger?: boolean;
+  /** Team mode configuration */
+  teamMode?: 'off' | 'on' | 'auto';
+  /** Orchestration tier configuration */
+  orchestrationTier?: 'single' | 'dual' | 'multi';
+  /** User attachments for complexity analysis */
+  files?: import('@/types').FileAttachment[];
 }
 
 export interface AssembledContext {
   /** Final assembled system prompt string, or undefined if no layers produced content */
   systemPrompt: string | undefined;
+  /** Files discovered and referenced in the prompt (CLAUDE.md, etc.) */
+  referencedContexts?: string[];
   /** Whether generative UI is enabled (affects widget MCP server + streamClaude param) */
   generativeUIEnabled: boolean;
   /** Onboarding/checkin instructions (route.ts uses this for server-side completion detection) */
@@ -48,23 +58,33 @@ export interface AssembledContext {
   enableAgentsSkills?: boolean;
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
+  collaborationDecision?: CollaborationDecision;
 }
 
 // ── Main function ────────────────────────────────────────────────────
 
 export async function assembleContext(config: ContextAssemblyConfig): Promise<AssembledContext> {
-  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger } = config;
+  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, teamMode, orchestrationTier, autoTrigger, files } = config;
+  const _unused_history = conversationHistory;
   const t0 = Date.now();
 
   let workspacePrompt = '';
   let memoryHint = '';
   let assistantProjectInstructions = '';
+  const referencedContexts: string[] = [];
   let isAssistantProject = false;
   let includeAgentsMd = getSetting('include_agents_md') !== 'false';
   let includeClaudeMd = getSetting('include_claude_md') !== 'false';
   let enableAgentsSkills = getSetting('enable_agents_skills') !== 'false';
   let syncProjectRules = getSetting('sync_project_rules') !== 'false';
   let knowledgeBaseEnabled = getSetting('knowledge_base_enabled') !== 'false';
+  const collaborationDecision = analyzeCollaborationNeed({
+    prompt: userPrompt,
+    teamMode: teamMode || session.team_mode || 'on',
+    orchestrationTier: orchestrationTier || session.orchestration_tier || 'multi',
+    files,
+    conversationHistoryCount: conversationHistory?.length || 0,
+  });
 
   // ── Layer 1: Workspace prompt (if assistant project session) ──────
   // For imageAgentMode, we skip the workspace prompt and assistant instructions
@@ -214,9 +234,20 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     }
   }
 
-  // [STATIC 2] Session system prompt — set once at session creation
-  if (session.system_prompt) {
-    staticParts.push(session.system_prompt);
+  // [STATIC 2] Base Agent Persona & Task Orchestration
+  // Uses buildSystemPrompt to inject the core engineering persona,
+  // planning rules, and Team Orchestration instructions if enabled.
+  const basePromptResult = buildSystemPrompt({
+    sessionId: session.id,
+    workingDirectory: session.working_directory || undefined,
+    modelId: session.model,
+    teamMode: config.teamMode || session.team_mode || 'on',
+    orchestrationTier: orchestrationTier || session.orchestration_tier || 'multi',
+    collaborationDecision,
+  });
+  staticParts.push(basePromptResult.prompt);
+  if (basePromptResult.referencedFiles) {
+    referencedContexts.push(...basePromptResult.referencedFiles);
   }
 
   // [STATIC 3] Workspace identity files (soul/user/claude.md)
@@ -266,6 +297,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
 
   return {
     systemPrompt: finalSystemPrompt,
+    referencedContexts,
     generativeUIEnabled,
     assistantProjectInstructions,
     isAssistantProject,
@@ -274,6 +306,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     enableAgentsSkills,
     syncProjectRules,
     knowledgeBaseEnabled,
+    collaborationDecision,
   };
 }
 

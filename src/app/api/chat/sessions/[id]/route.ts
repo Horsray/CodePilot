@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { deleteSession, getSession, updateSessionWorkingDirectory, updateSessionTitle, updateSessionMode, updateSessionModel, updateSessionProviderId, clearSessionMessages, updateSdkSessionId, updateSessionPermissionProfile } from '@/lib/db';
+import { deleteSession, getSession, updateSessionWorkingDirectory, updateSessionTitle, updateSessionMode, updateSessionModel, updateSessionProviderId, clearSessionMessages, updateSdkSessionId, updateSessionPermissionProfile, updateSessionTeamMode, updateSessionOrchestrationTier } from '@/lib/db';
 import { autoApprovePendingForSession } from '@/lib/bridge/permission-broker';
 
 export async function GET(
@@ -40,6 +40,19 @@ export async function PATCH(
     }
     if (body.mode) {
       updateSessionMode(id, body.mode);
+    }
+    if (body.team_mode) {
+      if (body.team_mode !== 'off' && body.team_mode !== 'on' && body.team_mode !== 'auto') {
+        return Response.json({ error: 'team_mode must be "off", "on", or "auto"' }, { status: 400 });
+      }
+      updateSessionTeamMode(id, body.team_mode);
+    }
+    // 中文注释：功能名称「更新会话编排层级」，用法是在用户切换 single/dual/multi 后持久化选择。
+    if (body.orchestration_tier !== undefined) {
+      if (body.orchestration_tier !== 'single' && body.orchestration_tier !== 'dual' && body.orchestration_tier !== 'multi') {
+        return Response.json({ error: 'orchestration_tier must be "single", "dual", or "multi"' }, { status: 400 });
+      }
+      updateSessionOrchestrationTier(id, body.orchestration_tier);
     }
     // Track whether provider or model actually changed — if so, the old
     // sdk_session_id is stale and must be cleared to prevent resume failures

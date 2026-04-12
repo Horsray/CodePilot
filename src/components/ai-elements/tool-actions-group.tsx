@@ -111,6 +111,20 @@ function stepStatus(t: ToolAction): StepStatus {
   return t.isError ? 'err' : 'ok';
 }
 
+function getToolKey(t: ToolAction): string {
+  const k = toolKind(t.name);
+  const name = t.name;
+  if (k === 'bash') {
+    const cmd = sv(t.input, ['command', 'cmd', 'input']);
+    return `${name}:${cmd}`;
+  }
+  const p = fp(t.input);
+  if (p) {
+    return `${name}:${p}`;
+  }
+  return `${name}:${JSON.stringify(t.input)}`;
+}
+
 export interface DiffInfo {
   filename: string; fullPath: string; mode: 'edit' | 'create';
   added: number; removed: number;
@@ -162,15 +176,31 @@ function buildSegments(
     .map(s => s.trim())
     .filter(Boolean);
 
-  // Add all tools
+  // Requirement 2: Deduplicate tools - keep only the last call for the same name:path/cmd
+  const toolToKeepIndex = new Map<string, number>();
   for (let i = 0; i < tools.length; i++) {
+    const key = getToolKey(tools[i]);
+    toolToKeepIndex.set(key, i);
+  }
+
+  // Interleave tools with thinking
+  for (let i = 0; i < tools.length; i++) {
+    // If there's a thinking phase for this tool, we add it.
+    // Even if the tool is redundant, the thinking might contain important info.
+    // We'll merge consecutive thinking blocks later.
     if (phases.length > 0) {
       segs.push({ type: 'thinking', content: phases.shift()!, streaming: false });
     }
-    segs.push({
-      type: 'tool', tool: tools[i],
-      streamingOutput: tools[i].id === lastRunningId ? streamingToolOutput : undefined,
-    });
+
+    const key = getToolKey(tools[i]);
+    const isRedundant = toolToKeepIndex.get(key) !== i;
+
+    if (!isRedundant) {
+      segs.push({
+        type: 'tool', tool: tools[i],
+        streamingOutput: tools[i].id === lastRunningId ? streamingToolOutput : undefined,
+      });
+    }
   }
 
   // Any remaining thinking phases (or the current thinking if no tools are running)
@@ -179,7 +209,19 @@ function buildSegments(
     segs.push({ type: 'thinking', content: phases[i], streaming: isLast && isStreaming });
   }
 
-  return segs;
+  // Merge consecutive thinking segments to avoid multiple thinking rows
+  const merged: Segment[] = [];
+  for (const s of segs) {
+    const last = merged[merged.length - 1];
+    if (last?.type === 'thinking' && s.type === 'thinking') {
+      last.content += '\n\n' + s.content;
+      last.streaming = s.streaming;
+    } else {
+      merged.push(s);
+    }
+  }
+
+  return merged;
 }
 // ─── UI Components ────────────────────────────────────────────────────────────
 
@@ -283,7 +325,13 @@ function BashBlock({ output, live, isError }: { output: string; live: boolean; i
             : "border-border/25 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 dark:bg-zinc-950/50 dark:hover:bg-zinc-950/70"
         )}>
         <Terminal size={10} className="shrink-0 text-zinc-500/50" />
-        <span className="flex-1 truncate">{preview}{output.length > 60 ? '…' : ''}</span>
+        <span className="flex-1 truncate">
+          {live || open ? (
+            <>{preview}{output.length > 60 ? '…' : ''}</>
+          ) : (
+            <span className="text-zinc-500/60 italic">运行完毕，点击展开输出</span>
+          )}
+        </span>
         {live && <span className="inline-block h-2.5 w-1 animate-pulse rounded-sm bg-zinc-400/40" />}
         <CaretDown size={9} className={cn('shrink-0 text-zinc-500/40 transition-transform', open && 'rotate-180')} />
       </button>

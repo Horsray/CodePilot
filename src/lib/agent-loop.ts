@@ -20,7 +20,7 @@ import { emit as emitEvent } from './runtime/event-bus';
 import { createCheckpoint } from './file-checkpoint';
 import type { PermissionMode } from './permission-checker';
 import { buildCoreMessages } from './message-builder';
-import { getMessages } from './db';
+import { getMessages, getProvider } from './db';
 import { createPerfTrace } from './perf-trace';
 import { sendNotification } from './notification-manager';
 
@@ -71,6 +71,11 @@ export interface AgentLoopOptions {
   files?: import('@/types').FileAttachment[];
   /** Callback when runtime status changes */
   onRuntimeStatusChange?: (status: string) => void;
+  /** Team mode configuration */
+  teamMode?: 'off' | 'on' | 'auto';
+  orchestrationTier?: 'single' | 'dual' | 'multi';
+  // 中文注释：当前执行角色名称，用法是在流式状态事件里标识是 lead 还是某个子 Agent。
+  agentName?: string;
 }
 
 // ── Constants ───────────────────────────────────────────────────
@@ -119,9 +124,14 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
     permissionMode,
     mcpServers,
     bypassPermissions,
+    teamMode: _teamMode = 'on',
+    orchestrationTier = 'multi',
+    agentName = 'lead',
   } = options;
 
-  return new ReadableStream<string>({
+  const _unused_files = options.files;
+
+  return new ReadableStream({
     async start(controller) {
       const perfTrace = createPerfTrace('agent-loop', {
         id: traceId,
@@ -200,6 +210,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             providerId,
             sessionProviderId,
             model: modelOverride || sessionModel,
+            orchestrationTier,
             permissionContext: bypassPermissions ? undefined : {
               permissionMode: (permissionMode || 'normal') as PermissionMode,
               emitSSE: (event) => {
@@ -231,6 +242,8 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           model: modelOverride,
           sessionModel,
         }));
+        const resolvedProviderId = providerId || sessionProviderId || '';
+        const resolvedProviderName = resolvedProviderId ? (getProvider(resolvedProviderId)?.name || resolvedProviderId) : '';
         emitPerfStatus('model.create', { modelId }, Date.now() - modelStart);
 
         // 2. Load conversation history from DB
@@ -308,6 +321,19 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           step++;
           console.log(`[agentLoop] Session ${sessionId} starting step ${step}/${maxSteps}`);
           onRuntimeStatusChange?.(`Thinking... (step ${step}/${maxSteps})`);
+
+          // ── Step start report ─────────────────────────────────────
+          controller.enqueue(formatSSE({
+            type: 'status',
+            data: JSON.stringify({
+              message: `${modelId} is working...`,
+              step,
+              model: modelId,
+              agent: agentName,
+              providerId: resolvedProviderId,
+              providerName: resolvedProviderName,
+            }),
+          }));
 
           // Build provider options (Anthropic-specific)
           // For third-party proxies: disable adaptive thinking (not widely supported).
@@ -395,6 +421,10 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
                   usage: totalUsage,
                   finishReason,
                   toolsUsed: toolCalls?.map(tc => tc.toolName) || [],
+                  model: modelId,
+                  agent: agentName,
+                  providerId: resolvedProviderId,
+                  providerName: resolvedProviderName,
                 }),
               }));
             },
@@ -406,7 +436,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             },
 
             // repairToolCall: auto-fix invalid tool calls before failing
-            experimental_repairToolCall: async ({ toolCall, tools: availableTools, error }) => {
+            experimental_repairToolCall: async ({ toolCall, tools: _availableTools, error }) => {
               // Log the repair attempt for debugging
               console.warn(`[agent-loop] Repairing tool call "${toolCall.toolName}": ${error.message}`);
               // Return null to let the SDK retry with the model
@@ -452,12 +482,12 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             switch (event.type) {
               case 'text-delta':
                 hasContent = true;
-                controller.enqueue(formatSSE({ type: 'text', data: event.text }));
+                controller.enqueue(formatSSE({ type: 'text', data: event.text, model: modelId }));
                 break;
 
               case 'reasoning-delta':
                 hasContent = true;
-                controller.enqueue(formatSSE({ type: 'thinking', data: event.text }));
+                controller.enqueue(formatSSE({ type: 'thinking', data: event.text, model: modelId }));
                 break;
 
               case 'tool-call':
@@ -470,6 +500,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
                     name: event.toolName,
                     input: event.input,
                   }),
+                  model: modelId,
                 }));
                 break;
 
@@ -531,7 +562,6 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           const toolKey = stepToolNames.sort().join(',');
           const lastKey = lastToolNames.sort().join(',');
           if (toolKey === lastKey) {
-            const repeatCount = (step > 1) ? DOOM_LOOP_THRESHOLD : 1;
             // Simple heuristic: track repeats via a counter we'd need to add
             // For now, just detect immediate repeats and break after threshold
           }

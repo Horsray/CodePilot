@@ -84,19 +84,21 @@ function hasCredentialsForRequest(providerId?: string): boolean {
  * Pick the runtime to use for a given request.
  *
  * Priority:
- * 0. cli_enabled=false → ALWAYS use native (highest-priority constraint)
+ * 0. cli_enabled=false OR teamMode enabled → ALWAYS use native (highest-priority constraint)
  * 1. Explicit override (from function arg or per-session setting)
  * 2. Global user setting (agent_runtime)
  * 3. Auto: native if available, else claude-code-sdk
  */
-export function resolveRuntime(overrideId?: string, providerId?: string): AgentRuntime {
-  // 0. cli_enabled=false is an absolute constraint — never return SDK
+export function resolveRuntime(overrideId?: string, providerId?: string, teamMode?: 'off' | 'on' | 'auto'): AgentRuntime {
+  // 0. cli_enabled=false OR teamMode enabled is an absolute constraint — never return SDK
+  // Native runtime is required for CodePilot's custom Team Orchestration logic.
   const cliDisabled = getSetting('cli_enabled') === 'false';
+  const teamModeEnabled = teamMode && teamMode !== 'off';
 
-  if (cliDisabled) {
+  if (cliDisabled || teamModeEnabled) {
     const native = getRuntime('native');
     if (native) return native;
-    throw new Error('Native runtime not registered but CLI is disabled. This is a bug.');
+    throw new Error('Native runtime not registered but required. This is a bug.');
   }
 
   // 1. Explicit override
@@ -138,13 +140,15 @@ export function resolveRuntime(overrideId?: string, providerId?: string): AgentR
  * so callers (chat route, bridge) can prepare the right MCP config upfront.
  *
  * @param providerId - The provider for this request ('openai-oauth' forces native)
+ * @param teamMode - Current team mode ('off' | 'on' | 'auto')
  */
-export function predictNativeRuntime(providerId?: string): boolean {
+export function predictNativeRuntime(providerId?: string, teamMode?: 'off' | 'on' | 'auto'): boolean {
   // Non-Anthropic providers always force native
   if (providerId === 'openai-oauth') return true;
 
-  // cli_enabled=false → always native
+  // cli_enabled=false OR teamMode enabled → always native
   if (getSetting('cli_enabled') === 'false') return true;
+  if (teamMode && teamMode !== 'off') return true;
 
   // Explicit setting — but verify SDK is actually usable
   const settingId = getSetting('agent_runtime');

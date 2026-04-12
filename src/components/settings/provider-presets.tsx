@@ -41,6 +41,7 @@ export function getProviderIcon(name: string, baseUrl: string): ReactNode {
   if (url.includes("xiaomimimo") || lower.includes("mimo") || lower.includes("小米"))
     return <XiaomiMiMo size={18} />;
   if (url.includes("11434") || lower.includes("ollama")) return <Ollama size={18} />;
+  if (url.includes("127.0.0.1:8000") || lower.includes("olmx")) return <HardDrives size={18} />;
   if (lower.includes("bedrock")) return <Bedrock size={18} />;
   if (lower.includes("vertex") || lower.includes("google")) return <Google size={18} />;
   if (lower.includes("aws")) return <Aws size={18} />;
@@ -86,6 +87,7 @@ function resolveIcon(iconKey: string): ReactNode {
     bailian: <Bailian size={18} />,
     'xiaomi-mimo': <XiaomiMiMo size={18} />,
     ollama: <Ollama size={18} />,
+    olmx: <HardDrives size={18} />,
     server: <HardDrives size={18} className="text-muted-foreground" />,
   };
   return ICON_MAP[iconKey] || <HardDrives size={18} className="text-muted-foreground" />;
@@ -102,7 +104,9 @@ function toQuickPreset(vp: VendorPreset): QuickPreset {
         : vp.protocol === 'bedrock'
           ? 'bedrock'
           : vp.protocol === 'vertex'
-            ? 'vertex'
+          ? 'vertex'
+          : vp.protocol === 'openai-compatible'
+            ? 'openai-compatible'
             : vp.protocol === 'gemini-image'
               ? 'gemini-image'
               : 'anthropic';
@@ -164,6 +168,9 @@ export function findMatchingPreset(provider: ApiProvider): QuickPreset | undefin
   if (provider.provider_type === "gemini-image") return QUICK_PRESETS.find(p => p.key === "gemini-image");
   if (provider.provider_type === "generic-image") return QUICK_PRESETS.find(p => p.key === "custom-media");
   if (provider.provider_type === "cc-switch") return QUICK_PRESETS.find(p => p.key === "cc-switch");
+  if (provider.provider_type === "openai-compatible" && (provider.base_url?.includes("127.0.0.1:8000") || provider.base_url?.includes("olmx"))) {
+    return QUICK_PRESETS.find(p => p.key === "olmx");
+  }
   if (provider.provider_type === "anthropic" && provider.base_url === "https://api.anthropic.com") {
     return QUICK_PRESETS.find(p => p.key === "anthropic-official");
   }

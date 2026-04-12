@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useCallback, useEffect, type KeyboardEvent, type FormEvent } from 'react';
+import { useRef, useState, useCallback, useEffect, useMemo, type KeyboardEvent, type FormEvent } from 'react';
 import { Terminal } from "@/components/ui/icon";
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
@@ -12,13 +12,16 @@ import {
   PromptInputButton,
 } from '@/components/ai-elements/prompt-input';
 import type { ChatStatus } from 'ai';
-import type { FileAttachment } from '@/types';
+import type { FileAttachment, ApiProvider, CollaborationStrategy } from '@/types';
 import { SlashCommandButton } from './SlashCommandButton';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { CliToolsPopover } from './CliToolsPopover';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
 import { EffortSelectorDropdown } from './EffortSelectorDropdown';
+import { TeamModeSelector, type TeamMode } from './TeamModeSelector';
+import { OrchestrationTierSelector, type OrchestrationTier } from './OrchestrationTierSelector';
 import { FileAwareSubmitButton, AttachFileButton, FileTreeAttachmentBridge, FileAttachmentsCapsules, CommandBadge, CliBadge } from './MessageInputParts';
+import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
   TooltipContent,
@@ -49,9 +52,18 @@ interface MessageInputProps {
   onProviderModelChange?: (providerId: string, model: string) => void;
   workingDirectory?: string;
   onAssistantTrigger?: () => void;
+  /** Explicit mode (code, plan, ask) — if provided, overrides current internal session mode */
+  mode?: 'code' | 'plan' | 'ask' | string;
+  onModeChange?: (mode: string) => void;
   /** Effort selection lifted to parent for inclusion in the stream chain */
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
+  /** Team mode selection */
+  teamMode?: TeamMode;
+  onTeamModeChange?: (mode: TeamMode) => void;
+  /** Orchestration tier selection */
+  orchestrationTier?: OrchestrationTier;
+  onOrchestrationTierChange?: (tier: OrchestrationTier) => void;
   /** SDK init metadata — when available, used to validate command/skill availability */
   sdkInitMeta?: { tools?: unknown; slash_commands?: unknown; skills?: unknown } | null;
   /** Initial value to prefill in the input */
@@ -75,8 +87,14 @@ export function MessageInput({
   onProviderModelChange,
   workingDirectory,
   onAssistantTrigger,
+  mode,
+  onModeChange,
   effort: effortProp,
   onEffortChange,
+  teamMode = 'on',
+  onTeamModeChange,
+  orchestrationTier = 'multi',
+  onOrchestrationTierChange,
   sdkInitMeta,
   initialValue,
   isAssistantProject,
@@ -90,10 +108,37 @@ export function MessageInput({
   // key={initialValue} on the parent would be the canonical React way to reset,
   // but since this component remounts on navigation, useState(initialValue) is sufficient.
   const [inputValue, setInputValue] = useState(initialValue || '');
+  const [providerRecords, setProviderRecords] = useState<ApiProvider[]>([]);
+  const [collaborationStrategy, setCollaborationStrategy] = useState<CollaborationStrategy | null>(null);
 
   // --- Extracted hooks ---
   const popover = usePopoverState(modelName);
   const { providerGroups, currentProviderIdValue, modelOptions, currentModelOption, globalDefaultModel, globalDefaultProvider } = useProviderModels(providerId, modelName, imageGen.state.enabled);
+  const currentProvider = useMemo(
+    () => providerRecords.find((provider) => provider.id === currentProviderIdValue || provider.id === providerId) || null,
+    [providerId, providerRecords, currentProviderIdValue],
+  );
+  const collaborationSummary = useMemo(() => {
+    const currentLabel = currentProvider?.name ? `${currentProvider.name} / ${modelName || currentModelOption?.value || '未选择'}` : (modelName || currentModelOption?.value || '未选择');
+    const format = (model?: string) => model || '未配置';
+    // 中文注释：功能名称「生成当前协作摘要」，用法是在输入框下方仅展示各角色绑定的模型名称。
+    if (teamMode === 'off') return [];
+    if (orchestrationTier === 'single') {
+      return [{ role: '单模型', model: modelName || currentModelOption?.value || currentLabel }];
+    }
+    if (orchestrationTier === 'dual') {
+      return [
+        { role: '主执行', model: format(collaborationStrategy?.dual?.lead?.model) },
+        { role: '验证者', model: format(collaborationStrategy?.dual?.verifier?.model) },
+      ];
+    }
+    return [
+      { role: '研究员', model: format(collaborationStrategy?.multi?.researcher?.model) },
+      { role: '架构师', model: format(collaborationStrategy?.multi?.architect?.model) },
+      { role: '执行者', model: format(collaborationStrategy?.multi?.executor?.model) },
+      { role: '验证者', model: format(collaborationStrategy?.multi?.verifier?.model) },
+    ];
+  }, [collaborationStrategy, currentModelOption?.value, currentProvider, modelName, orchestrationTier, teamMode]);
 
   // Auto-correct model when it doesn't exist in the current provider's model list.
   // This prevents sending an unsupported model name (e.g. 'opus' to MiniMax which only has 'sonnet').
@@ -109,6 +154,34 @@ export function MessageInput({
       onProviderModelChange?.(currentProviderIdValue, fallback);
     }
   }, [modelName, modelOptions, currentProviderIdValue, onModelChange, onProviderModelChange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    // 中文注释：功能名称「同步 Provider 详情」，用法是在聊天输入区显示当前 Provider 的协作角色映射。
+    const fetchProviders = async () => {
+      try {
+        const res = await fetch('/api/providers');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) {
+          setProviderRecords(data.providers || []);
+        }
+        const globalRes = await fetch('/api/providers/options?providerId=__global__');
+        const globalData = globalRes.ok ? await globalRes.json() : null;
+        if (!cancelled) setCollaborationStrategy(globalData?.options?.collaboration_strategy || null);
+      } catch {
+        // ignore provider summary fetch errors
+      }
+    };
+
+    fetchProviders();
+    const handler = () => { fetchProviders(); };
+    window.addEventListener('provider-changed', handler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('provider-changed', handler);
+    };
+  }, []);
 
   const { badge, setBadge, cliBadge, setCliBadge, removeBadge, removeCliBadge, hasBadge } = useCommandBadge(textareaRef);
 
@@ -445,6 +518,18 @@ export function MessageInput({
                   </TooltipContent>
                 </Tooltip>
 
+                {/* Team mode selector */}
+                <TeamModeSelector
+                  value={teamMode}
+                  onChange={(v) => onTeamModeChange?.(v)}
+                />
+
+                {/* Orchestration tier selector */}
+                <OrchestrationTierSelector
+                  value={orchestrationTier}
+                  onChange={(v) => onOrchestrationTierChange?.(v)}
+                />
+
                 {/* Model selector */}
                 <ModelSelectorDropdown
                   currentModelValue={currentModelValue}
@@ -479,6 +564,24 @@ export function MessageInput({
           </PromptInput>
         </div>
       </div>
+
+      {teamMode !== 'off' && (
+        <div className="mx-auto mt-2 flex flex-wrap items-center gap-2 px-1">
+          <Badge variant="outline" className="text-[10px]">
+            {`Team ${teamMode} / ${orchestrationTier}`}
+          </Badge>
+          {currentProvider && (
+            <Badge variant="secondary" className="text-[10px]">
+              {currentProvider.name}
+            </Badge>
+          )}
+          {collaborationSummary.map((item) => (
+            <Badge key={`${item.role}-${item.model}`} variant="outline" className="text-[10px] font-mono">
+              {`${item.role}: ${item.model}`}
+            </Badge>
+          ))}
+        </div>
+      )}
 
     </div>
   );

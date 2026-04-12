@@ -6,6 +6,7 @@
  */
 
 import type { ToolSet } from 'ai';
+import type { SSEEvent } from '@/types';
 import { createReadTool } from './read';
 import { createWriteTool } from './write';
 import { createGlobTool } from './glob';
@@ -18,6 +19,8 @@ import { createSkillTool } from './skill';
 import { createAgentTool } from './agent';
 import { createTodoWriteTool } from './todo-write';
 import { createAskUserQuestionTool } from './ask-user-question';
+import { createCheckBackgroundJobTool } from './background-job';
+import { createGetDiagnosticsTool } from './get-diagnostics';
 
 export interface ToolContext {
   /** Working directory for file operations */
@@ -32,8 +35,10 @@ export interface ToolContext {
   model?: string;
   /** Permission mode (for sub-agents) */
   permissionMode?: string;
+  /** Orchestration tier for sub-agents */
+  orchestrationTier?: 'single' | 'dual' | 'multi';
   /** SSE emitter callback — passed to sub-agents for permission forwarding */
-  emitSSE?: (event: { type: string; data: string }) => void;
+  emitSSE?: (event: SSEEvent) => void;
   /** Abort signal from parent */
   abortSignal?: AbortSignal;
 }
@@ -59,10 +64,14 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
       parentModel: ctx.model,
       permissionMode: ctx.permissionMode,
       parentSessionId: ctx.sessionId,
+      // 中文注释：功能名称「向子 Agent 透传编排层级」，用法是让 dual/multi 路由在子智能体中真正生效。
+      orchestrationTier: ctx.orchestrationTier,
       emitSSE: ctx.emitSSE,
       abortSignal: ctx.abortSignal,
     }),
     TodoWrite: createTodoWriteTool(ctx),
     AskUserQuestion: createAskUserQuestionTool(ctx),
+    codepilot_check_background_job: createCheckBackgroundJobTool(ctx),
+    GetDiagnostics: createGetDiagnosticsTool(ctx),
   };
 }

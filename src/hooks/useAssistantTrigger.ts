@@ -72,7 +72,7 @@ interface UseAssistantTriggerOpts {
   sessionId: string;
   workingDirectory?: string;
   isStreaming: boolean;
-  mode: string;
+  mode: 'code' | 'plan' | 'ask';
   currentModel: string;
   currentProviderId: string;
   initialMessages: Message[];

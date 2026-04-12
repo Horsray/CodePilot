@@ -21,6 +21,7 @@ import type { TimelineFileChange, TimelineStep } from '@/types';
 
 interface AgentTimelineProps {
   steps: TimelineStep[];
+  sessionId?: string;
   compact?: boolean;
 }
 
@@ -40,6 +41,11 @@ function getStepStatusLabel(status: TimelineStep['status']): string {
     case 'stopped': return '已停止';
     default: return '等待中';
   }
+}
+
+function shortValue(value?: string): string {
+  if (!value) return '';
+  return value.split('/').pop() || value;
 }
 
 function formatObject(value: unknown): string {
@@ -222,7 +228,7 @@ function getActivityInfo(step: TimelineStep) {
   };
 }
 
-const TimelineStepCard = memo(function TimelineStepCard({ step, compact }: { step: TimelineStep; compact?: boolean }) {
+const TimelineStepCard = memo(function TimelineStepCard({ step, sessionId, compact }: { step: TimelineStep; sessionId?: string; compact?: boolean }) {
   const [open, setOpen] = useState(step.status === 'running' || step.status === 'retrying');
   const activity = getActivityInfo(step);
   const reasoningText = cleanReasoningText(step.reasoning);
@@ -264,13 +270,33 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, compact }: { ste
     return () => clearInterval(interval);
   }, [step.status]);
 
-  const handleBgRun = () => {
-    // This is a UI-only hint for CodePilot since our backend always runs in background.
-    // We just inform the user and hide the prompt.
-    setShowBgAction(false);
-    window.dispatchEvent(new CustomEvent('chat-status-message', { 
-      detail: { message: '任务已转入后台持续处理，你可以继续提问。' } 
-    }));
+  const handleBgRun = async () => {
+    // 中文注释：发送后台运行信号。如果该步骤中有正在运行的工具，通知后端将其转入后台。
+    if (!sessionId) return;
+    
+    const runningTools = step.toolCalls.filter(t => t.status === 'running');
+    if (runningTools.length === 0) {
+      setShowBgAction(false);
+      return;
+    }
+
+    try {
+      // Background all running tools in this step
+      await Promise.all(runningTools.map(t => 
+        fetch('/api/chat/background', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, toolCallId: t.id }),
+        })
+      ));
+
+      setShowBgAction(false);
+      window.dispatchEvent(new CustomEvent('chat-status-message', { 
+        detail: { message: '任务已转入后台持续处理，你可以继续提问。' } 
+      }));
+    } catch (err) {
+      console.error('[AgentTimeline] Failed to background tools:', err);
+    }
   };
 
   return (
@@ -321,6 +347,28 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, compact }: { ste
                     <div className="flex flex-col min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-[13px] font-bold text-foreground/90 leading-tight">{activity.label}</span>
+                        {step.agent && (
+                          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/5 border border-blue-500/10">
+                            <span className="text-[9px] font-medium text-blue-600 uppercase tracking-tight">
+                              {shortValue(step.agent)}
+                            </span>
+                          </div>
+                        )}
+                        {step.providerName && (
+                          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/5 border border-emerald-500/10">
+                            <span className="text-[9px] font-medium text-emerald-600 tracking-tight">
+                              {shortValue(step.providerName)}
+                            </span>
+                          </div>
+                        )}
+                        {step.model && (
+                          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-muted/50 border border-border/20">
+                            <Brain size={10} className="text-muted-foreground/70" />
+                            <span className="text-[9px] font-medium text-muted-foreground uppercase tracking-tight">
+                              {step.model.split('/').pop()}
+                            </span>
+                          </div>
+                        )}
                         {/* Whitelist badge (Trae-like) - Matches agent-tools.ts logic */}
                         {step.status === 'running' && step.toolCalls.length > 0 && step.toolCalls.every(t => 
                           ['Read', 'Glob', 'Grep', 'Skill', 'Agent', 'TodoWrite'].includes(t.name) || 
@@ -384,6 +432,32 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, compact }: { ste
                     </div>
                     <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/80 font-medium">
                       {previewText(reasoningText, compact ? 300 : 800)}
+                    </div>
+                  </div>
+                )}
+
+                {(step.agent || step.providerName || step.model) && (
+                  <div className="rounded-lg border border-border/20 bg-background/40 p-2.5">
+                    <div className="mb-1.5 text-[11px] font-bold text-foreground/60 uppercase tracking-wider">实际命中</div>
+                    <div className="flex flex-wrap gap-2">
+                      {step.agent && (
+                        <div className="rounded-md border border-blue-500/10 bg-blue-500/5 px-2 py-1 text-[11px]">
+                          <span className="text-muted-foreground/70">Agent: </span>
+                          <span className="font-mono text-blue-600">{step.agent}</span>
+                        </div>
+                      )}
+                      {step.providerName && (
+                        <div className="rounded-md border border-emerald-500/10 bg-emerald-500/5 px-2 py-1 text-[11px]">
+                          <span className="text-muted-foreground/70">Provider: </span>
+                          <span className="font-mono text-emerald-600">{step.providerName}</span>
+                        </div>
+                      )}
+                      {step.model && (
+                        <div className="rounded-md border border-border/20 bg-muted/20 px-2 py-1 text-[11px]">
+                          <span className="text-muted-foreground/70">Model: </span>
+                          <span className="font-mono text-foreground/80">{step.model}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -461,7 +535,7 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, compact }: { ste
  * 中文注释：功能名称「智能体执行时间线」，用法是在流式消息和历史消息中复用同一组件，
  * 把统一的 TimelineStep[] 渲染成步骤卡片和执行链路。
  */
-export const AgentTimeline = memo(function AgentTimeline({ steps, compact = false }: AgentTimelineProps) {
+export const AgentTimeline = memo(function AgentTimeline({ steps, sessionId, compact = false }: AgentTimelineProps) {
   const visibleSteps = steps.filter((step) => {
     return step.reasoning.trim()
       || step.output.trim()
@@ -509,6 +583,7 @@ export const AgentTimeline = memo(function AgentTimeline({ steps, compact = fals
                 <TimelineStepCard
                   key={step.id}
                   step={step}
+                  sessionId={sessionId}
                   compact={compact}
                 />
               ))}
@@ -519,6 +594,7 @@ export const AgentTimeline = memo(function AgentTimeline({ steps, compact = fals
     </div>
   );
 }, (prev, next) => {
-  return prev.steps.length === next.steps.length &&
+  return prev.sessionId === next.sessionId &&
+         prev.steps.length === next.steps.length &&
          prev.steps.every((s, i) => s.status === next.steps[i].status && s.reasoning === next.steps[i].reasoning);
 });

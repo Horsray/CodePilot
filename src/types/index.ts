@@ -2,6 +2,21 @@
 // Database Models
 // ==========================================
 
+export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'timeout';
+
+export interface BackgroundJob {
+  id: string;
+  session_id: string;
+  tool_name: string;
+  tool_input: string;
+  status: BackgroundJobStatus;
+  output?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -24,6 +39,8 @@ export interface ChatSession {
   permission_profile?: 'default' | 'full_access';
   context_summary?: string;
   context_summary_updated_at?: string;
+  team_mode?: 'off' | 'on' | 'auto';
+  orchestration_tier?: 'single' | 'dual' | 'multi';
 }
 
 // ==========================================
@@ -190,13 +207,20 @@ export interface TimelineStep {
   usage: TokenUsage | null;
   error: string | null;
   retryCount: number;
+  model?: string;
+  // 中文注释：当前步骤命中的角色名称，用法是在时间线中显示 Lead / Researcher / Executor 等实际执行者。
+  agent?: string;
+  // 中文注释：当前步骤命中的 Provider ID，用法是在运行时面板中判断模型来自哪个渠道。
+  providerId?: string;
+  // 中文注释：当前步骤命中的 Provider 名称，用法是在时间线中给用户展示更易读的渠道名称。
+  providerName?: string;
 }
 
 // Structured message content blocks (stored as JSON in messages.content)
 export type MessageContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'thinking'; thinking: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'thinking'; thinking: string; model?: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown; model?: string }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; media?: MediaBlock[] }
   | { type: 'timeline'; steps: TimelineStep[] }
   | { type: 'code'; language: string; code: string };
@@ -318,6 +342,35 @@ export interface ProviderOptions {
   default_model?: string;
   /** Global default model's provider ID — which provider the default model belongs to */
   default_model_provider?: string;
+  // 中文注释：协作角色绑定，用法是在双模型/多模型策略中指定每个角色对应的服务商与模型。
+  collaboration_strategy?: CollaborationStrategy;
+}
+
+export interface CollaborationBinding {
+  providerId?: string;
+  model?: string;
+}
+
+export interface CollaborationStrategy {
+  dual?: {
+    lead?: CollaborationBinding;
+    verifier?: CollaborationBinding;
+  };
+  multi?: {
+    researcher?: CollaborationBinding;
+    architect?: CollaborationBinding;
+    executor?: CollaborationBinding;
+    verifier?: CollaborationBinding;
+  };
+}
+
+export interface CollaborationDecision {
+  shouldCollaborate: boolean;
+  mode: 'direct' | 'lead_plus_verifier' | 'team_workflow';
+  leadMayImplementDirectly: boolean;
+  reasons: string[];
+  suggestedRoles: Array<'lead' | 'researcher' | 'architect' | 'executor' | 'verifier'>;
+  summary: string;
 }
 
 export interface ProvidersResponse {
@@ -352,6 +405,9 @@ export interface CreateSessionRequest {
   mode?: string;
   provider_id?: string;
   permission_profile?: string;
+  team_mode?: 'off' | 'on' | 'auto';
+  // 中文注释：会话编排层级，用法是在新建会话时持久化 single/dual/multi 选择。
+  orchestration_tier?: 'single' | 'dual' | 'multi';
 }
 
 export interface SendMessageRequest {
@@ -542,6 +598,7 @@ export type SSEEventType =
 export interface SSEEvent {
   type: SSEEventType;
   data: string;
+  model?: string;
 }
 
 // ==========================================
@@ -681,6 +738,8 @@ export interface AssistantWorkspaceState {
   enableAgentsSkills?: boolean;
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
+  teamMode?: 'off' | 'on' | 'auto';
+  orchestrationTier?: 'single' | 'dual' | 'multi';
 }
 
 export interface AssistantWorkspaceFiles {
@@ -1027,6 +1086,7 @@ export interface SessionStreamSnapshot {
   toolResults: ToolResultInfo[];
   streamingToolOutput: string;
   statusText: string | undefined;
+  statusPayload?: Record<string, any>;
   pendingPermission: PermissionRequestEvent | null;
   permissionResolved: 'allow' | 'deny' | null;
   tokenUsage: TokenUsage | null;
@@ -1098,6 +1158,10 @@ export interface ClaudeStreamOptions {
   enableAgentsSkills?: boolean;
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
+  // 中文注释：团队模式开关，用法是在运行时决定是否启用协作策略。
+  teamMode?: 'off' | 'on' | 'auto';
+  // 中文注释：模型编排层级，用法是在运行时决定单模型/双模型/多模型路由。
+  orchestrationTier?: 'single' | 'dual' | 'multi';
 }
 
 // ==========================================

@@ -15,8 +15,8 @@ interface ToolResultInfo {
 }
 
 export interface SSECallbacks {
-  onText: (accumulated: string) => void;
-  onToolUse: (tool: ToolUseInfo) => void;
+  onText: (accumulated: string, model?: string) => void;
+  onToolUse: (tool: ToolUseInfo, model?: string) => void;
   onToolResult: (result: ToolResultInfo) => void;
   onToolOutput: (data: string) => void;
   onToolProgress: (toolName: string, elapsedSeconds: number) => void;
@@ -29,7 +29,7 @@ export interface SSECallbacks {
   onRewindPoint: (sdkUserMessageId: string) => void;
   onReferencedContexts?: (files: string[]) => void;
   onUiAction?: (action: { action: string; url?: string; tab?: string; terminalId?: string; newTab?: boolean }) => void;
-  onThinking?: (delta: string) => void;
+  onThinking?: (delta: string, model?: string) => void;
   onKeepAlive: () => void;
   onError: (accumulated: string) => void;
   onStatusPayload?: (payload: Record<string, unknown>) => void;
@@ -57,12 +57,12 @@ function handleSSEEvent(
   switch (event.type) {
     case 'text': {
       const next = accumulated + event.data;
-      callbacks.onText(next);
+      callbacks.onText(next, event.model);
       return next;
     }
 
     case 'thinking': {
-      callbacks.onThinking?.(event.data);
+      callbacks.onThinking?.(event.data, event.model);
       return accumulated;
     }
 
@@ -73,7 +73,7 @@ function handleSSEEvent(
           id: toolData.id,
           name: toolData.name,
           input: toolData.input,
-        });
+        }, event.model);
       } catch {
         // skip malformed tool_use data
       }
@@ -337,8 +337,8 @@ export function useSSEStream() {
 
       // Proxy through ref so callers always hit the latest callbacks
       const proxied: SSECallbacks = {
-        onText: (a) => callbacksRef.current?.onText(a),
-        onToolUse: (t) => callbacksRef.current?.onToolUse(t),
+        onText: (a, m) => callbacksRef.current?.onText(a, m),
+        onToolUse: (t, m) => callbacksRef.current?.onToolUse(t, m),
         onToolResult: (r) => callbacksRef.current?.onToolResult(r),
         onToolOutput: (d) => callbacksRef.current?.onToolOutput(d),
         onToolProgress: (n, s) => callbacksRef.current?.onToolProgress(n, s),
@@ -351,7 +351,7 @@ export function useSSEStream() {
         onRewindPoint: (id) => callbacksRef.current?.onRewindPoint(id),
         onReferencedContexts: (f) => callbacksRef.current?.onReferencedContexts?.(f),
         onUiAction: (action) => callbacksRef.current?.onUiAction?.(action),
-        onThinking: (d) => callbacksRef.current?.onThinking?.(d),
+        onThinking: (d, m) => callbacksRef.current?.onThinking?.(d, m),
         onKeepAlive: () => callbacksRef.current?.onKeepAlive(),
         onError: (a) => callbacksRef.current?.onError(a),
         onStatusPayload: (payload) => callbacksRef.current?.onStatusPayload?.(payload),

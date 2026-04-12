@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
-import type { ChatSession, Message, SettingsMap, TaskItem, TaskStatus, ApiProvider, CreateProviderRequest, UpdateProviderRequest, MediaJob, MediaJobStatus, MediaJobItem, MediaJobItemStatus, MediaContextEvent, BatchConfig, CustomCliTool, ScheduledTask, CustomRule } from '@/types';
+import type { ChatSession, Message, SettingsMap, TaskItem, TaskStatus, ApiProvider, CreateProviderRequest, UpdateProviderRequest, MediaJob, MediaJobStatus, MediaJobItem, MediaJobItemStatus, MediaContextEvent, BatchConfig, CustomCliTool, ScheduledTask, CustomRule, BackgroundJob, BackgroundJobStatus } from '@/types';
 import type { ChannelType, ChannelBinding } from './bridge/types';
 import { getLocalDateString, localDayStartAsUTC } from './utils';
 
@@ -104,7 +104,9 @@ function initDb(db: Database.Database): void {
       model TEXT NOT NULL DEFAULT '',
       system_prompt TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
-      sdk_session_id TEXT NOT NULL DEFAULT ''
+      sdk_session_id TEXT NOT NULL DEFAULT '',
+      team_mode TEXT NOT NULL DEFAULT 'on' CHECK(team_mode IN ('off', 'on', 'auto')),
+      orchestration_tier TEXT NOT NULL DEFAULT 'multi' CHECK(orchestration_tier IN ('single', 'dual', 'multi'))
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -324,6 +326,21 @@ function initDb(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- Background Jobs: persisted state for tool calls moved to background
+    CREATE TABLE IF NOT EXISTS background_jobs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      tool_input TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'timeout')),
+      output TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    );
   `);
 
   // Run migrations for existing databases
@@ -399,6 +416,12 @@ function migrateDb(db: Database.Database): void {
   }
   if (!colNames.includes('context_summary_updated_at')) {
     safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN context_summary_updated_at TEXT NOT NULL DEFAULT ''");
+  }
+  if (!colNames.includes('team_mode')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN team_mode TEXT NOT NULL DEFAULT 'off'");
+  }
+  if (!colNames.includes('orchestration_tier')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN orchestration_tier TEXT NOT NULL DEFAULT 'single'");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_runtime_status ON chat_sessions(runtime_status)");
 
@@ -991,6 +1014,8 @@ export function createSession(
   mode?: string,
   providerId?: string,
   permissionProfile?: string,
+  teamMode?: 'off' | 'on' | 'auto',
+  orchestrationTier?: 'single' | 'dual' | 'multi',
 ): ChatSession {
   const db = getDb();
   const id = crypto.randomBytes(16).toString('hex');
@@ -998,9 +1023,27 @@ export function createSession(
   const wd = workingDirectory || '';
   const projectName = path.basename(wd);
 
+  // 中文注释：功能名称「创建会话并持久化编排配置」，用法是在新会话创建时同时保存 team_mode 和 orchestration_tier。
   db.prepare(
-    'INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, sdk_session_id, project_name, status, mode, sdk_cwd, provider_id, permission_profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, title || 'New Chat', now, now, model || '', systemPrompt || '', wd, '', projectName, 'active', mode || 'code', wd, providerId || '', permissionProfile || 'default');
+    'INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, sdk_session_id, project_name, status, mode, sdk_cwd, provider_id, permission_profile, team_mode, orchestration_tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    id,
+    title || 'New Chat',
+    now,
+    now,
+    model || '',
+    systemPrompt || '',
+    wd,
+    '',
+    projectName,
+    'active',
+    mode || 'code',
+    wd,
+    providerId || '',
+    permissionProfile || 'default',
+    teamMode || 'on',
+    orchestrationTier || 'multi',
+  );
 
   return getSession(id)!;
 }
@@ -1089,6 +1132,48 @@ export function updateSessionMode(id: string, mode: string): void {
 export function updateSessionPermissionProfile(id: string, profile: string): void {
   const db = getDb();
   db.prepare('UPDATE chat_sessions SET permission_profile = ? WHERE id = ?').run(profile, id);
+}
+
+export function updateSessionTeamMode(id: string, mode: 'off' | 'on' | 'auto'): void {
+  const db = getDb();
+  db.prepare('UPDATE chat_sessions SET team_mode = ? WHERE id = ?').run(mode, id);
+}
+
+export function updateSessionOrchestrationTier(id: string, tier: 'single' | 'dual' | 'multi'): void {
+  const db = getDb();
+  db.prepare('UPDATE chat_sessions SET orchestration_tier = ? WHERE id = ?').run(tier, id);
+}
+
+/**
+ * Find a provider ID that supports a specific model ID.
+ * Useful for multi-model orchestration when routing to specialized agents.
+ */
+export function findProviderIdByModel(modelId: string): string | undefined {
+  const db = getDb();
+  // Check provider_models table first (user-configured models)
+  const pm = db.prepare('SELECT provider_id FROM provider_models WHERE model_id = ? OR upstream_model_id = ?').get(modelId, modelId) as { provider_id: string } | undefined;
+  if (pm) return pm.provider_id;
+
+  // Fallback: check vendors by name (fuzzy match)
+  const providers = db.prepare('SELECT id, name FROM api_providers WHERE is_active = 1').all() as Array<{ id: string, name: string }>;
+  const lowerModel = modelId.toLowerCase();
+  
+  if (lowerModel.includes('qwen') || lowerModel.includes('olmx')) {
+    const olmx = providers.find(p => p.name.toLowerCase().includes('olmx'));
+    if (olmx) return olmx.id;
+  }
+  
+  if (lowerModel.includes('minimax')) {
+    const mm = providers.find(p => p.name.toLowerCase().includes('minimax') || p.name.toLowerCase().includes('cc-switch'));
+    if (mm) return mm.id;
+  }
+
+  if (lowerModel.includes('claude') || lowerModel.includes('opus') || lowerModel.includes('sonnet')) {
+    const anthropic = providers.find(p => p.name.toLowerCase().includes('anthropic') || p.name.toLowerCase().includes('cc-switch'));
+    if (anthropic) return anthropic.id;
+  }
+
+  return undefined;
 }
 
 // ==========================================
@@ -1431,9 +1516,17 @@ export function getProviderOptions(providerId: string): import('@/types').Provid
   if (providerId === '__global__') {
     const defaultModel = getSetting('global_default_model') || undefined;
     const defaultModelProvider = getSetting('global_default_model_provider') || undefined;
+    let collaborationStrategy: import('@/types').ProviderOptions['collaboration_strategy'];
+    try {
+      const raw = getSetting('collaboration_strategy_json') || '';
+      collaborationStrategy = raw ? JSON.parse(raw) : undefined;
+    } catch {
+      collaborationStrategy = undefined;
+    }
     return {
       ...(defaultModel ? { default_model: defaultModel } : {}),
       ...(defaultModelProvider ? { default_model_provider: defaultModelProvider } : {}),
+      ...(collaborationStrategy ? { collaboration_strategy: collaborationStrategy } : {}),
     };
   }
   if (providerId === 'env') {
@@ -1459,6 +1552,9 @@ export function setProviderOptions(providerId: string, options: import('@/types'
   if (providerId === '__global__') {
     if (options.default_model !== undefined) setSetting('global_default_model', options.default_model);
     if (options.default_model_provider !== undefined) setSetting('global_default_model_provider', options.default_model_provider);
+    if (options.collaboration_strategy !== undefined) {
+      setSetting('collaboration_strategy_json', JSON.stringify(options.collaboration_strategy));
+    }
     // Sync legacy default_provider_id so backend consumers (doctor, repair, etc.) stay consistent
     if ((options as Record<string, unknown>).legacy_default_provider_id !== undefined) {
       setSetting('default_provider_id', (options as Record<string, unknown>).legacy_default_provider_id as string);
@@ -2759,6 +2855,65 @@ export function deleteCustomRule(id: string): boolean {
   const db = getDb();
   const result = db.prepare('DELETE FROM custom_rules WHERE id = ?').run(id);
   return result.changes > 0;
+}
+
+// ==========================================
+// Background Job Operations
+// ==========================================
+
+export function createBackgroundJob(params: {
+  id: string;
+  sessionId: string;
+  toolName: string;
+  toolInput: string;
+}): BackgroundJob {
+  const db = getDb();
+  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+  db.prepare(
+    'INSERT INTO background_jobs (id, session_id, tool_name, tool_input, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(params.id, params.sessionId, params.toolName, params.toolInput, 'running', now, now);
+  return getBackgroundJob(params.id)!;
+}
+
+export function getBackgroundJob(id: string): BackgroundJob | undefined {
+  const db = getDb();
+  return db.prepare('SELECT * FROM background_jobs WHERE id = ?').get(id) as BackgroundJob | undefined;
+}
+
+export function updateBackgroundJob(id: string, updates: {
+  status?: BackgroundJobStatus;
+  output?: string;
+  error?: string;
+}): void {
+  const db = getDb();
+  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+  const fields: string[] = ['updated_at = ?'];
+  const values: unknown[] = [now];
+
+  if (updates.status) {
+    fields.push('status = ?');
+    values.push(updates.status);
+    if (['completed', 'failed', 'timeout'].includes(updates.status)) {
+      fields.push('completed_at = ?');
+      values.push(now);
+    }
+  }
+  if (updates.output !== undefined) {
+    fields.push('output = ?');
+    values.push(updates.output);
+  }
+  if (updates.error !== undefined) {
+    fields.push('error = ?');
+    values.push(updates.error);
+  }
+
+  values.push(id);
+  db.prepare(`UPDATE background_jobs SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function listBackgroundJobs(sessionId: string): BackgroundJob[] {
+  const db = getDb();
+  return db.prepare('SELECT * FROM background_jobs WHERE session_id = ? ORDER BY created_at DESC').all(sessionId) as BackgroundJob[];
 }
 
 export function closeDb(): void {

@@ -291,7 +291,7 @@ export function PresetConnectDialog({
       setBaseUrl(preset.base_url);
       setName(preset.name);
       setExtraEnv(preset.extra_env);
-      setModelName("");
+      setModelName(preset.key.startsWith("minimax") ? "MiniMax-M2.7" : "");
       // Use authStyle directly from preset (single source of truth)
       const detectedStyle = (preset.authStyle === 'auth_token' ? 'auth_token' : 'api_key') as 'api_key' | 'auth_token';
       // If preset doesn't expose api_key field, pre-fill from extra_env default
@@ -308,13 +308,13 @@ export function PresetConnectDialog({
       setHasStoredKey(false);
       setAuthStyle(detectedStyle);
       setInitialAuthStyle(detectedStyle);
-      setMapSonnet("");
-      setMapOpus("");
-      setMapHaiku("");
+      setMapSonnet(preset.key.startsWith("minimax") ? "coding-plan-vlm" : "");
+      setMapOpus(preset.key.startsWith("minimax") ? "MiniMax-M2.7" : "");
+      setMapHaiku(preset.key.startsWith("minimax") ? "coding-plan-search" : "");
       setHeadersJson("{}");
       setEnvOverridesJson("");
       setNotes("");
-      setModelNamesText("");
+      setModelNamesText(preset.key.startsWith("minimax") ? "MiniMax-M2.7\ncoding-plan-vlm\ncoding-plan-search" : "");
       setMediaProtocol("custom-image");
       setMediaEndpoint("");
       setHasStoredApiKey(false);
@@ -322,7 +322,7 @@ export function PresetConnectDialog({
         setName("通用中转平台");
         setMediaProtocol("custom-image");
       }
-      setShowAdvanced(false);
+      setShowAdvanced(preset.key.startsWith("minimax"));
     }
   }, [open, preset, isEdit, editProvider]);
 
@@ -731,7 +731,11 @@ export function PresetConnectDialog({
               <Textarea
                 value={modelNamesText}
                 onChange={(e) => setModelNamesText(e.target.value)}
-                placeholder={isZh ? "claude-sonnet-4-5\nclaude-opus-4-1" : "claude-sonnet-4-5\nclaude-opus-4-1"}
+                placeholder={preset.key.startsWith("minimax")
+                  ? "MiniMax-M2.7\ncoding-plan-vlm\ncoding-plan-search"
+                  : isZh
+                    ? "claude-sonnet-4-5\nclaude-opus-4-1"
+                    : "claude-sonnet-4-5\nclaude-opus-4-1"}
                 className="text-sm font-mono min-h-[72px]"
                 rows={4}
               />
@@ -796,33 +800,37 @@ export function PresetConnectDialog({
                   {preset.fields.includes("model_mapping") && (
                     <div className="space-y-2">
                       <Label className="text-xs text-muted-foreground">
-                        {isZh ? '模型名称映射' : 'Model Name Mapping'}
+                        {isZh ? '协作模型映射' : 'Collaboration Model Mapping'}
                       </Label>
                       <p className="text-[11px] text-muted-foreground leading-relaxed">
-                        {isZh
-                          ? '如果服务商使用不同的模型名称（如 claude-sonnet-4-6），在此映射。留空则使用默认名称（sonnet / opus / haiku）。'
-                          : 'Map model names if the provider uses different IDs (e.g. claude-sonnet-4-6). Leave empty to use defaults (sonnet / opus / haiku).'}
+                        {preset.key.startsWith("minimax")
+                          ? (isZh
+                              ? '用于配置团队协作时各角色使用的模型。Researcher 对应 Haiku/Search，Executor 对应 Sonnet/VLM，Architect 对应 Opus/M2.7。'
+                              : 'Configure which model each collaboration role uses. Researcher maps to Haiku/Search, Executor to Sonnet/VLM, Architect to Opus/M2.7.')
+                          : (isZh
+                              ? '如果服务商使用不同的模型名称（如 claude-sonnet-4-6），在此映射。留空则使用默认名称（sonnet / opus / haiku）。'
+                              : 'Map model names if the provider uses different IDs (e.g. claude-sonnet-4-6). Leave empty to use defaults (sonnet / opus / haiku).')}
                       </p>
                       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 items-center">
-                        <span className="text-xs text-muted-foreground text-right">Sonnet</span>
+                        <span className="text-xs text-muted-foreground text-right">{preset.key.startsWith("minimax") ? 'Executor' : 'Sonnet'}</span>
                         <Input
                           value={mapSonnet}
                           onChange={(e) => setMapSonnet(e.target.value)}
-                          placeholder="claude-sonnet-4-6"
+                          placeholder={preset.key.startsWith("minimax") ? "coding-plan-vlm" : "claude-sonnet-4-6"}
                           className="text-sm font-mono h-8"
                         />
-                        <span className="text-xs text-muted-foreground text-right">Opus</span>
+                        <span className="text-xs text-muted-foreground text-right">{preset.key.startsWith("minimax") ? 'Architect' : 'Opus'}</span>
                         <Input
                           value={mapOpus}
                           onChange={(e) => setMapOpus(e.target.value)}
-                          placeholder="claude-opus-4-6"
+                          placeholder={preset.key.startsWith("minimax") ? "MiniMax-M2.7" : "claude-opus-4-6"}
                           className="text-sm font-mono h-8"
                         />
-                        <span className="text-xs text-muted-foreground text-right">Haiku</span>
+                        <span className="text-xs text-muted-foreground text-right">{preset.key.startsWith("minimax") ? 'Researcher' : 'Haiku'}</span>
                         <Input
                           value={mapHaiku}
                           onChange={(e) => setMapHaiku(e.target.value)}
-                          placeholder="claude-haiku-4-5-20251001"
+                          placeholder={preset.key.startsWith("minimax") ? "coding-plan-search" : "claude-haiku-4-5-20251001"}
                           className="text-sm font-mono h-8"
                         />
                       </div>

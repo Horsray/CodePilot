@@ -94,5 +94,27 @@ export function createMemorySearchTools(workspacePath: string) {
         } catch (err) { return `Failed: ${err instanceof Error ? err.message : 'unknown'}`; }
       },
     }),
+
+    codepilot_memory_store: tool({
+      description: 'Store new knowledge, architectural insights, or project facts into the long-term knowledge graph. ' +
+                   'Use this to "crystallize" research findings so they are available in future sessions.',
+      inputSchema: z.object({
+        entityName: z.string().describe('Name of the entity or concept (e.g., "AuthFlow", "Tailwind4Config")'),
+        entityType: z.string().optional().default('concept').describe('Type of entity (e.g., "architecture", "library", "best-practice")'),
+        observations: z.array(z.string()).describe('List of facts or observations to store'),
+      }),
+      execute: async ({ entityName, entityType, observations }) => {
+        try {
+          const { memoryClient } = await import('@/lib/memory-client');
+          // Ensure entity exists
+          await memoryClient.createEntities([{ name: entityName, entityType, observations: [] }]);
+          // Add observations
+          await memoryClient.addObservations([{ entityName, contents: observations }]);
+          return `Successfully crystallized knowledge for "${entityName}". This will be remembered in future sessions.`;
+        } catch (err) {
+          return `Failed to store memory: ${err instanceof Error ? err.message : 'unknown'}`;
+        }
+      },
+    }),
   };
 }

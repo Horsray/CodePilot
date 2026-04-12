@@ -5,7 +5,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Code, NotePencil } from '@/components/ui/icon';
 
 interface ModeIndicatorProps {
-  mode: 'code' | 'plan' | string;
+  mode: 'code' | 'plan' | 'ask' | string;
   onModeChange: (mode: string) => void;
   disabled?: boolean;
 }

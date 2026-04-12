@@ -25,21 +25,24 @@ export const nativeRuntime: AgentRuntime = {
     const ro = options.runtimeOptions || {};
     const isImageAgentMode = !!ro.imageAgentMode;
 
-    // Use a custom system prompt for image agent mode (Design Agent) to avoid
-    // the heavy software engineering persona and instructions.
-    const systemPromptResult = isImageAgentMode
-      ? { prompt: options.systemPrompt || '', referencedFiles: [] }
-      : buildSystemPrompt({
-          sessionId: options.sessionId,
-          userPrompt: options.systemPrompt,
-          workingDirectory: cwd,
-          modelId: options.model,
-          includeAgentsMd: options.includeAgentsMd,
-          includeClaudeMd: options.includeClaudeMd,
-          enableAgentsSkills: options.enableAgentsSkills,
-          syncProjectRules: options.syncProjectRules,
-          knowledgeBaseEnabled: options.knowledgeBaseEnabled,
-        });
+    // If a system prompt is already provided (e.g. from chat route/assembleContext),
+    // use it directly. Otherwise, build a fresh one.
+    const systemPromptResult = options.systemPrompt
+      ? { prompt: options.systemPrompt, referencedFiles: options.referencedContexts || [] }
+      : isImageAgentMode
+        ? { prompt: '', referencedFiles: [] }
+        : buildSystemPrompt({
+            sessionId: options.sessionId,
+            workingDirectory: cwd,
+            modelId: options.model,
+            includeAgentsMd: options.includeAgentsMd,
+            includeClaudeMd: options.includeClaudeMd,
+            enableAgentsSkills: options.enableAgentsSkills,
+            syncProjectRules: options.syncProjectRules,
+            knowledgeBaseEnabled: options.knowledgeBaseEnabled,
+            teamMode: options.teamMode,
+            orchestrationTier: options.orchestrationTier,
+          });
 
     // Create or reuse abort controller
     const abortController = options.abortController || new AbortController();
@@ -70,6 +73,8 @@ export const nativeRuntime: AgentRuntime = {
       autoTrigger: options.autoTrigger,
       onRuntimeStatusChange: options.onRuntimeStatusChange,
       files,
+      teamMode: options.teamMode,
+      orchestrationTier: options.orchestrationTier,
     });
 
     // Clean up controller when stream ends

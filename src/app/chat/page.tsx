@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import type { Message, SSEEvent, SessionResponse, TokenUsage, PermissionRequestEvent } from '@/types';
 import { MessageList } from '@/components/chat/MessageList';
 import { MessageInput } from '@/components/chat/MessageInput';
+import { TeamMode } from '@/components/chat/TeamModeSelector';
+import { OrchestrationTier } from '@/components/chat/OrchestrationTierSelector';
 import { ChatComposerActionBar } from '@/components/chat/ChatComposerActionBar';
 import { ModeIndicator } from '@/components/chat/ModeIndicator';
 import { ChatPermissionSelector } from '@/components/chat/ChatPermissionSelector';
@@ -267,6 +269,8 @@ export default function NewChatPage() {
   const [permissionResolved, setPermissionResolved] = useState<'allow' | 'deny' | null>(null);
   const [streamingToolOutput, setStreamingToolOutput] = useState('');
   const [permissionProfile, setPermissionProfile] = useState<'default' | 'full_access'>('default');
+  const [teamMode, setTeamMode] = useState<TeamMode>('on');
+  const [orchestrationTier, setOrchestrationTier] = useState<OrchestrationTier>('multi');
   const [createdSessionId, setCreatedSessionId] = useState<string | undefined>();
   const abortControllerRef = useRef<AbortController | null>(null);
   // Effort level — lifted here so the first message includes it
@@ -661,6 +665,8 @@ export default function NewChatPage() {
           permission_profile: permissionProfile,
           model: currentModel,
           provider_id: currentProviderId,
+          team_mode: teamMode,
+        orchestration_tier: orchestrationTier,
         };
 
         perfTrace.start('session.create.fetch');
@@ -718,6 +724,8 @@ export default function NewChatPage() {
             ...(thinkingConfig ? { thinking: thinkingConfig } : {}),
             ...(context1m ? { context_1m: true } : {}),
             ...(displayOverride ? { displayOverride } : {}),
+            team_mode: teamMode,
+            orchestration_tier: orchestrationTier,
           }),
           signal: controller.signal,
         });
@@ -954,7 +962,7 @@ export default function NewChatPage() {
         abortControllerRef.current = null;
       }
     },
-    [isStreaming, router, workingDir, mode, currentModel, currentProviderId, permissionProfile, selectedEffort, thinkingMode, context1m, setPendingApprovalSessionId, t, hasProvider, modelReady]
+    [isStreaming, router, workingDir, mode, currentModel, currentProviderId, permissionProfile, selectedEffort, thinkingMode, context1m, setPendingApprovalSessionId, t, hasProvider, modelReady, teamMode]
   );
 
   const handleCommand = useCallback((command: string) => {
@@ -1068,6 +1076,10 @@ export default function NewChatPage() {
         workingDirectory={workingDir}
         effort={selectedEffort}
         onEffortChange={setSelectedEffort}
+        teamMode={teamMode}
+        onTeamModeChange={setTeamMode}
+        orchestrationTier={orchestrationTier}
+        onOrchestrationTierChange={setOrchestrationTier}
         initialValue={prefillText}
       />
       <ChatComposerActionBar

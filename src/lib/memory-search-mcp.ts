@@ -15,7 +15,13 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { memoryClient } from './memory-client';
+import { knowledgeGraphProvider } from './knowledge-graph-provider';
 import type { SearchResult } from '@/types';
+
+const execAsync = promisify(exec);
 
 const HALF_LIFE_DAYS = 30;
 const LAMBDA = Math.log(2) / HALF_LIFE_DAYS;
@@ -115,44 +121,88 @@ export function createMemorySearchMcpServer(workspacePath: string) {
 
       tool(
         'codepilot_kb_search',
-        'Search the Atomic Knowledge Base for technical concepts, architecture decisions, and project structures.',
+        'Search the Unified Knowledge Graph (Project Architecture + Dynamic Memory). Returns matching entities and their observations.',
         {
-          query: z.string().describe('Technical concept or project area to search for'),
+          query: z.string().describe('Concept, file, or architectural component to search for'),
         },
         async ({ query }) => {
           try {
-            const graphJsonPath = path.join(workspacePath, 'graphify-out', 'graph.json');
-            if (!fs.existsSync(graphJsonPath)) {
-              return { content: [{ type: 'text' as const, text: 'Knowledge base not yet built. Please ask the user to "learn" knowledge first.' }] };
-            }
-
-            const graphData = JSON.parse(fs.readFileSync(graphJsonPath, 'utf-8'));
-            const q = query.toLowerCase();
+            // 1. Try to search in the dynamic MCP Memory (The unified source)
+            const memoryResults: any = await memoryClient.searchNodes(query);
             
-            const results = graphData.nodes
+            // 2. Fallback/Enrich with structural graphify data if memory is empty
+            const graphData = await knowledgeGraphProvider.getGraph(workspacePath);
+            const q = query.toLowerCase();
+            const graphNodes = (graphData.nodes || [])
               .filter((n: any) => 
-                n.id?.toLowerCase().includes(q) || 
                 n.label?.toLowerCase().includes(q) || 
-                n.description?.toLowerCase().includes(q)
+                n.description?.toLowerCase().includes(q) ||
+                n.id?.toLowerCase().includes(q)
               )
-              .slice(0, 10)
-              .map((n: any) => ({
-                label: n.label || n.id,
-                description: n.description,
-                type: n.level || 'EXTRACTED',
-                path: n.id
-              }));
+              .slice(0, 10);
 
-            if (results.length === 0) {
+            if (!memoryResults?.entities?.length && graphNodes.length === 0) {
               return { content: [{ type: 'text' as const, text: `No knowledge found for "${query}".` }] };
             }
 
-            const formatted = `Found ${results.length} knowledge nodes:\n\n` + 
-              results.map((r: any) => `### ${r.label} [${r.type}]\n${r.description}\nPath: ${r.path}`).join('\n\n');
+            let responseText = `## Unified Knowledge Search Results for "${query}"\n\n`;
 
-            return { content: [{ type: 'text' as const, text: formatted }] };
+            if (memoryResults?.entities?.length) {
+              responseText += `### Dynamic Memory Entities:\n`;
+              responseText += memoryResults.entities.map((e: any) => 
+                `- **${e.name}** (${e.entityType})\n  Observations: ${e.observations.join('; ')}`
+              ).join('\n') + '\n\n';
+            }
+
+            if (graphNodes.length > 0) {
+              responseText += `### Structural Graph Nodes:\n`;
+              responseText += graphNodes.map((n: any) => 
+                `- **${n.label || n.id}** [${n.level || 'FILE'}]\n  ${n.description || '(no description)'}\n  Path: ${n.id}`
+              ).join('\n') + '\n';
+            }
+
+            return { content: [{ type: 'text' as const, text: responseText }] };
           } catch (e) {
-            return { content: [{ type: 'text' as const, text: 'Failed to search knowledge base: ' + String(e) }] };
+            console.error(`[KB Search] Error:`, e);
+            return { content: [{ type: 'text' as const, text: 'Failed to search unified knowledge base.' }] };
+          }
+        }
+      ),
+
+      tool(
+        'codepilot_memory_store',
+        'Store new knowledge or observations into the long-term knowledge graph. AI can use this to "remember" architectural decisions or project facts.',
+        {
+          entityName: z.string().describe('Name of the entity to observe (e.g. "AuthFlow", "DatabaseSchema")'),
+          entityType: z.string().optional().default('concept').describe('Type of entity'),
+          observations: z.array(z.string()).describe('List of facts or observations to store'),
+        },
+        async ({ entityName, entityType, observations }) => {
+          try {
+            // Ensure entity exists
+            await memoryClient.createEntities([{ name: entityName, entityType, observations: [] }]);
+            // Add observations
+            await memoryClient.addObservations([{ entityName, contents: observations }]);
+            return { content: [{ type: 'text' as const, text: `Successfully stored memory for "${entityName}".` }] };
+          } catch (e) {
+            return { content: [{ type: 'text' as const, text: `Failed to store memory: ${String(e)}` }] };
+          }
+        }
+      ),
+
+      tool(
+        'codepilot_kb_query',
+        'Run a deep graph query using graphify. Best for complex dependency tracing and architectural analysis.',
+        {
+          question: z.string().describe('The architectural question to ask the knowledge graph'),
+          mode: z.enum(['bfs', 'dfs']).optional().default('bfs').describe('BFS for broad context, DFS for deep dependency tracing'),
+        },
+        async ({ question, mode }) => {
+          try {
+            const { stdout } = await execAsync(`graphify query "${question.replace(/"/g, '\\"')}" ${mode === 'dfs' ? '--dfs' : ''}`, { cwd: workspacePath });
+            return { content: [{ type: 'text' as const, text: stdout || 'No results from graph query.' }] };
+          } catch (e) {
+            return { content: [{ type: 'text' as const, text: 'Graph query failed: ' + String(e) }] };
           }
         }
       ),

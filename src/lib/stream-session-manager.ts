@@ -43,12 +43,17 @@ interface ActiveStream {
   accumulatedThinking: string;
   /** All thinking blocks concatenated (preserved for finalMessageContent) */
   fullThinking: string;
+  /** Structured thinking segments with model info */
+  thinkingSegments: Array<{ text: string; model?: string }>;
+  /** Map of tool_use_id to modelId */
+  toolModels: Record<string, string>;
   /** Tracks whether non-thinking content has arrived since last thinking delta */
   thinkingPhaseEnded: boolean;
   toolUsesArray: ToolUseInfo[];
   toolResultsArray: ToolResultInfo[];
   toolOutputAccumulated: string;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
+  lastStatusPayload: Record<string, any> | null;
   activeToolExecution: { toolId: string; toolName: string; startedAt: number } | null;
   abortReason: 'transport_idle' | 'no_meaningful_progress' | null;
   sendMessageFn: ((content: string, files?: FileAttachment[]) => void) | null;
@@ -77,6 +82,10 @@ export interface StartStreamParams {
   thinking?: { type: string; budgetTokens?: number };
   /** Enable 1M context window (beta) */
   context1m?: boolean;
+  /** Team mode configuration */
+  teamMode?: 'off' | 'on' | 'auto';
+  /** Orchestration tier for sub-agents */
+  orchestrationTier?: 'single' | 'dual' | 'multi';
   /** Called when init status event provides metadata (tools, slash_commands, skills) */
   onInitMeta?: (meta: { tools?: unknown; slash_commands?: unknown; skills?: unknown }) => void;
   /** Display-only content for user message (e.g. /skillName instead of expanded prompt) */
@@ -122,19 +131,24 @@ function upsertToolResult(stream: ActiveStream, res: ToolResultInfo): void {
 }
 
 function buildStructuredFinalContent(stream: ActiveStream, textContent: string | null): string | null {
-  const allThinking = [stream.fullThinking, stream.accumulatedThinking]
-    .filter((s) => s.trim())
-    .join('\n\n---\n\n');
+  // Capture the final segment if it hasn't been pushed yet
+  const finalSegments = [...stream.thinkingSegments];
+  if (stream.accumulatedThinking.trim()) {
+    finalSegments.push({ text: stream.accumulatedThinking, model: stream.lastStatusPayload?.model });
+  }
 
   const blocks: Array<Record<string, unknown>> = [];
-  if (allThinking) {
-    blocks.push({ type: 'thinking', thinking: allThinking });
+  
+  // Add thinking blocks with model info
+  for (const segment of finalSegments) {
+    blocks.push({ type: 'thinking', thinking: segment.text, model: segment.model });
   }
+
   if (textContent) {
     blocks.push({ type: 'text', text: textContent });
   }
   for (const tu of stream.toolUsesArray) {
-    blocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
+    blocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input, model: stream.toolModels[tu.id] });
     const tr = stream.toolResultsArray.find((r) => r.tool_use_id === tu.id);
     if (tr) {
       blocks.push({
@@ -191,6 +205,7 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     toolResults: [...stream.toolResultsArray],
     streamingToolOutput: stream.toolOutputAccumulated,
     statusText: stream.snapshot.statusText,
+    statusPayload: stream.lastStatusPayload || undefined,
     pendingPermission: stream.snapshot.pendingPermission,
     permissionResolved: stream.snapshot.permissionResolved,
     tokenUsage: stream.snapshot.tokenUsage,
@@ -295,11 +310,14 @@ export function startStream(params: StartStreamParams): void {
     accumulatedText: '',
     accumulatedThinking: '',
     fullThinking: '',
+    thinkingSegments: [],
+    toolModels: {},
     thinkingPhaseEnded: false,
     toolUsesArray: [],
     toolResultsArray: [],
     toolOutputAccumulated: '',
     toolTimeoutInfo: null,
+    lastStatusPayload: null,
     activeToolExecution: null,
     abortReason: null,
     sendMessageFn: params.sendMessageFn ?? null,
@@ -416,6 +434,8 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         ...(params.effort ? { effort: params.effort } : {}),
         ...(params.thinking ? { thinking: params.thinking } : {}),
         ...(params.context1m ? { context_1m: true } : {}),
+        ...(params.teamMode ? { team_mode: params.teamMode } : {}),
+        ...(params.orchestrationTier ? { orchestration_tier: params.orchestrationTier } : {}),
         ...(params.displayOverride ? { displayOverride: params.displayOverride } : {}),
       }),
       signal: stream.abortController.signal,
@@ -430,32 +450,47 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     if (!reader) throw new Error('No response stream');
 
     const result = await consumeSSEStream(reader, {
-      onText: (acc) => {
+      onText: (acc: string, model?: string) => {
         markMeaningfulProgress();
+        if (model) {
+          stream.lastStatusPayload = { ...stream.lastStatusPayload, model };
+        }
         stream.accumulatedText = acc;
         stream.thinkingPhaseEnded = true;
         throttledTextEmit();
       },
-      onThinking: (delta) => {
+      onThinking: (delta: string, model?: string) => {
         markMeaningfulProgress();
+        const currentModel = model || stream.lastStatusPayload?.model;
+
         // If non-thinking content has arrived since last thinking delta,
         // this is a new thinking phase (e.g. after a tool_use round-trip).
-        // Reset the live accumulator so the UI shows only the current phase.
         if (stream.thinkingPhaseEnded) {
-          // Save previous thinking to full history before resetting
           if (stream.accumulatedThinking) {
             stream.fullThinking += (stream.fullThinking ? '\n\n---\n\n' : '') + stream.accumulatedThinking;
+            stream.thinkingSegments.push({ text: stream.accumulatedThinking, model: stream.lastStatusPayload?.model });
           }
           stream.accumulatedThinking = '';
           stream.thinkingPhaseEnded = false;
         }
+        
+        if (model) {
+          stream.lastStatusPayload = { ...stream.lastStatusPayload, model };
+        }
         stream.accumulatedThinking += delta;
         emit(stream, 'snapshot-updated');
       },
-      onToolUse: (tool) => {
+      onToolUse: (tool: ToolUseInfo, model?: string) => {
         markMeaningfulProgress();
         flushTextThrottle(); // Ensure text is up-to-date before tool events
         stream.thinkingPhaseEnded = true;
+        
+        const currentModel = model || stream.lastStatusPayload?.model;
+        if (currentModel) {
+          stream.toolModels[tool.id] = currentModel;
+          stream.lastStatusPayload = { ...stream.lastStatusPayload, model: currentModel };
+        }
+
         stream.toolOutputAccumulated = '';
         stream.activeToolExecution = {
           toolId: tool.id,
@@ -604,6 +639,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         markMeaningfulProgress();
         params.onInitMeta?.(meta);
       },
+      onStatusPayload: (payload) => {
+        markMeaningfulProgress();
+        stream.lastStatusPayload = payload;
+        emit(stream, 'snapshot-updated');
+      },
     });
 
     // Flush any pending throttled text update before building final content
@@ -638,6 +678,8 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     stream.accumulatedText = '';
     stream.accumulatedThinking = '';
     stream.fullThinking = '';
+    stream.thinkingSegments = [];
+    stream.toolModels = {};
     stream.thinkingPhaseEnded = false;
     stream.toolUsesArray = [];
     stream.toolResultsArray = [];
@@ -680,6 +722,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.accumulatedText = '';
         stream.accumulatedThinking = '';
         stream.fullThinking = '';
+        stream.thinkingSegments = [];
+        stream.toolModels = {};
+        stream.thinkingPhaseEnded = false;
         stream.toolUsesArray = [];
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';

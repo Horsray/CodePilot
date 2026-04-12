@@ -21,6 +21,10 @@ interface StepCompletePayload {
   usage?: TokenUsage | null;
   finishReason?: string;
   toolsUsed?: string[];
+  model?: string;
+  agent?: string;
+  providerId?: string;
+  providerName?: string;
 }
 
 function makeStepTitle(index: number): string {
@@ -290,6 +294,27 @@ export function appendTimelineToolResult(state: TimelineAccumulatorState, result
   refreshStepMetadata(step);
 }
 
+/**
+ * 更新时间线步骤的状态。
+ * 用于在步骤开始或状态变更时（例如切换模型）更新 UI。
+ */
+export function updateTimelineStatus(
+  state: TimelineAccumulatorState,
+  payload: { message: string; step?: number; model?: string; agent?: string; providerId?: string; providerName?: string },
+  now = Date.now(),
+): void {
+  const step = ensureActiveStep(state, now);
+  step.status = 'running';
+  if (payload.model) step.model = payload.model;
+  if (payload.agent) step.agent = payload.agent;
+  if (payload.providerId) step.providerId = payload.providerId;
+  if (payload.providerName) step.providerName = payload.providerName;
+  // If the message contains specific status info, update the step activity
+  if (payload.message && payload.message.includes('Thinking')) {
+    step.reasoning = payload.message;
+  }
+}
+
 export function completeTimelineStep(
   state: TimelineAccumulatorState,
   payload?: StepCompletePayload,
@@ -301,6 +326,10 @@ export function completeTimelineStep(
   step.status = hasError ? 'failed' : 'completed';
   step.completedAt = now;
   step.usage = payload?.usage || step.usage || null;
+  if (payload?.model) step.model = payload.model;
+  if (payload?.agent) step.agent = payload.agent;
+  if (payload?.providerId) step.providerId = payload.providerId;
+  if (payload?.providerName) step.providerName = payload.providerName;
   if (payload?.finishReason && !step.summary) step.summary = payload.finishReason;
   if (payload?.toolsUsed && payload.toolsUsed.length > 0 && !step.summary) step.summary = payload.toolsUsed.join(', ');
   refreshStepMetadata(step);
@@ -363,12 +392,14 @@ export function extractTimelineStepsFromBlocks(blocks: MessageContentBlock[]): T
   for (const block of blocks) {
     switch (block.type) {
       case 'thinking':
+        updateTimelineStatus(state, { message: 'Thinking', model: block.model }, 0);
         appendTimelineReasoning(state, block.thinking, 0);
         break;
       case 'text':
         appendTimelineOutput(state, block.text, 0);
         break;
       case 'tool_use':
+        updateTimelineStatus(state, { message: 'Tool Use', model: block.model }, 0);
         appendTimelineToolUse(state, { id: block.id, name: block.name, input: block.input }, 0);
         break;
       case 'tool_result':

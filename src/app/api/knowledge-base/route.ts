@@ -3,10 +3,7 @@ import { getSetting } from '@/lib/db';
 import { SETTING_KEYS } from '@/types';
 import fs from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+import { knowledgeGraphProvider } from '@/lib/knowledge-graph-provider';
 
 export async function GET(request: NextRequest) {
   try {
@@ -25,94 +22,95 @@ export async function GET(request: NextRequest) {
       return new NextResponse('Graph not generated yet.', { status: 404 });
     }
 
-    const graphJsonPath = path.join(workspacePath, 'graphify-out', 'graph.json');
     const reportMdPath = path.join(workspacePath, 'graphify-out', 'GRAPH_REPORT.md');
-
-    let graphData = null;
     let reportMd = '';
-
-    if (fs.existsSync(graphJsonPath)) {
-      graphData = JSON.parse(fs.readFileSync(graphJsonPath, 'utf-8'));
-    }
-
     if (fs.existsSync(reportMdPath)) {
       reportMd = fs.readFileSync(reportMdPath, 'utf-8');
     }
 
-    // Merge logic: Start with graphify data if it exists
+    // Use the provider to get the unified graph data
+    const graphData = await knowledgeGraphProvider.getGraph(workspacePath);
     const nodes: any[] = graphData?.nodes || [];
-    
-    // Supplement with local markdown files from common directories
-    const knowledgeDirs = ['skills', 'docs', 'knowledge', 'specs', 'architecture', 'notes', 'reference', 'manuals'];
-    for (const dirName of knowledgeDirs) {
-      const dirPath = path.join(workspacePath, dirName);
-      if (fs.existsSync(dirPath)) {
+    const links: any[] = graphData?.links || [];
+
+    // Scan directories for potential knowledge (Source of Truth for files)
+    const scanDirs = ['knowledge', 'skills', 'docs', 'reference', 'manuals'];
+    const excludeFiles = ['AGENTS.md', 'CLAUDE.md', 'README.md', 'RULES.md', 'RELEASE_NOTES.md'];
+
+    const addFileNode = (fullPath: string, relativePath: string, category: string) => {
+      // Check if this file is already in the graphify nodes (either by id or path)
+      const existingNode = nodes.find(n => n.id === fullPath || n.path === fullPath || n.id === relativePath);
+      
+      if (!existingNode) {
         try {
-          const files = fs.readdirSync(dirPath);
-          for (const file of files) {
-            if (file.endsWith('.md')) {
-              const fullPath = path.join(dirPath, file);
-              // Only add if not already present (avoid duplicates)
-              if (!nodes.some(n => n.id === fullPath || n.path === fullPath)) {
-                const content = fs.readFileSync(fullPath, 'utf-8');
-                nodes.push({
-                  id: fullPath,
-                  label: file.replace('.md', ''),
-                  type: 'file',
-                  level: dirName.toUpperCase(),
-                  description: content.slice(0, 200).replace(/[\r\n]/g, ' ') + '...',
-                  path: fullPath
-                });
-              }
-            }
-          }
-        } catch (e) { /* ignore */ }
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          nodes.push({
+            id: relativePath,
+            label: path.basename(fullPath).replace('.md', ''),
+            type: 'file',
+            level: category.toUpperCase(),
+            description: content.slice(0, 200).replace(/[\r\n]/g, ' ') + '...',
+            path: fullPath,
+            status: 'unindexed' // Mark as not yet processed by graphify
+          });
+        } catch (e) { /* skip inaccessible */ }
+      } else {
+        // Enrich existing node with absolute path if missing
+        if (!existingNode.path) {
+          existingNode.path = fullPath;
+        }
+      }
+    };
+
+    // Recursive scan helper
+    const scanRecursive = (dir: string, baseDir: string, category: string) => {
+      if (!fs.existsSync(dir)) return;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        const relativePath = path.relative(baseDir, fullPath);
+        if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          scanRecursive(fullPath, baseDir, category);
+        } else if (entry.isFile() && entry.name.endsWith('.md') && !excludeFiles.includes(entry.name)) {
+          addFileNode(fullPath, relativePath, category);
+        }
+      }
+    };
+
+    // Run scans
+    for (const dirName of scanDirs) {
+      scanRecursive(path.join(workspacePath, dirName), workspacePath, dirName);
+    }
+    // Also scan root .md files
+    const rootFiles = fs.readdirSync(workspacePath, { withFileTypes: true });
+    for (const f of rootFiles) {
+      if (f.isFile() && f.name.endsWith('.md') && !excludeFiles.includes(f.name)) {
+        addFileNode(path.join(workspacePath, f.name), f.name, 'GENERAL');
       }
     }
 
-    // Always include root .md files (excluding system files)
-    const exclude = ['AGENTS.md', 'CLAUDE.md', 'README.md', 'RULES.md', 'RELEASE_NOTES.md'];
-    try {
-      const rootFiles = fs.readdirSync(workspacePath);
-      for (const file of rootFiles) {
-        if (file.endsWith('.md') && !exclude.includes(file)) {
-          const fullPath = path.join(workspacePath, file);
-          if (!nodes.some(n => n.id === fullPath || n.path === fullPath)) {
-            const content = fs.readFileSync(fullPath, 'utf-8');
-            nodes.push({
-              id: fullPath,
-              label: file.replace('.md', ''),
-              type: 'file',
-              level: 'GENERAL',
-              description: content.slice(0, 200).replace(/[\r\n]/g, ' ') + '...',
-              path: fullPath
-            });
-          }
-        }
-      }
-    } catch (e) { /* ignore */ }
-
     // Final graphData construction
-    graphData = {
+    const finalGraphData = {
       nodes: nodes.map((n: any) => {
-        // Ensure path exists for local files
+        // Final path normalization
         if (n.type === 'file' && !n.path) {
-          const possiblePath = path.join(workspacePath, n.id);
+          const possiblePath = path.isAbsolute(n.id) ? n.id : path.join(workspacePath, n.id);
           if (fs.existsSync(possiblePath)) {
             n.path = possiblePath;
           }
         }
         return n;
       }),
-      links: graphData?.links || []
+      links
     };
 
     return NextResponse.json({ 
-      graphData, 
+      graphData: finalGraphData, 
       reportMd,
       workspacePath 
     });
   } catch (err) {
+    console.error(`[KB API] GET Error:`, err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -124,9 +122,9 @@ export async function POST(req: Request) {
     if (!workspacePath) return NextResponse.json({ error: 'Workspace path not configured' }, { status: 400 });
 
     if (action === 'learn') {
-      const cmd = `graphify .`;
-      const { stdout, stderr } = await execAsync(cmd, { cwd: workspacePath });
-      return NextResponse.json({ success: true, stdout, stderr });
+      // Use the new KnowledgeGraphProvider which handles extraction AND sync to MCP Memory
+      const graphData = await knowledgeGraphProvider.learn(workspacePath);
+      return NextResponse.json({ success: true, nodeCount: graphData?.nodes?.length });
     }
 
     if (action === 'upload') {
@@ -140,6 +138,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (err) {
+    console.error(`[KB API] POST Error:`, err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

@@ -58,12 +58,11 @@ export default function KnowledgeBasePage() {
     if (!importValue) return;
     
     // Construct the prompt for AI
-    const prompt = `请充分理解并消化以下知识内容：\n\n${importValue}\n\n要求：\n1. 使用 'graphify' 工具将其写入原子知识库。\n2. 建立相关的知识图谱节点和关联关系。\n3. 提取其中的核心概念、设计动机和架构决策。\n4. 更新 'graphify-out' 目录下的报告。`;
+    const prompt = `请充分理解并消化以下知识内容：\n\n${importValue}\n\n要求：\n1. 使用 'graphify' 工具将其写入原子知识库。\n2. 建立相关的知识图谱节点和关联关系。\n3. 提取其中的核心概念、设计动机和架构决策。\n4. 将这些知识同步到 MCP Memory (mcp__memory__) 以便长期记忆。`;
     
     // Copy to clipboard
     try {
       await navigator.clipboard.writeText(prompt);
-      alert("学习指令已复制到剪贴板！请前往对话框粘贴并发送给 AI。\n\n指令内容：\n" + prompt.slice(0, 100) + "...");
     } catch (err) {
       console.error("Failed to copy prompt", err);
     }
@@ -76,11 +75,14 @@ export default function KnowledgeBasePage() {
         body: JSON.stringify({ action: 'learn', target: importValue }),
       });
       if (res.ok) {
+        const result = await res.json();
         setImportValue("");
         fetchKbData();
+        alert(`学习完成！已提取 ${result.nodeCount || 0} 个知识节点并同步至 MCP 长期记忆。 AI 以后将能自动调用这些知识。`);
       }
     } catch (err) {
       console.error("Failed to learn knowledge", err);
+      alert("学习过程中出现错误，请检查后台日志。");
     } finally {
       setLearning(false);
     }

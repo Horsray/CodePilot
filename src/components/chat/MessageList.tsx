@@ -151,6 +151,7 @@ interface MessageListProps {
   streamingThinkingContent?: string;
   referencedContexts?: string[];
   statusText?: string;
+  statusPayload?: Record<string, any>;
   onForceStop?: () => void;
   hasMore?: boolean;
   loadingMore?: boolean;
@@ -220,6 +221,7 @@ export function MessageList({
   streamingThinkingContent,
   referencedContexts,
   statusText,
+  statusPayload,
   onForceStop,
   hasMore,
   loadingMore,
@@ -349,6 +351,7 @@ export function MessageList({
             toolResults={toolResults}
             streamingToolOutput={streamingToolOutput}
             referencedFiles={referencedContexts}
+            statusPayload={statusPayload}
             thinkingContent={streamingThinkingContent}
             statusText={statusText}
             onForceStop={onForceStop}

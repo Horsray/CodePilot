@@ -1,7 +1,8 @@
 import { NextRequest } from 'next/server';
 import { streamClaude } from '@/lib/claude-client';
-import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTitle, updateSdkSessionId, updateSessionModel, updateSessionProvider, updateSessionProviderId, getSetting, acquireSessionLock, renewSessionLock, releaseSessionLock, setSessionRuntimeStatus, syncSdkTasks } from '@/lib/db';
+import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTitle, updateSdkSessionId, updateSessionModel, updateSessionProvider, updateSessionProviderId, getSetting, getProviderOptions, acquireSessionLock, renewSessionLock, releaseSessionLock, setSessionRuntimeStatus, syncSdkTasks } from '@/lib/db';
 import { resolveProvider as resolveProviderUnified } from '@/lib/provider-resolver';
+import { resolveCollaborationBinding } from '@/lib/collaboration-strategy';
 import { notifySessionStart, notifySessionComplete, notifySessionError } from '@/lib/telegram-bot';
 import { extractCompletion } from '@/lib/onboarding-completion';
 import { loadCodePilotMcpServers, loadAllMcpServers } from '@/lib/mcp-loader';
@@ -28,8 +29,8 @@ export async function POST(request: NextRequest) {
   const perfTrace = createPerfTrace('chat-route', { id: traceId });
 
   try {
-    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean } = await perfTrace.measureAsync('request.parse', () => request.json());
-    const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m } = body;
+    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean; team_mode?: 'off' | 'on' | 'auto'; orchestration_tier?: 'single' | 'dual' | 'multi' } = await perfTrace.measureAsync('request.parse', () => request.json());
+    const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m, team_mode, orchestration_tier } = body;
     perfTrace.annotate('request.received', {
       contentLength: content?.length || 0,
       hasFiles: !!files?.length,
@@ -169,12 +170,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const effectiveTeamMode = team_mode || session.team_mode || 'on';
+    const effectiveTier = orchestration_tier || session.orchestration_tier || 'multi';
     // Resolve provider via unified resolver (same logic for chat, bridge, onboarding, etc.)
-    const effectiveProviderId = provider_id || session.provider_id || '';
+    let effectiveProviderId = provider_id || session.provider_id || '';
+    if (effectiveTeamMode !== 'off' && effectiveTier !== 'single') {
+      const strategy = getProviderOptions('__global__').collaboration_strategy;
+      const leadBinding = resolveCollaborationBinding({
+        strategy,
+        tier: effectiveTier,
+        role: effectiveTier === 'dual' ? 'lead' : 'architect',
+        fallbackProviderId: effectiveProviderId || undefined,
+        fallbackModel: effectiveModel,
+      });
+      if (leadBinding.providerId) effectiveProviderId = leadBinding.providerId;
+      if (leadBinding.model) effectiveModel = leadBinding.model;
+    }
     const resolved = perfTrace.measure('provider.resolve', () => resolveProviderUnified({
       providerId: effectiveProviderId || undefined,
       sessionProviderId: session.provider_id || undefined,
-      model: model || undefined,
+      model: effectiveModel || undefined,
       sessionModel: session.model || undefined,
     }));
     const resolvedProvider = resolved.provider;
@@ -256,6 +271,9 @@ export async function POST(request: NextRequest) {
       conversationHistory: historyMsgs,
       imageAgentMode: isImageAgentMode,
       autoTrigger: !!autoTrigger,
+      teamMode: effectiveTeamMode,
+      orchestrationTier: effectiveTier,
+      files,
     }));
     const finalSystemPrompt = assembled.systemPrompt;
     const generativeUIEnabled = assembled.generativeUIEnabled;
@@ -273,7 +291,7 @@ export async function POST(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { predictNativeRuntime } = require('@/lib/runtime') as typeof import('@/lib/runtime');
     const mcpServers = perfTrace.measure('mcp.config.load', () => (
-      predictNativeRuntime(effectiveProviderId)
+      predictNativeRuntime(effectiveProviderId, effectiveTeamMode)
         ? loadAllMcpServers()
         : loadCodePilotMcpServers()
     ));
@@ -406,6 +424,8 @@ export async function POST(request: NextRequest) {
       enableAgentsSkills,
       syncProjectRules,
       knowledgeBaseEnabled,
+      teamMode: effectiveTeamMode,
+      orchestrationTier: effectiveTier,
     }));
 
     // Tee the stream: one for client, one for collecting the response

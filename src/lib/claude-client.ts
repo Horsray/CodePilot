@@ -449,7 +449,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
   }
 
   if (!runtime) {
-    runtime = resolveRuntime(getSetting('agent_runtime') || undefined, effectiveProvider || undefined);
+    runtime = resolveRuntime(getSetting('agent_runtime') || undefined, effectiveProvider || undefined, options.teamMode);
   }
 
   console.log(`[streamClaude] Using runtime: ${runtime.id} (setting: ${getSetting('agent_runtime') || 'auto'})`);
@@ -478,6 +478,8 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     enableAgentsSkills: options.enableAgentsSkills,
     syncProjectRules: options.syncProjectRules,
     knowledgeBaseEnabled: options.knowledgeBaseEnabled,
+    teamMode: options.teamMode,
+    orchestrationTier: options.orchestrationTier,
 
     // Runtime-specific fields (SDK Runtime reads these from runtimeOptions)
     runtimeOptions: {

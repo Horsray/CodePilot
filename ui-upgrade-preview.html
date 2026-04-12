@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodePilot UI 升级方案 - 苹果风格</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* Apple 色彩系统 */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f7;
+  --bg-tertiary: #fafafa;
+  --text-primary: #1d1d1f;
+  --text-secondary: #86868b;
+  --text-tertiary: #6e6e73;
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --border: #d2d2d7;
+  --border-light: #e5e5e7;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.06);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.08);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+  padding: 40px;
+}
+
+/* 标题 */
+.header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.header h1 {
+  font-size: 36px;
+  font-weight: 700;
+  color: white;
+  margin-bottom: 8px;
+  letter-spacing: -0.5px;
+}
+
+.header p {
+  font-size: 16px;
+  color: rgba(255,255,255,0.8);
+  font-weight: 400;
+}
+
+/* 对比网格 */
+.comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.column {
+  background: white;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+
+.column-header {
+  padding: 20px 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.column-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.column-header.upgraded h2 {
+  color: var(--accent);
+}
+
+/* 聊天界面 */
+.chat-interface {
+  display: flex;
+  height: 520px;
+}
+
+/* 侧边栏 */
+.sidebar {
+  width: 260px;
+  background: var(--bg-tertiary);
+  border-right: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.sidebar-header {
+  margin-bottom: 16px;
+}
+
+.logo {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-icon {
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, var(--accent), #5856d6);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.new-chat-btn {
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 20px;
+}
+
+.new-chat-btn:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.chat-item {
+  padding: 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  transition: background 0.15s;
+}
+
+.chat-item:hover {
+  background: var(--bg-secondary);
+}
+
+.chat-item.active {
+  background: rgba(0,113,227,0.08);
+}
+
+.chat-item .icon {
+  font-size: 14px;
+  opacity: 0.6;
+}
+
+.chat-item.active .icon {
+  opacity: 1;
+}
+
+.chat-item span {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-item.active span {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.sidebar-footer {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.model-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background: white;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.model-selector .dot {
+  width: 8px;
+  height: 8px;
+  background: #34c759;
+  border-radius: 50%;
+}
+
+.model-selector .name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.model-selector .arrow {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* 主内容区 */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+
+/* 顶部栏 */
+.top-bar {
+  height: 56px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-primary);
+}
+
+.top-bar h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.top-bar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 18px;
+  transition: all 0.15s;
+}
+
+.icon-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* 消息区域 */
+.messages-area {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+}
+
+.welcome-message {
+  text-align: center;
+  padding: 60px 40px;
+}
+
+.welcome-icon {
+  width: 64px;
+  height: 64px;
+  background: linear-gradient(135deg, var(--accent), #5856d6);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+  font-size: 28px;
+  color: white;
+  box-shadow: var(--shadow-lg);
+}
+
+.welcome-message h2 {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.welcome-message p {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* 消息气泡 */
+.message {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.message.user {
+  flex-direction: row-reverse;
+}
+
+.message-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.message.user .message-avatar {
+  background: var(--accent);
+  color: white;
+}
+
+.message.ai .message-avatar {
+  background: linear-gradient(135deg, var(--accent), #5856d6);
+  color: white;
+}
+
+.message-content {
+  max-width: 70%;
+}
+
+.message-bubble {
+  padding: 14px 18px;
+  border-radius: var(--radius-lg);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.message.user .message-bubble {
+  background: var(--accent);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.message.ai .message-bubble {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+
+.message-time {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
+  padding: 0 4px;
+}
+
+.message.user .message-time {
+  text-align: right;
+}
+
+/* 输入区域 */
+.input-area {
+  padding: 16px 24px 24px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-light);
+}
+
+.input-container {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.input-box {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  transition: all 0.2s;
+}
+
+.input-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(0,113,227,0.1);
+}
+
+.input-box input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.input-box input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.input-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.input-action {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  transition: all 0.15s;
+}
+
+.input-action:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.send-btn {
+  width: 44px;
+  height: 44px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: white;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.send-btn:hover {
+  background: var(--accent-hover);
+  transform: scale(1.05);
+  box-shadow: var(--shadow-md);
+}
+
+.send-btn:active {
+  transform: scale(0.95);
+}
+
+/* 底部提示 */
+.input-hints {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.hint-btn {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 16px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.hint-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+}
+
+/* 当前版本样式 */
+.current-ui {
+  opacity: 0.85;
+}
+
+.current-ui .sidebar {
+  background: #1c1c1e;
+  border-color: #38383a;
+}
+
+.current-ui .logo {
+  color: white;
+}
+
+.current-ui .chat-item span {
+  color: #f5f5f7;
+}
+
+.current-ui .chat-item:hover {
+  background: #2c2c2e;
+}
+
+.current-ui .chat-item.active {
+  background: rgba(0,113,227,0.3);
+}
+
+.current-ui .new-chat-btn {
+  background: #0a84ff;
+}
+
+.current-ui .top-bar {
+  background: #1c1c1e;
+  border-color: #38383a;
+}
+
+.current-ui .top-bar h1 {
+  color: white;
+}
+
+.current-ui .icon-btn {
+  color: #98989d;
+}
+
+.current-ui .icon-btn:hover {
+  background: #2c2c2e;
+  color: white;
+}
+
+.current-ui .messages-area {
+  background: #000;
+}
+
+.current-ui .welcome-message h2 {
+  color: white;
+}
+
+.current-ui .welcome-message p {
+  color: #98989d;
+}
+
+.current-ui .message-bubble {
+  background: #2c2c2e;
+  color: white;
+}
+
+.current-ui .message.user .message-bubble {
+  background: #0a84ff;
+}
+
+.current-ui .input-area {
+  background: #1c1c1e;
+  border-color: #38383a;
+}
+
+.current-ui .input-box {
+  background: #2c2c2e;
+  border-color: #38383a;
+}
+
+.current-ui .input-box input {
+  color: white;
+}
+
+.current-ui .input-box input::placeholder {
+  color: #636366;
+}
+
+.current-ui .hint-btn {
+  background: #2c2c2e;
+  border-color: #38383a;
+  color: #98989d;
+}
+
+.current-ui .model-selector {
+  background: #2c2c2e;
+  border-color: #38383a;
+}
+
+.current-ui .model-selector .name {
+  color: white;
+}
+
+.current-ui .column-header {
+  background: #2c2c2e;
+}
+
+.current-ui .column-header h2 {
+  color: #98989d;
+}
+
+/* 升级标注 */
+.upgrade-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(0,113,227,0.1);
+  color: var(--accent);
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 12px;
+}
+
+/* 设计说明 */
+.design-notes {
+  max-width: 1400px;
+  margin: 40px auto 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.note-card {
+  background: rgba(255,255,255,0.95);
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.note-card h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.note-card h3 span {
+  font-size: 18px;
+}
+
+.note-card p {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>CodePilot UI 升级方案</h1>
+  <p>苹果风格 · 现代简约 · 高级质感</p>
+</div>
+
+<div class="comparison">
+  <!-- 当前版本 -->
+  <div class="column current-ui">
+    <div class="column-header">
+      <h2>当前版本 · 深色模式</h2>
+    </div>
+    <div class="chat-interface">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <div class="logo">
+            <div class="logo-icon">CP</div>
+            CodePilot
+          </div>
+        </div>
+        <button class="new-chat-btn">+ 新对话</button>
+        <div class="chat-list">
+          <div class="chat-item">
+            <span class="icon">📝</span>
+            <span>项目架构分析</span>
+          </div>
+          <div class="chat-item">
+            <span class="icon">🔧</span>
+            <span>代码调试帮助</span>
+          </div>
+          <div class="chat-item">
+            <span class="icon">🎨</span>
+            <span>UI 设计建议</span>
+          </div>
+        </div>
+        <div class="sidebar-footer">
+          <div class="model-selector">
+            <span class="dot"></span>
+            <span class="name">Claude 3.5</span>
+            <span class="arrow">▼</span>
+          </div>
+        </div>
+      </div>
+      <div class="main-content">
+        <div class="top-bar">
+          <h1>智能对话</h1>
+          <div class="top-bar-actions">
+            <button class="icon-btn">⚙</button>
+            <button class="icon-btn">☰</button>
+          </div>
+        </div>
+        <div class="messages-area">
+          <div class="welcome-message">
+            <div class="welcome-icon">💬</div>
+            <h2>有什么可以帮你的？</h2>
+            <p>输入问题开始对话</p>
+          </div>
+        </div>
+        <div class="input-area">
+          <div class="input-container">
+            <div class="input-box">
+              <input type="text" placeholder="输入消息...">
+              <div class="input-actions">
+                <button class="input-action">📎</button>
+                <button class="input-action">🖼</button>
+              </div>
+            </div>
+            <button class="send-btn">↑</button>
+          </div>
+          <div class="input-hints">
+            <button class="hint-btn">@ 文件</button>
+            <button class="hint-btn">@ 知识库</button>
+            <button class="hint-btn">@ 终端</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 升级版本 -->
+  <div class="column">
+    <div class="column-header upgraded">
+      <h2>升级版本 · 苹果风格 <span class="upgrade-badge">✨ NEW</span></h2>
+    </div>
+    <div class="chat-interface">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <div class="logo">
+            <div class="logo-icon">CP</div>
+            CodePilot
+          </div>
+        </div>
+        <button class="new-chat-btn">+ 新对话</button>
+        <div class="chat-list">
+          <div class="chat-item active">
+            <span class="icon">📝</span>
+            <span>项目架构分析</span>
+          </div>
+          <div class="chat-item">
+            <span class="icon">🔧</span>
+            <span>代码调试帮助</span>
+          </div>
+          <div class="chat-item">
+            <span class="icon">🎨</span>
+            <span>UI 设计建议</span>
+          </div>
+        </div>
+        <div class="sidebar-footer">
+          <div class="model-selector">
+            <span class="dot"></span>
+            <span class="name">Claude 3.5 Sonnet</span>
+            <span class="arrow">▼</span>
+          </div>
+        </div>
+      </div>
+      <div class="main-content">
+        <div class="top-bar">
+          <h1>智能对话</h1>
+          <div class="top-bar-actions">
+            <button class="icon-btn">⚙</button>
+            <button class="icon-btn">☰</button>
+          </div>
+        </div>
+        <div class="messages-area">
+          <div class="welcome-message">
+            <div class="welcome-icon">✨</div>
+            <h2>有什么可以帮你的？</h2>
+            <p>输入问题，AI 助手为你解答</p>
+          </div>
+        </div>
+        <div class="input-area">
+          <div class="input-container">
+            <div class="input-box">
+              <input type="text" placeholder="输入消息让 AI 帮你...">
+              <div class="input-actions">
+                <button class="input-action">📎</button>
+                <button class="input-action">🖼</button>
+              </div>
+            </div>
+            <button class="send-btn">↑</button>
+          </div>
+          <div class="input-hints">
+            <button class="hint-btn">@ 文件</button>
+            <button class="hint-btn">@ 知识库</button>
+            <button class="hint-btn">@ 终端</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="design-notes">
+  <div class="note-card">
+    <h3><span>🎨</span> 色彩系统</h3>
+    <p>采用 Apple 官方色彩规范，主色调 #0071e3，圆角系统 8/12/16/20px 递进</p>
+  </div>
+  <div class="note-card">
+    <h3><span>🔤</span> 字体层级</h3>
+    <p>Inter + SF Pro 字体家族，清晰的字重对比 (300-700)，舒适的行高 1.6</p>
+  </div>
+  <div class="note-card">
+    <h3><span>📐</span> 空间韵律</h3>
+    <p>大量留白，元素间距 8px 基准网格，呼吸感充足，视觉焦点集中</p>
+  </div>
+  <div class="note-card">
+    <h3><span>✨</span> 微交互动效</h3>
+    <p>hover 上浮 + 阴影扩散，点击缩放回弹，消息淡入动画 300ms ease</p>
+  </div>
+</div>
+
+</body>
+</html>

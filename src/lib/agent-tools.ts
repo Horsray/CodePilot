@@ -8,6 +8,7 @@
 
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
+import type { SSEEvent } from '@/types';
 
 /** Tool names that are safe in read-only (plan) mode */
 export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'TodoWrite'] as const;
@@ -18,6 +19,7 @@ import { checkPermission, type PermissionMode } from './permission-checker';
 import { registerPendingPermission } from './permission-registry';
 import { emit as emitEvent } from './runtime/event-bus';
 import { createPermissionRequest } from './db';
+import { backgroundJobManager } from './background-job-manager';
 import crypto from 'crypto';
 
 export interface AssembleToolsOptions {
@@ -37,10 +39,11 @@ export interface AssembleToolsOptions {
   /** Permission context — when set, tools are wrapped with permission checks */
   permissionContext?: {
     permissionMode: PermissionMode;
-    /** Callback to emit SSE events (for permission_request) */
-    emitSSE: (event: { type: string; data: string }) => void;
+    /** Callback to emit SSE events（包括子 Agent 的状态与权限请求） */
+    emitSSE: (event: SSEEvent) => void;
     abortSignal?: AbortSignal;
   };
+  orchestrationTier?: 'single' | 'dual' | 'multi';
 }
 
 export interface AssembleToolsResult {
@@ -65,6 +68,7 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
     sessionProviderId: options.sessionProviderId,
     model: options.model,
     permissionMode: options.permissionContext?.permissionMode,
+    orchestrationTier: options.orchestrationTier,
     emitSSE: options.permissionContext?.emitSSE,
     abortSignal: options.permissionContext?.abortSignal,
   });
@@ -89,6 +93,7 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
   const allTools = guardToolExecution(
     { ...builtinTools, ...builtinMcpTools, ...mcpTools },
     {
+      sessionId: options.sessionId,
       emitSSE: options.permissionContext?.emitSSE,
       abortSignal: options.permissionContext?.abortSignal,
       toolTimeoutSeconds: options.toolTimeoutSeconds,
@@ -112,7 +117,8 @@ const DEFAULT_TOOL_TIMEOUT_MS = 45_000;
 const RETRYABLE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'Skill', 'Agent', 'codepilot_browser_open', 'codepilot_browser_context']);
 
 interface ToolGuardOptions {
-  emitSSE?: (event: { type: string; data: string }) => void;
+  sessionId?: string;
+  emitSSE?: (event: SSEEvent) => void;
   abortSignal?: AbortSignal;
   toolTimeoutSeconds?: number;
 }
@@ -142,6 +148,9 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
           return `(tool "${name}" has no execute function)`;
         }
 
+        const toolCallId = (execOptions as any)?.toolCallId;
+        const sessionId = options.sessionId;
+
         const config = getToolGuardConfig(name);
         if (options.toolTimeoutSeconds && options.toolTimeoutSeconds > 0) {
           config.timeoutMs = options.toolTimeoutSeconds * 1000;
@@ -166,6 +175,18 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
             }, config.timeoutMs);
           });
 
+          // Background signal listener
+          let isBackgrounded = false;
+          const backgroundPromise = new Promise<{ __bg: true }>((resolve) => {
+            if (sessionId && toolCallId) {
+              backgroundJobManager.once(`background:${sessionId}:${toolCallId}`, () => {
+                isBackgrounded = true;
+                // We DON'T abort the localAbortController here because we want the tool to keep running
+                resolve({ __bg: true });
+              });
+            }
+          });
+
           // Emit progress every 5 seconds for long-running tools
           const start = Date.now();
           const progressTimer = setInterval(() => {
@@ -179,14 +200,39 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
           }, 5000);
 
           try {
-            const result = await Promise.race([
-              Promise.resolve(original.execute(input, injectAbortSignal(execOptions, localAbortController.signal))),
+            const toolExecutionPromise = (async () => {
+              const result = await original.execute!(input, injectAbortSignal(execOptions, localAbortController.signal));
+              const finalOutput = result ?? '(tool completed with no output)';
+              
+              // If it was backgrounded, update the job registry when it finally finishes
+              if (isBackgrounded && sessionId && toolCallId) {
+                backgroundJobManager.completeJob(sessionId, toolCallId, typeof finalOutput === 'string' ? finalOutput : JSON.stringify(finalOutput));
+              }
+              
+              return finalOutput;
+            })();
+
+            const raceResult = await Promise.race([
+              toolExecutionPromise,
               timeoutPromise,
+              backgroundPromise,
             ]);
-            return result ?? '(tool completed with no output)';
+
+            if (typeof raceResult === 'object' && raceResult !== null && '__bg' in raceResult) {
+              // Register the job and return placeholder
+              backgroundJobManager.registerJob(sessionId!, toolCallId!, name, input);
+              return `The task "${name}" has been moved to the background and is still running. You can continue with other tasks. Use the "codepilot_check_background_job" tool later to check its status or wait for a notification.`;
+            }
+
+            return raceResult;
           } catch (error) {
             if (parentAbortSignal?.aborted) {
               throw error;
+            }
+
+            // If it failed while backgrounded, update registry
+            if (isBackgrounded && sessionId && toolCallId) {
+              backgroundJobManager.failJob(sessionId, toolCallId, error instanceof Error ? error.message : String(error));
             }
 
             lastFailure = {
@@ -205,6 +251,11 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
                   elapsed_seconds: Math.round(config.timeoutMs / 1000),
                 }),
               });
+              
+              // If it timed out while backgrounded, update registry
+              if (isBackgrounded && sessionId && toolCallId) {
+                backgroundJobManager.timeoutJob(sessionId, toolCallId);
+              }
             }
 
             if (attempt < totalAttempts) {
@@ -214,6 +265,10 @@ function guardToolExecution(tools: ToolSet, options: ToolGuardOptions): ToolSet 
             if (timeoutHandle) clearTimeout(timeoutHandle);
             clearInterval(progressTimer);
             parentAbortSignal?.removeEventListener('abort', handleParentAbort);
+            // Cleanup background listener if it didn't fire
+            if (sessionId && toolCallId) {
+              backgroundJobManager.removeAllListeners(`background:${sessionId}:${toolCallId}`);
+            }
           }
         }
 

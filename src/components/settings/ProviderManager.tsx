@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -26,7 +26,7 @@ import {
   findMatchingPreset,
   type QuickPreset,
 } from "./provider-presets";
-import type { ApiProvider, ProviderModelGroup } from "@/types";
+import type { ApiProvider, ProviderModelGroup, CollaborationBinding, CollaborationStrategy } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
 import Anthropic from "@lobehub/icons/es/Anthropic";
@@ -41,6 +41,59 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+type RoleKey = 'lead' | 'verifier' | 'researcher' | 'architect' | 'executor';
+
+function createEmptyStrategy(): CollaborationStrategy {
+  return {
+    dual: {
+      lead: {},
+      verifier: {},
+    },
+    multi: {
+      researcher: {},
+      architect: {},
+      executor: {},
+      verifier: {},
+    },
+  };
+}
+
+function ensureStrategyShape(strategy?: CollaborationStrategy): CollaborationStrategy {
+  const base = createEmptyStrategy();
+  return {
+    dual: { ...base.dual, ...(strategy?.dual || {}) },
+    multi: { ...base.multi, ...(strategy?.multi || {}) },
+  };
+}
+
+function updateStrategyBinding(
+  strategy: CollaborationStrategy,
+  tier: 'dual' | 'multi',
+  role: RoleKey,
+  patch: Partial<CollaborationBinding>,
+): CollaborationStrategy {
+  const next = ensureStrategyShape(strategy);
+  if (tier === 'dual' && (role === 'lead' || role === 'verifier')) {
+    return {
+      ...next,
+      dual: {
+        ...next.dual,
+        [role]: { ...(next.dual?.[role] || {}), ...patch },
+      },
+    };
+  }
+  if (tier === 'multi' && (role === 'researcher' || role === 'architect' || role === 'executor' || role === 'verifier')) {
+    return {
+      ...next,
+      multi: {
+        ...next.multi,
+        [role]: { ...(next.multi?.[role] || {}), ...patch },
+      },
+    };
+  }
+  return next;
+}
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -79,6 +132,7 @@ export function ProviderManager() {
   const [providerGroups, setProviderGroups] = useState<ProviderModelGroup[]>([]);
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [globalDefaultProvider, setGlobalDefaultProvider] = useState('');
+  const [collaborationStrategy, setCollaborationStrategy] = useState<CollaborationStrategy>(createEmptyStrategy());
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -121,6 +175,7 @@ export function ProviderManager() {
           setGlobalDefaultModel(data.options.default_model);
           setGlobalDefaultProvider(data.options.default_model_provider || '');
         }
+        setCollaborationStrategy(ensureStrategyShape(data?.options?.collaboration_strategy));
       })
       .catch(() => {});
   }, []);
@@ -280,6 +335,15 @@ export function ProviderManager() {
   };
 
   const sorted = [...providers].sort((a, b) => a.sort_order - b.sort_order);
+  const collaborationGroups = useMemo(
+    () => providerGroups.filter((group) =>
+      group.provider_id !== 'env'
+      && group.provider_type !== 'gemini-image'
+      && group.provider_type !== 'generic-image'
+      && group.models.length > 0
+    ),
+    [providerGroups],
+  );
 
   // Save global default model — also syncs default_provider_id for backend consumers
   const handleGlobalDefaultModelChange = useCallback(async (compositeValue: string) => {
@@ -314,6 +378,32 @@ export function ProviderManager() {
     }
     window.dispatchEvent(new Event('provider-changed'));
   }, []);
+
+  const saveCollaborationStrategy = useCallback(async (next: CollaborationStrategy) => {
+    setCollaborationStrategy(next);
+    await fetch('/api/providers/options', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        providerId: '__global__',
+        options: { collaboration_strategy: next },
+      }),
+    }).catch(() => {});
+    window.dispatchEvent(new Event('provider-changed'));
+  }, []);
+
+  const updateBinding = useCallback(async (
+    tier: 'dual' | 'multi',
+    role: RoleKey,
+    patch: Partial<CollaborationBinding>,
+  ) => {
+    const next = updateStrategyBinding(collaborationStrategy, tier, role, patch);
+    await saveCollaborationStrategy(next);
+  }, [collaborationStrategy, saveCollaborationStrategy]);
+
+  const getGroupByProviderId = useCallback((providerId?: string) => {
+    return collaborationGroups.find((group) => group.provider_id === providerId);
+  }, [collaborationGroups]);
 
   return (
     <div className="space-y-6">
@@ -389,6 +479,144 @@ export function ProviderManager() {
           )}
         </div>
       </div>
+
+      {/* 中文注释：功能名称「全局协作策略配置面板」，用法是在一个面板里配置双模型/多模型各角色使用哪个服务商与模型。 */}
+      {!loading && (
+        <div className="rounded-lg border border-border/50 p-4 space-y-4">
+          <div>
+            <h3 className="text-sm font-medium">协作策略配置</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              单模型不需要配置；双模型和多模型在这里直接指定每个角色使用哪个服务商和哪个模型，数据联动下方已连接的聊天服务商。
+            </p>
+          </div>
+
+          {collaborationGroups.length > 0 ? (
+            <>
+              <div className="rounded-md border border-border/30 bg-muted/10 p-3 space-y-3">
+                <div className="text-xs font-medium">双模型策略</div>
+                {([
+                  { key: 'lead' as const, label: '主执行', hint: '主脑/主执行模型' },
+                  { key: 'verifier' as const, label: '验证者', hint: '验证/复核模型' },
+                ]).map((item) => {
+                  const binding = collaborationStrategy.dual?.[item.key] || {};
+                  const group = getGroupByProviderId(binding.providerId);
+                  return (
+                    <div key={`dual-${item.key}`} className="grid gap-2 md:grid-cols-[120px_1fr_1fr] items-center">
+                      <div>
+                        <div className="text-xs font-medium">{item.label}</div>
+                        <div className="text-[10px] text-muted-foreground">{item.hint}</div>
+                      </div>
+                      <Select
+                        value={binding.providerId || '__none__'}
+                        onValueChange={(value) => {
+                          const selected = collaborationGroups.find((g) => g.provider_id === value);
+                          void updateBinding('dual', item.key, {
+                            providerId: value === '__none__' ? '' : value,
+                            model: selected?.models[0]?.value || '',
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="选择服务商" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">未配置</SelectItem>
+                          {collaborationGroups.map((group) => (
+                            <SelectItem key={`dual-provider-${item.key}-${group.provider_id}`} value={group.provider_id}>
+                              {group.provider_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={binding.model || '__none__'}
+                        onValueChange={(value) => void updateBinding('dual', item.key, { model: value === '__none__' ? '' : value })}
+                        disabled={!group}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="选择模型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">未配置</SelectItem>
+                          {(group?.models || []).map((model) => (
+                            <SelectItem key={`dual-model-${item.key}-${model.value}`} value={model.value}>
+                              {model.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-md border border-border/30 bg-muted/10 p-3 space-y-3">
+                <div className="text-xs font-medium">多模型策略</div>
+                {([
+                  { key: 'researcher' as const, label: '研究员', hint: '检索/调研' },
+                  { key: 'architect' as const, label: '架构师', hint: '规划/主脑' },
+                  { key: 'executor' as const, label: '执行者', hint: '开发/实施' },
+                  { key: 'verifier' as const, label: '验证者', hint: '验证/复核' },
+                ]).map((item) => {
+                  const binding = collaborationStrategy.multi?.[item.key] || {};
+                  const group = getGroupByProviderId(binding.providerId);
+                  return (
+                    <div key={`multi-${item.key}`} className="grid gap-2 md:grid-cols-[120px_1fr_1fr] items-center">
+                      <div>
+                        <div className="text-xs font-medium">{item.label}</div>
+                        <div className="text-[10px] text-muted-foreground">{item.hint}</div>
+                      </div>
+                      <Select
+                        value={binding.providerId || '__none__'}
+                        onValueChange={(value) => {
+                          const selected = collaborationGroups.find((g) => g.provider_id === value);
+                          void updateBinding('multi', item.key, {
+                            providerId: value === '__none__' ? '' : value,
+                            model: selected?.models[0]?.value || '',
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="选择服务商" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">未配置</SelectItem>
+                          {collaborationGroups.map((group) => (
+                            <SelectItem key={`multi-provider-${item.key}-${group.provider_id}`} value={group.provider_id}>
+                              {group.provider_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={binding.model || '__none__'}
+                        onValueChange={(value) => void updateBinding('multi', item.key, { model: value === '__none__' ? '' : value })}
+                        disabled={!group}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="选择模型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">未配置</SelectItem>
+                          {(group?.models || []).map((model) => (
+                            <SelectItem key={`multi-model-${item.key}-${model.value}`} value={model.value}>
+                              {model.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-md border border-dashed border-border/50 p-4 text-xs text-muted-foreground">
+              还没有可用于协作策略的聊天服务商。请先在下方连接聊天服务商并配置模型。
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Loading */}
       {loading && (

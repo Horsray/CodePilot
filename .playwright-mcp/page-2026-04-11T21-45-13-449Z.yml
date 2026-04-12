@@ -1,0 +1,68 @@
+- generic [ref=e3]:
+  - generic [ref=e5]:
+    - button "Git" [ref=e6]:
+      - img
+      - generic [ref=e7]: Git
+    - button "File Tree" [ref=e8]:
+      - img
+      - generic [ref=e9]: File Tree
+    - button "Dashboard" [ref=e10]:
+      - img
+      - generic [ref=e11]: Dashboard
+  - main [ref=e14]:
+    - generic [ref=e16]:
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20] [cursor=pointer]:
+            - generic [ref=e21]:
+              - generic [ref=e22]:
+                - img [ref=e23]
+                - generic [ref=e25]: Project Chat
+              - generic [ref=e26]: Open a project folder, AI helps you code, debug and refactor
+            - button "Select Folder" [ref=e28]:
+              - img
+              - text: Select Folder
+          - generic [ref=e29] [cursor=pointer]:
+            - generic [ref=e30]:
+              - generic [ref=e32]: Personal Assistant
+              - generic [ref=e33]: Set up an AI that remembers you, manages schedule, assists creation
+            - button "Set Up Assistant" [ref=e35]
+        - paragraph [ref=e36]: Project Chat works within a codebase folder. Personal Assistant works across all your tasks without a specific project.
+      - group [ref=e41]:
+        - textbox "Message Claude..." [disabled] [ref=e42]
+        - group [ref=e43]:
+          - generic [ref=e44]:
+            - button [ref=e45]:
+              - img
+            - button [ref=e46]:
+              - img
+            - button [ref=e47]:
+              - img
+            - 'button "Team: 关闭" [ref=e49]':
+              - img
+              - generic [ref=e50]: "Team: 关闭"
+              - img
+            - 'button "Tier: 单模型" [ref=e52]':
+              - img
+              - generic [ref=e53]: "Tier: 单模型"
+              - img
+            - button "Sonnet 4.6" [ref=e55]:
+              - generic [ref=e56]: Sonnet 4.6
+              - img
+          - button "Submit" [disabled]:
+            - img
+      - generic [ref=e58]:
+        - tablist [ref=e60]:
+          - tab "Code" [selected] [ref=e61]:
+            - img
+            - text: Code
+          - tab "Plan" [ref=e62]:
+            - img
+            - text: Plan
+        - button "Design Agent" [ref=e63]:
+          - img
+          - text: Design Agent
+        - button "Default" [ref=e64]:
+          - img
+          - generic [ref=e65]: Default
+          - img
