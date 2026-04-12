@@ -63,7 +63,7 @@
 | 3.3 | 渐进子目录 hint | ✅ 已完成 | (本 commit) | 完整 port，包含自写 shell tokenizer；20+ 测试（含真实文件系统 fixture）全通过；集成到 agent-tools.ts 推后到独立 follow-up |
 | 3.4 | Session 历史搜索 | ✅ 已完成 | (本 commit) | `searchMessages` DB 函数 + `codepilot_session_search` 工具 + builtin-tools 注册；12 测试含真实 SQLite DB fixture 全通过；**已完整 wire up**（与 memory-search 平级） |
 | 3.5a | 长对话压缩 - 接线 + token 预算 | ✅ 已完成 | (本 commit) | **重定位**：发现宏观 LLM 压缩已 wire 在 chat/route.ts。新增 `pruneOldToolResultsByBudget` 作为可选升级模块；`shouldAutoCompact` 标记 `@deprecated` 指向 `needsCompression` |
-| 3.5b | 长对话压缩 - LLM 摘要 | 📋 待开始 | — | — |
+| 3.5b | 长对话压缩 - LLM 摘要 | ✅ 已完成 | (本 commit) | **重定位**：LLM 摘要已存在，改为升级 `context-compressor.ts` 使用 `resolveAuxiliaryModel('compact')` 的 5 层 fallback 链；913 测试无回归 |
 | 3.6 | Skill 自动创建 nudge | 📋 待开始 | — | — |
 
 **状态符号**：📋 待开始 / 🔄 进行中 / ✅ 已完成 / ⏸ blocked / ❌ 放弃
