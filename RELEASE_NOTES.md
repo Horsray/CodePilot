@@ -1,38 +1,43 @@
-## CodePilot v0.49.0
+## CodePilot v0.50.0
 
-> Agent Runtime 能力大升级 — 借鉴 Hermes Agent 框架的 6 项核心能力 + 12 项额外改进。Native Runtime 用户将获得更智能的工具调度、更低的 API 成本、跨会话记忆、以及全新的交互式提问和 Skill 建议功能。
+> 飞书一键创建机器人 + SubAgent UI 可视化 + 消息队列模式 + 桥接稳定性大修 — 推荐所有飞书桥接用户升级。
 
 ### 新增功能
 
-- **历史会话搜索**：Agent 现在可以搜索所有历史对话的内容。当你说"上次我们讨论 X 的结论是什么"时，它能自动检索并引用之前的对话，不再需要手动翻找和复制
-- **Skill 自动保存建议**：当 Agent 完成一个复杂多步工作流（8+ 步骤、3+ 种工具）后，会在对话区底部弹出持久提示条，建议你把这个流程保存为可复用的 Skill。点击"保存为 Skill"按钮可一键启动保存流程
-- **结构化提问（AskUserQuestion）**：Agent 现在可以向你提出结构化的多选题，而不只是文字提问。当需要你在多个方案之间做选择时，会弹出带选项按钮的交互卡片，所有问题必须回答完整才能提交
-- **辅助模型自动路由**：上下文压缩、摘要等辅助任务现在会自动使用你配置中的小模型（如 Haiku），不再消耗主模型的额度。支持 5 级智能降级，即使主服务商不可用也能自动切换到备用服务商
-- **上下文压缩通知**：长对话触发自动压缩时，状态栏会显示"已压缩 N 条消息，节省约 X tokens"的提示，持续 5 秒，让你知道发生了什么
+- **飞书一键创建机器人**：设置 → 飞书设置 → "创建并绑定飞书应用"，浏览器自动打开飞书授权页面，确认后 Bot 能力、权限、事件订阅和长连接模式全部自动配置，无需再手动进飞书开放平台后台
+- **SubAgent 执行过程可视化**：Agent 调用子代理（explore / general）时，工具面板会显示闪电图标和子代理的嵌套工具调用进度（带 spinner / 完成 / 失败状态指示）
+- **输入框草稿持久化**：在一个聊天中打了字还没发送，切换到别的聊天再切回来，输入内容仍然保留（按会话分别保存）
+- **消息队列模式**：AI 正在响应时继续输入并回车，消息会显示在输入框上方的队列卡片里，AI 回复完成后自动发送。支持取消队列中的消息，参考 Codex 设计
+- **飞书 AskUserQuestion 交互卡片**：Agent 在飞书桥接中使用 AskUserQuestion 时，现在会渲染为带选项按钮的交互卡片（之前直接被拒绝），点击选项即可继续对话
+- **飞书资源消息支持**：飞书桥接现在可以接收图片、文件、音频、视频消息，自动下载并附加到对话上下文（带重试和 20MB 大小限制）
+
+### 修复问题
+
+- **飞书群聊 @mention 过滤失效**（#384）：设置"需要 @提及"开关后，机器人真的会在群里只响应 @Bot 的消息
+- **飞书话题群串 session**（#321）：未开启"话题会话"时，不同话题消息不再被错误地路由到独立会话
+- **飞书桥接鉴权配置失效**：dmPolicy / groupPolicy / allowFrom / groupAllowFrom 配置现在真的会拦截未授权用户的消息和卡片点击（之前是配置存在但从未生效）
+- **飞书 WebSocket 幽灵连接**：停止桥接或重绑应用时，旧的长连接现在会被正确关闭，不再出现重复消息投递
+- **桥接停止不中断任务**：点击"停止桥接"后，正在运行的 Claude 会话会立刻被打断，不再继续写数据库
+- **历史回放二进制附件乱码**：音频、视频、二进制文件在历史对话重放时不再被当成 UTF-8 文本注入上下文
+- **消息投递可靠性**（#266）：飞书 outbound 消息加了指数退避重试，瞬时网络故障不再导致消息丢失
+- **SubAgent 启动后后续消息排队**：在 AI 执行子代理期间继续发消息不会阻塞，会进入队列等待当前轮次完成
 
 ### 优化改进
 
-- 辅助模型路由现在正确识别当前会话的服务商，不再错误使用全局默认服务商的凭证进行压缩
-- Bridge/IM 场景下 AskUserQuestion 会被明确拒绝并提示模型改用文字提问，而不是静默返回空答案
-- 权限系统新增"总是需要交互"工具类别，AskUserQuestion 和 ExitPlanMode 即使在信任模式下也会弹出 UI
-- permission-registry 的超时计时器添加了 unref()，不再阻止应用优雅退出
-- 上下文压缩器 shouldAutoCompact 标记为 @deprecated，指向真正在用的 needsCompression
-
-### 基础设施（开发者相关）
-
-- 并行安全调度模块（parallel-safety.ts）：4 层判定算法已就绪，等待 AI SDK 提供 batch 级 hook 后接入
-- 渐进式子目录发现模块（subdirectory-hint-tracker.ts）：AGENTS.md/CLAUDE.md 懒加载已就绪，等待 agent-tools.ts 集成
-- Token 预算裁剪模块（pruneOldToolResultsByBudget）：可选的增强裁剪策略已就绪
-- 新增 ~90 个单元测试，覆盖所有新模块
+- 队列中的消息以卡片形式悬浮在输入框上方（参考 Codex），可随时取消，不再混在聊天流里造成"两条用户消息一条没回复"的视觉错觉
+- Streaming 中输入时按钮图标智能切换：空输入 → 终止图标，有内容 → 发送图标（只对纯文本有效；slash 命令 / badge / Image Agent 保持终止图标避免误导）
+- 飞书快速创建支持已有应用场景：点击"已有飞书应用？点击手动配置"可展开原有的 App ID / App Secret 手动录入表单
+- 飞书多 question / multi-select 的 AskUserQuestion 会被明确拒绝并附带清晰原因，不再静默截断成半截答案
+- 飞书 bot identity 启动失败后会每 60s 后台重试，不再永久 fail-open（#384 的边界情况）
 
 ## 下载地址
 
 ### macOS
-- [Apple Silicon (M1/M2/M3/M4)](https://github.com/op7418/CodePilot/releases/download/v0.49.0/CodePilot-0.49.0-arm64.dmg)
-- [Intel](https://github.com/op7418/CodePilot/releases/download/v0.49.0/CodePilot-0.49.0-x64.dmg)
+- [Apple Silicon (M1/M2/M3/M4)](https://github.com/op7418/CodePilot/releases/download/v0.50.0/CodePilot-0.50.0-arm64.dmg)
+- [Intel](https://github.com/op7418/CodePilot/releases/download/v0.50.0/CodePilot-0.50.0-x64.dmg)
 
 ### Windows
-- [Windows 安装包](https://github.com/op7418/CodePilot/releases/download/v0.49.0/CodePilot.Setup.0.49.0.exe)
+- [Windows 安装包](https://github.com/op7418/CodePilot/releases/download/v0.50.0/CodePilot.Setup.0.50.0.exe)
 
 ## 安装说明
 
