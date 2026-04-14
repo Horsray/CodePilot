@@ -12,9 +12,10 @@ src/lib/bridge/
 ├── channel-adapter.ts       # 抽象基类 + adapter 注册表（registerAdapterFactory/createAdapter）
 ├── channel-router.ts        # (channel, user, thread) → session 映射，自动创建/绑定会话
 ├── conversation-engine.ts   # 服务端消费 streamClaude() SSE 流，保存消息到 DB，onPartialText 流式回调
-├── permission-broker.ts     # 权限请求转发到 IM 内联按钮，处理回调审批
+├── permission-broker.ts     # 权限请求转发到 IM 内联按钮，处理回调审批（含 AskUserQuestion ask: 卡片）
 ├── delivery-layer.ts        # 出站消息分片、限流、重试退避、HTML 降级
 ├── bridge-manager.ts        # 生命周期编排，adapter 事件循环，流式预览状态机，deliverResponse 渲染分发
+├── feishu-app-registration.ts # 飞书 App Registration 设备流（begin/poll/cancel + globalThis session）
 ├── markdown/
 │   ├── ir.ts                # Markdown → IR 中间表示解析器（基于 markdown-it）
 │   ├── render.ts            # IR → 格式化输出的通用标记渲染器
@@ -43,15 +44,16 @@ src/lib/channels/
 ├── types.ts                 # ChannelPlugin / ChannelCapabilities / CardStreamController / ToolCallInfo 接口
 ├── channel-plugin-adapter.ts # ChannelPlugin → BaseChannelAdapter 桥接
 └── feishu/
-    ├── index.ts             # FeishuChannelPlugin 组合入口
+    ├── index.ts             # FeishuChannelPlugin 组合入口 + bot identity 解析 + generation guard
     ├── types.ts             # FeishuConfig / CardStreamConfig / FeishuBotInfo 等内部类型
     ├── config.ts            # 从 settings DB 加载配置 + 校验
-    ├── gateway.ts           # WSClient 生命周期 + card.action.trigger monkey-patch + 超时保护
-    ├── inbound.ts           # 入站消息解析 + 内容提取 + 资源下载
-    ├── outbound.ts          # 出站消息渲染（post md / interactive card / reaction）+ Markdown 优化
+    ├── gateway.ts           # WSClient 生命周期（含 force close）+ card.action.trigger monkey-patch + 超时保护
+    ├── inbound.ts           # 入站消息解析 + 多消息类型提取（text/image/file/audio/video）+ @mention 检测
+    ├── outbound.ts          # 出站消息渲染（post md / interactive card / reaction）+ Markdown 优化 + 指数退避重试
     ├── policy.ts            # 用户授权 + DM/群聊策略
-    ├── identity.ts          # Bot 身份解析 + @mention 检测
-    └── card-controller.ts   # CardKit v2 流式卡片（create/update/finalize/thinking/toolCalls）
+    ├── identity.ts          # Bot 身份解析
+    ├── card-controller.ts   # CardKit v2 流式卡片（create/update/finalize/thinking/toolCalls）
+    └── resource-downloader.ts # im.messageResource.get 下载器（20MB 限制 + 2 次重试）
 ```
 
 ## 数据流
@@ -309,7 +311,58 @@ Claude 的回复是 Markdown 格式，Telegram 仅支持有限 HTML 标签（b/i
 **21. 坏 cwd 不能继续 resume Claude 会话**
 Bridge 绑定和 chat session 中可能残留已经删除的 `working_directory` / `sdk_cwd`。一旦用坏目录继续携带旧 `sdk_session_id` 调 `streamClaude()`，Claude 子进程会在错误项目上下文里瞬间退出。当前修复要求在 cwd 回退时同步清空 binding/session 的 `sdk_session_id`，并把修正后的 cwd 回写 DB。
 
-## 设置项（settings 表）
+**22. 飞书一键创建应用（App Registration Device Flow）**
+`src/lib/bridge/feishu-app-registration.ts` 用飞书官方 CLI 同款的 `POST accounts.feishu.cn/oauth/v1/app/registration` 设备流，配合 `archetype=PersonalAgent` 让服务端自动配置 Bot 能力、IM scope、事件订阅、长连接模式，省去开放平台后台手动操作。
+- **流程**：前端调 `POST /api/bridge/feishu/register/start` 拿到 session_id + verification_url → `window.open()` 跳转浏览器 → 用户确认 → 前端轮询 `POST /api/bridge/feishu/register/poll` → 拿到 `client_id`/`client_secret` 写入 DB → 自动测试连接 → 运行中的桥接触发 restart
+- **session 状态机**：存 `globalThis.__feishu_registration_sessions__`（HMR 安全），状态 `waiting / completed / failed / expired`
+- **slow_down 退避**：服务端把 `session.interval` 通过 `interval_ms` 返回给前端，前端用 `setTimeout` 递归调度（非 setInterval）动态调整轮询间隔
+- **Lark 回切**：轮询响应的 `tenant_brand=lark` 且 `client_secret` 为空时，把 `session.domain` 切到 `lark` 后续轮询直接走 `accounts.larksuite.com`，支持 Lark 侧的 `authorization_pending` / `slow_down` 继续等待
+- **错误码契约**：后端返回结构化 `error_code`（`timeout` / `user_denied` / `empty_credentials` / `lark_empty_credentials`），前端按 i18n map 映射到中文提示
+- **Cancel 语义**：新增 `POST /api/bridge/feishu/register/cancel` 让前端取消时同步清理服务端 session，避免浏览器侧晚到的确认创建出孤儿应用
+- **前端轮询竞态**：`FeishuBridgeSection.tsx` 用 AbortController + 单调递增 `regRunIdRef` 双重保护：cancel 后 in-flight fetch 被 abort，所有 state 更新/schedulePoll 前都检查 generation 是否过期
+- **UI 降级**：`verify_error` 或 `bridge_restart_error` 不再渲染为 success，而是 `warning`（凭据已存但运行时有问题）；非 2xx 响应直接终止本轮，不 fallthrough 到重试
+
+**23. 飞书授权策略执行（Authorization Enforcement）**
+之前 `dmPolicy` / `groupPolicy` / `allowFrom` / `groupAllowFrom` 这套设置在飞书上是死代码——`FeishuChannelPlugin` 的 message handler 和 card action handler 都没调 `isUserAuthorized()`。现在：
+- **入站消息 gate**：`channels/feishu/index.ts` messageHandler 在 enqueue 前调 `isUserAuthorized(this.config!, addrUserId, rawChatId)`，未授权直接 drop 并记日志
+- **卡片回调 gate**：`channels/feishu/index.ts` cardActionHandler 拒绝未授权用户点击按钮（返回 "无权限操作" toast，不 enqueue 驱动任何动作），防止白名单外用户通过点击历史卡片审批权限或切换项目
+- **thread-session 地址兼容**：授权检查前用 `split(':thread:')[0]` 剥离 thread 后缀，因为 `groupAllowFrom` 存的是原始 `oc_xxx`，不剥离会让 `threadSession=true` 的群聊全部误拦
+
+**24. 飞书 bot identity 解析（@mention 支持基石）**
+`FeishuChannelPlugin` 启动后 fire-and-forget 调 `resolveBotIdentity()`，通过 `getBotInfo()`（`/bot/v3/info/` REST API）拿 `open_id`，用于 `inbound.ts` 的 @mention 检测（#384 requireMention 群聊过滤）。
+- **Fail-open 启动窗口**：`inbound.ts` 在 `botOpenId` 为空时跳过 requireMention 检查，避免启动 1-5s 内群消息被全部误拦（而不是 fail-closed）
+- **3 次快速重试**：2s/4s/6s backoff，成功即停
+- **60s 后台周期重试**：3 次都失败后启动 setInterval，解决运行期间飞书 API 偶发抖动导致 requireMention 永久失效的问题
+- **Generation guard**：`identityGeneration` 计数器在 `start()` / `stop()` 时 +1，所有 in-flight probe 和定时器 callback 在每次 `await` 前后检查 generation 匹配，不匹配就 bail 并自清 timer（timer 用闭包捕获的 `myTimer` 对象，不通过 `this.identityRetryTimer` 字段查找，避免 stale callback 误清新 generation 的 timer）
+
+**25. 飞书 WSClient 真正关闭**
+`channels/feishu/gateway.ts:181` 原来只把 `this.wsClient = null`，靠 SDK 自己断开——实际 SDK 的 ping/reconnect timer + WebSocket 实例都还活着，幽灵连接会在桥接重启或 Feishu 重绑时导致重复消息投递。现在调 `WSClient.close({ force: true })`（SDK `lib/index.js:85594` 实现），会 `clearTimeout` ping interval + reconnect interval、`removeAllListeners` + `wsInstance.terminate()`。
+
+**26. 全局 Bridge stop 中断 active tasks**
+`bridge-manager.stop()` 原来只 abort 事件循环就 `state.activeTasks.clear()`，正在跑的 Claude 会话依然在后台继续写 DB / 占 session lock。现在 stop 先遍历 `state.activeTasks` 对每个 AbortController 调 `.abort()`，对齐 per-session `/stop` 命令语义。
+
+**27. 飞书 AskUserQuestion 交互卡片**
+`permission-broker.ts` 从统一 deny 改为按 channel 能力分支：
+- **支持按钮的 channel**（Telegram / Discord / 飞书）：`buildAskUserQuestionCard()` 渲染带选项按钮的卡片，callback 格式 `ask:{requestId}:{optionIndex}`；`handleAskUserQuestionCallback()` 用 `updatedInput = { questions, answers: { [question]: label } }` 回填给 `AskUserQuestion` 工具，匹配 native 工具契约
+- **不支持按钮的 channel**（QQ / Weixin）：明确 deny 而非 degrade 到 Allow/Deny（后者会让工具以空 answers 执行返回"The user did not provide any answers"）
+- **严格 validation**：`validateAskUserQuestion()` 拒绝多 question（`questions.length > 1`）、`multiSelect=true`、空 options 三种形态，附带人类可读的原因，让模型能重新组织调用而非静默截断
+- **full_access 不自动审批**：AskUserQuestion 的用户选择携带语义，不只是权限同意，所以即使 `full_access` profile 也要走正常 UI 流程
+- **飞书卡片样式**：`outbound.ts` 识别 `ask:` 前缀渲染 indigo "Question" header + comment icon（区别于 perm: 的 blue "Permission Required" + lock icon）
+- **bridge-manager 路由**：`ask:` 回调走 `handleAskUserQuestionCallback` 且**不**发 "Permission response recorded" 确认消息（模型的下一条回复本身就是对用户选择的回应）
+
+**28. 飞书资源消息支持（image/file/audio/video）**
+`inbound.ts` 扩展非文本消息处理：`extractResources()` 从 `message.content` JSON 解析 `file_key` + `resourceType`，返回 `PendingResource[]`；`parseMessageWithResources()` 同时返回 base message + pending resources。`FeishuChannelPlugin.downloadAndEnqueue()` 在 gateway handler 外 fire-and-forget 做下载，不阻塞 WSClient。
+- **下载器**：`channels/feishu/resource-downloader.ts` 封装 `im.messageResource.get`，带 20MB 上限 + 2 次指数退避重试；permanent error（not-found / permission）不重试直接返回 null
+- **支持类型**：`image`（`image/png`）、`file`（`application/octet-stream`）、`audio`（`audio/ogg`）、`video`（`video/mp4`）；`media` 被当作 `video` 处理
+- **partial failure 容忍**：部分资源下载失败仍然 enqueue 已成功的 attachments + 原文本
+- **类型感知 fallback prompt**：`bridge-manager.handleMessage()` 在 text 为空且有 attachments 时按类型选提示语（纯图 `Describe this image` / 纯音 `Transcribe and summarize this audio` / 纯视频 `Describe what happens in this video` / 混合或文件 `Please review the attached file(s)`），不再硬编码 `Describe this image.`
+- **历史回放二进制防护**：`message-builder.ts` 用 `isTextLikeMime()` 判断后才 `readFileSync(..., 'utf-8')` 内联，否则只插一行 `[Attached file: name (mime, binary — content not inlined; path: ...)]` 引用备注，避免 audio/video 二进制字节被当乱码文本注入 prompt
+
+**29. 飞书出站消息重试（#266）**
+`outbound.ts` 的 `sendMessage()` 包裹 2 次指数退避重试。`isTransientError()` 识别 Feishu 永久错误码（99991663/99991664/10003/230001/230002）提前 fail，timeout/network/5xx 继续重试。
+
+**30. 飞书 thread-session 守卫（#321）**
+`inbound.ts` 之前无条件把 `root_id` 拼进 `chatId` 做 thread 路由，`bridge_feishu_thread_session` 设置其实无效（永远开启）。现在检查 `config.threadSession && rootId` 才做 synthetic address，默认关闭时所有消息共享同一 session，和产品预期一致。
 
 | Key | 说明 |
 |-----|------|
@@ -353,6 +406,9 @@ Bridge 绑定和 chat session 中可能残留已经删除的 `working_directory`
 | /api/settings/weixin/accounts/[accountId] | PATCH/DELETE | 启停或删除微信账号；bridge 运行中会同步 restart |
 | /api/settings/weixin/login/start | POST | 创建二维码登录会话并返回二维码图片 |
 | /api/settings/weixin/login/wait | POST | 轮询二维码状态；确认后自动尝试重启 bridge |
+| /api/bridge/feishu/register/start | POST | 启动飞书 App Registration 设备流，返回 session_id + verification_url |
+| /api/bridge/feishu/register/poll | POST | 轮询注册状态；completed 后验证凭据 + 自动重启 bridge；返回 interval_ms 让前端响应 slow_down |
+| /api/bridge/feishu/register/cancel | POST | 取消注册 session（服务端清理，避免浏览器侧晚到确认产生孤儿应用） |
 
 ## Telegram 命令
 
