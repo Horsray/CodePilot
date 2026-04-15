@@ -9,12 +9,12 @@
  * 1. Explicitly rebuilds native modules for the target Electron ABI
  * 2. Copies the rebuilt .node into all locations within standalone resources
  */
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { execSync } = require('child_process');
-
 module.exports = async function afterPack(context) {
+  const fs = await import('fs');
+  const os = await import('os');
+  const path = await import('path');
+  const { execSync } = await import('child_process');
+
   const appOutDir = context.appOutDir;
   const arch = context.arch;
   // electron-builder arch enum: 1=x64, 3=arm64, etc.
@@ -25,7 +25,7 @@ module.exports = async function afterPack(context) {
   const electronVersion =
     context.electronVersion ||
     context.packager?.config?.electronVersion ||
-    require(path.join(process.cwd(), 'node_modules', 'electron', 'package.json')).version;
+    JSON.parse(fs.readFileSync(path.join(process.cwd(), 'node_modules', 'electron', 'package.json'), 'utf8')).version;
 
   console.log(`[afterPack] Electron ${electronVersion}, arch=${archName}, platform=${platform}`);
 
@@ -70,7 +70,7 @@ module.exports = async function afterPack(context) {
       } catch (err) {
         console.error(`[afterPack] Failed to rebuild ${name}:`, err.message);
         try {
-          const { rebuild } = require('@electron/rebuild');
+          const { rebuild } = await import('@electron/rebuild');
           await rebuild({
             buildPath: projectDir,
             electronVersion: electronVersion,

@@ -23,9 +23,6 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   const [sessionInfoLoaded, setSessionInfoLoaded] = useState(false);
   const [sessionPermissionProfile, setSessionPermissionProfile] = useState<'default' | 'full_access'>('default');
   const [sessionMode, setSessionMode] = useState<'code' | 'plan'>('code');
-  const [sessionTeamMode, setSessionTeamMode] = useState<'off' | 'on' | 'auto'>('on');
-  const [sessionOrchestrationTier, setSessionOrchestrationTier] = useState<'single' | 'multi'>('multi');
-  const [sessionOrchestrationProfileId, setSessionOrchestrationProfileId] = useState<string>('');
   const [sessionHasSummary, setSessionHasSummary] = useState(false);
   const { setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
   const { t } = useTranslation();
@@ -65,9 +62,6 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
           setSessionProviderId(resolved.providerId);
           setSessionPermissionProfile(data.session.permission_profile || 'default');
           setSessionMode((data.session.mode as 'code' | 'plan') || 'code');
-          setSessionTeamMode((data.session.team_mode as 'off' | 'on' | 'auto') || 'on');
-          setSessionOrchestrationTier((data.session.orchestration_tier as 'single' | 'multi') || 'multi');
-          setSessionOrchestrationProfileId(data.session.orchestration_profile_id || '');
           setSessionHasSummary(!!data.session.context_summary);
         }
       } catch {
@@ -177,7 +171,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialTeamMode={sessionTeamMode} initialOrchestrationTier={sessionOrchestrationTier} initialOrchestrationProfileId={sessionOrchestrationProfileId} initialHasSummary={sessionHasSummary} />
+      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} />
     </div>
   );
 }

@@ -82,11 +82,6 @@ export interface StartStreamParams {
   thinking?: { type: string; budgetTokens?: number };
   /** Enable 1M context window (beta) */
   context1m?: boolean;
-  /** Team mode configuration */
-  teamMode?: 'off' | 'on' | 'auto';
-  /** Orchestration tier for sub-agents */
-  orchestrationTier?: 'single' | 'multi';
-  orchestrationProfileId?: string;
   /** Called when init status event provides metadata (tools, slash_commands, skills) */
   onInitMeta?: (meta: { tools?: unknown; slash_commands?: unknown; skills?: unknown }) => void;
   /** Display-only content for user message (e.g. /skillName instead of expanded prompt) */
@@ -101,7 +96,7 @@ const GLOBAL_KEY = '__streamSessionManager__' as const;
 const LISTENERS_KEY = '__streamSessionListeners__' as const;
 const STREAM_IDLE_TIMEOUT_MS = 330_000;
 const STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS = 300_000; // Increased to 5 minutes to match backend
-const MCP_TOOL_TIMEOUT_MS = 60_000; // Increased to 1 minute
+const MCP_TOOL_TIMEOUT_MS = 300_000; // 5 minutes — same as non-MCP tools; 60s was too aggressive and killed legitimate long-running MCP tools
 const GC_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 function isMcpTool(toolName?: string | null): boolean {
@@ -435,10 +430,8 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         ...(params.effort ? { effort: params.effort } : {}),
         ...(params.thinking ? { thinking: params.thinking } : {}),
         ...(params.context1m ? { context_1m: true } : {}),
-        ...(params.teamMode ? { team_mode: params.teamMode } : {}),
-        ...(params.orchestrationTier ? { orchestration_tier: params.orchestrationTier } : {}),
-        ...(params.orchestrationProfileId ? { orchestration_profile_id: params.orchestrationProfileId } : {}),
         ...(params.displayOverride ? { displayOverride: params.displayOverride } : {}),
+        permission_mode: 'bypassPermissions',
       }),
       signal: stream.abortController.signal,
     });

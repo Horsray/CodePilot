@@ -24,7 +24,6 @@ import { execFileSync, spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import net from 'net';
 import os from 'os';
-import { TerminalManager } from './terminal-manager';
 
 /**
  * Return a copy of process.env without __NEXT_PRIVATE_* variables.
@@ -80,8 +79,6 @@ let installState: InstallState = {
 };
 
 let installProcess: ChildProcess | null = null;
-
-const terminalManager = new TerminalManager();
 
 const isDev = !app.isPackaged;
 
@@ -1318,38 +1315,6 @@ app.whenReady().then(async () => {
     }
   });
 
-  // --- Terminal IPC handlers ---
-  terminalManager.setOnData((id, data) => {
-    mainWindow?.webContents.send('terminal:data', { id, data });
-  });
-
-  terminalManager.setOnExit((id, code) => {
-    mainWindow?.webContents.send('terminal:exit', { id, code });
-  });
-
-  ipcMain.handle('terminal:create', async (_event, opts: { id: string; cwd: string; cols: number; rows: number }) => {
-    terminalManager.create(opts.id, {
-      cwd: opts.cwd,
-      cols: opts.cols,
-      rows: opts.rows,
-      env: userShellEnv,
-    });
-  });
-
-  ipcMain.on('terminal:write', (_event, data: { id: string; data: string }) => {
-    terminalManager.write(data.id, data.data);
-  });
-
-  ipcMain.handle('terminal:resize', async (_event, data: { id: string; cols: number; rows: number }) => {
-    terminalManager.resize(data.id, data.cols, data.rows);
-  });
-
-  ipcMain.handle('terminal:kill', async (_event, id: string) => {
-    terminalManager.kill(id);
-  });
-
-  // --- End terminal IPC handlers ---
-
   // --- Notification IPC handler ---
   ipcMain.handle('notification:show', async (_event, options: {
     title: string;
@@ -1483,9 +1448,6 @@ app.on('activate', async () => {
 });
 
 app.on('before-quit', async (e) => {
-  // Kill all terminal processes
-  terminalManager.killAll();
-
   // Kill any running install process (tree-kill on Windows)
   if (installProcess) {
     const pid = installProcess.pid;

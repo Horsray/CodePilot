@@ -12,7 +12,6 @@ import { UpdateBanner } from "./UpdateBanner";
 import { UnifiedTopBar } from "./UnifiedTopBar";
 import { PanelZone } from "./PanelZone";
 import { BottomPanelContainer } from "./BottomPanelContainer";
-import { BrowserTabView } from "./BrowserTabView";
 import { PanelContext, type PreviewViewMode, type WorkspaceTab } from "@/hooks/usePanel";
 import { UpdateContext } from "@/hooks/useUpdate";
 import { useUpdateChecker } from "@/hooks/useUpdateChecker";
@@ -74,16 +73,6 @@ const LG_BREAKPOINT = 1024;
 
 function getFileTabTitle(filePath: string): string {
   return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath;
-}
-
-function getBrowserTabTitle(url?: string): string {
-  if (!url) return "Browser";
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname.replace(/^www\./, "") || "Browser";
-  } catch {
-    return "Browser";
-  }
 }
 
 function createWorkspaceId(prefix: string): string {
@@ -163,13 +152,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [fileTreeOpen, setFileTreeOpen] = useState(false);
   const [gitPanelOpen, setGitPanelOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
   const [dashboardPanelOpen, setDashboardPanelOpen] = useState(false);
   const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
   const [isAssistantWorkspace, setIsAssistantWorkspace] = useState(false);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
-  const [bottomPanelTab, setBottomPanelTab] = useState<"terminal" | "console">("terminal");
-  const [browserUrl, setBrowserUrl] = useState("");
+  const [bottomPanelTab, setBottomPanelTab] = useState<"console">("console");
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
   const [activeWorkspaceTabId, setActiveWorkspaceTabIdRaw] = useState<string | null>(null);
 
@@ -404,23 +391,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setActiveWorkspaceTabIdRaw(id);
   }, [workspaceTabs]);
 
-  const openBrowserTab = useCallback((url?: string) => {
-    const nextUrl = url?.trim() || browserUrl || "";
-    const id = createWorkspaceId("browser");
-    setWorkspaceTabs((prev) => [
-      ...prev,
-      {
-        id,
-        kind: "browser",
-        title: getBrowserTabTitle(nextUrl),
-        url: nextUrl,
-        closable: true,
-      },
-    ]);
-    setBrowserUrl(nextUrl);
-    setActiveWorkspaceTabIdRaw(id);
-  }, [browserUrl]);
-
   const closeWorkspaceTab = useCallback((id: string) => {
     setWorkspaceTabs((prev) => {
       const index = prev.findIndex((tab) => tab.id === id);
@@ -433,26 +403,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       return next;
     });
   }, [activeWorkspaceTabId]);
-
-  const updateWorkspaceTab = useCallback((id: string, patch: Partial<WorkspaceTab>) => {
-    setWorkspaceTabs((prev) =>
-      prev.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab))
-    );
-  }, []);
-
-  const syncBrowserContextMeta = useCallback((meta: { url?: string; title?: string }) => {
-    if (!sessionId) return;
-    fetch("/api/browser-context", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId,
-        type: "meta",
-        ...(meta.url ? { url: meta.url } : {}),
-        ...(meta.title ? { title: meta.title } : {}),
-      }),
-    }).catch(() => {});
-  }, [sessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -470,88 +420,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const handler = (e: Event) => {
       const url = (e as CustomEvent).detail?.url;
       if (typeof url === "string" && url.trim()) {
-        openBrowserTab(url);
+        window.open(url, "_blank");
       }
     };
     window.addEventListener("browser-navigate", handler);
     return () => window.removeEventListener("browser-navigate", handler);
-  }, [openBrowserTab]);
+  }, []);
 
   useEffect(() => {
     const handler = (e: Event) => {
       const tab = (e as CustomEvent).detail?.tab;
-      if (tab === "console") {
-        setBottomPanelTab("console");
-      } else {
-        setBottomPanelTab("terminal");
-      }
+      if (tab === "console") setBottomPanelTab("console");
       setBottomPanelOpen(true);
     };
     window.addEventListener("terminal-ensure-visible", handler);
     return () => window.removeEventListener("terminal-ensure-visible", handler);
   }, [setBottomPanelOpen, setBottomPanelTab]);
 
-  useEffect(() => {
-    if (!sessionId || !browserUrl) return;
-    syncBrowserContextMeta({ url: browserUrl });
-  }, [browserUrl, sessionId, syncBrowserContextMeta]);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (!sessionId || detail?.source !== "browser" || !detail?.message) return;
-      fetch("/api/browser-context", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          type: "log",
-          level: detail.level || "log",
-          message: detail.message,
-          source: detail.source,
-          url: browserUrl || undefined,
-        }),
-      }).catch(() => {});
-    };
-    window.addEventListener("console-log", handler);
-    return () => window.removeEventListener("console-log", handler);
-  }, [browserUrl, sessionId]);
-
   const activeWorkspaceTab = useMemo(
     () => workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId) || null,
     [workspaceTabs, activeWorkspaceTabId]
   );
-  const mainViewMode: "chat" | "browser" = activeWorkspaceTab?.kind === "browser" ? "browser" : "chat";
-  const browserTabOpen = workspaceTabs.some((tab) => tab.kind === "browser");
-  const setMainViewMode = useCallback((mode: "chat" | "browser") => {
-    if (mode === "chat") {
-      setActiveWorkspaceTabIdRaw(null);
-      return;
-    }
-    const firstBrowser = workspaceTabs.find((tab) => tab.kind === "browser");
-    if (firstBrowser) {
-      setActiveWorkspaceTabIdRaw(firstBrowser.id);
-      return;
-    }
-    openBrowserTab(browserUrl);
-  }, [browserUrl, openBrowserTab, workspaceTabs]);
-  const setBrowserTabOpen = useCallback((open: boolean) => {
-    if (open) {
-      const firstBrowser = workspaceTabs.find((tab) => tab.kind === "browser");
-      if (firstBrowser) {
-        setActiveWorkspaceTabIdRaw(firstBrowser.id);
-        return;
-      }
-      openBrowserTab(browserUrl);
-      return;
-    }
-    const browserTabIds = new Set(workspaceTabs.filter((tab) => tab.kind === "browser").map((tab) => tab.id));
-    if (browserTabIds.size === 0) return;
-    setWorkspaceTabs((prev) => prev.filter((tab) => !browserTabIds.has(tab.id)));
-    if (activeWorkspaceTab && browserTabIds.has(activeWorkspaceTab.id)) {
-      setActiveWorkspaceTabIdRaw(null);
-    }
-  }, [activeWorkspaceTab, browserUrl, openBrowserTab, workspaceTabs]);
 
   // Keep chat list state in sync when resizing across the breakpoint
   useEffect(() => {
@@ -600,8 +489,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setGitPanelOpen,
       previewOpen,
       setPreviewOpen,
-      terminalOpen,
-      setTerminalOpen,
       dashboardPanelOpen,
       setDashboardPanelOpen,
       assistantPanelOpen,
@@ -612,12 +499,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setBottomPanelOpen,
       bottomPanelTab,
       setBottomPanelTab,
-      mainViewMode,
-      setMainViewMode,
-      browserTabOpen,
-      setBrowserTabOpen,
-      browserUrl,
-      setBrowserUrl,
       currentBranch,
       gitDirtyCount,
       currentWorktreeLabel,
@@ -625,7 +506,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       workspaceTabs,
       activeWorkspaceTabId,
       setActiveWorkspaceTabId,
-      openBrowserTab,
       openPreviewTab,
       closeWorkspaceTab,
       workingDirectory,
@@ -645,7 +525,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       previewViewMode,
       setPreviewViewMode,
     }),
-    [fileTreeOpen, gitPanelOpen, previewOpen, terminalOpen, dashboardPanelOpen, assistantPanelOpen, isAssistantWorkspace, bottomPanelOpen, bottomPanelTab, mainViewMode, setMainViewMode, browserTabOpen, setBrowserTabOpen, browserUrl, workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, openBrowserTab, openPreviewTab, closeWorkspaceTab, currentBranch, gitDirtyCount, currentWorktreeLabel, workingDirectory, sessionId, sessionTitle, streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, previewFile, setPreviewFile, previewViewMode]
+    [fileTreeOpen, gitPanelOpen, previewOpen, dashboardPanelOpen, assistantPanelOpen, isAssistantWorkspace, bottomPanelOpen, bottomPanelTab, workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, openPreviewTab, closeWorkspaceTab, currentBranch, gitDirtyCount, currentWorktreeLabel, workingDirectory, sessionId, sessionTitle, streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, previewFile, setPreviewFile, previewViewMode]
   );
 
   const imageGenValue = useImageGenState();
@@ -680,23 +560,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     {isChatRoute || isSplitActive ? (
                       activeWorkspaceTab ? (
                         <div className="absolute inset-0 min-h-0">
-                          {activeWorkspaceTab.kind === "browser" ? (
-                            <BrowserTabView
-                              initialUrl={activeWorkspaceTab.url}
-                              onMetaChange={(meta) => {
-                                const nextUrl = meta.url?.trim() || activeWorkspaceTab.url || "";
-                                if (nextUrl) setBrowserUrl(nextUrl);
-                                syncBrowserContextMeta({
-                                  ...(nextUrl ? { url: nextUrl } : {}),
-                                  ...(meta.title?.trim() ? { title: meta.title.trim() } : {}),
-                                });
-                                updateWorkspaceTab(activeWorkspaceTab.id, {
-                                  ...(nextUrl ? { url: nextUrl } : {}),
-                                  ...(meta.title?.trim() ? { title: meta.title.trim() } : nextUrl ? { title: getBrowserTabTitle(nextUrl) } : {}),
-                                });
-                              }}
-                            />
-                          ) : activeWorkspaceTab.kind === "preview" && activeWorkspaceTab.filePath ? (
+                          {activeWorkspaceTab.kind === "preview" && activeWorkspaceTab.filePath ? (
                             <PreviewPanel
                               standalone
                               filePath={activeWorkspaceTab.filePath}

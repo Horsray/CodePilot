@@ -5,8 +5,8 @@ import { createContext, useContext } from "react";
 export type PanelContent = "files" | "tasks";
 
 export type PreviewViewMode = "source" | "rendered";
-export type BottomPanelTab = "terminal" | "console";
-export type WorkspaceTabKind = "browser" | "preview";
+export type BottomPanelTab = "console";
+export type WorkspaceTabKind = "preview";
 
 export interface WorkspaceTab {
   id: string;
@@ -26,8 +26,6 @@ export interface PanelContextValue {
   setGitPanelOpen: (open: boolean) => void;
   previewOpen: boolean;
   setPreviewOpen: (open: boolean) => void;
-  terminalOpen: boolean;
-  setTerminalOpen: (open: boolean) => void;
   dashboardPanelOpen: boolean;
   setDashboardPanelOpen: (open: boolean) => void;
   assistantPanelOpen: boolean;
@@ -38,16 +36,9 @@ export interface PanelContextValue {
   setBottomPanelOpen: (open: boolean) => void;
   bottomPanelTab: BottomPanelTab;
   setBottomPanelTab: (tab: BottomPanelTab) => void;
-  mainViewMode: "chat" | "browser";
-  setMainViewMode: (mode: "chat" | "browser") => void;
-  browserTabOpen: boolean;
-  setBrowserTabOpen: (open: boolean) => void;
-  browserUrl: string;
-  setBrowserUrl: (url: string) => void;
   workspaceTabs: WorkspaceTab[];
   activeWorkspaceTabId: string | null;
   setActiveWorkspaceTabId: (id: string | null) => void;
-  openBrowserTab: (url?: string) => void;
   openPreviewTab: (path: string) => void;
   closeWorkspaceTab: (id: string) => void;
 

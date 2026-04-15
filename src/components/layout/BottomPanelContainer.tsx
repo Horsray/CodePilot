@@ -3,7 +3,6 @@
 import { useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import {
-  Terminal as TerminalIcon,
   ListBullets,
   X,
   ArrowsInLineVertical,
@@ -13,10 +12,6 @@ import { Button } from "@/components/ui/button";
 import { usePanel, type BottomPanelTab } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 
-const WebTerminalTab = dynamic(
-  () => import("./panels/WebTerminalPanel").then((m) => ({ default: m.WebTerminalPanel })),
-  { ssr: false }
-);
 const ConsolePanelTab = dynamic(
   () => import("@/components/console/ConsolePanel").then((m) => ({ default: m.ConsolePanel })),
   { ssr: false }
@@ -56,11 +51,6 @@ export function BottomPanelContainer() {
   if (!bottomPanelOpen) return null;
 
   const tabs: { id: BottomPanelTab; label: string; icon: React.ReactNode }[] = [
-    {
-      id: "terminal",
-      label: t("bottomPanel.terminal"),
-      icon: <TerminalIcon size={14} />,
-    },
     {
       id: "console",
       label: t("bottomPanel.console"),
@@ -120,9 +110,6 @@ export function BottomPanelContainer() {
       </div>
 
       <div className={`flex-1 min-h-0 overflow-hidden ${collapsed ? "hidden" : ""}`}>
-        <div className={bottomPanelTab === "terminal" ? "h-full" : "hidden h-full"}>
-          <WebTerminalTab />
-        </div>
         <div className={bottomPanelTab === "console" ? "h-full" : "hidden h-full"}>
           <ConsolePanelTab />
         </div>

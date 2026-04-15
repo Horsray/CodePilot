@@ -2,7 +2,6 @@ import { NextRequest } from 'next/server';
 import { streamClaude } from '@/lib/claude-client';
 import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTitle, updateSdkSessionId, updateSessionModel, updateSessionProvider, updateSessionProviderId, getSetting, getProviderOptions, acquireSessionLock, renewSessionLock, releaseSessionLock, setSessionRuntimeStatus, syncSdkTasks } from '@/lib/db';
 import { resolveProvider as resolveProviderUnified } from '@/lib/provider-resolver';
-import { resolveCollaborationBinding } from '@/lib/collaboration-strategy';
 import { notifySessionStart, notifySessionComplete, notifySessionError } from '@/lib/telegram-bot';
 import { extractCompletion } from '@/lib/onboarding-completion';
 import { loadCodePilotMcpServers, loadAllMcpServers } from '@/lib/mcp-loader';
@@ -29,8 +28,8 @@ export async function POST(request: NextRequest) {
   const perfTrace = createPerfTrace('chat-route', { id: traceId });
 
   try {
-    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean; team_mode?: 'off' | 'on' | 'auto'; orchestration_tier?: 'single' | 'multi'; orchestration_profile_id?: string } = await perfTrace.measureAsync('request.parse', () => request.json());
-    const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m, team_mode, orchestration_tier } = body;
+    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean; permission_mode?: string } = await perfTrace.measureAsync('request.parse', () => request.json());
+    const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m, permission_mode } = body;
     perfTrace.annotate('request.received', {
       contentLength: content?.length || 0,
       hasFiles: !!files?.length,
@@ -188,23 +187,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const effectiveTeamMode = team_mode || session.team_mode || 'on';
-    const effectiveTier = orchestration_tier || session.orchestration_tier || 'multi';
     // Resolve provider via unified resolver (same logic for chat, bridge, onboarding, etc.)
     let effectiveProviderId = provider_id || session.provider_id || '';
-    if (effectiveTeamMode !== 'off' && effectiveTier !== 'single') {
-      const strategy = getProviderOptions('__global__').collaboration_strategy;
-      const leadBinding = resolveCollaborationBinding({
-        strategy,
-        tier: effectiveTier,
-        role: 'team-leader',
-        profileId: body.orchestration_profile_id || session.orchestration_profile_id || '',
-        fallbackProviderId: effectiveProviderId || undefined,
-        fallbackModel: effectiveModel,
-      });
-      if (leadBinding.providerId) effectiveProviderId = leadBinding.providerId;
-      if (leadBinding.model) effectiveModel = leadBinding.model;
-    }
     const resolved = perfTrace.measure('provider.resolve', () => resolveProviderUnified({
       providerId: effectiveProviderId || undefined,
       sessionProviderId: session.provider_id || undefined,
@@ -233,11 +217,12 @@ export async function POST(request: NextRequest) {
     // Request body mode takes priority to avoid race condition: user switches mode
     // then immediately sends — the PATCH may not have landed in DB yet.
     const effectiveMode = mode || session.mode || 'code';
-    const permissionMode = effectiveMode === 'plan' ? 'plan' : 'acceptEdits';
+    const permissionMode = mode === 'plan' ? 'plan' : (permission_mode || 'bypassPermissions');
 
     // Plan mode takes precedence over full_access: if the user explicitly chose
     // Plan, they expect no tool execution regardless of permission profile.
-    const bypassPermissions = session.permission_profile === 'full_access' && effectiveMode !== 'plan';
+    // Default to bypassPermissions so tools run automatically (same as terminal).
+    const bypassPermissions = (permission_mode === 'bypassPermissions' || session.permission_profile === 'full_access') && effectiveMode !== 'plan';
     const systemPromptOverride: string | undefined = undefined;
 
     const abortController = new AbortController();
@@ -290,8 +275,6 @@ export async function POST(request: NextRequest) {
       conversationHistory: historyMsgs,
       imageAgentMode: isImageAgentMode,
       autoTrigger: !!autoTrigger,
-      teamMode: effectiveTeamMode,
-      orchestrationTier: effectiveTier,
       files,
     }));
     const finalSystemPrompt = assembled.systemPrompt;
@@ -310,7 +293,7 @@ export async function POST(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { predictNativeRuntime } = require('@/lib/runtime') as typeof import('@/lib/runtime');
     const mcpServers = perfTrace.measure('mcp.config.load', () => (
-      predictNativeRuntime(effectiveProviderId, effectiveTeamMode)
+      predictNativeRuntime(effectiveProviderId)
         ? loadAllMcpServers()
         : loadCodePilotMcpServers()
     ));
@@ -448,9 +431,6 @@ export async function POST(request: NextRequest) {
       enableAgentsSkills,
       syncProjectRules,
       knowledgeBaseEnabled,
-      teamMode: effectiveTeamMode,
-      orchestrationTier: effectiveTier,
-      orchestrationProfileId: body.orchestration_profile_id || session.orchestration_profile_id || '',
     }));
 
     // Tee the stream: one for client, one for collecting the response

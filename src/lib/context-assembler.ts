@@ -10,12 +10,10 @@
  *   Bridge:  workspace + session + assistant instructions + CLI tools (no widget)
  */
 
-import type { ChatSession, CollaborationDecision } from '@/types';
+import type { ChatSession } from '@/types';
 import { getProviderOptions, getSetting } from '@/lib/db';
 import { EGG_IMAGE_URL } from '@/lib/buddy';
 import { buildSystemPrompt } from './agent-system-prompt';
-import { analyzeCollaborationNeed } from './collaboration-decision';
-import { getCollaborationProfileLabel } from './collaboration-strategy';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -34,10 +32,6 @@ export interface ContextAssemblyConfig {
   imageAgentMode?: boolean;
   /** Whether this is an auto-trigger turn (heartbeat, onboarding hook, etc.) */
   autoTrigger?: boolean;
-  /** Team mode configuration */
-  teamMode?: 'off' | 'on' | 'auto';
-  /** Orchestration tier configuration */
-  orchestrationTier?: 'single' | 'multi';
   /** User attachments for complexity analysis */
   files?: import('@/types').FileAttachment[];
 }
@@ -59,21 +53,12 @@ export interface AssembledContext {
   enableAgentsSkills?: boolean;
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
-  collaborationDecision?: CollaborationDecision;
-  phaseRunnerPayload?: {
-    phases: Array<{
-      name: string;
-      parallel: boolean;
-      objective: string;
-      tasks: Array<{ agent: string; prompt: string }>;
-    }>;
-  };
 }
 
 // ── Main function ────────────────────────────────────────────────────
 
 export async function assembleContext(config: ContextAssemblyConfig): Promise<AssembledContext> {
-  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, teamMode, orchestrationTier, autoTrigger, files } = config;
+  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, files } = config;
   const _unused_history = conversationHistory;
   const t0 = Date.now();
 
@@ -87,20 +72,6 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   let enableAgentsSkills = getSetting('enable_agents_skills') !== 'false';
   let syncProjectRules = getSetting('sync_project_rules') !== 'false';
   let knowledgeBaseEnabled = getSetting('knowledge_base_enabled') !== 'false';
-  const collaborationDecision = analyzeCollaborationNeed({
-    prompt: userPrompt,
-    teamMode: teamMode || session.team_mode || 'on',
-    orchestrationTier: orchestrationTier || session.orchestration_tier || 'multi',
-    files,
-    conversationHistoryCount: conversationHistory?.length || 0,
-    conversationHistory: conversationHistory?.filter((item): item is { role: 'user' | 'assistant'; content: string } =>
-      item.role === 'user' || item.role === 'assistant'
-    ),
-  });
-  const orchestrationProfileName = getCollaborationProfileLabel(
-    getProviderOptions('__global__').collaboration_strategy,
-    session.orchestration_profile_id || undefined,
-  );
 
   // ── Layer 1: Workspace prompt (if assistant project session) ──────
   // For imageAgentMode, we skip the workspace prompt and assistant instructions
@@ -257,10 +228,6 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     sessionId: session.id,
     workingDirectory: session.working_directory || undefined,
     modelId: session.model,
-    teamMode: config.teamMode || session.team_mode || 'on',
-    orchestrationTier: orchestrationTier || session.orchestration_tier || 'multi',
-    orchestrationProfileName,
-    collaborationDecision,
   });
   staticParts.push(basePromptResult.prompt);
   if (basePromptResult.referencedFiles) {
@@ -327,8 +294,6 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     enableAgentsSkills,
     syncProjectRules,
     knowledgeBaseEnabled,
-    collaborationDecision,
-    phaseRunnerPayload: basePromptResult.phaseRunnerPayload,
   };
 }
 

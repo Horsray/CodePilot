@@ -14,6 +14,7 @@ import type { ClaudeStreamOptions } from '@/types';
 import { findClaudeBinary } from '../platform';
 import { getConversation } from '../conversation-registry';
 import { getSetting, getActiveProvider } from '../db';
+import { disposeSessionPool } from '../cli-session-pool';
 
 export const sdkRuntime: AgentRuntime = {
   id: 'claude-code-sdk',
@@ -88,9 +89,6 @@ export const sdkRuntime: AgentRuntime = {
   dispose(): void {
     // SDK manages its own subprocess lifecycle, but clean up
     // our session tracking pool to avoid stale session IDs
-    try {
-      const { disposeSessionPool } = require('../cli-session-pool');
-      disposeSessionPool();
-    } catch { /* best effort */ }
+    try { disposeSessionPool(); } catch { /* best effort */ }
   },
 };

@@ -13,93 +13,6 @@ import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
 import { getDb, getAllCustomRules } from './db';
-import type { CollaborationDecision, CollaborationRole } from '@/types';
-
-function getRoleDisplayName(role: CollaborationRole): string {
-  switch (role) {
-    case 'team-leader':
-      return '总指挥';
-    case 'worker-executor':
-      return '工作执行';
-    case 'quality-inspector':
-      return '质量检验';
-    case 'expert-consultant':
-      return '专家顾问';
-    default:
-      return role;
-  }
-}
-
-function buildRequiredWorkflow(decision?: CollaborationDecision): string {
-  if (!decision || !decision.shouldCollaborate) return '';
-  const orderedRoles: CollaborationRole[] = [
-    'team-leader',
-    'worker-executor',
-    'quality-inspector',
-    'expert-consultant',
-  ];
-  const activeRoles = orderedRoles.filter((role) => decision.suggestedRoles.includes(role));
-  if (activeRoles.length === 0) return '';
-  return [
-    '- **Required Workflow For This Task**:',
-    ...activeRoles.map((role, index) => `  ${index + 1}. ${getRoleDisplayName(role)} (\`${role}\`) ${role === 'team-leader' ? '负责统筹，不得直接吞掉所有工作。' : '必须在合适阶段被实际调起。'}`),
-    `- **Hard Rule**: For this task, do not skip the required roles above. If you do not delegate to them when applicable, you are violating the orchestration contract.`,
-  ].join('\n');
-}
-
-function buildExecutionPlan(decision?: CollaborationDecision): string {
-  if (!decision?.phases || decision.phases.length === 0) return '';
-  return [
-    '- **Execution Plan**:',
-    ...decision.phases.map((phase, index) => {
-      const depends = phase.dependsOn && phase.dependsOn.length > 0 ? `；依赖：${phase.dependsOn.join(', ')}` : '';
-      const parallel = phase.parallel ? '；可并行' : '；需串行';
-      return `  ${index + 1}. ${phase.name} [${phase.roles.join(', ')}] - ${phase.objective}${parallel}${depends}`;
-    }),
-    '- **Dependency Rule**: If a phase depends on prior conclusions, wait for that phase to finish before delegating the next role. Only independent evidence-gathering phases may run in parallel.',
-  ].join('\n');
-}
-
-function buildPhaseRunnerPlan(decision?: CollaborationDecision): string {
-  const payload = buildPhaseRunnerPayload(decision);
-  if (payload.phases.length === 0) return '';
-
-  return [
-    '- **First Tool Preference**: Because a valid phase plan exists, your preferred first orchestration tool should be `PhaseRunner` unless the user explicitly asks for a different order.',
-    '- **Preferred PhaseRunner Payload**:',
-    '```json',
-    JSON.stringify(payload, null, 2),
-    '```',
-    '- **Execution Rule**: If you choose to use `PhaseRunner`, start from the payload above and only adjust prompts when the task context requires more specificity.',
-  ].join('\n');
-}
-
-function buildPhaseRunnerPayload(decision?: CollaborationDecision): {
-  phases: Array<{
-    name: string;
-    parallel: boolean;
-    objective: string;
-    tasks: Array<{ agent: string; prompt: string }>;
-  }>;
-} {
-  if (!decision?.phases || decision.phases.length === 0) {
-    return { phases: [] };
-  }
-
-  return {
-    phases: decision.phases.map((phase) => ({
-      name: phase.name,
-      parallel: phase.parallel,
-      objective: phase.objective,
-      tasks: phase.roles
-        .filter((role) => role !== 'team-leader')
-        .map((role) => ({
-          agent: role,
-          prompt: `Handle the ${phase.name} phase as ${getRoleDisplayName(role)}. Objective: ${phase.objective}`,
-        })),
-    })).filter((phase) => phase.tasks.length > 0),
-  };
-}
 
 // ── Section: Identity ──────────────────────────────────────────
 
@@ -113,39 +26,8 @@ function getIdentitySection(model?: string) {
 
 // ── Section: Doing Tasks ───────────────────────────────────────
 
-function getDoingTasksSection(teamMode: 'off' | 'on' | 'auto', orchestrationTier: 'single' | 'multi' = 'multi') {
-  let section = '';
-
-  if (teamMode !== 'off') {
-    section += `# Team Orchestration Mode (Active: ${teamMode})
-
-- **Lead Orchestrator**: You are currently in Team Orchestration Mode. You MUST NOT perform complex tasks alone. Act as the Team Leader.
-- **Specialized Expert Team**: You have access to specialized agents that use different models optimized for specific tasks.
-  - **Worker Executor**: Best for code implementation and operational execution.
-  - **Quality Inspector**: Best for validation, diagnostics, tests, and final acceptance.
-  - **Expert Consultant**: Best for difficult edge cases, repeated failures, conflicting evidence, and high-stakes judgment calls.
-- **Mandatory Delegation**: You MUST use the \`Agent\` tool to delegate specialized phases of the task. Do not read or edit many files yourself; delegate to the appropriate expert. If you find yourself doing more than 2-3 consecutive \`Read\` or \`Edit\` calls, you are failing your role as Lead—delegate to a sub-agent instead.
-  1. **Capability Phase**: If MCP tools such as \`web_search\` or \`understand_image\` are available, use them directly for联网搜索与图片理解，而不是再拆成额外角色模型。
-  2. **Execution Phase**: Delegate to \`worker-executor\` to implement code or operational changes.
-  3. **Quality Phase**: Delegate to \`quality-inspector\` to run tests and ensure quality.
-  4. **Escalation Phase**: Delegate to \`expert-consultant\` if the team is stuck, the user reports repeated invalid results, or the task exceeds current confidence.
-- **First Action Rule**: In Team Mode, for any non-trivial request, your first meaningful action MUST be \`TodoWrite\` or \`Agent\`. Do not jump straight into direct implementation.
-- **Planning Rule**: Before any file edit, you MUST create or update a plan. In \`${orchestrationTier}\` tier, the plan should explicitly mention the roles you intend to use.
-- **Lead Restrictions**: The Lead model may do at most one exploratory \`Read\` or \`Grep\` before delegation. The Lead MUST NOT become the main implementation worker for multi-file tasks.
-- **Tier Workflow**:
-  - **single**: One model may execute directly, but still plan first for non-trivial tasks.
-  - **multi**: Team Leader MUST first create a plan, then use available MCP tools for search/image tasks and delegate execution/quality steps to the right specialists.
-- **Auto-Trigger Logic**: In \`auto\` mode, you MUST trigger this team workflow if:
-  - The task involves more than 3 files.
-  - The task requires docs, latest information, screenshots, OCR, or visual understanding and suitable MCP tools are available.
-  - The task is a critical refactor or architectural change.
-- **Feedback Loop**: If the \`quality-inspector\` finds errors, feed them back to the \`worker-executor\`. Do not settle for "it should work"; ensure it **does** work.
-- **Escalation Rule**: If the user gives repeated negative feedback, prior attempts failed multiple times, or the evidence is conflicting, you MUST escalate to \`expert-consultant\` rather than looping blindly.
-
-`;
-  }
-
-  section += `# Doing tasks
+function getDoingTasksSection() {
+  return `# Doing tasks
 
 - The user will primarily request you to perform software engineering tasks. These may include solving bugs, adding new functionality, refactoring code, explaining code, and more. When given an unclear or generic instruction, consider it in the context of these software engineering tasks and the current working directory.
 - You are an expert orchestrator. You don't just "do" tasks; you engineer solutions. This means you must understand the "why" before the "how".
@@ -159,12 +41,7 @@ function getDoingTasksSection(teamMode: 'off' | 'on' | 'auto', orchestrationTier
 - **Plan First**: For any task that is not trivial (e.g., more than 2-3 steps, or involving multiple files), you MUST formulate a plan before execution.
 - **The Todo Contract**: Use the \`TodoWrite\` tool not just as a progress tracker, but as a formal contract. Update it immediately when the plan changes.
 - **Chain of Thought (CoT)**: Before every tool call, briefly state your reasoning in your thought process. Why this tool? Why this input? What do you expect to see?
-- **Sub-Agent Delegation**: For complex, multi-faceted tasks (e.g., "Implement feature X and add tests"), prefer delegating specialized sub-tasks to the \`Agent\` tool. This keeps your main context clean and focused on high-level orchestration.
-- **MCP First For Capabilities**: If tools like \`web_search\` or \`understand_image\` are installed, prefer using them directly for search/image tasks instead of fabricating dedicated search/vision role models.
-- **Phase Execution**: When the task has an explicit phase plan with dependencies, prefer the \`PhaseRunner\` tool so the phases execute in order and only independent tasks run in parallel.
 - **Verification**: Every task is incomplete until verified. Always run tests, check the output, or use the \`Read\` tool to confirm your changes took effect as expected.`;
-
-  return section;
 }
 
 const MANAGING_TASKS_SECTION = `# Managing tasks
@@ -200,10 +77,6 @@ When you encounter an obstacle, do not use destructive actions as a shortcut to 
 
 const TOOLS_SECTION = `# Using your tools
 
-- **Orchestration First**: You have specialized tools and sub-agents. Use them strategically.
-  - Use the \`Agent\` tool with \`agent='explore'\` for fast, read-only codebase research.
-  - Use the \`Agent\` tool with \`agent='general'\` for isolated, complex sub-tasks.
-  - Use the \`PhaseRunner\` tool when the current task already has a phase graph or ordered dependency plan. It is the safest way to enforce serial/parallel boundaries.
 - **Use SearchHistory Proactively**: When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`SearchHistory\` tool before guessing from memory.
 - Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.
   - To read files use Read instead of cat, head, tail, or sed
@@ -254,30 +127,21 @@ export interface SystemPromptOptions {
   enableAgentsSkills?: boolean;
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
-  teamMode?: 'off' | 'on' | 'auto';
-  // 中文注释：编排层级配置，用法是在系统提示词中感知 single/multi 当前策略。
-  orchestrationTier?: 'single' | 'multi';
-  orchestrationProfileName?: string;
-  collaborationDecision?: CollaborationDecision;
 }
 
 export interface SystemPromptResult {
   prompt: string;
   referencedFiles: string[];
-  phaseRunnerPayload: ReturnType<typeof buildPhaseRunnerPayload>;
 }
 
 /**
  * Build the complete system prompt for the native Agent Loop.
  */
 export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemPromptResult {
-  const { teamMode = 'on', orchestrationTier = 'multi', modelId, collaborationDecision, orchestrationProfileName } = options;
+  const { modelId } = options;
   const parts: string[] = [
     getIdentitySection(modelId),
-    getDoingTasksSection(teamMode, orchestrationTier)
-      + (teamMode !== 'off' ? `\n\n- **Current Tier**: ${orchestrationTier}` : '')
-      + (teamMode !== 'off' && orchestrationProfileName ? `\n- **Current Profile**: ${orchestrationProfileName}` : '')
-      + (teamMode !== 'off' && collaborationDecision ? `\n- **Collaboration Decision**: ${collaborationDecision.summary}\n- **Reasons**: ${collaborationDecision.reasons.join('；')}\n- **Suggested Roles**: ${collaborationDecision.suggestedRoles.join(', ')}\n- **Lead May Implement Directly**: ${collaborationDecision.leadMayImplementDirectly ? 'yes' : 'no'}\n${buildRequiredWorkflow(collaborationDecision)}\n${buildExecutionPlan(collaborationDecision)}\n${buildPhaseRunnerPlan(collaborationDecision)}` : ''),
+    getDoingTasksSection(),
     MANAGING_TASKS_SECTION,
     REASONING_SECTION,
     ACTIONS_SECTION,
@@ -330,7 +194,6 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
   return {
     prompt: parts.join('\n\n'),
     referencedFiles,
-    phaseRunnerPayload: buildPhaseRunnerPayload(collaborationDecision),
   };
 }
 

@@ -40,8 +40,6 @@ export const nativeRuntime: AgentRuntime = {
             enableAgentsSkills: options.enableAgentsSkills,
             syncProjectRules: options.syncProjectRules,
             knowledgeBaseEnabled: options.knowledgeBaseEnabled,
-            teamMode: options.teamMode,
-            orchestrationTier: options.orchestrationTier,
           });
 
     // Create or reuse abort controller
@@ -73,8 +71,6 @@ export const nativeRuntime: AgentRuntime = {
       autoTrigger: options.autoTrigger,
       onRuntimeStatusChange: options.onRuntimeStatusChange,
       files,
-      teamMode: options.teamMode,
-      orchestrationTier: options.orchestrationTier,
     });
 
     // Clean up controller when stream ends

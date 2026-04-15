@@ -19,7 +19,6 @@ import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { ImageGenCard } from './ImageGenCard';
 import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview';
 import { WidgetRenderer } from './WidgetRenderer';
-import { AgentTimeline } from '@/components/chat/AgentTimeline';
 import { buildReferenceImages } from '@/lib/image-ref-store';
 import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, RARITY_BG_GRADIENT, type Species, type Rarity } from '@/lib/buddy';
 import { parseDBDate } from '@/lib/utils';
@@ -746,10 +745,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
         )}
 
         {/* Tool calls + thinking for assistant messages — single collapsible group */}
-        {!isUser && timelineSteps.length > 0 && (
-          <AgentTimeline steps={timelineSteps} compact={true} sessionId={sessionId} />
-        )}
-        {!isUser && timelineSteps.length === 0 && (pairedTools.length > 0 || thinking) && (
+        {!isUser && (pairedTools.length > 0 || thinking) && (
           <ToolActionsGroup
             tools={pairedTools.map((tool, i) => ({
               id: `hist-${i}`,

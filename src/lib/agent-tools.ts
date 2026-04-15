@@ -43,8 +43,6 @@ export interface AssembleToolsOptions {
     emitSSE: (event: SSEEvent) => void;
     abortSignal?: AbortSignal;
   };
-  orchestrationTier?: 'single' | 'multi';
-  orchestrationProfileId?: string;
 }
 
 export interface AssembleToolsResult {
@@ -65,12 +63,6 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
   const builtinTools = createBuiltinTools({
     workingDirectory: cwd,
     sessionId: options.sessionId,
-    providerId: options.providerId,
-    sessionProviderId: options.sessionProviderId,
-    model: options.model,
-    permissionMode: options.permissionContext?.permissionMode,
-    orchestrationTier: options.orchestrationTier,
-    orchestrationProfileId: options.orchestrationProfileId,
     emitSSE: options.permissionContext?.emitSSE,
     abortSignal: options.permissionContext?.abortSignal,
   });
@@ -116,7 +108,7 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
 const sessionApprovals = new Map<string, Array<{ toolName: string; pattern: string }>>();
 
 const DEFAULT_TOOL_TIMEOUT_MS = 45_000;
-const RETRYABLE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'Skill', 'Agent', 'codepilot_browser_open', 'codepilot_browser_context']);
+const RETRYABLE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'Skill', 'Agent']);
 
 interface ToolGuardOptions {
   sessionId?: string;

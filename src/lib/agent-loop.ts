@@ -72,10 +72,6 @@ export interface AgentLoopOptions {
   files?: import('@/types').FileAttachment[];
   /** Callback when runtime status changes */
   onRuntimeStatusChange?: (status: string) => void;
-  /** Team mode configuration */
-  teamMode?: 'off' | 'on' | 'auto';
-  orchestrationTier?: 'single' | 'multi';
-  orchestrationProfileId?: string;
   // 中文注释：当前执行角色名称，用法是在流式状态事件里标识是 team-leader 还是某个子 Agent。
   agentName?: string;
 }
@@ -126,10 +122,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
     permissionMode,
     mcpServers,
     bypassPermissions,
-    teamMode: _teamMode = 'on',
-    orchestrationTier = 'multi',
-    orchestrationProfileId = '',
-    agentName = 'team-leader',
+    agentName = 'assistant',
   } = options;
 
   const _unused_files = options.files;
@@ -213,8 +206,6 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             providerId,
             sessionProviderId,
             model: modelOverride || sessionModel,
-            orchestrationTier,
-            orchestrationProfileId,
             permissionContext: bypassPermissions ? undefined : {
               permissionMode: (permissionMode || 'normal') as PermissionMode,
               emitSSE: (event) => {

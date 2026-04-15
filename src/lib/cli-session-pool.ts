@@ -17,6 +17,7 @@
  */
 
 import { getSetting, updateSdkSessionId } from './db';
+import { findClaudeBinary } from './platform';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -48,7 +49,6 @@ let prewarmedClaudePath: string | null = null;
 export function prewarmClaudePath(): void {
   if (prewarmedClaudePath !== null) return;
   try {
-    const { findClaudeBinary } = require('./platform');
     prewarmedClaudePath = findClaudeBinary() || null;
   } catch {
     // best effort

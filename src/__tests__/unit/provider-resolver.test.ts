@@ -1,4 +1,4 @@
-import { describe, it, after } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
@@ -280,18 +280,32 @@ describe('Provider Catalog', () => {
 // ── Provider Resolver Tests ─────────────────────────────────────
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-provider-resolver-db-'));
-try {
-  require('../../lib/db').closeDb();
-} catch {}
-try {
-  delete require.cache[require.resolve('../../lib/provider-resolver')];
-  delete require.cache[require.resolve('../../lib/db')];
-} catch {}
-
 process.env.CLAUDE_GUI_DATA_DIR = dataDir;
 
-const { closeDb } = require('../../lib/db') as typeof import('../../lib/db');
-const { resolveProvider, toClaudeCodeEnv, toAiSdkConfig, routeAuxiliaryModel } = require('../../lib/provider-resolver') as typeof import('../../lib/provider-resolver');
+let closeDb: typeof import('../../lib/db').closeDb;
+let getSetting: typeof import('../../lib/db').getSetting;
+let setSetting: typeof import('../../lib/db').setSetting;
+let createProvider: typeof import('../../lib/db').createProvider;
+let deleteProvider: typeof import('../../lib/db').deleteProvider;
+let resolveProvider: typeof import('../../lib/provider-resolver').resolveProvider;
+let toClaudeCodeEnv: typeof import('../../lib/provider-resolver').toClaudeCodeEnv;
+let toAiSdkConfig: typeof import('../../lib/provider-resolver').toAiSdkConfig;
+let routeAuxiliaryModel: typeof import('../../lib/provider-resolver').routeAuxiliaryModel;
+
+before(async () => {
+  const db = await import('../../lib/db');
+  closeDb = db.closeDb;
+  getSetting = db.getSetting;
+  setSetting = db.setSetting;
+  createProvider = db.createProvider;
+  deleteProvider = db.deleteProvider;
+
+  const pr = await import('../../lib/provider-resolver');
+  resolveProvider = pr.resolveProvider;
+  toClaudeCodeEnv = pr.toClaudeCodeEnv;
+  toAiSdkConfig = pr.toAiSdkConfig;
+  routeAuxiliaryModel = pr.routeAuxiliaryModel;
+});
 
 type ResolvedProvider = import('../../lib/provider-resolver').ResolvedProvider;
 
@@ -1118,8 +1132,6 @@ describe('Entry Point Resolution Contract', () => {
 
 // ── Global Default Model Tests ──────────────────────────────────
 
-const { getSetting, setSetting } = require('../../lib/db') as typeof import('../../lib/db');
-
 describe('Global Default Model', () => {
   // Save and restore settings around each test
   let savedModel: string | null | undefined;
@@ -1194,8 +1206,6 @@ describe('Global Default Model', () => {
 
   it('DB provider uses global default model when it belongs to that provider', () => {
     setup();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic import in test to avoid top-level side effects
-const { createProvider, deleteProvider } = require('../../lib/db');
     const provider = createProvider({
       name: '__test_global_default__',
       provider_type: 'anthropic',
@@ -1217,8 +1227,6 @@ const { createProvider, deleteProvider } = require('../../lib/db');
 
   it('DB provider ignores global default model when it belongs to a different provider', () => {
     setup();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic import in test to avoid top-level side effects
-const { createProvider, deleteProvider } = require('../../lib/db');
     const provider = createProvider({
       name: '__test_global_default_cross__',
       provider_type: 'anthropic',
@@ -1244,8 +1252,6 @@ const { createProvider, deleteProvider } = require('../../lib/db');
 
   it('DB provider: session model overrides global default even when provider matches', () => {
     setup();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic import in test to avoid top-level side effects
-const { createProvider, deleteProvider } = require('../../lib/db');
     const provider = createProvider({
       name: '__test_global_default_session__',
       provider_type: 'anthropic',

@@ -53,15 +53,6 @@ interface ElectronUpdaterAPI {
   onStatus: (callback: (data: UpdateStatusEvent) => void) => () => void;
 }
 
-interface ElectronTerminalAPI {
-  create: (opts: { id: string; cwd: string; cols: number; rows: number }) => Promise<void>;
-  write: (id: string, data: string) => void;
-  resize: (id: string, cols: number, rows: number) => Promise<void>;
-  kill: (id: string) => Promise<void>;
-  onData: (callback: (data: { id: string; data: string }) => void) => () => void;
-  onExit: (callback: (data: { id: string; code: number }) => void) => () => void;
-}
-
 interface ElectronAPI {
   versions: {
     electron: string;
@@ -86,7 +77,6 @@ interface ElectronAPI {
   proxy?: {
     resolve: (url: string) => Promise<string>;
   };
-  terminal?: ElectronTerminalAPI;
   notification?: {
     show: (options: { title: string; body?: string; onClick?: string }) => Promise<void>;
     onClick: (listener: (action: string) => void) => () => void;

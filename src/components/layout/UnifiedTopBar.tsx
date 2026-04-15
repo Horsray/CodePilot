@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import {
   GitBranch,
   TreeStructure,
-  Globe,
   FileCode,
   PencilSimple,
   DotOutline,
@@ -212,7 +211,6 @@ export function UnifiedTopBar() {
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-hide pr-2">
             {workspaceTabs.map((tab) => {
               const isActive = activeWorkspaceTabId === tab.id;
-              const isBrowserTab = tab.kind === "browser";
               const isPreviewTab = tab.kind === "preview";
 
               return (
@@ -233,9 +231,7 @@ export function UnifiedTopBar() {
                       : "border-transparent bg-muted/30 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                   }`}
                 >
-                  {isBrowserTab ? (
-                    <Globe size={13} className="shrink-0" />
-                  ) : isPreviewTab ? (
+                  {isPreviewTab ? (
                     <FileCode size={13} className="shrink-0" />
                   ) : (
                     <PencilSimple size={13} className="shrink-0" />

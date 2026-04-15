@@ -18,7 +18,6 @@ import { isImageFile } from '@/types';
 import { registerPendingPermission } from './permission-registry';
 import { registerConversation, unregisterConversation } from './conversation-registry';
 import { captureCapabilities, isCacheFresh, setCachedPlugins } from './agent-sdk-capabilities';
-import { getRegisteredAgents } from './agent-sdk-agents';
 import { normalizeMessageContent, microCompactMessage } from './message-normalizer';
 import { roughTokenEstimate } from './context-estimator';
 import { getSetting, updateSdkSessionId, createPermissionRequest } from './db';
@@ -451,7 +450,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
   }
 
   if (!runtime) {
-    runtime = resolveRuntime(getSetting('agent_runtime') || undefined, effectiveProvider || undefined, options.teamMode);
+    runtime = resolveRuntime(getSetting('agent_runtime') || undefined, effectiveProvider || undefined);
   }
 
   console.log(`[streamClaude] Using runtime: ${runtime.id} (setting: ${getSetting('agent_runtime') || 'auto'})`);
@@ -480,9 +479,6 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     enableAgentsSkills: options.enableAgentsSkills,
     syncProjectRules: options.syncProjectRules,
     knowledgeBaseEnabled: options.knowledgeBaseEnabled,
-    teamMode: options.teamMode,
-    orchestrationTier: options.orchestrationTier,
-    orchestrationProfileId: options.orchestrationProfileId,
 
     // Runtime-specific fields (SDK Runtime reads these from runtimeOptions)
     runtimeOptions: {
@@ -801,12 +797,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         }
         if (agents) {
           queryOptions.agents = agents as Options['agents'];
-        } else {
-          // Inject default SDK agents when caller does not provide any
-          const registeredAgents = getRegisteredAgents();
-          if (Object.keys(registeredAgents).length > 0) {
-            queryOptions.agents = registeredAgents as Options['agents'];
-          }
         }
         if (agent) {
           queryOptions.agent = agent;
@@ -837,6 +827,46 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         const historyCount = conversationHistory ? conversationHistory.length : 0;
         const hasSdkSession = !!sdkSessionId;
         let shouldResume = hasSdkSession && needsResume(historyCount);
+
+        // Detect broken SDK sessions: if the last assistant message contains
+        // tool_use blocks without a matching tool_result from the user, the
+        // SDK subprocess is mid-roundtrip. Resuming would fail because the
+        // SDK expects a tool_result that never arrives. Clear the session
+        // and start fresh instead.
+        if (shouldResume && conversationHistory && conversationHistory.length > 0) {
+          const lastMsg = conversationHistory[conversationHistory.length - 1];
+          if (lastMsg.role === 'assistant') {
+            let hasToolUse = false;
+            const toolUseIds = new Set<string>();
+            try {
+              const blocks = JSON.parse(lastMsg.content);
+              if (Array.isArray(blocks)) {
+                for (const block of blocks) {
+                  if (block.type === 'tool_use' && block.id) {
+                    hasToolUse = true;
+                    toolUseIds.add(block.id);
+                  }
+                }
+              }
+            } catch {
+              // content is plain text, not structured blocks — no tool_use
+            }
+            // If assistant ended with tool_use and there's no follow-up user
+            // message with tool_result, the session is broken.
+            if (hasToolUse && toolUseIds.size > 0) {
+              // Check remaining messages (should be none, but verify)
+              // Since this IS the last message, there's no user reply with tool_result
+              console.warn(
+                `[claude-client] Detected broken session: assistant sent tool_use without tool_result. ` +
+                `Clearing sdk_session_id to start fresh.`,
+              );
+              shouldResume = false;
+              if (sessionId) {
+                try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
+              }
+            }
+          }
+        }
 
         // Register session lifecycle tracking
         if (sdkSessionId && sessionId) {
@@ -884,8 +914,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
 
         // Permission handler: sends SSE event and waits for user response
         queryOptions.canUseTool = async (toolName, input, opts) => {
-          // Auto-approve CodePilot's own in-process MCP tools — they are internal
-          // and the user has already opted in by enabling the relevant mode.
           // Auto-approve CodePilot's own in-process MCP tools — they are internal
           // and the user has already opted in by enabling the relevant mode.
           // Note: SDK prefixes MCP tool names with mcp__<server>__, so we check

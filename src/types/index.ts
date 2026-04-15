@@ -347,47 +347,6 @@ export interface ProviderOptions {
   default_model?: string;
   /** Global default model's provider ID — which provider the default model belongs to */
   default_model_provider?: string;
-  // 中文注释：协作角色绑定，用法是在双模型/多模型策略中指定每个角色对应的服务商与模型。
-  collaboration_strategy?: CollaborationStrategy;
-}
-
-export interface CollaborationBinding {
-  providerId?: string;
-  model?: string;
-}
-
-export type CollaborationRole =
-  | 'team-leader'
-  | 'worker-executor'
-  | 'quality-inspector'
-  | 'expert-consultant';
-
-export interface CollaborationProfile {
-  id: string;
-  name: string;
-  roles: Record<CollaborationRole, CollaborationBinding>;
-}
-
-export interface CollaborationStrategy {
-  profiles: CollaborationProfile[];
-  defaultProfileId?: string;
-}
-
-export interface CollaborationDecision {
-  shouldCollaborate: boolean;
-  mode: 'direct' | 'team_workflow';
-  leadMayImplementDirectly: boolean;
-  reasons: string[];
-  suggestedRoles: Array<CollaborationRole>;
-  phases?: Array<{
-    id: string;
-    name: string;
-    roles: Array<CollaborationRole>;
-    dependsOn?: string[];
-    parallel: boolean;
-    objective: string;
-  }>;
-  summary: string;
 }
 
 export interface ProvidersResponse {
@@ -757,9 +716,6 @@ export interface AssistantWorkspaceState {
   enableAgentsSkills?: boolean;
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
-  teamMode?: 'off' | 'on' | 'auto';
-  orchestrationTier?: 'single' | 'multi';
-  orchestrationProfileId?: string;
 }
 
 export interface AssistantWorkspaceFiles {
@@ -1178,11 +1134,6 @@ export interface ClaudeStreamOptions {
   enableAgentsSkills?: boolean;
   syncProjectRules?: boolean;
   knowledgeBaseEnabled?: boolean;
-  // 中文注释：团队模式开关，用法是在运行时决定是否启用协作策略。
-  teamMode?: 'off' | 'on' | 'auto';
-  // 中文注释：模型编排层级，用法是在运行时决定单模型/多模型路由。
-  orchestrationTier?: 'single' | 'multi';
-  orchestrationProfileId?: string;
 }
 
 // ==========================================

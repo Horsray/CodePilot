@@ -7,6 +7,7 @@
 
 import type { AgentRuntime } from './types';
 import { getSetting, getAllProviders, getProvider } from '../db';
+import { prewarmClaudePath } from '../cli-session-pool';
 
 const runtimes = new Map<string, AgentRuntime>();
 
@@ -84,18 +85,16 @@ function hasCredentialsForRequest(providerId?: string): boolean {
  * Pick the runtime to use for a given request.
  *
  * Priority:
- * 0. cli_enabled=false OR teamMode enabled → ALWAYS use native (highest-priority constraint)
+ * 0. cli_enabled=false → ALWAYS use native (highest-priority constraint)
  * 1. Explicit override (from function arg or per-session setting)
  * 2. Global user setting (agent_runtime)
  * 3. Auto: native if available, else claude-code-sdk
  */
-export function resolveRuntime(overrideId?: string, providerId?: string, teamMode?: 'off' | 'on' | 'auto'): AgentRuntime {
-  // 0. cli_enabled=false OR teamMode enabled is an absolute constraint — never return SDK
-  // Native runtime is required for CodePilot's custom Team Orchestration logic.
+export function resolveRuntime(overrideId?: string, providerId?: string): AgentRuntime {
+  // 0. cli_enabled=false is an absolute constraint — never return SDK
   const cliDisabled = getSetting('cli_enabled') === 'false';
-  const teamModeEnabled = teamMode && teamMode !== 'off';
 
-  if (cliDisabled || teamModeEnabled) {
+  if (cliDisabled) {
     const native = getRuntime('native');
     if (native) return native;
     throw new Error('Native runtime not registered but required. This is a bug.');
@@ -123,10 +122,7 @@ export function resolveRuntime(overrideId?: string, providerId?: string, teamMod
   const sdk = getRuntime('claude-code-sdk');
   if (sdk?.isAvailable() && hasCredentialsForRequest(providerId)) {
     // Pre-warm Claude binary path so the next spawn doesn't pay cold-start delay
-    try {
-      const { prewarmClaudePath } = require('../cli-session-pool');
-      prewarmClaudePath();
-    } catch { /* best effort */ }
+    try { prewarmClaudePath(); } catch { /* best effort */ }
     return sdk;
   }
 
@@ -147,15 +143,13 @@ export function resolveRuntime(overrideId?: string, providerId?: string, teamMod
  * so callers (chat route, bridge) can prepare the right MCP config upfront.
  *
  * @param providerId - The provider for this request ('openai-oauth' forces native)
- * @param teamMode - Current team mode ('off' | 'on' | 'auto')
  */
-export function predictNativeRuntime(providerId?: string, teamMode?: 'off' | 'on' | 'auto'): boolean {
+export function predictNativeRuntime(providerId?: string): boolean {
   // Non-Anthropic providers always force native
   if (providerId === 'openai-oauth') return true;
 
-  // cli_enabled=false OR teamMode enabled → always native
+  // cli_enabled=false → always native
   if (getSetting('cli_enabled') === 'false') return true;
-  if (teamMode && teamMode !== 'off') return true;
 
   // Explicit setting — but verify SDK is actually usable
   const settingId = getSetting('agent_runtime');

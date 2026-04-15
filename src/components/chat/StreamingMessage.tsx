@@ -14,7 +14,6 @@ import { Shimmer } from '@/components/ai-elements/shimmer';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview';
 import { WidgetRenderer } from './WidgetRenderer';
-import { AgentTimeline } from '@/components/chat/AgentTimeline';
 import { ReferencedContexts } from './ReferencedContexts';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
@@ -698,14 +697,7 @@ export function StreamingMessage({
           <ReferencedContexts files={referencedFiles} />
         )}
 
-        {/* 时间线渲染：按步骤递进展示，避免工具/思考混成一坨 */}
-        {liveTimelineSteps.length > 0 ? (
-          <AgentTimeline
-            steps={liveTimelineSteps}
-            compact={true}
-            sessionId={sessionId}
-          />
-        ) : ((toolUses.length > 0 || thinkingContent) && (
+        {(toolUses.length > 0 || thinkingContent) && (
           <ToolActionsGroup
             tools={toolUses.map((tool) => {
               const result = toolResults.find((r) => r.tool_use_id === tool.id);
@@ -726,13 +718,13 @@ export function StreamingMessage({
             rewindUserMessageId={rewindUserMessageId}
             referencedFiles={referencedFiles}
           />
-        ))}
+        )}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
         {mediaPreview}
 
         {/* Streaming text content rendered via Streamdown */}
-        {liveTimelineSteps.length === 0 && renderedContent}
+        {renderedContent}
 
         {/* Completion Bar rendered only once at the end of the message when done */}
         {completionInfo && completionInfo.changedFiles.length > 0 && (

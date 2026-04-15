@@ -1650,17 +1650,9 @@ export function getProviderOptions(providerId: string): import('@/types').Provid
   if (providerId === '__global__') {
     const defaultModel = getSetting('global_default_model') || undefined;
     const defaultModelProvider = getSetting('global_default_model_provider') || undefined;
-    let collaborationStrategy: import('@/types').ProviderOptions['collaboration_strategy'];
-    try {
-      const raw = getSetting('collaboration_strategy_json') || '';
-      collaborationStrategy = raw ? JSON.parse(raw) : undefined;
-    } catch {
-      collaborationStrategy = undefined;
-    }
     return {
       ...(defaultModel ? { default_model: defaultModel } : {}),
       ...(defaultModelProvider ? { default_model_provider: defaultModelProvider } : {}),
-      ...(collaborationStrategy ? { collaboration_strategy: collaborationStrategy } : {}),
     };
   }
   if (providerId === 'env') {
@@ -1686,9 +1678,6 @@ export function setProviderOptions(providerId: string, options: import('@/types'
   if (providerId === '__global__') {
     if (options.default_model !== undefined) setSetting('global_default_model', options.default_model);
     if (options.default_model_provider !== undefined) setSetting('global_default_model_provider', options.default_model_provider);
-    if (options.collaboration_strategy !== undefined) {
-      setSetting('collaboration_strategy_json', JSON.stringify(options.collaboration_strategy));
-    }
     // Sync legacy default_provider_id so backend consumers (doctor, repair, etc.) stay consistent
     if ((options as Record<string, unknown>).legacy_default_provider_id !== undefined) {
       setSetting('default_provider_id', (options as Record<string, unknown>).legacy_default_provider_id as string);

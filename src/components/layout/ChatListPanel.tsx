@@ -15,7 +15,6 @@ import {
   Image,
   WifiHigh,
   Gear,
-  Globe,
   ListBullets,
   BookOpen,
 } from "@/components/ui/icon";
@@ -79,7 +78,6 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     activeStreamingSessions,
     pendingApprovalSessionIds,
     workingDirectory,
-    openBrowserTab,
     bottomPanelOpen,
     setBottomPanelOpen,
     bottomPanelTab,
@@ -531,37 +529,6 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{t('chatList.newConversation')}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              className="h-8 w-8 shrink-0"
-              onClick={() => openBrowserTab()}
-            >
-              <Globe size={14} />
-              <span className="sr-only">{t('topBar.browser')}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{t('topBar.browser')}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant={bottomPanelOpen && bottomPanelTab === "terminal" ? "secondary" : "outline"}
-              size="icon-sm"
-              className="h-8 w-8 shrink-0"
-              onClick={() => {
-                setBottomPanelTab("terminal");
-                setBottomPanelOpen(true);
-              }}
-            >
-              <Terminal size={14} />
-              <span className="sr-only">{t('bottomPanel.terminal')}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{t('bottomPanel.terminal')}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>

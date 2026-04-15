@@ -37,24 +37,18 @@ interface ChatViewProps {
   providerId?: string;
   initialPermissionProfile?: 'default' | 'full_access';
   initialMode?: 'code' | 'plan';
-  initialTeamMode?: 'off' | 'on' | 'auto';
-  initialOrchestrationTier?: 'single' | 'multi';
-  initialOrchestrationProfileId?: string;
   initialHasSummary?: boolean;
 }
 
 /** Maximum messages kept in React state. Older messages are trimmed and reloaded on scroll. */
 const MAX_MESSAGES_IN_MEMORY = 300;
 
-export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialTeamMode, initialOrchestrationTier, initialOrchestrationProfileId, initialHasSummary }: ChatViewProps) {
+export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialHasSummary }: ChatViewProps) {
   const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setDashboardPanelOpen, setFileTreeOpen, setIsAssistantWorkspace } = usePanel();
   const { t } = useTranslation();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [permissionProfile, setPermissionProfile] = useState<'default' | 'full_access'>(initialPermissionProfile || 'default');
-  const [teamMode, setTeamMode] = useState<'off' | 'on' | 'auto'>(initialTeamMode || 'on');
-  const [orchestrationTier, setOrchestrationTier] = useState<'single' | 'multi'>(initialOrchestrationTier || 'multi');
-  const [orchestrationProfileId, setOrchestrationProfileId] = useState<string>(initialOrchestrationProfileId || '');
 
   // Whether this session's working directory matches the configured assistant workspace
   const [isAssistantProject, setIsAssistantProject] = useState(false);
@@ -122,7 +116,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // Sync model/provider when session data loads
   useEffect(() => { if (modelName) setCurrentModel(modelName); }, [modelName]);
   useEffect(() => { if (providerId) setCurrentProviderId(providerId); }, [providerId]);
-  useEffect(() => { if (initialTeamMode) setTeamMode(initialTeamMode); }, [initialTeamMode]);
 
   // Fetch provider-specific options (with abort to prevent stale responses on fast switch)
   useEffect(() => {
@@ -209,45 +202,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, mode: newMode }),
-      }).catch(() => { /* silent */ });
-    }
-  }, [sessionId]);
-
-  const handleTeamModeChange = useCallback((newMode: 'off' | 'on' | 'auto') => {
-    setTeamMode(newMode);
-    if (sessionId) {
-      fetch(`/api/chat/sessions/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team_mode: newMode }),
-      }).then(() => {
-        window.dispatchEvent(new CustomEvent('session-updated'));
-      }).catch(() => { /* silent */ });
-    }
-  }, [sessionId]);
-
-  const handleOrchestrationTierChange = useCallback((newTier: 'single' | 'multi') => {
-    setOrchestrationTier(newTier);
-    if (sessionId) {
-      fetch(`/api/chat/sessions/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orchestration_tier: newTier }),
-      }).then(() => {
-        window.dispatchEvent(new CustomEvent('session-updated'));
-      }).catch(() => { /* silent */ });
-    }
-  }, [sessionId]);
-
-  const handleOrchestrationProfileChange = useCallback((profileId: string) => {
-    setOrchestrationProfileId(profileId);
-    if (sessionId) {
-      fetch(`/api/chat/sessions/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orchestration_profile_id: profileId }),
-      }).then(() => {
-        window.dispatchEvent(new CustomEvent('session-updated'));
       }).catch(() => { /* silent */ });
     }
   }, [sessionId]);
@@ -496,9 +450,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         effort: selectedEffort,
         thinking: buildThinkingConfig(),
         context1m,
-        teamMode,
-        orchestrationTier,
-        orchestrationProfileId,
         displayOverride,
         onModeChanged: (sdkMode) => {
           const uiMode = sdkMode === 'plan' ? 'plan' : 'code';
@@ -517,7 +468,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       // happen on stream completion via onStreamCompleted — at that point both
       // user and assistant messages are persisted, so no race is possible.
     },
-    [sessionId, isStreaming, mode, currentModel, currentProviderId, selectedEffort, context1m, teamMode, orchestrationTier, orchestrationProfileId, buildThinkingConfig, handleModeChange]
+    [sessionId, isStreaming, mode, currentModel, currentProviderId, selectedEffort, context1m, buildThinkingConfig, handleModeChange]
   );
 
   sendMessageRef.current = sendMessage;
@@ -732,12 +683,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onAssistantTrigger={checkAssistantTrigger}
         effort={selectedEffort}
         onEffortChange={setSelectedEffort}
-        teamMode={teamMode}
-        onTeamModeChange={handleTeamModeChange}
-        orchestrationTier={orchestrationTier}
-        onOrchestrationTierChange={handleOrchestrationTierChange}
-        orchestrationProfileId={orchestrationProfileId}
-        onOrchestrationProfileChange={handleOrchestrationProfileChange}
         sdkInitMeta={initMetaRef.current}
         isAssistantProject={isAssistantProject}
         hasMessages={messages.length > 0}

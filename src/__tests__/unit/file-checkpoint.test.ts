@@ -11,7 +11,7 @@
  * 5. clearCheckpoints removes all checkpoint data for a session
  */
 
-import { describe, it, beforeEach, after } from 'node:test';
+import { describe, it, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
@@ -20,13 +20,17 @@ import os from 'os';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-file-checkpoint-db-'));
 process.env.CLAUDE_GUI_DATA_DIR = dataDir;
 
-const { createSession, closeDb } = require('../../lib/db') as typeof import('../../lib/db');
-const {
-  createCheckpoint,
-  recordFileModification,
-  restoreCheckpoint,
-  clearCheckpoints,
-} = require('../../lib/file-checkpoint') as typeof import('../../lib/file-checkpoint');
+let createSession: typeof import('../../lib/db').createSession;
+let closeDb: typeof import('../../lib/db').closeDb;
+let createCheckpoint: typeof import('../../lib/file-checkpoint').createCheckpoint;
+let recordFileModification: typeof import('../../lib/file-checkpoint').recordFileModification;
+let restoreCheckpoint: typeof import('../../lib/file-checkpoint').restoreCheckpoint;
+let clearCheckpoints: typeof import('../../lib/file-checkpoint').clearCheckpoints;
+
+before(async () => {
+  ({ createSession, closeDb } = await import('../../lib/db'));
+  ({ createCheckpoint, recordFileModification, restoreCheckpoint, clearCheckpoints } = await import('../../lib/file-checkpoint'));
+});
 
 describe('createCheckpoint + restoreCheckpoint', () => {
   let tmpDir: string;

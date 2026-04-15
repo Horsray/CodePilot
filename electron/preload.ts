@@ -37,26 +37,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportPng: (html: string, width: number, isDark: boolean) =>
       ipcRenderer.invoke('widget:export-png', { html, width, isDark }),
   },
-  terminal: {
-    create: (opts: { id: string; cwd: string; cols: number; rows: number }) =>
-      ipcRenderer.invoke('terminal:create', opts),
-    write: (id: string, data: string) =>
-      ipcRenderer.send('terminal:write', { id, data }),
-    resize: (id: string, cols: number, rows: number) =>
-      ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
-    kill: (id: string) =>
-      ipcRenderer.invoke('terminal:kill', id),
-    onData: (callback: (data: { id: string; data: string }) => void) => {
-      const listener = (_event: unknown, data: { id: string; data: string }) => callback(data);
-      ipcRenderer.on('terminal:data', listener);
-      return () => { ipcRenderer.removeListener('terminal:data', listener); };
-    },
-    onExit: (callback: (data: { id: string; code: number }) => void) => {
-      const listener = (_event: unknown, data: { id: string; code: number }) => callback(data);
-      ipcRenderer.on('terminal:exit', listener);
-      return () => { ipcRenderer.removeListener('terminal:exit', listener); };
-    },
-  },
   notification: {
     show: (options: { title: string; body: string; onClick?: unknown }) =>
       ipcRenderer.invoke('notification:show', options),
