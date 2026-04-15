@@ -6,8 +6,8 @@
  */
 
 import type { AgentRuntime } from './types';
-import { getSetting, getAllProviders, getProvider } from '../db';
-import { hasClaudeSettingsCredentials } from '../claude-settings';
+import { getSetting, getAllProviders, getProvider } from '@/lib/db';
+import { hasClaudeSettingsCredentials } from '@/lib/claude-settings';
 
 const runtimes = new Map<string, AgentRuntime>();
 

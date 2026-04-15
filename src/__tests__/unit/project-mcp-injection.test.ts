@@ -120,7 +120,7 @@ describe('loadProjectMcpServers — explicit project .mcp.json injection', () =>
     });
 
     // Seed CodePilot DB with the secret value
-    const { setSetting } = await import('../../lib/db');
+    const { setSetting } = await import('@/lib/db');
     setSetting('team_api_token', 'sk-team-secret');
 
     const { loadProjectMcpServers } = await import('../../lib/mcp-loader');

@@ -260,6 +260,31 @@ describe('cc-switch end-to-end (no CodePilot provider, settings.json only)', () 
 // be "rescued" by cc-switch — the user picked Kimi/GLM precisely because they
 // want THAT provider's auth.
 describe('hasCredentialsForRequest — provider-group ownership', () => {
+  // Explicitly scrub ANTHROPIC_* env vars and the legacy DB token the function
+  // short-circuits on — otherwise CI runners that inherit these from the
+  // workflow or a prior test's state will make the function return true before
+  // it reaches the provider-ownership branch we're testing.
+  const savedApiKey = process.env.ANTHROPIC_API_KEY;
+  const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  let savedDbToken: string | undefined;
+
+  beforeEach(async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+    const { getSetting, setSetting } = await import('@/lib/db');
+    savedDbToken = getSetting('anthropic_auth_token');
+    setSetting('anthropic_auth_token', '');
+  });
+
+  afterEach(async () => {
+    if (savedApiKey !== undefined) process.env.ANTHROPIC_API_KEY = savedApiKey;
+    if (savedAuthToken !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = savedAuthToken;
+    if (savedDbToken !== undefined) {
+      const { setSetting } = await import('@/lib/db');
+      setSetting('anthropic_auth_token', savedDbToken);
+    }
+  });
+
   it('env group + settings.json creds → has credentials', async () => {
     writeSettings('settings.json', { env: { ANTHROPIC_AUTH_TOKEN: 'sk-cc-switch' } });
     const { hasCredentialsForRequest } = await import('../../lib/runtime/registry');
@@ -277,7 +302,7 @@ describe('hasCredentialsForRequest — provider-group ownership', () => {
     // a "Kimi config error", NOT a "use my Anthropic key" silent fallback.
     writeSettings('settings.json', { env: { ANTHROPIC_AUTH_TOKEN: 'sk-cc-switch-leak' } });
 
-    const { createProvider } = await import('../../lib/db');
+    const { createProvider } = await import('@/lib/db');
     const dbProvider = createProvider({
       name: 'Kimi (no key configured)',
       provider_type: 'anthropic',
@@ -296,7 +321,7 @@ describe('hasCredentialsForRequest — provider-group ownership', () => {
   it('DB provider WITH api_key → returns true (uses its own creds)', async () => {
     writeSettings('settings.json', { env: { ANTHROPIC_AUTH_TOKEN: 'sk-cc-switch-leak' } });
 
-    const { createProvider } = await import('../../lib/db');
+    const { createProvider } = await import('@/lib/db');
     const dbProvider = createProvider({
       name: 'Kimi (configured)',
       provider_type: 'anthropic',
