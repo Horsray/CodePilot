@@ -232,10 +232,10 @@ function resolveSubAgentRole(
   const normalized = agentId.toLowerCase();
   if (tier === 'single') return 'team-leader';
   if (normalized === 'explore' || normalized === 'researcher' || normalized === 'knowledge-searcher' || normalized === 'search') {
-    return 'knowledge-searcher';
+    return 'team-leader';
   }
   if (normalized === 'vision' || normalized === 'vision-understanding' || normalized === 'vlm') {
-    return 'vision-understanding';
+    return 'team-leader';
   }
   if (normalized === 'expert' || normalized === 'expert-consultant' || normalized === 'consultant') {
     return 'expert-consultant';

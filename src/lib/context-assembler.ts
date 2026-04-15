@@ -267,6 +267,10 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     referencedContexts.push(...basePromptResult.referencedFiles);
   }
 
+  if (session.system_prompt && session.system_prompt.trim()) {
+    staticParts.push(session.system_prompt);
+  }
+
   // [STATIC 3] Workspace identity files (soul/user/claude.md)
   // Note: workspacePrompt was computed earlier WITHOUT memory hint (identity only)
   if (workspacePrompt) {

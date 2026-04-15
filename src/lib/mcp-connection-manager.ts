@@ -56,6 +56,15 @@ const MCP_LIST_TOOLS_TIMEOUT_MS = 5_000;
 const MCP_CALL_TOOL_TIMEOUT_MS = 45_000;
 const MCP_FAILED_RETRY_COOLDOWN_MS = 60_000;
 
+function getMcpToolTimeoutMs(serverName: string, toolName: string): number {
+  const normalizedServer = serverName.toLowerCase();
+  if (normalizedServer === 'minimax') {
+    if (toolName === 'understand_image') return 180_000;
+    if (toolName === 'web_search') return 90_000;
+  }
+  return MCP_CALL_TOOL_TIMEOUT_MS;
+}
+
 // ── Singleton pool ──────────────────────────────────────────────
 
 const connections = new Map<string, McpConnection>();
@@ -235,13 +244,36 @@ export async function callMcpTool(
     throw new Error(`MCP server "${serverName}" is not connected`);
   }
 
+  const normalizedArgs = normalizeMcpToolArgs(serverName, toolName, args);
   const result = await withTimeout(
-    conn.client.callTool({ name: toolName, arguments: args }),
-    MCP_CALL_TOOL_TIMEOUT_MS,
+    conn.client.callTool({ name: toolName, arguments: normalizedArgs }),
+    getMcpToolTimeoutMs(serverName, toolName),
     `[MCP] ${serverName}/${toolName} callTool`,
   );
 
   return result;
+}
+
+export function normalizeMcpToolArgs(
+  serverName: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const normalizedServer = serverName.toLowerCase();
+  if (
+    normalizedServer === 'minimax' &&
+    toolName === 'understand_image' &&
+    'image_url' in args &&
+    !('image_source' in args)
+  ) {
+    const { image_url, ...rest } = args;
+    return {
+      ...rest,
+      image_source: image_url,
+    };
+  }
+
+  return args;
 }
 
 /**

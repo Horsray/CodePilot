@@ -23,14 +23,7 @@ describe('GET /api/providers/collaboration-check', () => {
       api_key: 'leader-key',
       role_models_json: JSON.stringify({ default: 'leader-default' }),
     });
-    const search = createProvider({
-      name: 'Search Provider',
-      provider_type: 'anthropic',
-      base_url: 'https://search.example.com',
-      api_key: 'search-key',
-      role_models_json: JSON.stringify({ default: 'search-default' }),
-    });
-    createdProviderIds.push(lead.id, search.id);
+    createdProviderIds.push(lead.id);
 
     setSetting('collaboration_strategy_json', JSON.stringify({
       defaultProfileId: 'low-cost',
@@ -40,8 +33,6 @@ describe('GET /api/providers/collaboration-check', () => {
           name: '低成本',
           roles: {
             'team-leader': { providerId: lead.id, model: 'leader-lite' },
-            'knowledge-searcher': { providerId: search.id, model: 'search-lite' },
-            'vision-understanding': {},
             'worker-executor': { providerId: lead.id, model: 'execute-lite' },
             'quality-inspector': { providerId: lead.id, model: 'verify-lite' },
             'expert-consultant': { providerId: lead.id, model: 'expert-lite' },
@@ -52,8 +43,6 @@ describe('GET /api/providers/collaboration-check', () => {
           name: '高性能',
           roles: {
             'team-leader': { providerId: lead.id, model: 'leader-pro' },
-            'knowledge-searcher': { providerId: search.id, model: 'search-pro' },
-            'vision-understanding': {},
             'worker-executor': { providerId: lead.id, model: 'execute-pro' },
             'quality-inspector': { providerId: lead.id, model: 'verify-pro' },
             'expert-consultant': { providerId: lead.id, model: 'expert-pro' },
@@ -79,17 +68,16 @@ describe('GET /api/providers/collaboration-check', () => {
     const lowJson = await lowRes.json();
     const highJson = await highRes.json();
 
-    const lowSearch = lowJson.matrix.multi.find((row: { role: string }) => row.role === '知识检索');
-    const highSearch = highJson.matrix.multi.find((row: { role: string }) => row.role === '知识检索');
+    const lowExec = lowJson.matrix.multi.find((row: { role: string }) => row.role === '工作执行');
+    const highExec = highJson.matrix.multi.find((row: { role: string }) => row.role === '工作执行');
     const lowExpert = lowJson.matrix.multi.find((row: { role: string }) => row.role === '专家顾问');
     const highExpert = highJson.matrix.multi.find((row: { role: string }) => row.role === '专家顾问');
 
-    assert.equal(lowSearch.profileName, '低成本');
-    assert.equal(highSearch.profileName, '高性能');
-    assert.equal(lowSearch.apiModel, 'search-lite');
-    assert.equal(highSearch.apiModel, 'search-pro');
+    assert.equal(lowExec.profileName, '低成本');
+    assert.equal(highExec.profileName, '高性能');
+    assert.equal(lowExec.apiModel, 'execute-lite');
+    assert.equal(highExec.apiModel, 'execute-pro');
     assert.equal(lowExpert.apiModel, 'expert-lite');
     assert.equal(highExpert.apiModel, 'expert-pro');
   });
 });
-

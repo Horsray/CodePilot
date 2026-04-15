@@ -71,8 +71,7 @@ function summarizeToolInput(toolName: string, input: unknown, compact?: boolean)
   if (toolName === 'Agent') {
     const agent = typeof data.agent === 'string' ? data.agent : 'general';
     const prompt = typeof data.prompt === 'string' ? data.prompt : '';
-    const inline = `${agent}: ${prompt}`.trim();
-    return previewText(inline, compact ? 120 : 240);
+    return `${agent}: ${prompt}`.trim();
   }
   const command = typeof data.command === 'string' ? data.command : '';
   const path = typeof data.path === 'string' ? data.path : typeof data.file_path === 'string' ? data.file_path : '';
@@ -494,13 +493,20 @@ const TimelineStepCard = memo(function TimelineStepCard({ step, sessionId, compa
                       <div key={tool.id} className="rounded-lg border border-border/20 bg-background/40 overflow-hidden">
                         {(() => {
                           const agentInput = tool.name === 'Agent' ? renderAgentToolInput(tool.input) : null;
+                          const toolSummary = summarizeToolInput(tool.name, tool.input, true);
                           return (
                             <>
                         <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-muted/10">
                           <div className="flex items-center gap-2 overflow-hidden">
                             <Gear size={12} weight="bold" className="text-primary/60 shrink-0" />
-                            <span className="text-[11px] font-mono text-foreground/70 truncate">
-                              {tool.name}({summarizeToolInput(tool.name, tool.input, true)})
+                            <span
+                              className={cn(
+                                'text-[11px] font-mono text-foreground/70',
+                                tool.name === 'Agent' ? 'whitespace-pre-wrap break-words' : 'truncate'
+                              )}
+                              title={toolSummary}
+                            >
+                              {tool.name}({toolSummary})
                             </span>
                           </div>
                           {tool.status !== 'completed' && (

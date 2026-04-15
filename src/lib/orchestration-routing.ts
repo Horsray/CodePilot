@@ -21,13 +21,6 @@ export function resolveAgentModelForTier(
     switch (agentId) {
       case 'team-leader':
         return { model: 'opus' };
-      case 'knowledge-searcher':
-      case 'search':
-      case 'explore':
-        return { model: 'haiku' };
-      case 'vision-understanding':
-      case 'vision':
-        return { model: 'vision' };
       case 'expert-consultant':
       case 'expert':
         return { model: 'opus' };

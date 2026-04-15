@@ -7,12 +7,10 @@ function includesAny(text: string, keywords: string[]): boolean {
 function buildExecutionPhases(params: {
   suggestedRoles: CollaborationDecision['suggestedRoles'];
   shouldEscalateToExpert: boolean;
-  hasKnowledgeWork: boolean;
-  hasVisionWork: boolean;
   hasExecutionWork: boolean;
   hasQualityWork: boolean;
 }): CollaborationDecision['phases'] {
-  const { suggestedRoles, shouldEscalateToExpert, hasKnowledgeWork, hasVisionWork, hasExecutionWork, hasQualityWork } = params;
+  const { suggestedRoles, shouldEscalateToExpert, hasExecutionWork, hasQualityWork } = params;
   if (!suggestedRoles.includes('team-leader')) return [];
 
   const phases: NonNullable<CollaborationDecision['phases']> = [
@@ -25,32 +23,14 @@ function buildExecutionPhases(params: {
     },
   ];
 
-  const researchRoles = [
-    hasKnowledgeWork && suggestedRoles.includes('knowledge-searcher') ? 'knowledge-searcher' : null,
-    hasVisionWork && suggestedRoles.includes('vision-understanding') ? 'vision-understanding' : null,
-  ].filter(Boolean) as Array<'knowledge-searcher' | 'vision-understanding'>;
-
-  if (researchRoles.length > 0) {
-    phases.push({
-      id: 'parallel-research',
-      name: researchRoles.length > 1 ? '并行取证' : '前置取证',
-      roles: researchRoles,
-      dependsOn: ['lead-plan'],
-      parallel: researchRoles.length > 1,
-      objective: researchRoles.length > 1
-        ? '知识检索与视觉理解可并行进行，分别产出外部资料和视觉证据。'
-        : '为后续执行准备必要的前置结论。',
-    });
-  }
-
   if (hasExecutionWork && suggestedRoles.includes('worker-executor')) {
     phases.push({
       id: 'execution',
       name: '工作执行',
       roles: ['worker-executor'],
-      dependsOn: phases.length > 1 ? [phases[phases.length - 1].id] : ['lead-plan'],
+      dependsOn: ['lead-plan'],
       parallel: false,
-      objective: '工作执行必须消费前置结论后再落地，避免在缺失上下文时盲改。',
+      objective: '工作执行在总指挥完成规划后落地；搜索与图片理解优先通过可用 MCP 工具由主链直接调用，而不是额外角色模型。',
     });
   }
 
@@ -133,8 +113,6 @@ export function analyzeCollaborationNeed(params: {
   if (conversationHistoryCount > 12) reasons.push('会话上下文较长，编排有助于降低主模型负担');
   if (shouldEscalateToExpert) reasons.push('最近多轮用户反馈无效或当前请求明确要求专家升级');
 
-  if (hasResearchSignal || hasWebSignal || fileMentionCount >= 3) roles.add('knowledge-searcher');
-  if (hasVisionSignal || imageAttachmentCount > 0) roles.add('vision-understanding');
   if (hasImplementationSignal || hasMultiStepSignal || hasHighRiskSignal || fileMentionCount >= 2) roles.add('worker-executor');
   if (hasVerificationSignal || hasQaSignal || hasImplementationSignal || hasHighRiskSignal || shouldEscalateToExpert) roles.add('quality-inspector');
   if (shouldEscalateToExpert) roles.add('expert-consultant');
@@ -171,8 +149,6 @@ export function analyzeCollaborationNeed(params: {
   const phases = buildExecutionPhases({
     suggestedRoles,
     shouldEscalateToExpert,
-    hasKnowledgeWork: hasResearchSignal || hasWebSignal || fileMentionCount >= 3,
-    hasVisionWork: hasVisionSignal || imageAttachmentCount > 0,
     hasExecutionWork: hasImplementationSignal || hasMultiStepSignal || hasHighRiskSignal || fileMentionCount >= 2,
     hasQualityWork: hasVerificationSignal || hasQaSignal || hasImplementationSignal || hasHighRiskSignal || shouldEscalateToExpert,
   });
@@ -185,7 +161,7 @@ export function analyzeCollaborationNeed(params: {
     suggestedRoles,
     phases,
     summary: shouldCollaborate
-      ? `多模型协作已触发：建议角色为 ${suggestedRoles.join('、')}。${shouldEscalateToExpert ? ' 已升级专家顾问参与。' : ''}`
+      ? `多模型协作已触发：建议角色为 ${suggestedRoles.join('、')}。搜索与图片理解优先通过已安装 MCP 工具处理。${shouldEscalateToExpert ? ' 已升级专家顾问参与。' : ''}`
       : '多模型已开启，但当前任务可由主模型直接完成，无需拉起完整团队。',
   };
 }

@@ -75,8 +75,6 @@ export async function GET(request: NextRequest) {
   ];
   const multi = [
     buildRoleCheck(providerId, 'team-leader', '总指挥', 'multi', profileId, parentModel),
-    buildRoleCheck(providerId, 'knowledge-searcher', '知识检索', 'multi', profileId, parentModel),
-    buildRoleCheck(providerId, 'vision-understanding', '视觉理解', 'multi', profileId, parentModel),
     buildRoleCheck(providerId, 'worker-executor', '工作执行', 'multi', profileId, parentModel),
     buildRoleCheck(providerId, 'quality-inspector', '质量检验', 'multi', profileId, parentModel),
     buildRoleCheck(providerId, 'expert-consultant', '专家顾问', 'multi', profileId, parentModel),
@@ -88,7 +86,7 @@ export async function GET(request: NextRequest) {
     warnings.push('多模型模式实际命中的 API 模型较少，可能仍存在映射重叠。');
   }
   if (multi.filter((item) => item.providerId === providerId).length === multi.length) {
-    warnings.push('多模型模式全部落在同一个 Provider，请确认该 Provider 内部 role mapping 是否已区分知识检索 / 视觉理解 / 工作执行 / 质量检验 / 专家顾问。');
+    warnings.push('多模型模式全部落在同一个 Provider，请确认该 Provider 内部 role mapping 是否已区分工作执行 / 质量检验 / 专家顾问。搜索与图片理解建议通过 MCP 工具提供。');
   }
 
   // 中文注释：功能名称「返回协作自检矩阵」，用法是在设置页一键查看 single/multi 最终命中的 provider 与 model。

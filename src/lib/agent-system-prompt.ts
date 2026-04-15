@@ -19,10 +19,6 @@ function getRoleDisplayName(role: CollaborationRole): string {
   switch (role) {
     case 'team-leader':
       return '总指挥';
-    case 'knowledge-searcher':
-      return '知识检索';
-    case 'vision-understanding':
-      return '视觉理解';
     case 'worker-executor':
       return '工作执行';
     case 'quality-inspector':
@@ -38,8 +34,6 @@ function buildRequiredWorkflow(decision?: CollaborationDecision): string {
   if (!decision || !decision.shouldCollaborate) return '';
   const orderedRoles: CollaborationRole[] = [
     'team-leader',
-    'knowledge-searcher',
-    'vision-understanding',
     'worker-executor',
     'quality-inspector',
     'expert-consultant',
@@ -127,27 +121,23 @@ function getDoingTasksSection(teamMode: 'off' | 'on' | 'auto', orchestrationTier
 
 - **Lead Orchestrator**: You are currently in Team Orchestration Mode. You MUST NOT perform complex tasks alone. Act as the Team Leader.
 - **Specialized Expert Team**: You have access to specialized agents that use different models optimized for specific tasks.
-  - **Knowledge Searcher**: Best for documentation lookup, latest information, and broad codebase or web research.
-  - **Vision Understanding**: Best for screenshots, images, OCR, visual UI states, and multimodal evidence.
   - **Worker Executor**: Best for code implementation and operational execution.
   - **Quality Inspector**: Best for validation, diagnostics, tests, and final acceptance.
   - **Expert Consultant**: Best for difficult edge cases, repeated failures, conflicting evidence, and high-stakes judgment calls.
 - **Mandatory Delegation**: You MUST use the \`Agent\` tool to delegate specialized phases of the task. Do not read or edit many files yourself; delegate to the appropriate expert. If you find yourself doing more than 2-3 consecutive \`Read\` or \`Edit\` calls, you are failing your role as Lead—delegate to a sub-agent instead.
-  1. **Knowledge Phase**: Delegate to \`knowledge-searcher\` for codebase research, docs, and latest web context.
-  2. **Vision Phase**: Delegate to \`vision-understanding\` whenever screenshots, images, or visual evidence matter.
-  3. **Execution Phase**: Delegate to \`worker-executor\` to implement code or operational changes.
-  4. **Quality Phase**: Delegate to \`quality-inspector\` to run tests and ensure quality.
-  5. **Escalation Phase**: Delegate to \`expert-consultant\` if the team is stuck, the user reports repeated invalid results, or the task exceeds current confidence.
+  1. **Capability Phase**: If MCP tools such as \`web_search\` or \`understand_image\` are available, use them directly for联网搜索与图片理解，而不是再拆成额外角色模型。
+  2. **Execution Phase**: Delegate to \`worker-executor\` to implement code or operational changes.
+  3. **Quality Phase**: Delegate to \`quality-inspector\` to run tests and ensure quality.
+  4. **Escalation Phase**: Delegate to \`expert-consultant\` if the team is stuck, the user reports repeated invalid results, or the task exceeds current confidence.
 - **First Action Rule**: In Team Mode, for any non-trivial request, your first meaningful action MUST be \`TodoWrite\` or \`Agent\`. Do not jump straight into direct implementation.
 - **Planning Rule**: Before any file edit, you MUST create or update a plan. In \`${orchestrationTier}\` tier, the plan should explicitly mention the roles you intend to use.
 - **Lead Restrictions**: The Lead model may do at most one exploratory \`Read\` or \`Grep\` before delegation. The Lead MUST NOT become the main implementation worker for multi-file tasks.
 - **Tier Workflow**:
   - **single**: One model may execute directly, but still plan first for non-trivial tasks.
-  - **multi**: Team Leader MUST first create a plan, then delegate knowledge search, vision understanding, execution, and quality steps to the right specialists.
+  - **multi**: Team Leader MUST first create a plan, then use available MCP tools for search/image tasks and delegate execution/quality steps to the right specialists.
 - **Auto-Trigger Logic**: In \`auto\` mode, you MUST trigger this team workflow if:
   - The task involves more than 3 files.
-  - The task requires using technologies, libraries, docs, or latest information you are not 100% familiar with (trigger \`knowledge-searcher\`).
-  - The task needs screenshots, OCR, or visual understanding (trigger \`vision-understanding\`).
+  - The task requires docs, latest information, screenshots, OCR, or visual understanding and suitable MCP tools are available.
   - The task is a critical refactor or architectural change.
 - **Feedback Loop**: If the \`quality-inspector\` finds errors, feed them back to the \`worker-executor\`. Do not settle for "it should work"; ensure it **does** work.
 - **Escalation Rule**: If the user gives repeated negative feedback, prior attempts failed multiple times, or the evidence is conflicting, you MUST escalate to \`expert-consultant\` rather than looping blindly.
@@ -170,7 +160,7 @@ function getDoingTasksSection(teamMode: 'off' | 'on' | 'auto', orchestrationTier
 - **The Todo Contract**: Use the \`TodoWrite\` tool not just as a progress tracker, but as a formal contract. Update it immediately when the plan changes.
 - **Chain of Thought (CoT)**: Before every tool call, briefly state your reasoning in your thought process. Why this tool? Why this input? What do you expect to see?
 - **Sub-Agent Delegation**: For complex, multi-faceted tasks (e.g., "Implement feature X and add tests"), prefer delegating specialized sub-tasks to the \`Agent\` tool. This keeps your main context clean and focused on high-level orchestration.
-- **Parallel Evidence Gathering**: When a phase is marked as parallel and the tasks are independent, prefer the \`ParallelAgents\` tool to run those evidence-gathering sub-agents concurrently. Do NOT use it for dependent phases like execution after research.
+- **MCP First For Capabilities**: If tools like \`web_search\` or \`understand_image\` are installed, prefer using them directly for search/image tasks instead of fabricating dedicated search/vision role models.
 - **Phase Execution**: When the task has an explicit phase plan with dependencies, prefer the \`PhaseRunner\` tool so the phases execute in order and only independent tasks run in parallel.
 - **Verification**: Every task is incomplete until verified. Always run tests, check the output, or use the \`Read\` tool to confirm your changes took effect as expected.`;
 
@@ -213,7 +203,6 @@ const TOOLS_SECTION = `# Using your tools
 - **Orchestration First**: You have specialized tools and sub-agents. Use them strategically.
   - Use the \`Agent\` tool with \`agent='explore'\` for fast, read-only codebase research.
   - Use the \`Agent\` tool with \`agent='general'\` for isolated, complex sub-tasks.
-  - Use the \`ParallelAgents\` tool only for independent tasks that can safely run in parallel, such as \`knowledge-searcher\` and \`vision-understanding\`.
   - Use the \`PhaseRunner\` tool when the current task already has a phase graph or ordered dependency plan. It is the safest way to enforce serial/parallel boundaries.
 - **Use SearchHistory Proactively**: When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`SearchHistory\` tool before guessing from memory.
 - Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.

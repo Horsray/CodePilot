@@ -60,7 +60,7 @@ describe('Assistant Workspace', () => {
       const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
       assert.equal(state.onboardingComplete, false);
       assert.equal(state.lastHeartbeatDate, null);
-      assert.equal(state.schemaVersion, 6);
+      assert.equal(state.schemaVersion, 8);
     });
 
     it('should create all 4 template files', () => {
@@ -124,18 +124,18 @@ describe('Assistant Workspace', () => {
 
   describe('daily check-in respects onboarding state', () => {
     it('should not trigger check-in if onboarding not complete', () => {
-      const state = { onboardingComplete: false, lastHeartbeatDate: null, lastCheckInDate: null, heartbeatEnabled: false, schemaVersion: 6 };
+      const state = { onboardingComplete: false, lastHeartbeatDate: null, lastCheckInDate: null, heartbeatEnabled: false, schemaVersion: 8 };
       assert.equal(needsDailyCheckIn(state), false);
     });
 
     it('should trigger check-in if onboarding done and no check-in today', () => {
-      const state = { onboardingComplete: true, lastHeartbeatDate: '2020-01-01', lastCheckInDate: '2020-01-01', heartbeatEnabled: true, dailyCheckInEnabled: true, schemaVersion: 6 };
+      const state = { onboardingComplete: true, lastHeartbeatDate: '2020-01-01', lastCheckInDate: '2020-01-01', heartbeatEnabled: true, dailyCheckInEnabled: true, schemaVersion: 8 };
       assert.equal(needsDailyCheckIn(state), true);
     });
 
     it('should not trigger check-in if already done today', () => {
       const today = getLocalDateString();
-      const state = { onboardingComplete: true, lastHeartbeatDate: today, lastCheckInDate: today, heartbeatEnabled: true, dailyCheckInEnabled: true, schemaVersion: 6 };
+      const state = { onboardingComplete: true, lastHeartbeatDate: today, lastCheckInDate: today, heartbeatEnabled: true, dailyCheckInEnabled: true, schemaVersion: 8 };
       assert.equal(needsDailyCheckIn(state), false);
     });
 
@@ -146,7 +146,7 @@ describe('Assistant Workspace', () => {
     });
 
     it('should not trigger check-in if heartbeatEnabled is not set (default off)', () => {
-      const state = { onboardingComplete: true, lastHeartbeatDate: '2020-01-01', lastCheckInDate: '2020-01-01', heartbeatEnabled: false, schemaVersion: 6 };
+      const state = { onboardingComplete: true, lastHeartbeatDate: '2020-01-01', lastCheckInDate: '2020-01-01', heartbeatEnabled: false, schemaVersion: 8 };
       assert.equal(needsDailyCheckIn(state), false);
     });
   });
@@ -268,7 +268,7 @@ describe('Assistant Workspace', () => {
       migrateStateV1ToV2(workDir);
 
       const state = loadState(workDir);
-      assert.equal(state.schemaVersion, 6);
+      assert.equal(state.schemaVersion, 8);
       assert.ok(fs.existsSync(path.join(workDir, 'memory', 'daily')));
       assert.ok(fs.existsSync(path.join(workDir, 'Inbox')));
     });
@@ -276,12 +276,12 @@ describe('Assistant Workspace', () => {
     it('should not re-migrate v6 state', () => {
       initializeWorkspace(workDir);
       const state = loadState(workDir);
-      assert.equal(state.schemaVersion, 6);
+      assert.equal(state.schemaVersion, 8);
 
       // Should not throw or change anything
       migrateStateV1ToV2(workDir);
       const reloaded = loadState(workDir);
-      assert.equal(reloaded.schemaVersion, 6);
+      assert.equal(reloaded.schemaVersion, 8);
     });
   });
 

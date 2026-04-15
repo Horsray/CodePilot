@@ -25,7 +25,7 @@ export function createParallelAgentsTool(ctx: ParallelAgentsToolOptions) {
   return tool({
     description:
       'Run multiple independent sub-agents in parallel for evidence-gathering phases. ' +
-      'Use only when the tasks do not depend on each other. Good for knowledge-searcher + vision-understanding in parallel.',
+      'Use only when the tasks do not depend on each other. Good for multiple independent execution or validation sub-tasks.',
     inputSchema: z.object({
       tasks: z.array(z.object({
         agent: z.string().describe('Sub-agent type to run'),
@@ -191,10 +191,10 @@ function resolveSubAgentRole(
   const normalized = agentId.toLowerCase();
   if (tier === 'single') return 'team-leader';
   if (normalized === 'explore' || normalized === 'researcher' || normalized === 'knowledge-searcher' || normalized === 'search') {
-    return 'knowledge-searcher';
+    return 'team-leader';
   }
   if (normalized === 'vision' || normalized === 'vision-understanding' || normalized === 'vlm') {
-    return 'vision-understanding';
+    return 'team-leader';
   }
   if (normalized === 'expert' || normalized === 'expert-consultant' || normalized === 'consultant') {
     return 'expert-consultant';

@@ -143,8 +143,6 @@ export function MessageInput({
     return [
       { role: `多模型-${getCollaborationProfileLabel(collaborationStrategy || undefined, orchestrationProfileId)}`, model: '' },
       { role: '总指挥', model: format(activeProfile?.roles?.['team-leader']?.model) },
-      { role: '知识检索', model: format(activeProfile?.roles?.['knowledge-searcher']?.model) },
-      { role: '视觉理解', model: format(activeProfile?.roles?.['vision-understanding']?.model) },
       { role: '工作执行', model: format(activeProfile?.roles?.['worker-executor']?.model) },
       { role: '质量检验', model: format(activeProfile?.roles?.['quality-inspector']?.model) },
       { role: '专家顾问', model: format(activeProfile?.roles?.['expert-consultant']?.model) },

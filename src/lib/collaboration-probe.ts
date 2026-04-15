@@ -6,8 +6,6 @@ import type { CollaborationRole } from '@/types';
 
 const ROLE_META: Array<{ role: CollaborationRole; label: string }> = [
   { role: 'team-leader', label: '总指挥' },
-  { role: 'knowledge-searcher', label: '知识检索' },
-  { role: 'vision-understanding', label: '视觉理解' },
   { role: 'worker-executor', label: '工作执行' },
   { role: 'quality-inspector', label: '质量检验' },
   { role: 'expert-consultant', label: '专家顾问' },

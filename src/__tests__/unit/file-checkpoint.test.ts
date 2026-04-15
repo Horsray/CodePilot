@@ -11,25 +11,30 @@
  * 5. clearCheckpoints removes all checkpoint data for a session
  */
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-import {
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-file-checkpoint-db-'));
+process.env.CLAUDE_GUI_DATA_DIR = dataDir;
+
+const { createSession, closeDb } = require('../../lib/db') as typeof import('../../lib/db');
+const {
   createCheckpoint,
   recordFileModification,
   restoreCheckpoint,
   clearCheckpoints,
-} from '@/lib/file-checkpoint';
+} = require('../../lib/file-checkpoint') as typeof import('../../lib/file-checkpoint');
 
 describe('createCheckpoint + restoreCheckpoint', () => {
   let tmpDir: string;
-  const sessionId = `test-session-${Date.now()}`;
+  let sessionId: string;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-checkpoint-'));
+    sessionId = createSession('checkpoint-test', '', '', tmpDir).id;
   });
 
   // Cleanup helper — called manually at end of each test since node:test
@@ -46,6 +51,15 @@ describe('createCheckpoint + restoreCheckpoint', () => {
       // ignore
     }
   }
+
+  after(() => {
+    try {
+      closeDb();
+    } catch {}
+    try {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    } catch {}
+  });
 
   it('restores a modified file to its original content', () => {
     try {

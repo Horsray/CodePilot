@@ -121,7 +121,14 @@ export function resolveRuntime(overrideId?: string, providerId?: string, teamMod
   //    because CLI manages its own auth in many ways (OAuth, env, provider),
   //    and we only need this guard for AUTO mode, not explicit selection.
   const sdk = getRuntime('claude-code-sdk');
-  if (sdk?.isAvailable() && hasCredentialsForRequest(providerId)) return sdk;
+  if (sdk?.isAvailable() && hasCredentialsForRequest(providerId)) {
+    // Pre-warm Claude binary path so the next spawn doesn't pay cold-start delay
+    try {
+      const { prewarmClaudePath } = require('../cli-session-pool');
+      prewarmClaudePath();
+    } catch { /* best effort */ }
+    return sdk;
+  }
 
   const native = getRuntime('native');
   if (native?.isAvailable()) return native;

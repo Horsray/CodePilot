@@ -364,16 +364,13 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      // 中文注释：功能名称「MiniMax 三模型预设」，用法是在模型选择与协作映射中同时暴露 M2.7、VLM、Search。
       { modelId: 'MiniMax-M2.7', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
-      { modelId: 'coding-plan-vlm', upstreamModelId: 'coding-plan-vlm', displayName: 'coding-plan-vlm', role: 'sonnet' },
-      { modelId: 'coding-plan-search', upstreamModelId: 'coding-plan-search', displayName: 'coding-plan-search', role: 'haiku' },
     ],
     defaultRoleModels: {
       default: 'MiniMax-M2.7',
-      sonnet: 'coding-plan-vlm',
+      sonnet: 'MiniMax-M2.7',
       opus: 'MiniMax-M2.7',
-      haiku: 'coding-plan-search',
+      haiku: 'MiniMax-M2.7',
     },
     fields: ['api_key', 'model_names', 'model_mapping'],
     iconKey: 'minimax',
@@ -399,16 +396,13 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      // 中文注释：功能名称「MiniMax 三模型预设」，用法是在模型选择与协作映射中同时暴露 M2.7、VLM、Search。
       { modelId: 'MiniMax-M2.7', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
-      { modelId: 'coding-plan-vlm', upstreamModelId: 'coding-plan-vlm', displayName: 'coding-plan-vlm', role: 'sonnet' },
-      { modelId: 'coding-plan-search', upstreamModelId: 'coding-plan-search', displayName: 'coding-plan-search', role: 'haiku' },
     ],
     defaultRoleModels: {
       default: 'MiniMax-M2.7',
-      sonnet: 'coding-plan-vlm',
+      sonnet: 'MiniMax-M2.7',
       opus: 'MiniMax-M2.7',
-      haiku: 'coding-plan-search',
+      haiku: 'MiniMax-M2.7',
     },
     fields: ['api_key', 'model_names', 'model_mapping'],
     iconKey: 'minimax',

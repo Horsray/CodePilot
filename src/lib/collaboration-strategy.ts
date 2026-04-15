@@ -9,8 +9,6 @@ export type CollaborationTier = 'single' | 'multi';
 
 const ROLE_ORDER: CollaborationRole[] = [
   'team-leader',
-  'knowledge-searcher',
-  'vision-understanding',
   'worker-executor',
   'quality-inspector',
   'expert-consultant',
@@ -19,8 +17,6 @@ const ROLE_ORDER: CollaborationRole[] = [
 function emptyRoles(): Record<CollaborationRole, CollaborationBinding> {
   return {
     'team-leader': {},
-    'knowledge-searcher': {},
-    'vision-understanding': {},
     'worker-executor': {},
     'quality-inspector': {},
     'expert-consultant': {},
@@ -78,12 +74,8 @@ export function ensureCollaborationStrategyShape(strategy?: CollaborationStrateg
     ...profile,
     roles: {
       ...profile.roles,
-      'team-leader': legacy?.dual?.lead || legacy?.multi?.lead || {},
-      'knowledge-searcher': legacy?.multi?.researcher || {},
-      'vision-understanding': {},
       'worker-executor': legacy?.multi?.executor || legacy?.dual?.lead || {},
       'quality-inspector': legacy?.multi?.verifier || legacy?.dual?.verifier || {},
-      'expert-consultant': legacy?.multi?.architect || {},
     },
     name: profile.name || `自定义配置${index + 1}`,
   }));

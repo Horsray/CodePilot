@@ -57,8 +57,6 @@ import {
 
 const ROLE_META: Array<{ key: CollaborationRole; label: string; alias: string; hint: string }> = [
   { key: 'team-leader', label: '总指挥', alias: 'opus', hint: '主任务理解、编排与汇总' },
-  { key: 'knowledge-searcher', label: '知识检索', alias: 'haiku', hint: '文档、资料、互联网检索' },
-  { key: 'vision-understanding', label: '视觉理解', alias: 'vision', hint: '截图、图片、界面、OCR' },
   { key: 'worker-executor', label: '工作执行', alias: 'sonnet', hint: '实现、修改、落地' },
   { key: 'quality-inspector', label: '质量检验', alias: 'verifier', hint: '测试、验证、回归检查' },
   { key: 'expert-consultant', label: '专家顾问', alias: 'expert', hint: '复杂疑难、连续失败、争议判断升级' },

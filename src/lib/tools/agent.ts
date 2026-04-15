@@ -39,6 +39,8 @@ export interface AgentToolOptions {
  */
 export function createAgentTool(ctx: AgentToolOptions) {
   const subAgentIds = getSubAgents().map(a => a.id);
+  const SUBAGENT_IDLE_WARNING_MS = 45_000;
+  const SUBAGENT_HARD_TIMEOUT_MS = 10 * 60_000;
 
   return tool({
     description:
@@ -119,6 +121,12 @@ export function createAgentTool(ctx: AgentToolOptions) {
           }),
         });
       }
+      const localAbortController = new AbortController();
+      if (ctx.abortSignal) {
+        if (ctx.abortSignal.aborted) localAbortController.abort(ctx.abortSignal.reason);
+        else ctx.abortSignal.addEventListener('abort', () => localAbortController.abort(ctx.abortSignal?.reason), { once: true });
+      }
+
       const stream = runAgentLoop({
         prompt,
         sessionId: `sub-${Date.now()}`, // ephemeral session
@@ -128,6 +136,7 @@ export function createAgentTool(ctx: AgentToolOptions) {
         agentName: role,
         systemPrompt,
         workingDirectory: ctx.workingDirectory,
+        abortController: localAbortController,
         tools: subTools,
         maxSteps: agentDef.maxSteps || 30,
         permissionMode: ctx.permissionMode, // inherit from parent
@@ -136,10 +145,38 @@ export function createAgentTool(ctx: AgentToolOptions) {
       // Collect text from the stream
       const reader = stream.getReader();
       const textParts: string[] = [];
+      let idleWarningTimer: ReturnType<typeof setTimeout> | null = null;
+      let hardTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+      let warnedStall = false;
+      const resetIdleWarningTimer = () => {
+        if (idleWarningTimer) clearTimeout(idleWarningTimer);
+        idleWarningTimer = setTimeout(() => {
+          warnedStall = true;
+          if (ctx.emitSSE) {
+            ctx.emitSSE({
+              type: 'status',
+              data: JSON.stringify({
+                message: `Sub-agent ${role} has no new model events yet. It may still be working, or the mapped API may be stalled.`,
+                agent: role,
+                requestedAgent: agentId || 'general',
+                model,
+                providerId,
+                providerName,
+                orchestrationProfileName: profileName,
+              }),
+            });
+          }
+        }, SUBAGENT_IDLE_WARNING_MS);
+      };
+      hardTimeoutTimer = setTimeout(() => {
+        localAbortController.abort(new Error(`Sub-agent ${role} exceeded the maximum execution window`));
+      }, SUBAGENT_HARD_TIMEOUT_MS);
+      resetIdleWarningTimer();
 
       try {
         while (true) {
           const { done, value } = await reader.read();
+          resetIdleWarningTimer();
           if (done) break;
 
           // Parse SSE events, extract text content and forward relevant events
@@ -166,7 +203,12 @@ export function createAgentTool(ctx: AgentToolOptions) {
             }
           }
         }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return `Sub-agent ${role} failed: ${message}. ${warnedStall ? 'It first entered a stalled state before failing. ' : ''}Please verify the mapped provider/model connectivity in Settings.`;
       } finally {
+        if (idleWarningTimer) clearTimeout(idleWarningTimer);
+        if (hardTimeoutTimer) clearTimeout(hardTimeoutTimer);
         reader.releaseLock();
       }
 
@@ -212,10 +254,10 @@ function resolveSubAgentRole(
 
   if (tier === 'single') return 'team-leader';
   if (normalized === 'explore' || normalized === 'researcher' || normalized === 'knowledge-searcher' || normalized === 'search') {
-    return 'knowledge-searcher';
+    return 'team-leader';
   }
   if (normalized === 'vision' || normalized === 'vision-understanding' || normalized === 'vlm') {
-    return 'vision-understanding';
+    return 'team-leader';
   }
   if (normalized === 'expert' || normalized === 'expert-consultant' || normalized === 'consultant') {
     return 'expert-consultant';

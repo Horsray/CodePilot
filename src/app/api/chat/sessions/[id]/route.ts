@@ -103,6 +103,11 @@ export async function PATCH(
     }
     if (body.clear_messages) {
       clearSessionMessages(id);
+      // Clear SDK session so next message doesn't waste time on resume
+      try {
+        const { closeSession } = await import('@/lib/cli-session-pool');
+        closeSession(id);
+      } catch { /* best effort */ }
     }
 
     const updated = getSession(id);
@@ -125,6 +130,13 @@ export async function DELETE(
     }
 
     deleteSession(id);
+
+    // Clean up SDK session pool entry
+    try {
+      const { closeSession } = await import('@/lib/cli-session-pool');
+      closeSession(id);
+    } catch { /* best effort */ }
+
     return Response.json({ success: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to delete session';

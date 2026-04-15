@@ -36,6 +36,12 @@ export async function POST(request: NextRequest) {
       }
     } catch { /* SDK not available */ }
 
+    // Clear SDK session so next message doesn't waste time on resume
+    try {
+      const { closeSession } = await import('@/lib/cli-session-pool');
+      closeSession(sessionId);
+    } catch { /* best effort */ }
+
     return NextResponse.json({ interrupted: true });
   } catch (error) {
     console.error('[interrupt] Failed to interrupt:', error);

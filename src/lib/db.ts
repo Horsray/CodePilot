@@ -342,6 +342,19 @@ function initDb(db: Database.Database): void {
       completed_at TEXT,
       FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS file_checkpoints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      message_id TEXT NOT NULL DEFAULT 'session-wide',
+      file_path TEXT NOT NULL,
+      original_content TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      UNIQUE(session_id, file_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_session ON file_checkpoints(session_id);
+    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_message ON file_checkpoints(message_id);
   `);
 
   // Run migrations for existing databases
@@ -428,6 +441,21 @@ function migrateDb(db: Database.Database): void {
     safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN orchestration_profile_id TEXT NOT NULL DEFAULT ''");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_runtime_status ON chat_sessions(runtime_status)");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS file_checkpoints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      message_id TEXT NOT NULL DEFAULT 'session-wide',
+      file_path TEXT NOT NULL,
+      original_content TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      UNIQUE(session_id, file_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_session ON file_checkpoints(session_id);
+    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_message ON file_checkpoints(message_id);
+  `);
 
   // Migrate is_active provider to default_provider_id setting
   const defaultProviderSetting = db.prepare("SELECT value FROM settings WHERE key = 'default_provider_id'").get() as { value: string } | undefined;

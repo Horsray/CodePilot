@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { analyzeCollaborationNeed } from '../../lib/collaboration-decision';
 
 describe('analyzeCollaborationNeed', () => {
-  it('triggers knowledge, vision, execution, and quality roles for a complex multimodal task', () => {
+  it('triggers execution and quality roles while leaving search/vision to MCP capabilities', () => {
     const result = analyzeCollaborationNeed({
       prompt: '请根据截图分析 UI 问题，再去官网和最新文档检索资料，然后修改代码并验证是否修复。',
       teamMode: 'on',
@@ -17,12 +17,10 @@ describe('analyzeCollaborationNeed', () => {
 
     assert.equal(result.shouldCollaborate, true);
     assert.ok(result.suggestedRoles.includes('team-leader'));
-    assert.ok(result.suggestedRoles.includes('knowledge-searcher'));
-    assert.ok(result.suggestedRoles.includes('vision-understanding'));
     assert.ok(result.suggestedRoles.includes('worker-executor'));
     assert.ok(result.suggestedRoles.includes('quality-inspector'));
-    assert.ok(result.phases?.some((phase) => phase.id === 'parallel-research' && phase.parallel));
-    assert.ok(result.phases?.some((phase) => phase.id === 'execution' && phase.dependsOn?.includes('parallel-research')));
+    assert.ok(result.phases?.some((phase) => phase.id === 'execution' && phase.dependsOn?.includes('lead-plan')));
+    assert.match(result.summary, /MCP/);
   });
 
   it('escalates to expert consultant after repeated negative user feedback', () => {

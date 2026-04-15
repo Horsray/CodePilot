@@ -358,8 +358,6 @@ export interface CollaborationBinding {
 
 export type CollaborationRole =
   | 'team-leader'
-  | 'knowledge-searcher'
-  | 'vision-understanding'
   | 'worker-executor'
   | 'quality-inspector'
   | 'expert-consultant';

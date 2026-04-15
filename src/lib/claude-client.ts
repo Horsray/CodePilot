@@ -18,6 +18,7 @@ import { isImageFile } from '@/types';
 import { registerPendingPermission } from './permission-registry';
 import { registerConversation, unregisterConversation } from './conversation-registry';
 import { captureCapabilities, isCacheFresh, setCachedPlugins } from './agent-sdk-capabilities';
+import { getRegisteredAgents } from './agent-sdk-agents';
 import { normalizeMessageContent, microCompactMessage } from './message-normalizer';
 import { roughTokenEstimate } from './context-estimator';
 import { getSetting, updateSdkSessionId, createPermissionRequest } from './db';
@@ -27,6 +28,7 @@ import { notifyPermissionRequest, notifyGeneric } from './telegram-bot';
 import { classifyError, formatClassifiedError } from './error-classifier';
 import { resolveWorkingDirectory } from './working-directory';
 import { sendNotification } from './notification-manager';
+import { registerSdkSession, releaseSession, needsResume, prewarmClaudePath } from './cli-session-pool';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -799,6 +801,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         }
         if (agents) {
           queryOptions.agents = agents as Options['agents'];
+        } else {
+          // Inject default SDK agents when caller does not provide any
+          const registeredAgents = getRegisteredAgents();
+          if (Object.keys(registeredAgents).length > 0) {
+            queryOptions.agents = registeredAgents as Options['agents'];
+          }
         }
         if (agent) {
           queryOptions.agent = agent;
@@ -818,11 +826,31 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         // ['user', 'project', 'local'] and resolves enabledPlugins on its own,
         // ensuring parity with Claude CLI.
 
-        // Resume session if we have an SDK session ID from a previous conversation turn.
-        // Pre-check: verify working_directory exists before attempting resume.
-        // Resume depends on session context (cwd/project scope), so if the
-        // original working_directory no longer exists, resume will fail.
-        let shouldResume = !!sdkSessionId;
+        // Smart context loading: only resume when there's meaningful conversation history.
+        // This avoids the resume overhead for fresh/short conversations where DB history
+        // is sufficient, making CodePilot feel as snappy as the terminal for new chats.
+        //
+        // Threshold rationale:
+        //   0 history msgs (brand new chat) → skip resume, identical to terminal
+        //   1-2 history msgs (short chat)   → skip resume, DB context is enough
+        //   3+ history msgs                  → resume to preserve SDK session context
+        const historyCount = conversationHistory ? conversationHistory.length : 0;
+        const hasSdkSession = !!sdkSessionId;
+        let shouldResume = hasSdkSession && needsResume(historyCount);
+
+        // Register session lifecycle tracking
+        if (sdkSessionId && sessionId) {
+          registerSdkSession(sessionId, sdkSessionId);
+        }
+
+        // If we have an SDK session but are skipping resume due to short history,
+        // clear the stale session ID so it doesn't accumulate
+        if (hasSdkSession && !shouldResume) {
+          if (sessionId) {
+            try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
+          }
+        }
+
         if (shouldResume && workingDirectory && resolvedWorkingDirectory.source !== 'requested') {
           console.warn(
             `[claude-client] Working directory "${workingDirectory}" does not exist, skipping resume`,
@@ -848,7 +876,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             data: JSON.stringify({
               notification: true,
               title: 'Resuming session',
-              message: 'Reconnecting to previous conversation...',
+              message: 'Loading conversation context...',
             }),
           }));
           queryOptions.resume = sdkSessionId;
@@ -1506,6 +1534,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           }
         }
 
+        // Release session back to the idle pool so it can be reused
+        // for follow-up messages without a full cold start
+        if (sessionId) {
+          releaseSession(sessionId);
+        }
+
         controller.enqueue(formatSSE({ type: 'done', data: '' }));
         controller.close();
       } catch (error) {
@@ -1522,6 +1556,13 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         });
 
         if (forcedToolTimeout) {
+          // Clear sdk_session_id because the SDK subprocess is in a broken
+          // state: it has a pending tool_use without a matching tool_result.
+          // If we don't clear, the next message will try to resume this stale
+          // session and the SDK will complain about missing tool result.
+          if (sessionId) {
+            try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
+          }
           controller.enqueue(formatSSE({
             type: 'error',
             data: JSON.stringify({
@@ -1770,6 +1811,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       } finally {
         if (toolWatchdog) clearInterval(toolWatchdog);
         unregisterConversation(sessionId);
+        // Release session to idle pool (idempotent — safe to call on both
+        // success and error paths). On error, the sdk_session_id was already
+        // cleared above, so releaseSession will clear the pool entry too.
+        if (sessionId) {
+          releaseSession(sessionId);
+        }
       }
     },
 

@@ -86,6 +86,11 @@ export const sdkRuntime: AgentRuntime = {
   },
 
   dispose(): void {
-    // SDK manages its own subprocess lifecycle
+    // SDK manages its own subprocess lifecycle, but clean up
+    // our session tracking pool to avoid stale session IDs
+    try {
+      const { disposeSessionPool } = require('../cli-session-pool');
+      disposeSessionPool();
+    } catch { /* best effort */ }
   },
 };

@@ -245,7 +245,7 @@ describe('v2→v3 migration', () => {
     assert.equal(raw.lastCheckInDate, '2026-03-10', 'should not change v3 state');
   });
 
-  it('loadState auto-migrates v2 state to v6', () => {
+  it('loadState auto-migrates v2 state to v8', () => {
     const stateDir = path.join(workDir, '.assistant');
     fs.mkdirSync(stateDir, { recursive: true });
     // Also need daily dir for v1→v2 migration path
@@ -263,7 +263,7 @@ describe('v2→v3 migration', () => {
     );
 
     const state = loadState(workDir);
-    assert.equal(state.schemaVersion, 6);
+    assert.equal(state.schemaVersion, 8);
     // Past date should be preserved (migrated to lastHeartbeatDate), not overwritten to today
     assert.equal(state.lastHeartbeatDate, '2026-01-15');
     // v4→v6 migration renames dailyCheckInEnabled to heartbeatEnabled (false)

@@ -1,5 +1,8 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import {
   VENDOR_PRESETS,
   inferProtocolFromLegacy,
@@ -51,6 +54,16 @@ describe('Provider Catalog', () => {
       assert.ok(minimax.length >= 2, 'Expected at least 2 MiniMax presets');
       for (const p of minimax) {
         assert.equal(p.protocol, 'anthropic', `MiniMax preset ${p.key} should use anthropic protocol`);
+      }
+    });
+
+    it('MiniMax presets keep search/vision on MCP side instead of direct role models', () => {
+      const minimax = VENDOR_PRESETS.filter(p => p.key.startsWith('minimax-'));
+      assert.ok(minimax.length >= 2, 'Expected at least 2 MiniMax presets');
+      for (const p of minimax) {
+        assert.equal(p.defaultRoleModels?.default, 'MiniMax-M2.7');
+        assert.equal(p.defaultRoleModels?.sonnet, 'MiniMax-M2.7');
+        assert.equal(p.defaultRoleModels?.haiku, 'MiniMax-M2.7');
       }
     });
 
@@ -266,8 +279,21 @@ describe('Provider Catalog', () => {
 
 // ── Provider Resolver Tests ─────────────────────────────────────
 
-import { resolveProvider, toClaudeCodeEnv, toAiSdkConfig, routeAuxiliaryModel } from '../../lib/provider-resolver';
-import type { ResolvedProvider } from '../../lib/provider-resolver';
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-provider-resolver-db-'));
+try {
+  require('../../lib/db').closeDb();
+} catch {}
+try {
+  delete require.cache[require.resolve('../../lib/provider-resolver')];
+  delete require.cache[require.resolve('../../lib/db')];
+} catch {}
+
+process.env.CLAUDE_GUI_DATA_DIR = dataDir;
+
+const { closeDb } = require('../../lib/db') as typeof import('../../lib/db');
+const { resolveProvider, toClaudeCodeEnv, toAiSdkConfig, routeAuxiliaryModel } = require('../../lib/provider-resolver') as typeof import('../../lib/provider-resolver');
+
+type ResolvedProvider = import('../../lib/provider-resolver').ResolvedProvider;
 
 describe('Provider Resolver', () => {
   describe('resolveProvider', () => {
@@ -749,6 +775,15 @@ describe('Provider Resolver', () => {
   });
 });
 
+after(() => {
+  try {
+    closeDb();
+  } catch {}
+  try {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  } catch {}
+});
+
 // ── Entry Point Consistency Tests ───────────────────────────────
 
 describe('Entry Point Consistency', () => {
@@ -1083,7 +1118,7 @@ describe('Entry Point Resolution Contract', () => {
 
 // ── Global Default Model Tests ──────────────────────────────────
 
-import { getSetting, setSetting } from '../../lib/db';
+const { getSetting, setSetting } = require('../../lib/db') as typeof import('../../lib/db');
 
 describe('Global Default Model', () => {
   // Save and restore settings around each test

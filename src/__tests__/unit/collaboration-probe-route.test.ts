@@ -22,14 +22,7 @@ describe('resolveCollaborationProbePlan', () => {
       api_key: 'leader-key',
       role_models_json: JSON.stringify({ default: 'leader-default' }),
     });
-    const search = createProvider({
-      name: 'Search Provider',
-      provider_type: 'anthropic',
-      base_url: 'https://api.anthropic.com',
-      api_key: 'search-key',
-      role_models_json: JSON.stringify({ default: 'search-default' }),
-    });
-    createdProviderIds.push(lead.id, search.id);
+    createdProviderIds.push(lead.id);
 
     setSetting('collaboration_strategy_json', JSON.stringify({
       defaultProfileId: 'custom',
@@ -39,8 +32,6 @@ describe('resolveCollaborationProbePlan', () => {
           name: '自定义配置',
           roles: {
             'team-leader': { providerId: lead.id, model: 'leader-model' },
-            'knowledge-searcher': { providerId: search.id, model: 'search-model' },
-            'vision-understanding': {},
             'worker-executor': { providerId: lead.id, model: 'exec-model' },
             'quality-inspector': { providerId: lead.id, model: 'verify-model' },
             'expert-consultant': {},
@@ -62,12 +53,12 @@ describe('resolveCollaborationProbePlan', () => {
     });
 
     const leader = result.rows.find((row) => row.roleKey === 'team-leader');
-    const vision = result.rows.find((row) => row.roleKey === 'vision-understanding');
+    const executor = result.rows.find((row) => row.roleKey === 'worker-executor');
     const expert = result.rows.find((row) => row.roleKey === 'expert-consultant');
 
     assert.equal(result.profileName, '自定义配置');
     assert.equal(leader?.status, 'ready');
-    assert.equal(vision?.status, 'unconfigured');
+    assert.equal(executor?.status, 'ready');
     assert.equal(expert?.status, 'unconfigured');
     assert.equal(leader?.providerName, 'Leader Provider');
     assert.equal(leader?.apiModel, 'leader-model');
