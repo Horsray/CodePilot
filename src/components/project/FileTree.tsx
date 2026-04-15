@@ -135,7 +135,7 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
   const [searchQuery, setSearchQuery] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const { t } = useTranslation();
-  const hasFlashedRef = useRef(false);
+  const seekKeyRef = useRef<string | null>(null);
 
   const fetchTree = useCallback(async () => {
     // Always cancel in-flight request first — even when clearing directory,
@@ -220,21 +220,19 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
     }
   }, [highlightPath]);
 
-  // Reset flash tracker when highlightPath changes
+  // Scroll to and flash highlighted file from search results.
+  // Guarded by seekKeyRef so tree auto-refreshes don't re-trigger the scroll.
   useEffect(() => {
-    hasFlashedRef.current = false;
-  }, [highlightPath]);
+    if (!highlightPath || tree.length === 0) return;
+    if (seekKeyRef.current === highlightPath) return;
+    seekKeyRef.current = highlightPath;
 
-  // Scroll to and flash highlighted file from search results
-  useEffect(() => {
-    if (!highlightPath || hasFlashedRef.current || tree.length === 0) return;
     let attempts = 0;
     const maxAttempts = 15;
     const interval = setInterval(() => {
       attempts++;
       const el = document.getElementById('file-tree-highlight');
       if (el) {
-        hasFlashedRef.current = true;
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         clearInterval(interval);
       } else if (attempts >= maxAttempts) {
@@ -242,7 +240,7 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
       }
     }, 100);
     return () => clearInterval(interval);
-  }, [highlightPath, tree, loading]);
+  }, [highlightPath, tree]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
