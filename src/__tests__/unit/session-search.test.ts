@@ -1,62 +1,133 @@
-import { describe, it, afterEach } from 'node:test';
+/**
+ * Unit tests for searchMessages (db) and session-search related behavior.
+ */
+
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-session-search-'));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-session-search-test-'));
 process.env.CLAUDE_GUI_DATA_DIR = tmpDir;
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const {
   createSession,
   addMessage,
-  closeDb,
+  clearSessionMessages,
   searchMessages,
+  closeDb,
 } = require('../../lib/db') as typeof import('../../lib/db');
 
-describe('searchMessages', () => {
-  afterEach(() => {
-    closeDb();
+describe('searchMessages (db)', () => {
+  let sessionA: string;
+  let sessionB: string;
+
+  before(() => {
+    const a = createSession('Planning session', 'sonnet', '', tmpDir);
+    const b = createSession('Bug triage', 'sonnet', '', tmpDir);
+    sessionA = a.id;
+    sessionB = b.id;
+
+    addMessage(sessionA, 'user', 'Let us plan the authentication rewrite');
+    addMessage(sessionA, 'assistant', 'Here is the proposed authentication approach with PKCE flow');
+    addMessage(sessionA, 'user', 'What about refresh tokens?');
+    addMessage(sessionA, 'assistant', 'Refresh tokens should be rotated every session');
+
+    addMessage(sessionB, 'user', 'I hit a bug in authentication when token expires');
+    addMessage(sessionB, 'assistant', 'That sounds like a PKCE state mismatch');
   });
 
-  it('finds matching messages across sessions ordered by newest first', () => {
-    const s1 = createSession('Alpha Session', 'sonnet');
-    const s2 = createSession('Beta Session', 'sonnet');
-
-    addMessage(s1.id, 'user', 'Please investigate provider fallback logic');
-    addMessage(s2.id, 'assistant', 'The provider fallback logic now prefers the compact helper model.');
-
-    const results = searchMessages('fallback', { limit: 10 });
-
-    assert.equal(results.length, 2);
-    assert.equal(results[0].sessionTitle, 'Beta Session');
-    assert.equal(results[1].sessionTitle, 'Alpha Session');
+  after(() => {
+    try {
+      closeDb();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // 中文注释：测试清理失败时忽略，避免因为临时目录状态影响断言结果。
+    }
   });
 
-  it('supports filtering by sessionId', () => {
-    const s1 = createSession('Only This Session', 'sonnet');
-    const s2 = createSession('Other Session', 'sonnet');
+  it('returns results matching the query across all sessions', () => {
+    const results = searchMessages('authentication');
+    assert.ok(results.length >= 3, `expected at least 3 results, got ${results.length}`);
+    assert.ok(results.every((r) => r.snippet.toLowerCase().includes('authentication')));
+  });
 
-    addMessage(s1.id, 'assistant', 'Searchable note about collaboration strategy.');
-    addMessage(s2.id, 'assistant', 'Another collaboration strategy note elsewhere.');
+  it('results include session title from chat_sessions join', () => {
+    const results = searchMessages('PKCE');
+    assert.ok(results.length >= 1);
+    const titles = new Set(results.map((r) => r.sessionTitle));
+    assert.ok(
+      titles.has('Planning session') || titles.has('Bug triage'),
+      `expected to find titled sessions, got ${[...titles]}`,
+    );
+  });
 
-    const results = searchMessages('collaboration', { sessionId: s1.id, limit: 10 });
+  it('sessionId filter restricts results to one session', () => {
+    const results = searchMessages('authentication', { sessionId: sessionA });
+    assert.ok(results.length > 0);
+    assert.ok(results.every((r) => r.sessionId === sessionA));
+  });
 
+  it('limit is respected', () => {
+    const results = searchMessages('authentication', { limit: 1 });
     assert.equal(results.length, 1);
-    assert.equal(results[0].sessionId, s1.id);
-    assert.equal(results[0].sessionTitle, 'Only This Session');
   });
 
-  it('returns a contextual snippet around the first match', () => {
-    const session = createSession('Snippet Session', 'sonnet');
-    const content = '0123456789 '.repeat(12) + 'keyword-hit' + ' abcdefghij'.repeat(12);
-    addMessage(session.id, 'assistant', content);
+  it('limit default is 5', () => {
+    for (let i = 0; i < 10; i++) {
+      addMessage(sessionA, 'user', `authentication test message ${i}`);
+    }
+    try {
+      const results = searchMessages('authentication');
+      assert.ok(results.length <= 5, `expected <=5 with default limit, got ${results.length}`);
+    } finally {
+      clearSessionMessages(sessionA);
+      addMessage(sessionA, 'user', 'Let us plan the authentication rewrite');
+      addMessage(sessionA, 'assistant', 'Here is the proposed authentication approach with PKCE flow');
+    }
+  });
 
-    const [result] = searchMessages('keyword-hit', { limit: 1 });
+  it('empty query returns empty results', () => {
+    assert.equal(searchMessages('').length, 0);
+    assert.equal(searchMessages('   ').length, 0);
+  });
 
-    assert.ok(result.snippet.includes('keyword-hit'));
-    assert.ok(result.snippet.length <= 220);
+  it('no-match query returns empty array', () => {
+    const results = searchMessages('totallyuniquestringnowayitsinmessages');
+    assert.equal(results.length, 0);
+  });
+
+  it('most recent results come first', () => {
+    const results = searchMessages('authentication');
+    for (let i = 0; i < results.length - 1; i++) {
+      assert.ok(results[i].createdAt >= results[i + 1].createdAt);
+    }
+  });
+
+  it('snippet contains the match', () => {
+    const results = searchMessages('PKCE');
+    assert.ok(results.length >= 1);
+    assert.ok(results[0].snippet.includes('PKCE'));
+  });
+
+  it('LIKE wildcards in query are treated as literals', () => {
+    addMessage(sessionB, 'user', 'The progress was 80% complete');
+    const results = searchMessages('80%');
+    assert.ok(results.some((r) => r.snippet.includes('80%')));
+    const wildcardOnly = searchMessages('100%');
+    assert.equal(wildcardOnly.length, 0);
+  });
+
+  it('returns role and timestamps as documented fields', () => {
+    const results = searchMessages('authentication', { limit: 1 });
+    assert.equal(results.length, 1);
+    const r = results[0];
+    assert.ok(['user', 'assistant'].includes(r.role));
+    assert.ok(typeof r.createdAt === 'string');
+    assert.ok(typeof r.messageId === 'string');
+    assert.ok(typeof r.sessionId === 'string');
+    assert.ok(typeof r.sessionTitle === 'string');
   });
 });
-

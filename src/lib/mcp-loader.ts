@@ -134,3 +134,49 @@ export function loadAllMcpServers(): Record<string, MCPServerConfig> | undefined
     return undefined;
   }
 }
+
+/**
+ * 中文注释：功能名称「按项目目录加载 MCP Server」。
+ * 用法：当调用侧显式传入某个工作目录时，读取该目录下 `.mcp.json`，并按用户设置覆盖 enabled 状态、解析 `${...}` 占位符。
+ */
+export function loadProjectMcpServers(projectCwd: string | undefined): Record<string, MCPServerConfig> | undefined {
+  if (!projectCwd) return undefined;
+
+  try {
+    const filePath = path.join(projectCwd, '.mcp.json');
+    if (!fs.existsSync(filePath)) return undefined;
+
+    const content = readJson(filePath);
+    const rawServers = (content.mcpServers || {}) as Record<string, MCPServerConfig>;
+    if (Object.keys(rawServers).length === 0) return undefined;
+
+    const userSettings = readJson(path.join(os.homedir(), '.claude', 'settings.json'));
+    const overrides = (userSettings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
+
+    const resolved: Record<string, MCPServerConfig> = {};
+    for (const [name, server] of Object.entries(rawServers)) {
+      const override = overrides[name];
+      const effectiveEnabled = override?.enabled !== undefined ? override.enabled : server.enabled;
+      if (effectiveEnabled === false) continue;
+
+      const out: MCPServerConfig = { ...server };
+      if (out.env) {
+        const env: Record<string, string> = {};
+        for (const [key, value] of Object.entries(out.env)) {
+          if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
+            const settingKey = value.slice(2, -1);
+            env[key] = getSetting(settingKey) || '';
+          } else if (typeof value === 'string') {
+            env[key] = value;
+          }
+        }
+        out.env = env;
+      }
+      resolved[name] = out;
+    }
+
+    return Object.keys(resolved).length > 0 ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}

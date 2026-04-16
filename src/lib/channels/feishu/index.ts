@@ -29,10 +29,12 @@ interface CardActionEvent {
 }
 import { loadFeishuConfig, validateFeishuConfig } from './config';
 import { FeishuGateway } from './gateway';
-import { parseInboundMessage } from './inbound';
+import { parseMessageWithResources } from './inbound';
+import { getBotInfo } from './identity';
 import { sendMessage, addReaction, removeReaction } from './outbound';
 import { isUserAuthorized } from './policy';
 import { createCardStreamController } from './card-controller';
+import { downloadResource } from './resource-downloader';
 
 export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
   readonly meta: ChannelMeta = {
@@ -48,6 +50,12 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
   private lastMessageIdByChat = new Map<string, string>();
   /** Track active reaction IDs per chatId so we can remove them on completion. */
   private activeReactions = new Map<string, { messageId: string; reactionId: string }>();
+  /** Bot's open_id, resolved after gateway starts. Used for @mention detection. */
+  private botOpenId = '';
+  /** Periodic retry timer for resolveBotIdentity when the initial probe fails. */
+  private identityRetryTimer: ReturnType<typeof setInterval> | null = null;
+  /** Generation guard so stale identity probes can't mutate a restarted plugin. */
+  private identityGeneration = 0;
 
   loadConfig(): FeishuConfig | null {
     this.config = loadFeishuConfig();
@@ -83,11 +91,27 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
 
     this.gateway = new FeishuGateway(this.config);
 
-    // Register message handler — pushes to internal queue
+    // Register message handler — pushes to internal queue.
     this.gateway.registerMessageHandler((data: unknown) => {
-      const msg = parseInboundMessage(data, this.config!);
-      if (!msg) return;
-      this.enqueueMessage(msg);
+      const parsed = parseMessageWithResources(data, this.config!, this.botOpenId);
+      if (!parsed) return;
+
+      const addrUserId = parsed.message.address.userId || '';
+      const rawChatId = parsed.message.address.chatId.split(':thread:')[0];
+      if (!isUserAuthorized(this.config!, addrUserId, rawChatId)) {
+        console.log('[feishu/plugin]', 'Dropping unauthorized message from', addrUserId, 'in', rawChatId);
+        return;
+      }
+
+      if (parsed.resources.length === 0) {
+        this.enqueueMessage(parsed.message);
+        return;
+      }
+
+      this.downloadAndEnqueue(parsed.message, parsed.resources).catch((err) => {
+        console.warn('[feishu/plugin]', 'Resource download failed:', err);
+        this.enqueueMessage(parsed.message);
+      });
     });
 
     // Register card action handler — converts button clicks to callback messages.
@@ -108,6 +132,13 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
       const chatId = event?.context?.open_chat_id || value.chatId || '';
       const messageId = event?.context?.open_message_id || event?.open_message_id || '';
       const userId = event?.operator?.open_id || event?.open_id || '';
+
+      // 中文注释：功能名称「飞书卡片点击权限校验」。
+      // 用法：避免未在 allowFrom / groupAllowFrom 白名单内的用户，通过旧卡片按钮执行审批或切项目操作。
+      if (chatId && !isUserAuthorized(this.config!, userId, chatId)) {
+        console.log('[feishu/plugin]', 'Rejecting card action from unauthorized user', userId, 'in', chatId);
+        return { toast: { type: 'warning' as const, content: '无权限操作' } };
+      }
 
       // Format 1: callback_data (permission buttons)
       const callbackData = value.callback_data;
@@ -167,13 +198,25 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
     });
 
     await this.gateway.start();
+
+    this.identityGeneration += 1;
+    const probeGeneration = this.identityGeneration;
+    this.resolveBotIdentity(probeGeneration).catch((err) => {
+      console.warn('[feishu/plugin]', 'Bot identity resolution failed:', err);
+    });
   }
 
   async stop(): Promise<void> {
+    this.identityGeneration += 1;
+    if (this.identityRetryTimer) {
+      clearInterval(this.identityRetryTimer);
+      this.identityRetryTimer = null;
+    }
     if (this.gateway) {
       await this.gateway.stop();
       this.gateway = null;
     }
+    this.botOpenId = '';
     // Unblock any waiting consumer
     if (this.waitResolve) {
       this.waitResolve(null);
@@ -197,6 +240,87 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
     } else {
       this.messageQueue.push(msg);
     }
+  }
+
+  private async resolveBotIdentity(generation: number, maxRetries = 3): Promise<void> {
+    const client = this.gateway?.getRestClient();
+    if (!client) return;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (this.identityGeneration !== generation) return;
+      const info = await getBotInfo(client);
+      if (this.identityGeneration !== generation) return;
+      if (info?.openId) {
+        this.botOpenId = info.openId;
+        if (this.config?.requireMention) {
+          console.log('[feishu/plugin]', `Bot identity resolved (attempt ${attempt}); requireMention gate now active`);
+        }
+        return;
+      }
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
+
+    if (this.identityGeneration !== generation) return;
+    console.warn('[feishu/plugin]', 'Could not resolve bot identity; will retry every 60s');
+    this.startIdentityRetryTimer(generation);
+  }
+
+  private startIdentityRetryTimer(generation: number): void {
+    if (this.identityRetryTimer) return;
+    let myTimer: ReturnType<typeof setInterval>;
+    const clearSelf = () => {
+      clearInterval(myTimer);
+      if (this.identityRetryTimer === myTimer) {
+        this.identityRetryTimer = null;
+      }
+    };
+
+    myTimer = setInterval(async () => {
+      if (this.identityGeneration !== generation) {
+        clearSelf();
+        return;
+      }
+      const client = this.gateway?.getRestClient();
+      if (!client) return;
+      const info = await getBotInfo(client);
+      if (this.identityGeneration !== generation) {
+        clearSelf();
+        return;
+      }
+      if (info?.openId) {
+        this.botOpenId = info.openId;
+        clearSelf();
+        if (this.config?.requireMention) {
+          console.log('[feishu/plugin]', 'Bot identity resolved via background retry; requireMention gate now active');
+        }
+      }
+    }, 60_000);
+
+    this.identityRetryTimer = myTimer;
+  }
+
+  private async downloadAndEnqueue(
+    base: InboundMessage,
+    resources: import('./inbound').PendingResource[],
+  ): Promise<void> {
+    const client = this.gateway?.getRestClient();
+    if (!client) {
+      this.enqueueMessage(base);
+      return;
+    }
+
+    const attachments: import('@/types').FileAttachment[] = [];
+    for (const resource of resources) {
+      const att = await downloadResource(client, resource.messageId, resource.fileKey, resource.resourceType);
+      if (att) attachments.push(att);
+    }
+
+    this.enqueueMessage({
+      ...base,
+      attachments: attachments.length > 0 ? attachments : undefined,
+    });
   }
 
   async consumeOne(): Promise<InboundMessage | null> {

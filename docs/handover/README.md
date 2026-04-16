@@ -31,3 +31,4 @@
 | sentry-error-reporting.md | Sentry 匿名错误上报：三层覆盖（browser/server/electron）、opt-out 机制、隐私保护、上报策略 |
 | decouple-native-runtime.md | Native Agent Runtime：双 Runtime 架构、AI SDK agent-loop、OpenAI Codex 集成、文件快照 rewind、MCP 全链路、验证边界与剩余风险 |
 | fork-sync-playbook.md | Fork 与官方同步维护手册：差异清单、冲突热点、AI 自动读取记忆方式、上游合并流程与验收清单 |
+| fork-sync-mechanism.md | Fork 长期追官方的同步机制：ownership map、patch manifest、sync report、bootstrap 工作流与边界检查 |

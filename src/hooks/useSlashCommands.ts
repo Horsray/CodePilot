@@ -33,6 +33,7 @@ export function useSlashCommands(opts: {
   closePopover: () => void;
   onCommand?: (command: string) => void;
   setBadge: (badge: { command: string; label: string; description: string; kind: SkillKind; installedSource?: "agents" | "claude" } | null) => void;
+  isStreaming?: boolean;
 }): UseSlashCommandsReturn {
   const {
     sessionId,
@@ -52,6 +53,7 @@ export function useSlashCommands(opts: {
     closePopover,
     onCommand,
     setBadge,
+    isStreaming,
   } = opts;
 
   // Enrich built-in commands with icons (presentation layer enrichment)
@@ -180,6 +182,10 @@ export function useSlashCommands(opts: {
 
     switch (result.action) {
       case 'immediate_command':
+        if (isStreaming) {
+          closePopover();
+          return;
+        }
         if (onCommand) {
           setInputValue('');
           closePopover();
@@ -188,10 +194,20 @@ export function useSlashCommands(opts: {
         return;
 
       case 'set_badge':
+        if (isStreaming) {
+          closePopover();
+          return;
+        }
         setBadge(result.badge!);
-        setInputValue('');
+        setInputValue(result.newInputValue ?? '');
         closePopover();
-        setTimeout(() => textareaRef.current?.focus(), 0);
+        setTimeout(() => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          const pos = el.value.length;
+          el.setSelectionRange(pos, pos);
+        }, 0);
         return;
 
       case 'insert_file_mention':
@@ -200,7 +216,7 @@ export function useSlashCommands(opts: {
         setTimeout(() => textareaRef.current?.focus(), 0);
         return;
     }
-  }, [triggerPos, popoverMode, closePopover, onCommand, inputValue, popoverFilter, textareaRef, setInputValue, setBadge]);
+  }, [triggerPos, popoverMode, closePopover, onCommand, inputValue, popoverFilter, textareaRef, setInputValue, setBadge, isStreaming]);
 
   // Handle input changes to detect @ and /
   const handleInputChange = useCallback(async (val: string) => {
@@ -234,15 +250,18 @@ export function useSlashCommands(opts: {
     }
   }, [fetchFiles, fetchSkills, popoverMode, closePopover, textareaRef, setInputValue, setPopoverMode, setPopoverFilter, setTriggerPos, setSelectedIndex, setPopoverItems]);
 
-  // Insert `/` into textarea to trigger slash command popover
+  // 中文注释：功能名称「Slash 按钮自动补空格」。
+  // 用法：当光标前不是空白时，先补一个空格再插入 `/`，避免触发器把路径或单词中的 `/` 误判为普通文本。
   const handleInsertSlash = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const cursorPos = textarea.selectionStart;
     const before = inputValue.slice(0, cursorPos);
     const after = inputValue.slice(cursorPos);
-    const newValue = before + '/' + after;
-    const newCursorPos = cursorPos + 1;
+    const needsSpace = before.length > 0 && !/\s$/.test(before);
+    const inserted = needsSpace ? ' /' : '/';
+    const newValue = before + inserted + after;
+    const newCursorPos = cursorPos + inserted.length;
     setInputValue(newValue);
     // Set cursor position first so handleInputChange reads correct selectionStart
     textarea.value = newValue;

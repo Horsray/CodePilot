@@ -29,7 +29,19 @@ export function createAskUserQuestionTool(ctx: ToolContext) {
         })).min(2).max(4).describe('List of 2-4 mutually exclusive or multi-select choices.'),
       })).min(1).max(4).describe('The set of questions to ask the user.'),
     }),
-    execute: async ({ questions }) => {
+    execute: async (input) => {
+      const data = input as {
+        questions?: Array<{ question: string }>;
+        answers?: Record<string, string>;
+      };
+
+      const answers = data.answers || {};
+      if (Object.keys(answers).length > 0) {
+        return Object.entries(answers)
+          .map(([question, answer]) => `Q: ${question}\nA: ${answer}`)
+          .join('\n\n');
+      }
+
       // In CodePilot design, this tool is intended to be INTERCEPTED by the permission system.
       // We don't actually "execute" anything here; the execution is suspended by the
       // wrapWithPermissions layer in agent-tools.ts, which emits a permission_request.

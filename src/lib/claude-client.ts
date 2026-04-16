@@ -28,6 +28,8 @@ import { classifyError, formatClassifiedError } from './error-classifier';
 import { resolveWorkingDirectory } from './working-directory';
 import { sendNotification } from './notification-manager';
 import { registerSdkSession, releaseSession, needsResume, prewarmClaudePath } from './cli-session-pool';
+import { prepareSdkSubprocessEnv } from './sdk-subprocess-env';
+import { loadProjectMcpServers } from './mcp-loader';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -329,19 +331,10 @@ export async function generateTextViaSdk(params: {
     providerId: params.providerId,
   });
 
-  const sdkEnv: Record<string, string> = { ...process.env as Record<string, string> };
-  if (!sdkEnv.HOME) sdkEnv.HOME = os.homedir();
-  if (!sdkEnv.USERPROFILE) sdkEnv.USERPROFILE = os.homedir();
-  sdkEnv.PATH = getExpandedPath();
-  delete sdkEnv.CLAUDECODE;
-
-  if (process.platform === 'win32' && !process.env.CLAUDE_CODE_GIT_BASH_PATH) {
-    const gitBashPath = findGitBash();
-    if (gitBashPath) sdkEnv.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
-  }
-
-  const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved);
-  Object.assign(sdkEnv, resolvedEnv);
+  // 中文注释：功能名称「SDK 子进程统一环境构建」。
+  // 用法：让轻量文本生成与主聊天链路共用同一套 Provider 鉴权归属和影子 HOME 逻辑。
+  const setup = prepareSdkSubprocessEnv(resolved);
+  const sdkEnv = setup.env;
 
   const abortController = new AbortController();
   if (params.abortSignal) {
@@ -392,6 +385,7 @@ export async function generateTextViaSdk(params: {
     }
   } catch (err) {
     clearTimeout(timeoutId);
+    setup.shadow.cleanup();
     if (abortController.signal.aborted && !(params.abortSignal?.aborted)) {
       throw new Error('SDK query timed out after 60s');
     }
@@ -399,6 +393,7 @@ export async function generateTextViaSdk(params: {
   }
 
   clearTimeout(timeoutId);
+  setup.shadow.cleanup();
 
   if (!resultText) {
     throw new Error('SDK query returned no result');
@@ -655,8 +650,22 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         // MCP servers: only pass explicitly provided config (e.g. from CodePilot UI).
         // User-level MCP config from ~/.claude.json and ~/.claude/settings.json
         // is now automatically loaded by the SDK via settingSources: ['user', 'project', 'local'].
-        if (mcpServers && Object.keys(mcpServers).length > 0) {
-          queryOptions.mcpServers = toSdkMcpConfig(mcpServers);
+        let mergedMcpServers = mcpServers ? { ...mcpServers } : undefined;
+
+        // 中文注释：功能名称「项目级 MCP 回注」。
+        // 用法：当 settingSources 不包含 project 时，显式把工作目录下的 `.mcp.json` 并回 SDK 配置，避免项目 MCP 丢失。
+        if (!resolved.settingSources.includes('project')) {
+          const projectMcpServers = loadProjectMcpServers(resolvedWorkingDirectory.path);
+          if (projectMcpServers && Object.keys(projectMcpServers).length > 0) {
+            mergedMcpServers = {
+              ...(mergedMcpServers || {}),
+              ...projectMcpServers,
+            };
+          }
+        }
+
+        if (mergedMcpServers && Object.keys(mergedMcpServers).length > 0) {
+          queryOptions.mcpServers = toSdkMcpConfig(mergedMcpServers);
         }
 
         // Memory MCP: always registered in assistant mode for memory search/retrieval.

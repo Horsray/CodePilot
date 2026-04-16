@@ -85,6 +85,27 @@ export function prepareOAuthFlow(): PreparedFlow {
 
 // ── Exchange Code for Tokens ───────────────────────────────────
 
+/**
+ * 中文注释：功能名称「OAuth token exchange 重试判定」。
+ * 用法：把网络抖动、403 传播延迟、429 和 5xx 归类为可重试，避免一次瞬时失败直接中断登录流程。
+ */
+export function isRetryableTokenExchangeFailure(status: number | null, err?: unknown): boolean {
+  if (status === null) return true;
+  if (status >= 500) return true;
+  if (status === 403 || status === 408 || status === 429) return true;
+  if (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED' || code === 'ENOTFOUND') {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function exchangeCodeForTokens(
   code: string,
   codeVerifier: string,
@@ -97,38 +118,70 @@ export async function exchangeCodeForTokens(
     code_verifier: codeVerifier,
   });
 
-  const response = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    },
-    body: params.toString(),
-  });
+  // 中文注释：功能名称「OAuth token exchange 重试执行」。
+  // 用法：在 OpenAI 授权码刚签发的短窗口内，允许对 403/网络错误做有限重试，降低偶发登录失败。
+  const MAX_ATTEMPTS = 3;
+  let lastStatus: number | null = null;
+  let lastBody = '';
+  let lastErr: unknown;
 
-  if (!response.ok) {
-    const text = await response.text();
-    let msg: string;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let response: Response;
+
     try {
-      const j = JSON.parse(text);
-      msg = j.error_description || j.error || text;
-    } catch { msg = text; }
-    throw new Error(`Token exchange failed: ${response.status} - ${msg}`);
+      response = await fetch(TOKEN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
+        },
+        body: params.toString(),
+      });
+    } catch (err) {
+      lastStatus = null;
+      lastErr = err;
+      lastBody = err instanceof Error ? err.message : String(err);
+      if (attempt < MAX_ATTEMPTS && isRetryableTokenExchangeFailure(null, err)) {
+        await sleep(1000 * Math.pow(2, attempt - 1));
+        continue;
+      }
+      throw new Error(`Token exchange failed (network): ${lastBody}`);
+    }
+
+    if (response.ok) {
+      const data = await response.json() as {
+        id_token: string;
+        access_token: string;
+        refresh_token?: string;
+        expires_in?: number;
+      };
+
+      return {
+        idToken: data.id_token,
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token,
+        expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined,
+      };
+    }
+
+    lastStatus = response.status;
+    lastBody = await response.text();
+
+    if (attempt < MAX_ATTEMPTS && isRetryableTokenExchangeFailure(response.status)) {
+      await sleep(1000 * Math.pow(2, attempt - 1));
+      continue;
+    }
+    break;
   }
 
-  const data = await response.json() as {
-    id_token: string;
-    access_token: string;
-    refresh_token?: string;
-    expires_in?: number;
-  };
-
-  return {
-    idToken: data.id_token,
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined,
-  };
+  let msg: string;
+  try {
+    const parsed = JSON.parse(lastBody);
+    msg = parsed.error_description || parsed.error || JSON.stringify(parsed);
+  } catch {
+    msg = lastBody || (lastErr instanceof Error ? lastErr.message : 'unknown');
+  }
+  throw new Error(`Token exchange failed after ${MAX_ATTEMPTS} attempts: ${lastStatus ?? 'network'} - ${msg}`);
 }
 
 // ── Refresh Tokens ─────────────────────────────────────────────

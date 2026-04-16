@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "description": "Fork patch queue / overlay 清单。记录哪些能力属于 fork 增量、挂载在哪些接缝、同步 upstream 时应该如何保留。",
+  "patches": [
+    {
+      "id": "workspace-tabs-and-layout",
+      "kind": "overlay",
+      "owner": "fork",
+      "summary": "顶部标签、统一工作区、多面板布局。",
+      "entrypoints": [
+        "src/components/layout/AppShell.tsx",
+        "src/components/layout/UnifiedTopBar.tsx",
+        "src/hooks/usePanel.ts",
+        "electron/main.ts"
+      ],
+      "ownedPaths": [
+        "src/components/layout/BrowserTabView.tsx",
+        "src/components/layout/panels/PreviewPanel.tsx",
+        "src/components/layout/panels/AssistantPanel.tsx",
+        "src/components/layout/panels/DashboardPanel.tsx"
+      ],
+      "syncStrategy": "保留 fork 模块，接缝文件尽量保持薄适配。"
+    },
+    {
+      "id": "enhanced-file-tree",
+      "kind": "overlay",
+      "owner": "fork",
+      "summary": "增强文件树、文件操作、项目级交互。",
+      "entrypoints": [
+        "src/components/project/FileTree.tsx",
+        "src/components/project/EnhancedFileTree.tsx",
+        "src/app/api/files/**"
+      ],
+      "ownedPaths": [
+        "src/components/layout/panels/FileTreePanel.tsx"
+      ],
+      "syncStrategy": "整组保留 fork，实现层不回退到 upstream。"
+    },
+    {
+      "id": "terminal-console",
+      "kind": "overlay",
+      "owner": "fork",
+      "summary": "终端、控制台、PTY 与底部面板。",
+      "entrypoints": [
+        "src/components/layout/BottomPanelContainer.tsx",
+        "src/components/layout/panels/WebTerminalPanel.tsx",
+        "src/app/api/terminal/**"
+      ],
+      "ownedPaths": [
+        "electron/terminal-manager.ts",
+        "src/lib/pty-manager.ts",
+        "src/components/terminal/**",
+        "src/components/console/**",
+        "src/hooks/useTerminal.ts",
+        "src/hooks/useWebTerminal.ts"
+      ],
+      "syncStrategy": "终端能力整组保留，仅同步外层 UI/状态接口。"
+    },
+    {
+      "id": "provider-cc-switch-olmx",
+      "kind": "adapter",
+      "owner": "fork",
+      "summary": "CC Switch、OLMX、Provider preset 扩展。",
+      "entrypoints": [
+        "src/lib/provider-resolver.ts",
+        "src/lib/runtime/registry.ts",
+        "src/lib/cc-switch.ts"
+      ],
+      "ownedPaths": [
+        "src/hooks/useCCSwitch.ts",
+        "src/app/api/providers/**",
+        "src/components/settings/provider-presets.tsx",
+        "src/components/settings/PresetConnectDialog.tsx"
+      ],
+      "syncStrategy": "官方 resolver/runtime 先更新，再回挂 fork adapter。"
+    },
+    {
+      "id": "media-gateway",
+      "kind": "adapter",
+      "owner": "fork",
+      "summary": "中转平台媒体生成与通用图像网关。",
+      "entrypoints": [
+        "src/lib/image-generator.ts",
+        "src/app/api/media/generate/**",
+        "src/app/api/image-gen/**"
+      ],
+      "ownedPaths": [
+        "src/lib/media/**",
+        "src/components/chat/ImageGenConfirmation.tsx"
+      ],
+      "syncStrategy": "保持媒体模块独立，避免把 provider 特判扩散到主链路。"
+    },
+    {
+      "id": "git-panel",
+      "kind": "overlay",
+      "owner": "fork",
+      "summary": "增强 Git 页面、API 与服务层。",
+      "entrypoints": [
+        "src/app/git/**",
+        "src/app/api/git/**",
+        "src/lib/git/**"
+      ],
+      "ownedPaths": [
+        "src/components/git/**"
+      ],
+      "syncStrategy": "整组保留 fork，只同步共享基础设施。"
+    },
+    {
+      "id": "bridge-extensions",
+      "kind": "shared-module",
+      "owner": "shared",
+      "summary": "Bridge / 渠道插件按 upstream 演进，但保留 fork 的策略与接入配置。",
+      "entrypoints": [
+        "src/lib/bridge/**",
+        "src/lib/channels/**",
+        "src/app/api/bridge/**",
+        "src/components/bridge/**"
+      ],
+      "ownedPaths": [],
+      "syncStrategy": "优先吸收官方，再回挂 fork 配置与白名单策略。"
+    },
+    {
+      "id": "chat-runtime-seam",
+      "kind": "seam",
+      "owner": "shared",
+      "summary": "聊天主链路、runtime、provider 接缝。",
+      "entrypoints": [
+        "src/app/api/chat/route.ts",
+        "src/lib/claude-client.ts",
+        "src/lib/agent-loop.ts",
+        "src/lib/provider-resolver.ts",
+        "src/lib/runtime/**"
+      ],
+      "ownedPaths": [],
+      "syncStrategy": "永远先吸收 upstream，再以最小 patch 回挂 fork 能力。"
+    }
+  ]
+}

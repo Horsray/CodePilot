@@ -1,0 +1,322 @@
+{
+  "version": 1,
+  "description": "CodePilot fork 与 upstream 同步时的差异所有权地图。规则按顺序匹配，首条命中即为最终归属。",
+  "defaultOwner": "unknown",
+  "rules": [
+    {
+      "id": "ignore-docs-and-temp",
+      "owner": "ignore",
+      "description": "文档、截图、临时调试产物不参与功能同步决策。",
+      "patterns": [
+        ".trae/**",
+        "ui开发文档/**",
+        "build.md",
+        "docs/**",
+        ".playwright-mcp/**",
+        "tmp/**",
+        "test-api.ts",
+        "test-peek.js",
+        "*.png",
+        "*.html",
+        "**/*.png",
+        "**/*.jpg",
+        "**/*.jpeg",
+        "**/*.gif",
+        "**/*.html"
+      ]
+    },
+    {
+      "id": "core-sync-governance",
+      "owner": "core",
+      "description": "同步治理文件与脚本属于机制层，默认全仓共享维护。",
+      "patterns": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "fork-sync-playbook.md",
+        "fork-ownership-map.json",
+        "fork-patches.manifest.json",
+        "scripts/**"
+      ]
+    },
+    {
+      "id": "fork-file-tree",
+      "owner": "fork",
+      "description": "增强文件树、文件操作与对应面板。",
+      "patterns": [
+        "src/components/ai-elements/file-tree.tsx",
+        "src/components/project/**",
+        "src/app/api/files/**",
+        "src/components/layout/panels/FileTreePanel.tsx"
+      ]
+    },
+    {
+      "id": "fork-tabs-and-browser",
+      "owner": "fork",
+      "description": "顶部标签、统一工作区、内置浏览器与相关 Hook。",
+      "patterns": [
+        "src/components/layout/AppShell.tsx",
+        "src/components/layout/UnifiedTopBar.tsx",
+        "src/components/layout/BrowserTabView.tsx",
+        "src/components/layout/panels/PreviewPanel.tsx",
+        "src/components/layout/panels/AssistantPanel.tsx",
+        "src/components/layout/panels/DashboardPanel.tsx",
+        "src/components/browser/**",
+        "src/hooks/usePanel.ts",
+        "electron/main.ts"
+      ]
+    },
+    {
+      "id": "fork-terminal-console",
+      "owner": "fork",
+      "description": "终端、控制台、底部面板与 PTY。",
+      "patterns": [
+        "electron/terminal-manager.ts",
+        "src/app/api/terminal/**",
+        "src/lib/pty-manager.ts",
+        "src/lib/terminal-output-store.ts",
+        "src/components/terminal/**",
+        "src/components/console/**",
+        "src/components/layout/BottomPanelContainer.tsx",
+        "src/components/layout/panels/WebTerminalPanel.tsx",
+        "src/hooks/useTerminal.ts",
+        "src/hooks/useWebTerminal.ts"
+      ]
+    },
+    {
+      "id": "fork-provider-overlay",
+      "owner": "fork",
+      "description": "CC Switch、OLMX 与 Provider 预设扩展。",
+      "patterns": [
+        "src/lib/cc-switch.ts",
+        "src/hooks/useCCSwitch.ts",
+        "src/lib/ai-provider.ts",
+        "src/components/settings/provider-presets.tsx",
+        "src/components/settings/PresetConnectDialog.tsx",
+        "src/components/settings/ProviderForm.tsx",
+        "src/components/settings/ProviderManager.tsx",
+        "src/components/setup/ProviderCard.tsx",
+        "src/app/api/providers/**"
+      ]
+    },
+    {
+      "id": "fork-media-gateway",
+      "owner": "fork",
+      "description": "媒体中转、通用图像生成与端点适配。",
+      "patterns": [
+        "src/lib/image-*.ts",
+        "src/lib/media/**",
+        "src/app/api/media/generate/**",
+        "src/app/api/image-gen/**",
+        "src/components/chat/ImageGenConfirmation.tsx"
+      ]
+    },
+    {
+      "id": "fork-git-panel",
+      "owner": "fork",
+      "description": "增强 Git 面板与相关 API/服务。",
+      "patterns": [
+        "src/components/git/**",
+        "src/app/api/git/**",
+        "src/lib/git/**",
+        "src/app/git/**"
+      ]
+    },
+    {
+      "id": "fork-browser-context",
+      "owner": "fork",
+      "description": "Browser Context 与浏览器相关工具。",
+      "patterns": [
+        "src/lib/browser-context-store.ts",
+        "src/lib/tools/browser-context.ts",
+        "src/lib/tools/browser.ts",
+        "src/app/api/browser-context/**"
+      ]
+    },
+    {
+      "id": "fork-workspace",
+      "owner": "fork",
+      "description": "Assistant Workspace 增强、心跳、检索与模板。",
+      "patterns": [
+        "src/lib/assistant-workspace.ts",
+        "src/lib/workspace-*.ts",
+        "src/lib/heartbeat.ts",
+        "src/app/api/chat/sessions/by-cwd/**"
+      ]
+    },
+    {
+      "id": "shared-chat-runtime",
+      "owner": "shared",
+      "description": "聊天主链路、运行时与 Provider 解析接缝。默认先吸收官方，再以薄适配挂回 fork 能力。",
+      "patterns": [
+        "src/app/api/chat/background/route.ts",
+        "src/app/api/chat/interrupt/route.ts",
+        "src/app/api/chat/perf/route.ts",
+        "src/app/api/chat/review/route.ts",
+        "src/app/api/chat/search/route.ts",
+        "src/app/api/chat/sessions/**",
+        "src/app/api/setup/route.ts",
+        "src/app/api/chat/route.ts",
+        "src/lib/claude-client.ts",
+        "src/lib/claude-home-shadow.ts",
+        "src/lib/claude-settings.ts",
+        "src/lib/agent-loop.ts",
+        "src/lib/context-assembler.ts",
+        "src/lib/context-compressor.ts",
+        "src/lib/context-pruner.ts",
+        "src/lib/db.ts",
+        "src/lib/diff-utils.ts",
+        "src/lib/error-classifier.ts",
+        "src/lib/file-checkpoint.ts",
+        "src/lib/message-builder.ts",
+        "src/lib/permission-checker.ts",
+        "src/lib/parallel-safety.ts",
+        "src/lib/permission-registry.ts",
+        "src/lib/provider-catalog.ts",
+        "src/lib/provider-presence.ts",
+        "src/lib/provider-resolver.ts",
+        "src/lib/provider-doctor.ts",
+        "src/lib/safe-stream.ts",
+        "src/lib/sdk-subprocess-env.ts",
+        "src/lib/skill-nudge.ts",
+        "src/lib/stream-session-manager.ts",
+        "src/lib/subdirectory-hint-tracker.ts",
+        "src/lib/mcp-loader.ts",
+        "src/lib/runtime/types.ts",
+        "src/lib/runtime/**",
+        "src/lib/openai-oauth.ts",
+        "src/hooks/useSSEStream.ts"
+      ]
+    },
+    {
+      "id": "shared-chat-ui",
+      "owner": "shared",
+      "description": "聊天输入、权限弹窗和会话交互 UI 随官方演进，但允许少量 fork 交互增强。",
+      "patterns": [
+        "src/app/chat/page.tsx",
+        "src/components/ai-elements/conversation.tsx",
+        "src/components/ai-elements/message.tsx",
+        "src/components/ai-elements/tool-actions-group.tsx",
+        "src/components/chat/ChatView.tsx",
+        "src/components/chat/FileReviewBar.tsx",
+        "src/components/chat/MessageItem.tsx",
+        "src/components/chat/MessageList.tsx",
+        "src/components/chat/ModeIndicator.tsx",
+        "src/components/chat/ReferencedContexts.tsx",
+        "src/components/chat/StreamingMessage.tsx",
+        "src/components/chat/TimelineFinalSummary.tsx",
+        "src/components/layout/ChatListPanel.tsx",
+        "src/components/chat/RuntimeBadge.tsx",
+        "src/components/chat/MessageInput.tsx",
+        "src/components/chat/MessageInputParts.tsx",
+        "src/components/chat/PermissionPrompt.tsx",
+        "src/components/settings/CliSettingsSection.tsx",
+        "src/hooks/useAssistantTrigger.ts",
+        "src/hooks/useProviderModels.ts",
+        "src/hooks/useSlashCommands.ts",
+        "src/hooks/useCommandBadge.ts",
+        "src/lib/message-input-logic.ts"
+      ]
+    },
+    {
+      "id": "core-agent-infra",
+      "owner": "core",
+      "description": "Agent 编排、CLI 会话池、通知与性能追踪基础设施默认跟随 upstream。",
+      "patterns": [
+        "src/lib/agent-*.ts",
+        "src/lib/background-job-manager.ts",
+        "src/lib/bg-notify-parser.ts",
+        "src/lib/claude-code-compat/**",
+        "src/lib/cli-session-pool.ts",
+        "src/lib/notification-manager.ts",
+        "src/lib/orchestration-routing.ts",
+        "src/lib/perf-trace.ts"
+      ]
+    },
+    {
+      "id": "core-mcp-runtime",
+      "owner": "core",
+      "description": "MCP 连接、工具适配与记忆检索运行时默认跟随 upstream。",
+      "patterns": [
+        "src/lib/cli-tools-mcp.ts",
+        "src/lib/mcp-connection-manager.ts",
+        "src/lib/mcp-tool-adapter.ts",
+        "src/lib/memory-client.ts",
+        "src/lib/memory-search-mcp.ts"
+      ]
+    },
+    {
+      "id": "core-settings-setup",
+      "owner": "core",
+      "description": "设置、初始化向导与 MCP 配置界面默认跟随 upstream。",
+      "patterns": [
+        "src/app/api/settings/**",
+        "src/components/layout/InstallWizard.tsx",
+        "src/components/plugins/McpServerEditor.tsx",
+        "src/components/settings/**",
+        "src/components/setup/**"
+      ]
+    },
+    {
+      "id": "shared-bridge",
+      "owner": "shared",
+      "description": "Bridge / 渠道插件默认跟官方一起演进，但要保留 fork 的接入配置与策略。",
+      "patterns": [
+        "src/lib/bridge/**",
+        "src/lib/channels/**",
+        "src/app/api/bridge/**",
+        "src/components/bridge/**"
+      ]
+    },
+    {
+      "id": "core-tools",
+      "owner": "core",
+      "description": "工具注册层与内置工具默认跟随 upstream，fork 只允许在注册接缝做薄扩展。",
+      "patterns": [
+        "src/lib/builtin-tools/**",
+        "src/lib/tools/**",
+        "src/lib/agent-tools.ts"
+      ]
+    },
+    {
+      "id": "core-tests",
+      "owner": "core",
+      "description": "单元测试默认跟随实现同步维护。",
+      "patterns": [
+        "src/__tests__/unit/**"
+      ]
+    },
+    {
+      "id": "core-platform",
+      "owner": "core",
+      "description": "平台与公共配置默认跟随 upstream。",
+      "patterns": [
+        "RELEASE_NOTES.md",
+        "electron-builder.yml",
+        "electron/preload.ts",
+        "eslint.config.mjs",
+        "package.json",
+        "package-lock.json",
+        "next.config.ts",
+        "src/app/api/knowledge-base/**",
+        "src/app/api/settings/app/route.ts",
+        "src/app/api/utils/open-path/**",
+        "src/app/globals.css",
+        "src/app/knowledge-base/**",
+        "src/components/ui/**",
+        "src/hooks/useClientPlatform.ts",
+        "src/hooks/useNotificationPoll.ts",
+        "src/lib/constants/image-agent-prompt.ts",
+        "src/lib/console-utils.ts",
+        "src/lib/knowledge-graph-provider.ts",
+        "src/instrumentation.ts",
+        "src/lib/platform.ts",
+        "src/types/electron.d.ts",
+        "src/types/index.ts",
+        "src/i18n/en.ts",
+        "src/i18n/zh.ts",
+        ".husky/**",
+        "tsconfig.json"
+      ]
+    }
+  ]
+}

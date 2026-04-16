@@ -148,6 +148,7 @@ export function MessageInput({
     closePopover: popover.closePopover,
     onCommand,
     setBadge,
+    isStreaming,
   });
 
   // Assistant trigger on first focus

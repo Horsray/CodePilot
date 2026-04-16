@@ -98,7 +98,9 @@ function AskUserQuestionUI({
     onSubmit('allow', { questions: toolInput.questions, answers });
   };
 
-  const hasAnswer = questions.some((_, i) => {
+  // 中文注释：功能名称「AskUserQuestion 全量回答校验」。
+  // 用法：要求所有问题都被回答后才能提交，避免模型收到半成品问卷结果继续执行。
+  const hasAnswer = questions.length > 0 && questions.every((_, i) => {
     const qIdx = String(i);
     return (selections[qIdx]?.size || 0) > 0 || (useOther[qIdx] && otherTexts[qIdx]?.trim());
   });

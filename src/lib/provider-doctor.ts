@@ -11,9 +11,9 @@ import {
   findAllClaudeBinaries,
   isWindows,
   findGitBash,
-  getExpandedPath,
 } from '@/lib/platform';
-import { resolveProvider, resolveForClaudeCode, toClaudeCodeEnv } from '@/lib/provider-resolver';
+import { resolveProvider, resolveForClaudeCode } from '@/lib/provider-resolver';
+import { prepareSdkSubprocessEnv } from '@/lib/sdk-subprocess-env';
 import {
   getAllProviders,
   getDefaultProviderId,
@@ -755,20 +755,10 @@ async function runLiveProbe(): Promise<ProbeResult> {
     return { probe: 'live', severity: probeSeverity(findings), findings, durationMs: Date.now() - start };
   }
 
-  // 4. Build env
-  const sdkEnv: Record<string, string> = { ...process.env as Record<string, string> };
-  if (!sdkEnv.HOME) sdkEnv.HOME = os.homedir();
-  if (!sdkEnv.USERPROFILE) sdkEnv.USERPROFILE = os.homedir();
-  sdkEnv.PATH = getExpandedPath();
-  delete sdkEnv.CLAUDECODE;
-
-  if (process.platform === 'win32' && !process.env.CLAUDE_CODE_GIT_BASH_PATH) {
-    const gitBashPath = findGitBash();
-    if (gitBashPath) sdkEnv.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
-  }
-
-  const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved);
-  Object.assign(sdkEnv, resolvedEnv);
+  // 中文注释：功能名称「Live Probe 统一 SDK 环境」。
+  // 用法：让诊断探活与真实聊天请求共用同一套 Provider 鉴权归属和影子 HOME 逻辑，避免诊断结果失真。
+  const setup = prepareSdkSubprocessEnv(resolved);
+  const sdkEnv = setup.env;
 
   // 5. Build query options
   const LIVE_PROBE_TIMEOUT = 15_000;
@@ -869,6 +859,8 @@ async function runLiveProbe(): Promise<ProbeResult> {
         ].filter(Boolean).join('\n'),
       });
     }
+  } finally {
+    setup.shadow.cleanup();
   }
 
   return {
