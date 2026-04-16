@@ -180,8 +180,12 @@ export class FeishuGateway {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
-    // 中文注释：功能名称「飞书网关强制断开旧 WSClient」。
-    // 用法：桥接重启或重新绑定飞书应用时，确保旧连接被彻底关闭，避免重复收消息。
+    // WSClient.close({ force: true }) cancels ping + reconnect timers, removes
+    // all listeners, and terminates the underlying WebSocket. Without this,
+    // the old connection stayed alive after stop() — a problem during bridge
+    // restart or feishu "rebind" flows where the same app_id/secret got a
+    // fresh WSClient while the old one kept receiving events, causing
+    // duplicate message/permission card deliveries.
     if (this.wsClient) {
       try {
         (this.wsClient as unknown as { close: (opts?: { force?: boolean }) => void }).close({ force: true });

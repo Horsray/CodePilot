@@ -1,7 +1,3 @@
-/**
- * 中文注释：功能名称「subdirectory-hint-tracker 单元测试」。
- * 用法：验证子目录上下文发现、祖先目录回溯和 Bash 路径提取行为，保证模块在未正式接线前语义稳定。
- */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';

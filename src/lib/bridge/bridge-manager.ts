@@ -345,6 +345,19 @@ export async function stop(): Promise<void> {
 
   state.running = false;
 
+  // Abort all active tool/stream tasks so in-flight Claude sessions stop
+  // writing to DB and release session locks cleanly. Without this, `/stop`
+  // had "interrupt current task" semantics per-session but global stop()
+  // would let running tasks finish in the background uncounted.
+  for (const [sessionId, taskAbort] of state.activeTasks) {
+    try {
+      taskAbort.abort();
+    } catch (err) {
+      console.warn(`[bridge-manager] Error aborting task ${sessionId}:`, err);
+    }
+  }
+  state.activeTasks.clear();
+
   // Abort all event loops
   for (const [, abort] of state.loopAborts) {
     abort.abort();
@@ -364,7 +377,6 @@ export async function stop(): Promise<void> {
   state.adapters.clear();
   state.adapterMeta.clear();
   state.sessionLocks.clear();
-  state.activeTasks.clear();
   state.startedAt = null;
 
   // Re-enable notification bot polling
@@ -533,6 +545,14 @@ async function handleMessage(
           replyToMessageId: msg.messageId,
         });
       }
+      ack();
+      return;
+    }
+
+    // AskUserQuestion option button (#282)
+    if (msg.callbackData.startsWith('ask:')) {
+      broker.handleAskUserQuestionCallback(msg.callbackData, msg.address.chatId, msg.callbackMessageId);
+      // No confirmation — the model will respond to the chosen answer naturally.
       ack();
       return;
     }
@@ -740,8 +760,22 @@ async function handleMessage(
   try {
     // Pass permission callback so requests are forwarded to IM immediately
     // during streaming (the stream blocks until permission is resolved).
-    // Use text or empty string for image-only messages (prompt is still required by streamClaude)
-    const promptText = text || (hasAttachments ? 'Describe this image.' : '');
+    // Type-aware fallback prompt for attachment-only turns — "Describe this image"
+    // was misleading when audio/video/file types were added (#291).
+    let promptText = text;
+    if (!promptText && hasAttachments) {
+      const types = new Set((msg.attachments || []).map((a) => (a.type || '').split('/')[0]));
+      if (types.has('image') && types.size === 1) {
+        promptText = 'Describe this image.';
+      } else if (types.has('audio') && types.size === 1) {
+        promptText = 'Transcribe and summarize this audio.';
+      } else if (types.has('video') && types.size === 1) {
+        promptText = 'Describe what happens in this video.';
+      } else {
+        // Mixed or file: let the model decide based on attachment content.
+        promptText = 'Please review the attached file(s).';
+      }
+    }
 
     const result = await engine.processMessage(binding, promptText, async (perm) => {
       await broker.forwardPermissionRequest(

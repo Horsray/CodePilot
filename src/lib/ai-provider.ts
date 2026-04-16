@@ -31,6 +31,7 @@ import {
   toAiSdkConfig,
 } from './provider-resolver';
 import { getOAuthCredentialsSync } from './openai-oauth-manager';
+import { hasClaudeSettingsCredentials } from './claude-settings';
 
 // ── Public API ──────────────────────────────────────────────────
 
@@ -62,6 +63,15 @@ export function createModel(opts: CreateModelOptions = {}): CreateModelResult {
   });
 
   if (!resolved.hasCredentials && !resolved.provider) {
+    // If the user has credentials in ~/.claude/settings.json (e.g. cc-switch)
+    // but we landed here anyway, it means the native runtime was explicitly
+    // selected — native cannot read settings.json, only the Claude Code SDK
+    // runtime can. Point users at the fix instead of the generic message.
+    if (hasClaudeSettingsCredentials()) {
+      throw new Error(
+        'Credentials found in ~/.claude/settings.json (managed by cc-switch or similar), but the Native runtime cannot read them. Switch the runtime to "Claude Code SDK" in Settings → Runtime, or add the provider to CodePilot directly.',
+      );
+    }
     throw new Error(
       'No provider credentials available. Please configure a provider in Settings or set ANTHROPIC_API_KEY.',
     );

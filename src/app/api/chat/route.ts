@@ -8,8 +8,11 @@ import { loadCodePilotMcpServers, loadAllMcpServers } from '@/lib/mcp-loader';
 import { assembleContext } from '@/lib/context-assembler';
 import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, FileAttachment, ClaudeStreamOptions, MediaBlock } from '@/types';
 import { saveMediaToLibrary } from '@/lib/media-saver';
+import { wrapController } from '@/lib/safe-stream';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
 import { createPerfTrace, createPerfTraceId } from '@/lib/perf-trace';
+import { predictNativeRuntime } from '@/lib/runtime';
+import { hasCodePilotProvider } from '@/lib/provider-presence';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
@@ -44,6 +47,21 @@ export async function POST(request: NextRequest) {
         status: 400,
         headers: { 'Content-Type': 'application/json', 'X-CodePilot-Trace-Id': traceId },
       });
+    }
+
+    // Precondition: CodePilot must have a provider configured. ~/.claude/settings.json
+    // (cc-switch, CLI login) is intentionally NOT counted — users with only that source
+    // are redirected to the setup flow to add a proper CodePilot provider.
+    if (!hasCodePilotProvider()) {
+      return new Response(
+        JSON.stringify({
+          error: 'No provider configured in CodePilot.',
+          code: 'NEEDS_PROVIDER_SETUP',
+          actionHint: 'open_setup_center',
+          initialCard: 'provider',
+        }),
+        { status: 412, headers: { 'Content-Type': 'application/json' } },
+      );
     }
 
     const session = perfTrace.measure('db.session.load', () => getSession(session_id));
@@ -290,8 +308,12 @@ export async function POST(request: NextRequest) {
     // Load MCP servers for the predicted runtime:
     // - SDK Runtime: only needs servers with ${...} env placeholders (SDK loads the rest via settingSources)
     // - Native Runtime: needs ALL servers (it manages MCP connections independently)
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { predictNativeRuntime } = require('@/lib/runtime') as typeof import('@/lib/runtime');
+    // Load MCP servers for the predicted runtime:
+    // - SDK Runtime: only needs servers with ${...} env placeholders (SDK loads the rest via settingSources)
+    // - Native Runtime: needs ALL servers (it manages MCP connections independently)
+    // Note: was a lazy `require()` previously; converted to static import after
+    // Turbopack's CJS↔ESM interop started returning `{ default: ... }` shape
+    // and broke "predictNativeRuntime is not not a function" at runtime.
     const mcpServers = perfTrace.measure('mcp.config.load', () => (
       predictNativeRuntime(effectiveProviderId)
         ? loadAllMcpServers()
@@ -454,15 +476,18 @@ export async function POST(request: NextRequest) {
       setSessionRuntimeStatus(session_id, 'idle', e instanceof Error ? e.message : 'Background stream error');
     });
 
-    // If auto-compression happened, prepend a notification event to the stream
+    // If auto-compression happened, prepend a notification event to the stream.
+    // The message is human-readable so the browser status bar shows something
+    // meaningful, and includes structured data for future rich UI handling.
     const responseStream = compressionOccurred
       ? new ReadableStream<string>({
-          async start(controller) {
+          async start(controllerRaw) {
+            const controller = wrapController(controllerRaw);
             const msgCount = compressionStats?.messagesCompressed ?? 0;
             const tokensSaved = compressionStats?.tokensSaved ?? 0;
             const displayMessage = tokensSaved > 0
-              ? `上下文已压缩：总结了 ${msgCount} 条较早消息，约节省 ${Math.round(tokensSaved / 1000)}K tokens`
-              : `上下文已压缩：总结了 ${msgCount} 条较早消息`;
+              ? `Context compressed: ${msgCount} older messages summarized, ~${tokensSaved.toLocaleString()} tokens saved`
+              : `Context compressed: ${msgCount} older messages summarized`;
             controller.enqueue(`data: ${JSON.stringify({
               type: 'status',
               data: JSON.stringify({
@@ -478,6 +503,7 @@ export async function POST(request: NextRequest) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 controller.enqueue(value);
+                if (controller.closed) break; // consumer aborted
               }
             } finally {
               controller.close();

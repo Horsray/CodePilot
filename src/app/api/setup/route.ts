@@ -23,8 +23,14 @@ export async function GET() {
       }
     }
 
-    // 中文注释：功能名称「Setup Provider 状态对齐聊天预检」。
-    // 用法：让初始化向导与 /api/chat 的 provider 判断共用同一来源，避免向导显示已完成但聊天入口仍拦截。
+    // Provider status — MUST stay in lockstep with /api/chat's precheck
+    // (hasCodePilotProvider). If SetupCenter tells a user "provider: completed"
+    // while the chat entry is 412-blocking them, the wizard is lying.
+    //
+    // Specifically: Claude CLI existence is NOT a provider source for CodePilot —
+    // it's the Claude card's concern. A user who only has the CLI installed
+    // (no DB provider, no env, no OAuth) falls into "not-configured" here so
+    // the Provider card can surface the "Add provider" CTA.
     let provider: 'not-configured' | 'completed' | 'skipped' | 'needs-fix' = 'not-configured';
     if (hasCodePilotProvider()) {
       provider = 'completed';

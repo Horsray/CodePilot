@@ -69,9 +69,9 @@ meta?: {
 
 `toClaudeCodeEnv()` 的 `api_key` 分支只设 `ANTHROPIC_API_KEY`，不再同时设 `ANTHROPIC_AUTH_TOKEN`。防止上游 Claude Code 添加 Bearer 头与 API-key-only 服务商冲突。
 
-### 宿主接管
+### ~~宿主接管~~（已用 shadow HOME 替代）
 
-`toClaudeCodeEnv()` 末尾注入 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1`，防止 `~/.claude/settings.json` 中的 provider 路由变量覆盖 CodePilot 注入的配置。
+> **2026-04-15 更正 + 修复** — 原方案在 `toClaudeCodeEnv()` 末尾注入 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` 是死代码（SDK 0.2.62 不识别）。当前实现：`src/lib/claude-home-shadow.ts` 在 DB provider 请求里建剥离 `ANTHROPIC_*` 的临时 `~/.claude/`，user-level MCP/plugins/hooks 全部保留。详见 `docs/exec-plans/active/cc-switch-credential-bridge.md`。
 
 ### authStyle 单一真相源
 

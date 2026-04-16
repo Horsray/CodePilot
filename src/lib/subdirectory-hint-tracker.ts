@@ -24,9 +24,6 @@
  * fully tested and ready for use.
  *
  * Reference: docs/research/hermes-agent-analysis.md §1.5, §3.3
- *
- * 中文注释：功能名称「子目录提示追踪器」。
- * 用法：在工具调用进入新目录时，懒加载该目录或祖先目录里的 `AGENTS.md`、`CLAUDE.md`、`.cursorrules`，并把提示文本追加到工具结果。
  */
 
 import fs from 'fs';
@@ -294,9 +291,6 @@ export class SubdirectoryHintTracker {
  * These limitations are acceptable for path extraction because the
  * result is only used as candidate paths, and any bad token is filtered
  * out by the `has / or .` + URL checks in extractPathsFromCommand.
- *
- * 中文注释：功能名称「简单 shell 命令分词」。
- * 用法：按未加引号的空白拆分命令字符串，并保留单引号/双引号包裹的路径片段。
  */
 export function tokenizeShellCommand(cmd: string): string[] {
   const tokens: string[] = [];

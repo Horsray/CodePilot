@@ -149,3 +149,99 @@ describe('SSE Stream — media in tool_result', () => {
     assert.equal(results[0].media, undefined);
   });
 });
+
+// ────────────────────────────────────────────────────────────────
+// context_compressed SSE events
+// ────────────────────────────────────────────────────────────────
+
+describe('SSE Stream — context_compressed events', () => {
+  it('dispatches onContextCompressed for subtype=context_compressed status events', async () => {
+    const events: Array<{ message: string; messagesCompressed: number; tokensSaved: number }> = [];
+    const statusCalls: string[] = [];
+
+    const reader = mockReader([
+      sseData({
+        type: 'status',
+        data: JSON.stringify({
+          notification: true,
+          subtype: 'context_compressed',
+          message: 'Context compressed: 5 older messages summarized, ~1,200 tokens saved',
+          stats: { messagesCompressed: 5, tokensSaved: 1200 },
+        }),
+      }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onContextCompressed: (d) => events.push(d),
+      onStatus: (t) => { if (t) statusCalls.push(t); },
+    }));
+
+    // onContextCompressed should have been called
+    assert.equal(events.length, 1);
+    assert.equal(events[0].messagesCompressed, 5);
+    assert.equal(events[0].tokensSaved, 1200);
+    assert.ok(events[0].message.includes('Context compressed'));
+
+    // onStatus should NOT have been called (context_compressed is intercepted before notification branch)
+    assert.equal(statusCalls.length, 0, 'context_compressed must not leak into onStatus');
+  });
+
+  it('does NOT fire onContextCompressed for unrelated status events', async () => {
+    const events: unknown[] = [];
+    const reader = mockReader([
+      sseData({
+        type: 'status',
+        data: JSON.stringify({ notification: true, message: 'Some other notification' }),
+      }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onContextCompressed: (d) => events.push(d),
+    }));
+
+    assert.equal(events.length, 0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// skill_nudge SSE events
+// ────────────────────────────────────────────────────────────────
+
+describe('SSE Stream — skill_nudge events', () => {
+  it('dispatches onSkillNudge for subtype=skill_nudge status events', async () => {
+    const events: Array<{ message: string; step: number; distinctToolCount: number; toolNames: string[] }> = [];
+    const statusCalls: string[] = [];
+
+    const reader = mockReader([
+      sseData({
+        type: 'status',
+        data: JSON.stringify({
+          notification: true,
+          subtype: 'skill_nudge',
+          message: 'This workflow involved 10 steps...',
+          payload: {
+            type: 'skill_nudge',
+            message: 'This workflow involved 10 steps...',
+            reason: { step: 10, distinctToolCount: 4, toolNames: ['Bash', 'Edit', 'Grep', 'Read'] },
+          },
+        }),
+      }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onSkillNudge: (d) => events.push(d),
+      onStatus: (t) => { if (t) statusCalls.push(t); },
+    }));
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].step, 10);
+    assert.equal(events[0].distinctToolCount, 4);
+    assert.deepEqual(events[0].toolNames, ['Bash', 'Edit', 'Grep', 'Read']);
+
+    // Must not leak into onStatus
+    assert.equal(statusCalls.length, 0, 'skill_nudge must not leak into onStatus');
+  });
+});

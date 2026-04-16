@@ -29,6 +29,7 @@ import {
 import { resolveProvider as resolveProviderUnified } from '../provider-resolver';
 import { loadCodePilotMcpServers, loadAllMcpServers } from '../mcp-loader';
 import { assembleContext } from '../context-assembler';
+import { predictNativeRuntime } from '../runtime';
 import crypto from 'crypto';
 
 export interface PermissionRequestInfo {
@@ -212,9 +213,9 @@ export async function processMessage(
       }
     }
 
-    // Load MCP servers using shared runtime prediction (same logic as chat route)
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { predictNativeRuntime } = require('../runtime') as typeof import('../runtime');
+    // Load MCP servers using shared runtime prediction (same logic as chat route).
+    // Was lazy `require('../runtime')`; converted to static import — Turbopack's
+    // CJS↔ESM interop returns `{ default: ... }` shape that broke destructuring.
     const mcpServers = predictNativeRuntime(effectiveProviderId)
       ? loadAllMcpServers()
       : loadCodePilotMcpServers();
@@ -417,6 +418,26 @@ async function consumeStream(
               }
               if (statusData.model) {
                 updateSessionModel(sessionId, statusData.model);
+              }
+              // Skill-nudge: agent loop emits this at end-of-run when the
+              // workflow is complex enough to warrant saving as a Skill.
+              // Append as a separated text block so IM users see the
+              // suggestion at the bottom of the assistant reply.
+              if (
+                statusData.subtype === 'skill_nudge' &&
+                typeof statusData.message === 'string' &&
+                statusData.message.trim() !== ''
+              ) {
+                // Flush any pending assistant text first so the nudge
+                // appears AFTER the assistant's own final words.
+                if (currentText.trim()) {
+                  contentBlocks.push({ type: 'text', text: currentText });
+                  currentText = '';
+                }
+                contentBlocks.push({
+                  type: 'text',
+                  text: `\n\n---\nSkill suggestion: ${statusData.message}`,
+                });
               }
             } catch { /* skip */ }
             break;

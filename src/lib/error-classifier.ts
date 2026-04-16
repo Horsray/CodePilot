@@ -172,16 +172,19 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   },
 
   // ── No credentials ──
+  //
+  // `not logged in` / `please run /login` is the Claude Code CLI's native
+  // error when settings.json is missing or its base URL/token combo is
+  // rejected. In the CodePilot UI the CLI's /login flow is a dead-end, so
+  // we surface the same user-friendly guidance as a true credentials-missing
+  // case — open the Providers setup instead of telling users to run a
+  // command that doesn't exist in the desktop app.
   {
     category: 'NO_CREDENTIALS',
     patterns: [
-      'no api key',
-      'missing api key',
-      'ANTHROPIC_API_KEY is not set',
-      'api key required',
-      'missing credentials',
-      'not logged in',
-      'please run /login',
+      'no api key', 'missing api key', 'ANTHROPIC_API_KEY is not set',
+      'api key required', 'missing credentials',
+      'not logged in', 'please run /login',
     ],
     userMessage: (ctx) => `No API credentials found${providerHint(ctx)}.`,
     actionHint: () => 'Go to Settings → Providers and add your API key, or set the ANTHROPIC_API_KEY environment variable.',

@@ -32,39 +32,71 @@ import fs from 'fs';
 interface FileMeta {
   id: string;
   name: string;
-  type: string;
+  type: string; // MIME type
   size: number;
   filePath?: string;
-  data?: string;
 }
 
+/**
+ * Whether a MIME type (or fallback filename extension) is safe to read as
+ * UTF-8 text and inline into a prompt. Used to avoid injecting binary content
+ * (audio/video/PDF/zip) as garbled characters during history replay.
+ */
+function isTextLikeMime(mime: string | undefined, name: string | undefined): boolean {
+  const m = (mime || '').toLowerCase();
+  if (!m && !name) return false;
+  if (m.startsWith('text/')) return true;
+  // Common "application/*" types that are actually text
+  if (['application/json', 'application/xml', 'application/javascript',
+       'application/typescript', 'application/yaml', 'application/x-yaml',
+       'application/x-sh', 'application/toml', 'application/x-toml',
+       'application/graphql', 'application/sql'].includes(m)) return true;
+  if (m.includes('+json') || m.includes('+xml') || m.includes('+yaml')) return true;
+  // Fallback to extension for missing/generic MIME types
+  const ext = (name || '').toLowerCase().split('.').pop() || '';
+  const TEXT_EXTS = new Set([
+    'txt', 'md', 'markdown', 'rst', 'log', 'json', 'jsonc', 'yaml', 'yml',
+    'toml', 'ini', 'cfg', 'conf', 'csv', 'tsv', 'xml', 'html', 'htm', 'css',
+    'scss', 'sass', 'less', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'vue',
+    'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp',
+    'cs', 'php', 'pl', 'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd',
+    'sql', 'graphql', 'proto', 'env', 'gitignore', 'dockerfile',
+  ]);
+  return TEXT_EXTS.has(ext);
+}
+
+/**
+ * Convert an array of DB messages (chronological order) into
+ * Vercel AI SDK ModelMessage[] suitable for streamText({ messages }).
+ *
+ * Skips heartbeat-ack messages. Strips file metadata from user messages.
+ */
 export function buildCoreMessages(dbMessages: Message[]): ModelMessage[] {
   const raw: ModelMessage[] = [];
 
-  // Pruning: Only keep full image data for the last 2 user messages to reduce payload size.
-  // Older images will be replaced with a text placeholder.
-  const userMessageIndices = dbMessages
-    .map((m, i) => (m.role === 'user' && m.is_heartbeat_ack !== 1 ? i : -1))
-    .filter(i => i !== -1);
-  const messagesToKeepImages = new Set(userMessageIndices.slice(-2));
-
-  for (let i = 0; i < dbMessages.length; i++) {
-    const msg = dbMessages[i];
+  for (const msg of dbMessages) {
     if (msg.is_heartbeat_ack === 1) continue;
 
     if (msg.role === 'user') {
-      raw.push(buildUserMessage(msg.content, messagesToKeepImages.has(i)));
+      raw.push(buildUserMessage(msg.content));
     } else {
+      // assistant — may contain structured blocks
       const blocks = parseMessageContent(msg.content);
       const converted = convertAssistantBlocks(blocks);
       raw.push(...converted);
     }
   }
 
+  // Enforce message alternation: Anthropic API requires user/assistant turns to alternate.
+  // Consecutive same-role messages get merged (user) or the later one wins (assistant).
   const result = enforceAlternation(raw);
   return result;
 }
 
+/**
+ * Ensure messages alternate between user and assistant/tool roles.
+ * Consecutive user messages are merged. Consecutive assistant messages keep the last.
+ */
 function enforceAlternation(messages: ModelMessage[]): ModelMessage[] {
   if (messages.length <= 1) return messages;
 
@@ -75,8 +107,10 @@ function enforceAlternation(messages: ModelMessage[]): ModelMessage[] {
     const curr = messages[i];
 
     if (curr.role === prev.role && curr.role === 'user') {
+      // Merge consecutive user messages, preserving multi-part content
       result[result.length - 1] = { role: 'user', content: mergeUserContent(prev.content, curr.content) };
     } else if (curr.role === prev.role && curr.role === 'assistant') {
+      // Keep the later assistant message (more recent)
       result[result.length - 1] = curr;
     } else {
       result.push(curr);
@@ -86,19 +120,33 @@ function enforceAlternation(messages: ModelMessage[]): ModelMessage[] {
   return result;
 }
 
+// ── Internal ────────────────────────────────────────────────────
+
+/**
+ * Merge two user message contents, handling both string and multi-part array formats.
+ * Ensures file attachments (non-string parts) are preserved during merge.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mergeUserContent(a: any, b: any): any {
   const partsA = typeof a === 'string' ? [{ type: 'text', text: a }] : Array.isArray(a) ? a : [{ type: 'text', text: String(a) }];
   const partsB = typeof b === 'string' ? [{ type: 'text', text: b }] : Array.isArray(b) ? b : [{ type: 'text', text: String(b) }];
   const merged = [...partsA, ...partsB];
 
+  // If all parts are text, collapse back to a single string for simplicity
   if (merged.every((p: { type: string }) => p.type === 'text')) {
     return merged.map((p: { text?: string }) => p.text || '').join('\n\n').trim();
   }
   return merged;
 }
 
-function buildUserMessage(content: string, keepImages: boolean = true): ModelMessage {
+/**
+ * Parse user message content, rebuilding file attachments as multi-modal content parts.
+ * File metadata is stored as `<!--files:[{id,name,type,size,filePath}]-->text`.
+ * For image files: reads from disk and includes as { type: 'file', data, mediaType }.
+ * For non-image files: includes filename mention in text.
+ * If no file metadata or files can't be read: returns plain text.
+ */
+function buildUserMessage(content: string): ModelMessage {
   const match = content.match(/^<!--files:(\[.*?\])-->([\s\S]*)$/);
   if (!match) {
     return { role: 'user', content };
@@ -112,6 +160,7 @@ function buildUserMessage(content: string, keepImages: boolean = true): ModelMes
     return { role: 'user', content: text };
   }
 
+  // Build multi-modal content parts
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const parts: any[] = [];
   if (text.trim()) {
@@ -119,56 +168,35 @@ function buildUserMessage(content: string, keepImages: boolean = true): ModelMes
   }
 
   for (const meta of fileMetas) {
-    if (!meta.type) continue;
+    if (!meta.filePath || !meta.type) continue;
 
+    // Only include image files as binary content (models can see them)
     if (meta.type.startsWith('image/')) {
       try {
-        let buffer: Buffer | undefined;
-        const filePath = meta.filePath;
-
-        if (meta.data) {
-          buffer = Buffer.from(meta.data, 'base64');
-        } else if (filePath) {
-          buffer = fs.readFileSync(filePath);
-        }
-
-        if (!buffer) continue;
-        
-        // Standard AI SDK ImagePart format expects Uint8Array or Buffer for data
-        const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-        const mimeType = supportedTypes.includes(meta.type) ? meta.type : 'image/png';
-        
-        // Use a descriptive hint for the agent, matching Claude Code SDK style
-        const pathHint = filePath ? `[User attached image: ${filePath} (${meta.name})]` : `[User attached image: (clipboard) (${meta.name})]`;
-        
-        // Add text hint first so the agent knows the file's "identity" on disk
-        parts.push({ type: 'text', text: pathHint });
-
-        if (!keepImages) continue;
-        
-        // Add actual vision block
-        parts.push({ 
-          type: 'image', 
-          image: buffer, 
-          mimeType: mimeType
-        } as unknown as { type: 'image'; image: Buffer | Uint8Array; mimeType: string });
-      } catch (err) {
-        console.error(`[message-builder] Failed to process image:`, err);
-        parts.push({ type: 'text', text: `[Image attachment: ${meta.name} (failed to read)]` });
+        const data = fs.readFileSync(meta.filePath);
+        const base64 = data.toString('base64');
+        parts.push({ type: 'file', data: base64, mediaType: meta.type });
+      } catch {
+        // File no longer exists — mention it in text
+        parts.push({ type: 'text', text: `[Attached file: ${meta.name} (no longer available)]` });
       }
-    } else {
+    } else if (isTextLikeMime(meta.type, meta.name)) {
+      // Actual text content — inline it (truncated)
       try {
-        if (meta.filePath) {
-          const fileContent = fs.readFileSync(meta.filePath, 'utf-8');
-          parts.push({ type: 'text', text: `\n--- ${meta.name} ---\n${fileContent.slice(0, 50000)}\n--- end ---` });
-        } else if (meta.data) {
-          // If it's text data but no filePath, decode base64
-          const fileContent = Buffer.from(meta.data, 'base64').toString('utf-8');
-          parts.push({ type: 'text', text: `\n--- ${meta.name} ---\n${fileContent.slice(0, 50000)}\n--- end ---` });
-        }
+        const fileContent = fs.readFileSync(meta.filePath, 'utf-8');
+        parts.push({ type: 'text', text: `\n--- ${meta.name} ---\n${fileContent.slice(0, 50000)}\n--- end ---` });
       } catch {
         parts.push({ type: 'text', text: `[Attached file: ${meta.name}]` });
       }
+    } else {
+      // Binary content (audio, video, archives, PDFs, etc) — reading as UTF-8
+      // would inject garbled bytes into the prompt and waste tokens. Keep a
+      // reference note so the model knows the attachment existed, and include
+      // the file path so tools like Read can open it on demand.
+      parts.push({
+        type: 'text',
+        text: `[Attached file: ${meta.name} (${meta.type}, binary — content not inlined; path: ${meta.filePath})]`,
+      });
     }
   }
 
@@ -182,34 +210,36 @@ function buildUserMessage(content: string, keepImages: boolean = true): ModelMes
   return { role: 'user', content: parts };
 }
 
+/**
+ * Convert a flat array of MessageContentBlock[] (from a single DB assistant record)
+ * into a sequence of CoreMessage[].
+ *
+ * The DB stores one assistant record per SDK "turn", which may contain:
+ *   [text, tool_use, tool_use, tool_result, tool_result, text, tool_use, tool_result, text]
+ *
+ * We need to split this into:
+ *   assistant: [text, tool_call, tool_call]
+ *   tool: [result, result]
+ *   assistant: [text, tool_call]
+ *   tool: [result]
+ *   assistant: [text]
+ *
+ * Strategy: scan blocks sequentially. Accumulate assistant content (text + tool_use).
+ * When we hit tool_result blocks, flush the assistant message, then emit tool message(s).
+ * Resume accumulating for the next assistant segment.
+ */
 function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
   const messages: ModelMessage[] = [];
 
+  // AssistantContent = string | Array<TextPart | FilePart | ReasoningPart | ToolCallPart | ...>
   let assistantParts: Exclude<AssistantContent, string> = [];
+  // ToolContent = Array<ToolResultPart | ToolApprovalResponse>
   let toolResults: ToolContent = [];
-  const pendingToolCalls = new Map<string, string>();
 
   const flushAssistant = () => {
     if (assistantParts.length > 0) {
       messages.push({ role: 'assistant', content: assistantParts } as AssistantModelMessage);
       assistantParts = [];
-    }
-  };
-
-  const flushPendingMissingToolResults = () => {
-    if (pendingToolCalls.size === 0) return;
-    const missing: ToolContent = [];
-    for (const [toolCallId, toolName] of pendingToolCalls.entries()) {
-      missing.push({
-        type: 'tool-result',
-        toolCallId,
-        toolName,
-        output: { type: 'text', value: `[tool-error] ${toolName}: missing tool_result; previous run was interrupted or timed out.` },
-      });
-    }
-    pendingToolCalls.clear();
-    if (missing.length > 0) {
-      messages.push({ role: 'tool', content: missing } as ToolModelMessage);
     }
   };
 
@@ -220,6 +250,7 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
     }
   };
 
+  // Build a map of tool_use_id → toolName so tool_result can reference it
   const toolNameMap = new Map<string, string>();
   for (const block of blocks) {
     if (block.type === 'tool_use') {
@@ -230,12 +261,9 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
   for (const block of blocks) {
     switch (block.type) {
       case 'text':
+        // If we have pending tool results, flush them first (tool → assistant transition)
         if (toolResults.length > 0) {
           flushToolResults();
-        }
-        if (pendingToolCalls.size > 0) {
-          flushAssistant();
-          flushPendingMissingToolResults();
         }
         if (block.text.trim()) {
           assistantParts.push({ type: 'text', text: block.text });
@@ -243,13 +271,17 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
         break;
 
       case 'thinking':
+        // Thinking blocks are Anthropic-specific. The AI SDK supports ReasoningPart
+        // but sending reasoning back to the model is provider-dependent.
+        // Skip — thinking is informational and not sent back to the model
+        // in most cases. Anthropic's sendReasoning option controls this at the provider level.
         break;
 
       case 'tool_use':
+        // If we have pending tool results, flush them first
         if (toolResults.length > 0) {
           flushToolResults();
         }
-        pendingToolCalls.set(block.id, block.name);
         assistantParts.push({
           type: 'tool-call',
           toolCallId: block.id,
@@ -259,8 +291,8 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
         break;
 
       case 'tool_result':
+        // Flush assistant first (assistant → tool transition)
         flushAssistant();
-        pendingToolCalls.delete(block.tool_use_id);
         toolResults.push({
           type: 'tool-result',
           toolCallId: block.tool_use_id,
@@ -270,12 +302,9 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
         break;
 
       case 'code':
+        // Code blocks are rendered as text
         if (toolResults.length > 0) {
           flushToolResults();
-        }
-        if (pendingToolCalls.size > 0) {
-          flushAssistant();
-          flushPendingMissingToolResults();
         }
         assistantParts.push({
           type: 'text',
@@ -285,10 +314,11 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
     }
   }
 
+  // Flush remaining
   flushAssistant();
   flushToolResults();
-  flushPendingMissingToolResults();
 
+  // If no messages were generated (empty blocks), emit a minimal assistant message
   if (messages.length === 0) {
     messages.push({ role: 'assistant', content: '' });
   }

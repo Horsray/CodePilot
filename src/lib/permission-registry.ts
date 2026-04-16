@@ -56,8 +56,10 @@ export function registerPendingPermission(
   const map = getMap();
 
   return new Promise<PermissionResult>((resolve) => {
-    // 中文注释：功能名称「权限请求超时自动拒绝」。
-    // 用法：每个权限请求独立计时；并通过 `unref()` 避免仅剩超时器时阻塞 Node 进程退出。
+    // Per-request independent timer: auto-deny after TIMEOUT_MS.
+    // `.unref()` so this timer doesn't prevent Node process from exiting
+    // during graceful shutdown — if the app is closing, we don't need to
+    // fire the timeout handler.
     const timer = setTimeout(() => {
       if (map.has(id)) {
         console.warn(`[permission-registry] Permission request ${id} timed out after ${TIMEOUT_MS / 1000}s`);

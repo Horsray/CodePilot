@@ -1,5 +1,18 @@
 /**
  * builtin-tools/session-search.ts — Historical session search tool.
+ *
+ * Exposes a `codepilot_session_search` tool to the model so it can search
+ * across past conversations. The underlying SQLite `messages` table stores
+ * the complete history; this tool makes it queryable by the agent without
+ * requiring the user to manually copy / paste from old chats.
+ *
+ * Design: mirrors the structure of memory-search.ts — AI SDK `tool()`
+ * definition with a Zod schema, delegating the heavy lifting to a
+ * dynamically-imported db function (`searchMessages`). The implementation
+ * uses LIKE queries (no FTS5) to keep the schema requirements minimal;
+ * upgrade to FTS5 can be a follow-up if perf becomes an issue.
+ *
+ * Reference: docs/research/hermes-agent-analysis.md §3.4
  */
 
 import { tool } from 'ai';
@@ -37,6 +50,8 @@ export function createSessionSearchTools() {
       }),
       execute: async ({ query, sessionId, limit }) => {
         try {
+          // Dynamic import to keep builtin-tools registration lightweight
+          // and avoid pulling db on every tool assembly.
           const { searchMessages } = await import('@/lib/db');
           const results = searchMessages(query, { sessionId, limit });
 
@@ -46,7 +61,7 @@ export function createSessionSearchTools() {
 
           return results
             .map((r, i) => {
-              const roleLabel = r.role === 'user' ? 'User' : 'Assistant';
+              const roleLabel = r.role === 'user' ? '👤 User' : '🤖 Assistant';
               return [
                 `**${i + 1}. ${r.sessionTitle}** — ${roleLabel}`,
                 `Session: \`${r.sessionId}\` · ${r.createdAt}`,

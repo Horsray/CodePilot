@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import { Button } from '@/components/ui/button';
@@ -159,6 +159,7 @@ interface MessageListProps {
   /** SDK rewind points — only emitted for visible prompt-level user messages (not tool results or auto-triggers), mapped by position */
   rewindPoints?: RewindPoint[];
   sessionId?: string;
+  startedAt?: number;
   /** Whether this is an assistant workspace project */
   isAssistantProject?: boolean;
   /** Assistant name for avatar display */
@@ -228,6 +229,7 @@ export function MessageList({
   onLoadMore,
   rewindPoints = [],
   sessionId,
+  startedAt,
   isAssistantProject,
   assistantName,
 }: MessageListProps) {
@@ -347,6 +349,7 @@ export function MessageList({
             isStreaming={isStreaming}
             sessionId={sessionId}
             rewindUserMessageId={messages.length > 0 ? getRewindTargetForMessage(messages, rewindPoints, messages[messages.length - 1]) : undefined}
+            startedAt={startedAt!}
             toolUses={toolUses}
             toolResults={toolResults}
             streamingToolOutput={streamingToolOutput}

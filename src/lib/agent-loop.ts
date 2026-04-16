@@ -16,6 +16,7 @@ import { createModel } from './ai-provider';
 import { assembleTools, READ_ONLY_TOOLS } from './agent-tools';
 import { reportNativeError, classifyError, formatClassifiedError } from './error-classifier';
 import { pruneOldToolResults } from './context-pruner';
+import { shouldSuggestSkill, buildSkillNudgeStatusEvent } from './skill-nudge';
 import { emit as emitEvent } from './runtime/event-bus';
 import { createCheckpoint } from './file-checkpoint';
 import type { PermissionMode } from './permission-checker';
@@ -23,7 +24,7 @@ import { buildCoreMessages } from './message-builder';
 import { getMessages, getProvider } from './db';
 import { createPerfTrace } from './perf-trace';
 import { sendNotification } from './notification-manager';
-import { buildSkillNudgeStatusEvent, shouldSuggestSkill } from './skill-nudge';
+import { wrapController } from './safe-stream';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -125,16 +126,20 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
     agentName = 'assistant',
   } = options;
 
-  const _unused_files = options.files;
-
-  return new ReadableStream({
-    async start(controller) {
+  return new ReadableStream<string>({
+    async start(controllerRaw) {
+      // Wrap controller so async callbacks (onStepFinish, late tool-result
+      // handlers, keep-alive timer) can call enqueue() without crashing
+      // when the consumer aborts. See src/lib/safe-stream.ts.
+      const controller = wrapController(controllerRaw, (kind) => {
+        console.warn(`[agent-loop] late ${kind} after stream close — silently dropped`);
+      });
       const perfTrace = createPerfTrace('agent-loop', {
         id: traceId,
         metadata: { sessionId },
       });
       const keepAliveTimer = setInterval(() => {
-        try { controller.enqueue(formatSSE({ type: 'keep_alive', data: '' })); } catch { /* stream closed */ }
+        controller.enqueue(formatSSE({ type: 'keep_alive', data: '' }));
       }, KEEPALIVE_INTERVAL_MS);
 
       // 中文注释：把后端阶段耗时作为 status 事件发给前端，便于在浏览器侧重建完整链路。
@@ -209,7 +214,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             permissionContext: bypassPermissions ? undefined : {
               permissionMode: (permissionMode || 'normal') as PermissionMode,
               emitSSE: (event) => {
-                try { controller.enqueue(formatSSE(event as SSEEvent)); } catch { /* stream closed */ }
+                controller.enqueue(formatSSE(event as SSEEvent));
               },
               abortSignal: abortController.signal,
             },
@@ -305,7 +310,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         let step = 0;
         const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
         let lastToolNames: string[] = []; // for doom loop detection
-        const distinctTools = new Set<string>();
+        const distinctTools = new Set<string>(); // for skill-nudge heuristic
         let messages = historyMessages;
 
         while (step < maxSteps) {
@@ -596,6 +601,18 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           messages = [...messages, ...newMessages];
         }
 
+        // 6a. Emit skill-nudge if the run was complex enough to warrant saving as a Skill.
+        // Heuristic: >= 8 agent steps AND >= 3 distinct tools used. See skill-nudge.ts.
+        //
+        // Event shape is designed to be consumed by BOTH web and bridge:
+        //   - Web SSE parser (useSSEStream.ts): `notification: true` + `message`
+        //     routes through the status/notification branch so the message
+        //     shows in the status bar.
+        //   - Bridge parser (conversation-engine.ts): `subtype: 'skill_nudge'`
+        //     routes through a dedicated handler that appends the nudge to
+        //     the assistant message as a separated text block.
+        //   - Future dedicated UI: `subtype: 'skill_nudge'` + full `payload`
+        //     provides structured data for a rich nudge card.
         if (shouldSuggestSkill({ step, distinctTools })) {
           controller.enqueue(formatSSE({
             type: 'status',

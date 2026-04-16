@@ -755,8 +755,11 @@ async function runLiveProbe(): Promise<ProbeResult> {
     return { probe: 'live', severity: probeSeverity(findings), findings, durationMs: Date.now() - start };
   }
 
-  // 中文注释：功能名称「Live Probe 统一 SDK 环境」。
-  // 用法：让诊断探活与真实聊天请求共用同一套 Provider 鉴权归属和影子 HOME 逻辑，避免诊断结果失真。
+  // 4. Build env via the shared helper so the live probe sees the EXACT same
+  // provider-owned auth isolation as the real chat path. Otherwise the
+  // diagnostic could pass against cc-switch's Anthropic-direct credentials
+  // while the actual chat hits the explicit DB provider, producing a
+  // confusing "doctor green, chat broken" split.
   const setup = prepareSdkSubprocessEnv(resolved);
   const sdkEnv = setup.env;
 
@@ -860,6 +863,7 @@ async function runLiveProbe(): Promise<ProbeResult> {
       });
     }
   } finally {
+    // Tear down the per-request shadow ~/.claude/ if we built one. Best-effort.
     setup.shadow.cleanup();
   }
 

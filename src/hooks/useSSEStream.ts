@@ -14,7 +14,7 @@ interface ToolResultInfo {
   media?: MediaBlock[];
 }
 
-interface SkillNudgeData {
+export interface SkillNudgeData {
   message: string;
   step: number;
   distinctToolCount: number;
@@ -53,10 +53,10 @@ export interface SSECallbacks {
 }
 
 // 中文注释：功能名称「SSE 非正常断流识别」，用法是在流没有收到 done 终止事件就结束时抛出，
-// 让上层能够区分“正常完成”和“传输被静默掐断”，从而触发自动恢复而不是误判成功。
+// 让上层能够区分"正常完成"和"传输被静默掐断"，从而触发自动恢复而不是误判成功。
 /**
  * Parse a single SSE line (after stripping "data: " prefix) and dispatch
- * to the appropriate callback.  Returns the updated accumulated text.
+ * to the appropriate callback.  Returns the updated accumulating text.
  */
 function handleSSEEvent(
   event: SSEEvent,
@@ -147,6 +147,13 @@ function handleSSEEvent(
           });
           return accumulated;
         }
+        // Context compressed — dedicated handler so stream-session-manager
+        // dispatches the 'context-compressed' window event (drives hasSummary
+        // state in ChatView). Before the human-readable message change,
+        // onStatus received the literal string 'context_compressed' and the
+        // manager matched it directly. Now the SSE payload has subtype +
+        // structured stats, so we intercept here before it hits the generic
+        // notification branch which would pass the full message string.
         if (statusData.subtype === 'context_compressed') {
           callbacks.onContextCompressed?.({
             message: statusData.message || '',

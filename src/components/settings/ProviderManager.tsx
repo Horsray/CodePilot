@@ -265,6 +265,10 @@ export function ProviderManager() {
               setOpenaiAuth(status);
               setOpenaiLoggingIn(false);
               fetchModels(); // refresh model list to include OpenAI models
+              // OAuth is a virtual provider source that hasCodePilotProvider()
+              // counts; broadcast so listeners (SetupCenter's ProviderCard,
+              // anywhere reading provider presence) re-evaluate.
+              window.dispatchEvent(new Event('provider-changed'));
             }
           }
         } catch { /* keep polling */ }
@@ -280,6 +284,9 @@ export function ProviderManager() {
       await fetch("/api/openai-oauth/status", { method: "DELETE" });
       setOpenaiAuth({ authenticated: false });
       fetchModels(); // refresh model list
+      // Logout removes the virtual OAuth provider; listeners must re-check
+      // so SetupCenter's ProviderCard can downgrade if OAuth was the only source.
+      window.dispatchEvent(new Event('provider-changed'));
     } catch { /* ignore */ }
   };
 

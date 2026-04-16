@@ -1,5 +1,15 @@
 /**
  * Unit tests for Feishu App Registration state machine.
+ *
+ * Covers:
+ * - startRegistration — successful begin response parsing, session persistence
+ * - pollRegistration — authorization_pending (keeps waiting), slow_down (increases interval),
+ *   access_denied (failed + user_denied code), expired_token (expired + timeout code),
+ *   successful completion writes credentials to DB + returns completed
+ * - Lark fallback — empty client_secret + tenant_brand=lark switches to larksuite endpoint
+ *   and continues polling if Lark returns authorization_pending
+ * - Error code contract (timeout / user_denied / empty_credentials / lark_empty_credentials)
+ * - cancelRegistration removes the session from memory
  */
 
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
@@ -17,22 +27,19 @@ let closeDb: typeof import('../../lib/db').closeDb;
 
 const originalFetch = globalThis.fetch;
 
+// Helper: build a fetch mock from a queue of responses.
 type MockResponse = { status: number; body: Record<string, unknown> };
-
 function mockFetch(responses: Map<string, MockResponse[]>) {
   return (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
-    const target = new URL(url);
-    const key = `${target.origin}${target.pathname}`;
+    // Match by host+path (ignore query)
+    const key = new URL(url).origin + new URL(url).pathname;
     const queue = responses.get(key);
     if (!queue || queue.length === 0) {
       throw new Error(`Unexpected fetch call: ${url}`);
     }
     const resp = queue.shift()!;
-    return new Response(JSON.stringify(resp.body), {
-      status: resp.status,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return new Response(JSON.stringify(resp.body), { status: resp.status, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
 }
 
@@ -123,7 +130,19 @@ describe('pollRegistration', () => {
     ]));
     const session = await feishuReg.pollRegistration(sessionId);
     assert.equal(session.status, 'waiting');
-    assert.equal(session.interval, 10000);
+    assert.equal(session.interval, 10000); // 5000 + 5000
+  });
+
+  it('caps interval at MAX_INTERVAL_MS', async () => {
+    // Pre-set interval near the cap
+    const s = feishuReg.getRegistrationSession(sessionId)!;
+    s.interval = 58_000;
+
+    globalThis.fetch = mockFetch(new Map([
+      [FEISHU_REG_URL, [{ status: 400, body: { error: 'slow_down' } }]],
+    ]));
+    const session = await feishuReg.pollRegistration(sessionId);
+    assert.equal(session.interval, 60000); // capped
   });
 
   it('maps access_denied to user_denied error code', async () => {
@@ -160,9 +179,20 @@ describe('pollRegistration', () => {
     assert.equal(session.appId, 'cli_abc123');
     assert.equal(session.appSecret, 'secret_xyz');
     assert.equal(session.domain, 'feishu');
+
+    // Verify credentials hit the DB
     assert.equal(getSetting('bridge_feishu_app_id'), 'cli_abc123');
     assert.equal(getSetting('bridge_feishu_app_secret'), 'secret_xyz');
     assert.equal(getSetting('bridge_feishu_domain'), 'feishu');
+  });
+
+  it('expires session when past expiresAt', async () => {
+    const s = feishuReg.getRegistrationSession(sessionId)!;
+    s.expiresAt = Date.now() - 1000;
+
+    const session = await feishuReg.pollRegistration(sessionId);
+    assert.equal(session.status, 'expired');
+    assert.equal(session.errorCode, 'timeout');
   });
 
   it('maps empty credentials to empty_credentials error code', async () => {
@@ -208,6 +238,7 @@ describe('pollRegistration — Lark fallback', () => {
 
   it('switches to lark endpoint when tenant_brand=lark and retries successfully', async () => {
     globalThis.fetch = mockFetch(new Map([
+      // First feishu response: lark tenant with empty secret
       [FEISHU_REG_URL, [{
         status: 200,
         body: {
@@ -216,6 +247,7 @@ describe('pollRegistration — Lark fallback', () => {
           user_info: { open_id: 'ou_test', tenant_brand: 'lark' },
         },
       }]],
+      // Lark endpoint returns full credentials
       [LARK_REG_URL, [{
         status: 200,
         body: {
@@ -229,11 +261,12 @@ describe('pollRegistration — Lark fallback', () => {
     const session = await feishuReg.pollRegistration(sessionId);
     assert.equal(session.status, 'completed');
     assert.equal(session.domain, 'lark');
+    assert.equal(session.appId, 'cli_lark_id');
     assert.equal(session.appSecret, 'lark_secret');
     assert.equal(getSetting('bridge_feishu_domain'), 'lark');
   });
 
-  it('returns waiting when lark retry still says authorization_pending', async () => {
+  it('keeps waiting when lark endpoint returns authorization_pending', async () => {
     globalThis.fetch = mockFetch(new Map([
       [FEISHU_REG_URL, [{
         status: 200,
@@ -243,17 +276,65 @@ describe('pollRegistration — Lark fallback', () => {
           user_info: { open_id: 'ou_test', tenant_brand: 'lark' },
         },
       }]],
-      [LARK_REG_URL, [{
-        status: 400,
-        body: { error: 'authorization_pending' },
-      }]],
+      [LARK_REG_URL, [{ status: 400, body: { error: 'authorization_pending' } }]],
     ]));
 
     const session = await feishuReg.pollRegistration(sessionId);
+    // Lark is still pending, session should stay waiting (not fail)
     assert.equal(session.status, 'waiting');
+    assert.equal(session.domain, 'lark'); // but domain latched to lark for future polls
+    assert.equal(session.errorCode, undefined);
   });
 
-  it('maps missing lark credentials to lark_empty_credentials', async () => {
+  it('subsequent poll after lark detection uses lark endpoint', async () => {
+    // First poll: detect lark
+    globalThis.fetch = mockFetch(new Map([
+      [FEISHU_REG_URL, [{
+        status: 200,
+        body: {
+          client_id: 'cli_lark_id',
+          client_secret: '',
+          user_info: { open_id: 'ou_test', tenant_brand: 'lark' },
+        },
+      }]],
+      [LARK_REG_URL, [{ status: 400, body: { error: 'authorization_pending' } }]],
+    ]));
+    await feishuReg.pollRegistration(sessionId);
+
+    // Second poll should go straight to LARK endpoint (not feishu)
+    globalThis.fetch = mockFetch(new Map([
+      [LARK_REG_URL, [{
+        status: 200,
+        body: {
+          client_id: 'cli_lark_id',
+          client_secret: 'lark_done',
+          user_info: { open_id: 'ou_test', tenant_brand: 'lark' },
+        },
+      }]],
+    ]));
+    const session = await feishuReg.pollRegistration(sessionId);
+    assert.equal(session.status, 'completed');
+    assert.equal(session.appSecret, 'lark_done');
+  });
+
+  it('increases interval on lark slow_down', async () => {
+    globalThis.fetch = mockFetch(new Map([
+      [FEISHU_REG_URL, [{
+        status: 200,
+        body: {
+          client_id: 'cli_lark_id',
+          client_secret: '',
+          user_info: { open_id: 'ou_test', tenant_brand: 'lark' },
+        },
+      }]],
+      [LARK_REG_URL, [{ status: 400, body: { error: 'slow_down' } }]],
+    ]));
+    const session = await feishuReg.pollRegistration(sessionId);
+    assert.equal(session.status, 'waiting');
+    assert.equal(session.interval, 10000);
+  });
+
+  it('maps lark empty credentials to lark_empty_credentials error code', async () => {
     globalThis.fetch = mockFetch(new Map([
       [FEISHU_REG_URL, [{
         status: 200,
@@ -265,14 +346,9 @@ describe('pollRegistration — Lark fallback', () => {
       }]],
       [LARK_REG_URL, [{
         status: 200,
-        body: {
-          client_id: 'cli_lark_id',
-          client_secret: '',
-          user_info: { open_id: 'ou_test', tenant_brand: 'lark' },
-        },
+        body: { client_id: '', client_secret: '' },
       }]],
     ]));
-
     const session = await feishuReg.pollRegistration(sessionId);
     assert.equal(session.status, 'failed');
     assert.equal(session.errorCode, 'lark_empty_credentials');
@@ -286,17 +362,57 @@ describe('cancelRegistration', () => {
         status: 200,
         body: {
           device_code: 'dc_cancel',
-          user_code: 'CANCEL-1',
-          verification_uri_complete: 'https://open.feishu.cn/page/openclaw?user_code=CANCEL-1',
+          user_code: 'CXL-0001',
+          verification_uri_complete: 'https://open.feishu.cn/page/openclaw?user_code=CXL-0001',
           expires_in: 300,
           interval: 5,
         },
       }]],
     ]));
+    const r = await feishuReg.startRegistration();
+    assert.ok(feishuReg.getRegistrationSession(r.sessionId));
 
-    const { sessionId } = await feishuReg.startRegistration();
-    assert.ok(feishuReg.getRegistrationSession(sessionId));
-    feishuReg.cancelRegistration(sessionId);
-    assert.equal(feishuReg.getRegistrationSession(sessionId), null);
+    feishuReg.cancelRegistration(r.sessionId);
+    assert.equal(feishuReg.getRegistrationSession(r.sessionId), null);
+  });
+
+  it('is a no-op for unknown session_id', () => {
+    assert.doesNotThrow(() => feishuReg.cancelRegistration('nonexistent'));
+  });
+});
+
+describe('pollRegistration — terminal states are idempotent', () => {
+  it('does not re-poll after completion', async () => {
+    globalThis.fetch = mockFetch(new Map([
+      [FEISHU_REG_URL, [
+        {
+          status: 200,
+          body: {
+            device_code: 'dc_idem',
+            user_code: 'IDEM-0001',
+            verification_uri_complete: 'https://open.feishu.cn/page/openclaw?user_code=IDEM-0001',
+            expires_in: 300,
+            interval: 5,
+          },
+        },
+        {
+          status: 200,
+          body: {
+            client_id: 'cli_idem',
+            client_secret: 'secret_idem',
+            user_info: { open_id: 'ou_test', tenant_brand: 'feishu' },
+          },
+        },
+      ]],
+    ]));
+    const r = await feishuReg.startRegistration();
+    const first = await feishuReg.pollRegistration(r.sessionId);
+    assert.equal(first.status, 'completed');
+
+    // Second poll should return the same session without additional fetch calls
+    // (no more mocks queued — would throw if fetch was called)
+    const second = await feishuReg.pollRegistration(r.sessionId);
+    assert.equal(second.status, 'completed');
+    assert.equal(second.appId, 'cli_idem');
   });
 });

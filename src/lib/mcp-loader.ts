@@ -136,12 +136,31 @@ export function loadAllMcpServers(): Record<string, MCPServerConfig> | undefined
 }
 
 /**
- * 中文注释：功能名称「按项目目录加载 MCP Server」。
- * 用法：当调用侧显式传入某个工作目录时，读取该目录下 `.mcp.json`，并按用户设置覆盖 enabled 状态、解析 `${...}` 占位符。
+ * Load MCP servers from a SPECIFIC project's `.mcp.json` file.
+ *
+ * Used to compensate for `settingSources: ['user']` on DB-provider requests
+ * (which drops 'project' to prevent project-level settings env from
+ * overriding the explicit provider's auth — see provider-resolver.ts
+ * around line 800). Without this, project `.mcp.json` MCP servers would
+ * silently disappear for DB-provider users, even though the project's MCP
+ * servers are auth-neutral and should keep working.
+ *
+ * Why this isn't covered by the cache-based `loadAndMerge` above:
+ * `loadAndMerge` reads `<process.cwd()>/.mcp.json`, which on the desktop
+ * app is the Next.js server's working directory (typically the standalone
+ * bundle dir), NOT the user's project directory. We need the actual
+ * resolved working directory of the request, which only the streaming
+ * code path knows.
+ *
+ * Servers with `${...}` env placeholders are resolved against the
+ * CodePilot DB the same way loadAndMerge does. Disabled servers are
+ * filtered out.
+ *
+ * @param projectCwd - The user's actual working directory (NOT process.cwd())
+ * @returns Map of resolved server configs, or undefined when none found
  */
 export function loadProjectMcpServers(projectCwd: string | undefined): Record<string, MCPServerConfig> | undefined {
   if (!projectCwd) return undefined;
-
   try {
     const filePath = path.join(projectCwd, '.mcp.json');
     if (!fs.existsSync(filePath)) return undefined;
@@ -150,16 +169,26 @@ export function loadProjectMcpServers(projectCwd: string | undefined): Record<st
     const rawServers = (content.mcpServers || {}) as Record<string, MCPServerConfig>;
     if (Object.keys(rawServers).length === 0) return undefined;
 
+    // Apply user-level `mcpServerOverrides` from ~/.claude/settings.json.
+    // The CodePilot MCP Manager UI persists per-server enable/disable state
+    // there (see mcp-loader.ts:57-62 — original loadAndMerge does the same
+    // for the cached path). Without this, a DB-provider session would
+    // silently re-enable a project MCP the user toggled off (or fail to
+    // enable one they overrode on), creating a state mismatch between the
+    // UI and what the SDK actually loads.
     const userSettings = readJson(path.join(os.homedir(), '.claude', 'settings.json'));
     const overrides = (userSettings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
 
     const resolved: Record<string, MCPServerConfig> = {};
     for (const [name, server] of Object.entries(rawServers)) {
+      // UI override takes precedence over the file's own `enabled` field.
+      // Same precedence as loadAndMerge() so behavior stays consistent
+      // across the cached path and the per-cwd path.
       const override = overrides[name];
       const effectiveEnabled = override?.enabled !== undefined ? override.enabled : server.enabled;
       if (effectiveEnabled === false) continue;
 
-      const out: MCPServerConfig = { ...server };
+      const out = { ...server };
       if (out.env) {
         const env: Record<string, string> = {};
         for (const [key, value] of Object.entries(out.env)) {

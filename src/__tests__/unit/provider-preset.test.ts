@@ -71,13 +71,14 @@ describe('Preset Schema Validation', () => {
   });
 });
 
-describe('PROVIDER_MANAGED_BY_HOST', () => {
-  it('toClaudeCodeEnv always sets CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST', async () => {
+describe('toClaudeCodeEnv: env shape after CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST removal', () => {
+  // The flag was removed in the cc-switch credential bridge fix — SDK 0.2.62
+  // does not implement this variable, so setting it was dead code. These
+  // tests pin the current behavior so the flag doesn't get reintroduced
+  // accidentally, and verify the core env injection still works correctly.
+  it('with provider: cleans ANTHROPIC_* from baseEnv and injects the provider auth', async () => {
     const { toClaudeCodeEnv } = await import('../../lib/provider-resolver');
-    const { VENDOR_PRESETS: presets } = await import('../../lib/provider-catalog');
-    const anthropic = presets.find(p => p.key === 'anthropic-official')!;
 
-    // With a provider
     const resolvedWithProvider = {
       provider: {
         id: 'test', name: 'Test', provider_type: 'anthropic', protocol: 'anthropic',
@@ -93,15 +94,29 @@ describe('PROVIDER_MANAGED_BY_HOST', () => {
       upstreamModel: 'sonnet',
       headers: {},
       envOverrides: {},
-      roleModels: {},
+      roleModels: { default: 'claude-sonnet-4-5' },
       hasCredentials: true,
       availableModels: [],
       settingSources: ['project', 'local'],
     };
-    const env = toClaudeCodeEnv({ PATH: '/usr/bin' }, resolvedWithProvider);
-    assert.equal(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, '1');
+    const env = toClaudeCodeEnv({
+      PATH: '/usr/bin',
+      ANTHROPIC_API_KEY: 'stale-key-should-be-removed',
+      ANTHROPIC_BASE_URL: 'https://stale-proxy.example.com',
+    }, resolvedWithProvider);
 
-    // Without a provider (env mode)
+    // Dead-code flag must NOT be set
+    assert.equal(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, undefined);
+    // Provider auth correctly injected
+    assert.equal(env.ANTHROPIC_API_KEY, 'sk-test');
+    assert.equal(env.ANTHROPIC_BASE_URL, 'https://api.anthropic.com');
+    // Model injection
+    assert.equal(env.ANTHROPIC_MODEL, 'claude-sonnet-4-5');
+  });
+
+  it('without provider (env mode): preserves baseEnv ANTHROPIC_* for cc-switch compatibility', async () => {
+    const { toClaudeCodeEnv } = await import('../../lib/provider-resolver');
+
     const resolvedWithoutProvider = {
       provider: undefined,
       protocol: 'anthropic' as const,
@@ -116,7 +131,16 @@ describe('PROVIDER_MANAGED_BY_HOST', () => {
       availableModels: [],
       settingSources: ['user', 'project', 'local'],
     };
-    const env2 = toClaudeCodeEnv({ PATH: '/usr/bin' }, resolvedWithoutProvider);
-    assert.equal(env2.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, '1');
+    const env = toClaudeCodeEnv({
+      PATH: '/usr/bin',
+      ANTHROPIC_AUTH_TOKEN: 'cc-switch-token',
+      ANTHROPIC_BASE_URL: 'https://proxy.example.com',
+    }, resolvedWithoutProvider);
+
+    // Dead-code flag must NOT be set
+    assert.equal(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, undefined);
+    // Caller's env is preserved so SDK's settingSources:['user'] path can layer settings.json on top
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'cc-switch-token');
+    assert.equal(env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
   });
 });

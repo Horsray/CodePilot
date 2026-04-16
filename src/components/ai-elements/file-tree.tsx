@@ -31,6 +31,11 @@ interface FileTreeContextType {
   onAdd?: (path: string) => void;
 }
 
+// Module-scope immutable empty Set. Inlining `new Set()` as a destructuring
+// default parameter (e.g. `defaultExpanded = new Set()`) triggered a production
+// ReferenceError under Next.js 16 + Turbopack in v0.50.2 (Sentry NEXT-PA).
+const EMPTY_EXPANDED: Set<string> = new Set();
+
 // Default noop for context default value
 // oxlint-disable-next-line eslint(no-empty-function)
 const noop = () => {};
@@ -52,7 +57,7 @@ export type FileTreeProps = HTMLAttributes<HTMLDivElement> & {
 
 export const FileTree = ({
   expanded: controlledExpanded,
-  defaultExpanded = new Set(),
+  defaultExpanded = EMPTY_EXPANDED,
   selectedPath,
   onSelect,
   onAdd,

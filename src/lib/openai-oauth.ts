@@ -86,12 +86,21 @@ export function prepareOAuthFlow(): PreparedFlow {
 // ── Exchange Code for Tokens ───────────────────────────────────
 
 /**
- * 中文注释：功能名称「OAuth token exchange 重试判定」。
- * 用法：把网络抖动、403 传播延迟、429 和 5xx 归类为可重试，避免一次瞬时失败直接中断登录流程。
+ * Determine if a token-exchange failure is worth retrying.
+ *
+ * Network errors (TypeError from fetch on connection reset, ETIMEDOUT, DNS
+ * failure) and transient 5xx server errors are retryable. 4xx (auth errors)
+ * are not — retrying won't help if the code is genuinely invalid.
+ *
+ * 403 sits in a grey zone: OpenAI's token endpoint occasionally returns 403
+ * for first-attempt requests when the auth code is fresh and propagation
+ * hasn't completed across their edge. Treating 403 as retryable matches
+ * what the upstream OpenCode client does (codex.ts:580 `if (status !== 403
+ * && status !== 404) return failed`).
  */
 export function isRetryableTokenExchangeFailure(status: number | null, err?: unknown): boolean {
-  if (status === null) return true;
-  if (status >= 500) return true;
+  if (status === null) return true; // network-level error (TypeError from fetch)
+  if (status >= 500) return true;   // server-side transient
   if (status === 403 || status === 408 || status === 429) return true;
   if (err) {
     const code = (err as { code?: string }).code;
@@ -103,7 +112,7 @@ export function isRetryableTokenExchangeFailure(status: number | null, err?: unk
 }
 
 async function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export async function exchangeCodeForTokens(
@@ -118,8 +127,12 @@ export async function exchangeCodeForTokens(
     code_verifier: codeVerifier,
   });
 
-  // 中文注释：功能名称「OAuth token exchange 重试执行」。
-  // 用法：在 OpenAI 授权码刚签发的短窗口内，允许对 403/网络错误做有限重试，降低偶发登录失败。
+  // Retry up to 3 times with exponential backoff (1s, 2s, 4s) for transient
+  // network failures + 403/5xx. Issue #464 reports users on macOS + Windows
+  // hitting "Token exchange failed: 403" while the maintainer's two machines
+  // never reproduce — strong signal of network-stability dependence. The
+  // upstream OpenCode reference implementation handles this with polling
+  // retries on the same status codes.
   const MAX_ATTEMPTS = 3;
   let lastStatus: number | null = null;
   let lastBody = '';
@@ -127,7 +140,6 @@ export async function exchangeCodeForTokens(
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let response: Response;
-
     try {
       response = await fetch(TOKEN_URL, {
         method: 'POST',
@@ -138,6 +150,7 @@ export async function exchangeCodeForTokens(
         body: params.toString(),
       });
     } catch (err) {
+      // Network-level failure (DNS, connection reset, TLS handshake failed)
       lastStatus = null;
       lastErr = err;
       lastBody = err instanceof Error ? err.message : String(err);
@@ -155,7 +168,6 @@ export async function exchangeCodeForTokens(
         refresh_token?: string;
         expires_in?: number;
       };
-
       return {
         idToken: data.id_token,
         accessToken: data.access_token,
@@ -164,6 +176,7 @@ export async function exchangeCodeForTokens(
       };
     }
 
+    // Non-OK response — capture body for the error message and decide whether to retry
     lastStatus = response.status;
     lastBody = await response.text();
 
@@ -174,10 +187,13 @@ export async function exchangeCodeForTokens(
     break;
   }
 
+  // Out of retries — produce a useful error. JSON.stringify the body when
+  // possible so users (and Sentry) see structured fields instead of the
+  // legacy "[object Object]" placeholder that issue #464 complained about.
   let msg: string;
   try {
-    const parsed = JSON.parse(lastBody);
-    msg = parsed.error_description || parsed.error || JSON.stringify(parsed);
+    const j = JSON.parse(lastBody);
+    msg = j.error_description || j.error || JSON.stringify(j);
   } catch {
     msg = lastBody || (lastErr instanceof Error ? lastErr.message : 'unknown');
   }

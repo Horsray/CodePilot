@@ -507,7 +507,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'qwen3.5-plus', displayName: 'Qwen 3.5 Plus', role: 'default' },
+      { modelId: 'qwen3.6-plus', displayName: 'Qwen 3.6 Plus', role: 'default' },
       { modelId: 'qwen3-coder-next', displayName: 'Qwen 3 Coder Next' },
       { modelId: 'qwen3-coder-plus', displayName: 'Qwen 3 Coder Plus' },
       { modelId: 'kimi-k2.5', displayName: 'Kimi K2.5' },

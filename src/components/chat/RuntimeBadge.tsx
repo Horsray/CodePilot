@@ -21,6 +21,9 @@ const LABELS: Record<ConcreteRuntime, { en: string; zh: string }> = {
 };
 
 export function RuntimeBadge({ providerId }: RuntimeBadgeProps) {
+  // 0.50.3 removed 'auto' as a user-visible state. We still read whatever is
+  // stored (possibly 'auto' on legacy rows) but coerce immediately via
+  // resolveLegacyRuntimeForDisplay — the badge never surfaces 'Agent: Auto'.
   const [runtimeSetting, setRuntimeSetting] = useState<ConcreteRuntime>('claude-code-sdk');
   const router = useRouter();
   const { t } = useTranslation();

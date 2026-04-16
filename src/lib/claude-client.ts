@@ -21,8 +21,8 @@ import { captureCapabilities, isCacheFresh, setCachedPlugins } from './agent-sdk
 import { normalizeMessageContent, microCompactMessage } from './message-normalizer';
 import { roughTokenEstimate } from './context-estimator';
 import { getSetting, updateSdkSessionId, createPermissionRequest } from './db';
-import { resolveForClaudeCode, toClaudeCodeEnv } from './provider-resolver';
-import { findClaudeBinary, findGitBash, getExpandedPath, invalidateClaudePathCache } from './platform';
+import { resolveForClaudeCode } from './provider-resolver';
+import { findClaudeBinary, invalidateClaudePathCache } from './platform';
 import { notifyPermissionRequest, notifyGeneric } from './telegram-bot';
 import { classifyError, formatClassifiedError } from './error-classifier';
 import { resolveWorkingDirectory } from './working-directory';
@@ -30,6 +30,27 @@ import { sendNotification } from './notification-manager';
 import { registerSdkSession, releaseSession, needsResume, prewarmClaudePath } from './cli-session-pool';
 import { prepareSdkSubprocessEnv } from './sdk-subprocess-env';
 import { loadProjectMcpServers } from './mcp-loader';
+import { wrapController } from './safe-stream';
+import { type ShadowHome } from './claude-home-shadow';
+// Static imports for resolveRuntime/detectTransport — used to be lazy
+// `require('./runtime')` / `require('./provider-transport')`, but Turbopack's
+// CJS↔ESM interop returns `{ default: ... }` shape that broke destructuring
+// at runtime ("resolveRuntime is not a function" etc).
+//
+// IMPORTANT: import from `./runtime/registry` NOT from `./runtime` (== index).
+// runtime/index.ts imports native-runtime AND sdk-runtime at top-level and
+// registers them. sdk-runtime in turn imports FROM this file (claude-client).
+// Importing `./runtime` here closes the cycle
+// claude-client → runtime/index → sdk-runtime → claude-client
+// and during evaluation of sdk-runtime's `export const sdkRuntime = {...}`,
+// runtime/index's own `registerRuntime(sdkRuntime)` line hits the TDZ and
+// throws "Cannot access 'sdkRuntime' before initialization" (caught by
+// sdk-availability.test.ts under certain module load orders).
+// registry.ts only imports types/db/claude-settings — no cycle. The actual
+// runtime registration still happens elsewhere (runtime/index is imported
+// via its own entry points at app startup).
+import { resolveRuntime, getRuntime } from './runtime/registry';
+import { detectTransport, isNativeCompatible } from './provider-transport';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -331,8 +352,10 @@ export async function generateTextViaSdk(params: {
     providerId: params.providerId,
   });
 
-  // 中文注释：功能名称「SDK 子进程统一环境构建」。
-  // 用法：让轻量文本生成与主聊天链路共用同一套 Provider 鉴权归属和影子 HOME 逻辑。
+  // Same provider-owned auth isolation as the main streaming path: when an
+  // explicit DB provider is selected, this auxiliary call must NOT pick up
+  // cc-switch credentials from ~/.claude/settings.json or ~/.claude/json.
+  // See src/lib/sdk-subprocess-env.ts.
   const setup = prepareSdkSubprocessEnv(resolved);
   const sdkEnv = setup.env;
 
@@ -370,14 +393,14 @@ export async function generateTextViaSdk(params: {
     }
   }
 
-  const conversation = query({
-    prompt: params.prompt,
-    options: queryOptions,
-  });
-
-  // Iterate through all messages; the last one with type 'result' has the answer
   let resultText = '';
   try {
+    const conversation = query({
+      prompt: params.prompt,
+      options: queryOptions,
+    });
+
+    // Iterate through all messages; the last one with type 'result' has the answer
     for await (const msg of conversation) {
       if (msg.type === 'result' && 'result' in msg) {
         resultText = (msg as SDKResultSuccess).result || '';
@@ -410,11 +433,6 @@ export async function generateTextViaSdk(params: {
  * the appropriate runtime, and delegates.
  */
 export function streamClaude(options: ClaudeStreamOptions): ReadableStream<string> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { resolveRuntime, getRuntime } = require('./runtime') as typeof import('./runtime');
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { detectTransport, isNativeCompatible } = require('./provider-transport') as typeof import('./provider-transport');
-
   // ── Capability-aware routing ────────────────────────────────
   // Route to the right runtime based on provider + user setting.
   const cliDisabled = getSetting('cli_enabled') === 'false';
@@ -527,11 +545,21 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
   } = options;
 
   return new ReadableStream<string>({
-    async start(controller) {
+    async start(controllerRaw) {
+      // Wrap controller so async callbacks (keep-alive timer, late tool-result
+      // handlers, post-abort message processing) can call enqueue() without
+      // crashing when the consumer aborts. See src/lib/safe-stream.ts.
+      const controller = wrapController(controllerRaw, (kind) => {
+        console.warn(`[claude-client] late ${kind} after stream close — silently dropped`);
+      });
       // Flag to prevent infinite PTL retry loops (at most one retry per request)
       let ptlRetryAttempted = false;
       let toolWatchdog: ReturnType<typeof setInterval> | null = null;
       let forcedToolTimeout: { toolName: string; elapsedSeconds: number } | null = null;
+      // Per-request shadow ~/.claude/ for DB-provider isolation. Built lazily
+      // below once we know whether we have an explicit DB provider; cleaned up
+      // in the outer finally block. See src/lib/claude-home-shadow.ts.
+      let shadowHome: ShadowHome | null = null;
 
       // Resolve provider via the unified resolver. The caller may pass an explicit
       // provider (from resolveProvider().provider), or undefined when 'env' mode is
@@ -553,36 +581,14 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           );
         }
 
-        // Build env for the Claude Code subprocess.
-        // Start with process.env (includes user shell env from Electron's loadUserShellEnv).
-        // Then overlay any API config the user set in CodePilot settings (optional).
-        const sdkEnv: Record<string, string> = { ...process.env as Record<string, string> };
-
-        // Ensure HOME/USERPROFILE are set so Claude Code can find ~/.claude/commands/
-        if (!sdkEnv.HOME) sdkEnv.HOME = os.homedir();
-        if (!sdkEnv.USERPROFILE) sdkEnv.USERPROFILE = os.homedir();
-        // Ensure SDK subprocess has expanded PATH (consistent with Electron mode)
-        sdkEnv.PATH = getExpandedPath();
-
-        // Remove CLAUDECODE env var to prevent "nested session" detection.
-        // When CodePilot is launched from within a Claude Code CLI session
-        // (e.g. during development), the child process inherits this variable
-        // and the SDK refuses to start.
-        delete sdkEnv.CLAUDECODE;
-
-        // On Windows, auto-detect Git Bash if not already configured
-        if (process.platform === 'win32' && !process.env.CLAUDE_CODE_GIT_BASH_PATH) {
-          const gitBashPath = findGitBash();
-          if (gitBashPath) {
-            sdkEnv.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
-          }
-        }
-
-        // Build env from resolved provider
-        const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved);
-        // toClaudeCodeEnv returns a full env — merge back into sdkEnv
-        // (preserves HOME, USERPROFILE, PATH, Git Bash detection set above)
-        Object.assign(sdkEnv, resolvedEnv);
+        // Build env for the Claude Code subprocess via the shared helper —
+        // every SDK entry point (this stream, generateTextViaSdk, provider
+        // doctor live probe) goes through `prepareSdkSubprocessEnv` so the
+        // provider-group ownership rule is applied uniformly. See
+        // src/lib/sdk-subprocess-env.ts.
+        const setup = prepareSdkSubprocessEnv(resolved);
+        const sdkEnv = setup.env;
+        shadowHome = setup.shadow;
 
         // Warn if no credentials found at all
         if (!resolved.hasCredentials && !sdkEnv.ANTHROPIC_API_KEY && !sdkEnv.ANTHROPIC_AUTH_TOKEN) {
@@ -603,11 +609,26 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             : ((permissionMode as Options['permissionMode']) || 'acceptEdits'),
           env: sanitizeEnv(sdkEnv),
           // Load settings so the SDK behaves like the CLI (tool permissions,
-          // CLAUDE.md, etc.). When an active provider is configured in
-          // CodePilot, skip 'user' settings because ~/.claude/settings.json
-          // may contain env overrides (ANTHROPIC_BASE_URL, ANTHROPIC_MODEL,
-          // etc.) that would conflict with the provider's configuration.
+          // CLAUDE.md, etc.). For DB providers settingSources is ['user'] only;
+          // for env mode it's ['user', 'project', 'local']. See provider-resolver.ts.
           settingSources: resolved.settingSources as Options['settingSources'],
+          // Auto-allow all CodePilot built-in MCPs. These are host-defined
+          // in-process servers (createSdkMcpServer in claude-client.ts below)
+          // that ship with CodePilot — they're not third-party plugins and
+          // don't need per-tool user approval. Without this list, SDK's
+          // default 'acceptEdits' mode prompts the user for each mcp__codepilot-*
+          // invocation, which is the regression users reported after we
+          // stopped silently allowing everything via project-level settings.
+          allowedTools: [
+            'mcp__codepilot-memory',
+            'mcp__codepilot-notify',
+            'mcp__codepilot-widget',
+            'mcp__codepilot-widget-guidelines',
+            'mcp__codepilot-media',
+            'mcp__codepilot-image-gen',
+            'mcp__codepilot-cli-tools',
+            'mcp__codepilot-dashboard',
+          ],
         };
 
         if (skipPermissions) {
@@ -647,25 +668,34 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           };
         }
 
-        // MCP servers: only pass explicitly provided config (e.g. from CodePilot UI).
+        // MCP servers: pass explicitly provided config (e.g. from CodePilot UI).
         // User-level MCP config from ~/.claude.json and ~/.claude/settings.json
-        // is now automatically loaded by the SDK via settingSources: ['user', 'project', 'local'].
-        let mergedMcpServers = mcpServers ? { ...mcpServers } : undefined;
-
-        // 中文注释：功能名称「项目级 MCP 回注」。
-        // 用法：当 settingSources 不包含 project 时，显式把工作目录下的 `.mcp.json` 并回 SDK 配置，避免项目 MCP 丢失。
-        if (!resolved.settingSources.includes('project')) {
-          const projectMcpServers = loadProjectMcpServers(resolvedWorkingDirectory.path);
-          if (projectMcpServers && Object.keys(projectMcpServers).length > 0) {
-            mergedMcpServers = {
-              ...(mergedMcpServers || {}),
-              ...projectMcpServers,
-            };
-          }
+        // is automatically loaded by the SDK via settingSources: ['user'] (DB
+        // providers) or ['user', 'project', 'local'] (env mode).
+        if (mcpServers && Object.keys(mcpServers).length > 0) {
+          queryOptions.mcpServers = toSdkMcpConfig(mcpServers);
         }
 
-        if (mergedMcpServers && Object.keys(mergedMcpServers).length > 0) {
-          queryOptions.mcpServers = toSdkMcpConfig(mergedMcpServers);
+        // For DB-provider requests, settingSources is ['user'] only (project
+        // and local layers are dropped to prevent <cwd>/.claude/settings.json
+        // env from overriding the explicit provider's auth — see
+        // provider-resolver.ts ~800). That also disables SDK auto-loading of
+        // `<cwd>/.mcp.json`, which is normally an auth-neutral file team
+        // members commit to share project MCP servers. Re-inject it here so
+        // those servers don't silently disappear for DB-provider users.
+        if (resolved.provider) {
+          const { loadProjectMcpServers } = await import('@/lib/mcp-loader');
+          const projectMcps = loadProjectMcpServers(resolvedWorkingDirectory.path);
+          if (projectMcps) {
+            const sdkProjectMcps = toSdkMcpConfig(projectMcps);
+            // Existing entries (CodePilot UI / placeholder-managed) take
+            // precedence on name collision — they're the user's currently-
+            // chosen config layer, project file is the team default.
+            queryOptions.mcpServers = {
+              ...sdkProjectMcps,
+              ...(queryOptions.mcpServers || {}),
+            };
+          }
         }
 
         // Memory MCP: always registered in assistant mode for memory search/retrieval.
@@ -1831,6 +1861,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         // cleared above, so releaseSession will clear the pool entry too.
         if (sessionId) {
           releaseSession(sessionId);
+        }
+        // Tear down shadow ~/.claude/ if we built one. Best-effort — the OS
+        // will eventually GC tmpdir even if this fails.
+        if (shadowHome) {
+          shadowHome.cleanup();
+          shadowHome = null;
         }
       }
     },

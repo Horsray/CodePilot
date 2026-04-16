@@ -3,6 +3,7 @@ import path from 'path';
 import type { AssistantWorkspaceState, AssistantWorkspaceFiles, AssistantWorkspaceFilesV2, SearchResult } from '@/types';
 import { getLocalDateString } from '@/lib/utils';
 import { HEARTBEAT_TEMPLATE, isWithinActiveHours } from './heartbeat';
+import { inferTaxonomyFromDirs, loadTaxonomy, saveTaxonomy } from '@/lib/workspace-taxonomy';
 
 const DEFAULT_STATE: AssistantWorkspaceState = {
   onboardingComplete: false,
@@ -466,8 +467,10 @@ export function initializeWorkspace(dir: string): string[] {
   if (hasExistingContent) {
     generateRootDocs(dir);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { inferTaxonomyFromDirs, loadTaxonomy, saveTaxonomy } = require('@/lib/workspace-taxonomy');
+      // Was lazy `require('@/lib/workspace-taxonomy')`; converted to static
+      // import after Turbopack's CJS↔ESM interop broke similar destructuring
+      // elsewhere in the codebase. workspace-taxonomy doesn't import this
+      // module back, so no circular-dep concern.
       const taxonomy = loadTaxonomy(dir);
       if (taxonomy.categories.length === 0) {
         const inferred = inferTaxonomyFromDirs(dir);

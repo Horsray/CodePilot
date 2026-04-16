@@ -60,49 +60,7 @@ npm run sync:ownership
 
 基于当前已提交的 fork 增量，和官方主项目相比，差异主要集中在以下方向。
 
-### 1. 终端与控制台能力
-
-目标是把桌面端 AI 助手进一步做成可执行、可观测的工作台，而不只是聊天窗口。
-
-涉及文件：
-
-- `electron/terminal-manager.ts`
-- `src/app/api/terminal/route.ts`
-- `src/app/api/terminal/stream/route.ts`
-- `src/lib/pty-manager.ts`
-- `src/lib/terminal-output-store.ts`
-- `src/hooks/useWebTerminal.ts`
-- `src/components/terminal/XtermTerminal.tsx`
-- `src/components/console/ConsolePanel.tsx`
-- `src/components/layout/BottomPanelContainer.tsx`
-- `src/components/layout/panels/WebTerminalPanel.tsx`
-
-保留要求：
-
-- 终端支持实时交互
-- 终端输出支持流式读取
-- 底部面板中可切换终端和控制台
-- 控制台具备日志查看、搜索、高亮、复制等工作流能力
-
-### 2. 内置浏览器能力
-
-目标是在应用内增加浏览器标签页，使"聊天 + 浏览 + 操作"形成闭环。
-
-涉及文件：
-
-- `src/components/browser/BuiltinBrowser.tsx`
-- `src/components/layout/BrowserTabView.tsx`
-- `src/components/layout/AppShell.tsx`
-- `src/components/layout/UnifiedTopBar.tsx`
-- `src/components/layout/ChatListPanel.tsx`
-
-保留要求：
-
-- 可以在聊天视图与浏览器视图之间切换
-- 浏览器入口不能因官方布局调整而丢失
-- 顶部导航、标签视图、主体布局之间的联动需要继续可用
-
-### 3. CC Switch 服务商接入
+### 1. CC Switch 服务商接入
 
 目标是让模型调用可以在本地、`/api` 和中转平台之间切换，形成更适合本地使用习惯的 provider 接入方式。
 
@@ -124,7 +82,7 @@ npm run sync:ownership
 - provider preset、表单字段、模型列表获取逻辑保持一致
 - 官方如果调整 provider 架构，应把 CC Switch 适配进新架构，而不是删除该能力
 
-### 4. 中转平台媒体生成支持
+### 2. 中转平台媒体生成支持
 
 原项目仅支持 google 官方的模型，扩展为支持中转站 api 模式的媒体生成能力，并可自定义维护 base_url 和 api 接口后缀，模型名称等必要参数。
 
@@ -139,7 +97,7 @@ npm run sync:ownership
 - generic-image 或等价中转能力不能在合并时被回退
 - 媒体协议、端点配置、provider 解析逻辑要与上游更新对齐
 
-### 5. 文件树 UI 与交互增强
+### 3. 文件树 UI 与交互增强
 
 目标是增强文件树在真实项目场景中的可用性，增加右键菜单，可以把文件添加到对话，新建文件，新建文件夹，删除文件等能力。
 
@@ -155,14 +113,13 @@ npm run sync:ownership
 - 展开状态、本地持久化、交互体验需要保留
 - 如果官方后续重构文件树结构，应把增强逻辑迁移到新结构里
 
-### 6. 工作区标签页系统
+### 4. 工作区标签页系统
 
-将浏览器、文件预览、终端等从独立面板重构为统一的工作区标签页形式，提升多任务处理体验。
+将文件预览等从独立面板重构为统一的工作区标签页形式，提升多任务处理体验。
 
 涉及文件：
 
 - `src/components/layout/AppShell.tsx` - 工作区标签页管理
-- `src/components/layout/BrowserTabView.tsx` - 浏览器标签页视图
 - `src/components/layout/panels/PreviewPanel.tsx` - 文件预览面板（标签页形式）
 - `src/components/layout/panels/AssistantPanel.tsx` - 助手面板
 - `src/components/layout/panels/DashboardPanel.tsx` - Dashboard 面板
@@ -173,32 +130,11 @@ npm run sync:ownership
 保留要求：
 
 - 标签页系统不能被官方布局调整回滚
-- 浏览器、预览、终端、控制台等面板均以标签页形式存在
+- 预览、Git 等面板以标签页形式存在
 - 文件树点击文件时在标签页中打开预览而非侧边面板
 - Electron 环境启用 webview 标签支持
 
-### 7. 性能追踪系统
-
-引入 traceId 贯穿前后端，实现全链路请求耗时监控。
-
-涉及文件：
-
-- `src/lib/perf-trace.ts` - 性能追踪库（createPerfTrace / measureAsync / finish 等 API）
-- `src/app/api/chat/perf/route.ts` - 性能数据查询 API
-- `src/lib/agent-loop.ts` - Agent Loop 集成 traceId
-- `src/lib/claude-client.ts` - 传递 traceId
-- `src/lib/runtime/native-runtime.ts` - Native Runtime traceId 支持
-- `src/hooks/useSSEStream.ts` - 前端性能监控
-- `src/app/chat/page.tsx` - 前端聊天页面性能记录
-- `src/types/index.ts` - traceId 类型定义
-
-保留要求：
-
-- traceId 生成和传递逻辑不能丢失
-- 性能追踪 API 端点保持可用
-- perf-trace.ts 的环形缓冲机制保留
-
-### 8. Native Agent Runtime（原生运行时）
+### 5. Native Agent Runtime（原生运行时）
 
 基于 Vercel AI SDK 的原生运行时，支持独立于 Claude Code CLI 运行，降低使用门槛。
 
@@ -220,41 +156,7 @@ npm run sync:ownership
 - Native Runtime 不依赖 Claude Code CLI 的特性必须保留
 - 支持 OpenAI Provider（非 Anthropic Provider 强制使用 Native）
 
-### 9. Browser Context 系统
-
-内置浏览器的会话上下文存储与 AI Tool 集成，使 AI 能读取浏览器当前 URL、标题和控制台日志。
-
-涉及文件：
-
-- `src/lib/browser-context-store.ts` - 浏览器会话上下文存储（全局 Map）
-- `src/lib/tools/browser-context.ts` - AI Tool（读取浏览器上下文）
-- `src/lib/tools/browser.ts` - 浏览器相关工具
-- `src/app/api/browser-context/route.ts` - 浏览器上下文 API（GET/POST/DELETE）
-
-保留要求：
-
-- BrowserContextStore 全局存储机制不能丢失
-- AI Tool `browser-context` 必须保留，使 AI 能感知浏览器状态
-- API 端点 `/api/browser-context` 必须保留
-
-### 10. CLI Tools MCP
-
-CLI 工具的目录管理、上下文组装和 MCP 协议集成。
-
-涉及文件：
-
-- `src/lib/cli-tools-catalog.ts` - CLI 工具目录
-- `src/lib/cli-tools-context.ts` - CLI 工具上下文组装
-- `src/lib/cli-tools-detect.ts` - CLI 工具检测
-- `src/lib/cli-tools-mcp.ts` - MCP 协议集成
-- `src/app/api/cli-tools/` - CLI 工具相关 API 路由
-
-保留要求：
-
-- CLI Tools MCP 功能不能被官方回滚
-- 工具检测和目录管理逻辑保留
-
-### 11. Bridge / Channel 系统
+### 6. Bridge / Channel 系统
 
 多平台桥接支持，包括 Discord、Feishu（飞书）、Telegram、Weixin（微信）和 QQ 等渠道的适配与消息处理。
 
@@ -278,7 +180,7 @@ CLI 工具的目录管理、上下文组装和 MCP 协议集成。
 - Bridge 安全验证机制保留
 - Markdown 渲染针对各平台的定制保留
 
-### 12. Assistant Workspace 增强
+### 7. Assistant Workspace 增强
 
 工作区状态管理、文件模板、心跳机制和记忆系统。
 
@@ -299,7 +201,7 @@ CLI 工具的目录管理、上下文组装和 MCP 协议集成。
 - 心跳/每日记忆机制保留
 - Workspace 文件模板（claude.md、soul.md、user.md、memory.md）保留
 
-### 13. Git 面板增强
+### 8. Git 面板增强
 
 目标是恢复并增强 fork 版本的 Git 面板功能，提供完整的 Git 操作能力。
 
@@ -354,7 +256,7 @@ CLI 工具的目录管理、上下文组装和 MCP 协议集成。
 
 同步时若 Git 相关文件发生冲突，**优先保留 fork 的增强功能**，不做整文件覆盖。
 
-### 14. 配套 UI、资源与国际化调整
+### 9. 配套 UI、资源与国际化调整
 
 涉及文件：
 
@@ -378,7 +280,6 @@ CLI 工具的目录管理、上下文组装和 MCP 协议集成。
 ### 布局与导航
 - `src/components/layout/AppShell.tsx` - **工作区标签页系统核心**，极易冲突
 - `src/components/layout/UnifiedTopBar.tsx` - 顶部导航，标签页入口
-- `src/components/layout/BrowserTabView.tsx` - 浏览器标签页视图
 
 ### 文件树与面板
 - `src/components/project/FileTree.tsx`、`src/components/project/EnhancedFileTree.tsx`
@@ -400,15 +301,6 @@ CLI 工具的目录管理、上下文组装和 MCP 协议集成。
 - `src/lib/runtime/registry.ts` - **Runtime 注册与解析逻辑**
 - `src/lib/runtime/types.ts`
 
-### 性能追踪
-- `src/lib/perf-trace.ts`
-- `src/lib/agent-loop.ts` - traceId 集成
-
-### Browser Context
-- `src/lib/browser-context-store.ts`
-- `src/lib/tools/browser-context.ts`
-- `src/app/api/browser-context/route.ts`
-
 ### Bridge / Channel
 - `src/lib/bridge/channel-adapter.ts`、`src/lib/bridge/delivery-layer.ts`
 - `src/lib/bridge/adapters/` 各平台适配器
@@ -421,15 +313,11 @@ CLI 工具的目录管理、上下文组装和 MCP 协议集成。
 - `src/i18n/en.ts`、`src/i18n/zh.ts`
 
 ### 类型与依赖
-- `src/types/index.ts` - traceId 等新类型
+- `src/types/index.ts` - 自定义类型
 - `package.json`
 
-### API 路由（新增大量）
-- `src/app/api/chat/perf/route.ts` - 性能追踪
-- `src/app/api/browser-context/route.ts` - 浏览器上下文
-- `src/app/api/terminal/route.ts`、`src/app/api/terminal/stream/route.ts` - 终端
+### API 路由
 - `src/app/api/media/generate/route.ts` - 媒体生成
-- `src/app/api/cli-tools/` - CLI 工具
 - `src/app/api/bridge/` - 桥接
 - `src/app/api/git/diff/route.ts` - Git diff
 - `src/app/api/git/stage/route.ts`、`src/app/api/git/unstage/route.ts` - Git stage/unstage
@@ -445,7 +333,7 @@ CLI 工具的目录管理、上下文组装和 MCP 协议集成。
 未来 AI 在同步官方更新时，默认遵循下面的优先级：
 
 1. 优先吸收官方的安全修复、基础设施修复、架构升级、依赖升级
-2. 优先保留本 fork 的产品能力和入口，不允许把终端、浏览器、控制台、CC Switch、媒体中转、增强文件树、工作区标签页、Native Runtime、Browser Context、Git 面板增强等直接合并掉
+2. 优先保留本 fork 的产品能力和入口，不允许把 CC Switch、媒体中转、增强文件树、工作区标签页、Native Runtime、Git 面板增强等直接合并掉
 3. 如果官方重构了相同模块，优先把 fork 能力迁移到新结构，而不是把官方重构回退成旧结构
 4. 对公共层代码优先采用官方实现，对 fork 独有能力采用"追加适配"的方式挂回去
 5. 合并冲突时，先判断"这是官方基础能力变更"还是"这是 fork 产品能力入口"，不要只按最近修改时间取舍
@@ -530,12 +418,12 @@ npm run sync:report:write
 在开始任何同步任务前，先阅读：
 1. CLAUDE.md
 2. AGENTS.md
-3. docs/handover/fork-sync-playbook.md
+3. fork-sync-playbook.md
 
 然后执行下面目标：
 - 拉取 upstream/main 的最新更新
 - 将官方更新合并到 integration/official-skeleton
-- 保留 fork 独有能力：终端、控制台、内置浏览器、CC Switch、媒体中转、增强文件树、工作区标签页、Native Runtime、Browser Context、CLI Tools MCP、Bridge 渠道、Assistant Workspace、Git 面板增强等
+- 保留 fork 独有能力：CC Switch、媒体中转、增强文件树、工作区标签页、Native Runtime、Bridge 渠道、Assistant Workspace、Git 面板增强等
 - 优先继承官方的新架构和修复，再把 fork 能力适配回去
 - 不允许通过整文件覆盖的方式粗暴解决冲突
 
@@ -552,9 +440,6 @@ npm run sync:report:write
 每次同步完官方更新后，至少确认以下能力仍然正常：
 
 ### 核心能力
-- [ ] 终端可以创建、连接、实时输出
-- [ ] 控制台面板仍然可见且可操作
-- [ ] 内置浏览器入口仍然存在，聊天与浏览器视图可以切换
 - [ ] 设置页仍然可以配置 CC Switch
 - [ ] 媒体生成链路仍然支持中转平台方案
 - [ ] 文件树增强交互仍然存在
@@ -573,7 +458,6 @@ npm run sync:report:write
 
 ### 工作区标签页
 - [ ] 工作区标签页系统正常
-- [ ] 浏览器、预览、终端等面板以标签页形式存在
 - [ ] 文件树点击文件时在标签页中打开预览
 - [ ] Electron webview 标签支持正常
 
@@ -581,16 +465,6 @@ npm run sync:report:write
 - [ ] Native Runtime 可用（不依赖 Claude Code CLI）
 - [ ] Runtime Registry 解析逻辑正常（cli_enabled / override / auto 优先级）
 - [ ] OpenAI Provider 强制使用 Native Runtime
-
-### 性能追踪
-- [ ] traceId 生成和传递正常
-- [ ] 性能追踪 API 端点可用
-- [ ] perf-trace.ts 环形缓冲正常
-
-### Browser Context
-- [ ] BrowserContextStore 全局存储正常
-- [ ] AI Tool `browser-context` 可用
-- [ ] API 端点 `/api/browser-context` 正常
 
 ### Bridge / Channel
 - [ ] 各平台适配器（Discord、Feishu、Telegram、Weixin、QQ）正常

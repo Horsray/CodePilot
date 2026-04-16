@@ -29,7 +29,7 @@
 |-------|------|------|------|
 | Phase 0 | 架构设计 + 参考项目调研 | ✅ 已完成 | 本文档 |
 | Phase 1 | Preset 声明式改造 + Schema 校验 | ✅ 已完成 | Zod PresetSchema + meta 字段 + 61 个新测试 |
-| Phase 2 | 宿主接管 + authStyle 修正 | ✅ 已完成 | 6 个 authStyle 修正 + PROVIDER_MANAGED_BY_HOST 注入 |
+| Phase 2 | 宿主接管 + authStyle 修正 | ⚠️ 部分完成（见 2.1 更正） | 6 个 authStyle 修正已落；~~PROVIDER_MANAGED_BY_HOST 注入~~ 于 2026-04-15 确认是死代码并回滚 |
 | Phase 3 | 配置时连通性验证 | ✅ 已完成 | POST /api/providers/test + testProviderConnection() |
 | Phase 4 | 用户引导 UX（服务商信息面板） | ✅ 已完成 | QUICK_PRESETS 去重（-181 行），meta 流通到前端 |
 | Phase 5 | 运行时错误治理 | ✅ 已完成 | RecoveryAction + providerMeta → 分类错误码 + 恢复按钮 |
@@ -40,7 +40,7 @@
 - 2026-04-04: 参考了三个项目的架构：
   - **OpenCode** — Registry + Lazy Factory + Plugin，用 models.dev 做外部模型目录，Zod schema 校验所有配置，10+ 种错误模式匹配
   - **Craft Agents** — Driver 模式，连接模板，CredentialManager 多后端，ModelRefreshService 回退链，配置时连通性测试 + RecoveryAction
-  - **Claude Code CLI** — 扁平 if/else，`PROVIDER_MANAGED_BY_HOST` 宿主接管，per-provider 模型 ID 映射，529 自动切模型
+  - **Claude Code CLI** — 扁平 if/else，~~`PROVIDER_MANAGED_BY_HOST` 宿主接管~~（此机制来自上游设计稿，实测 SDK 0.2.62 未实现，已于 2026-04-15 回滚注入逻辑），per-provider 模型 ID 映射，529 自动切模型
 - 2026-04-04: 决策不做 Google Vertex，只走 AI Studio (Gemini API) 路线
 - 2026-04-04: 决策会话切换 provider 做软约束（提示开新会话），不硬锁
 
@@ -173,16 +173,15 @@ notes: ['需先在控制台激活 Endpoint', 'API Key 为临时凭证']
 
 ## Phase 2：宿主接管 + authStyle 修正
 
-### 2.1 注入 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`
+### 2.1 ~~注入 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`~~（已用 shadow HOME 替代）
 
-**一行改动**，在 `toClaudeCodeEnv()` 中：
-
-```typescript
-// provider-resolver.ts, toClaudeCodeEnv() 开头
-env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
-```
-
-效果：用户终端 `~/.claude/settings.json` 中的 provider 路由变量不再覆盖 CodePilot 注入的配置。
+> **2026-04-15 更正 + 修复** — 本节原方案基于上游设计稿（`managedEnv.ts` / `withoutHostManagedProviderVars()`），但实测 `@anthropic-ai/claude-agent-sdk@0.2.62` 全文 0 hit，该 flag 从未被 SDK 识别。死代码已移除。
+>
+> **当前实现：per-request shadow `~/.claude/`**（`src/lib/claude-home-shadow.ts`）
+>
+> 按 provider group 决定凭据归属：env group 完全尊重 settings.json/cc-switch；DB provider 请求时建剥离 `ANTHROPIC_*` 的临时 `~/.claude/`，其余文件/目录通过 symlink 镜像，user-level MCP/plugins/hooks/CLAUDE.md 全部保留。
+>
+> 详细决策日志见 `docs/exec-plans/active/cc-switch-credential-bridge.md`。
 
 ### 2.2 修正 5 个 preset 的 authStyle
 
@@ -374,6 +373,6 @@ const AUTH_PATTERNS = [
 | 加新服务商 | 手写 preset 对象，没有校验，上线后用户报 bug 才发现错 | 写声明式配置 + meta，Schema 校验不过则 test 失败，不可能带错上线 |
 | 改模型名 | 改 catalog，不确定有没有破坏别的，祈祷 | 改配置，preset 测试自动验证所有服务商不受影响 |
 | 用户配置 GLM | 填 Key → 发消息 → 报错 401 → 截图发 Issue | 填 Key → 点测试 → 立即成功/立即看到"Key 无效，去这里重新获取" |
-| 终端 Claude Code 配了 Bedrock，打开 CodePilot 选 OpenRouter | 请求莫名跑到 Bedrock，用户完全无法理解 | `PROVIDER_MANAGED_BY_HOST` 拦截，CodePilot 的选择不被干扰 |
+| 终端 Claude Code 配了 Bedrock，打开 CodePilot 选 OpenRouter | 请求莫名跑到 Bedrock，用户完全无法理解 | ✅ 2026-04-15 通过 per-request shadow `~/.claude/` 实现真正隔离：DB provider 请求时自动剥离 settings.json 的 ANTHROPIC_*，其余 user-level MCP/plugins/hooks/CLAUDE.md 不受影响 |
 | 运行时 API 报错 | "Error: 401 Unauthorized" | "智谱 GLM 认证失败，可能是 Key 过期。[重新获取 →]" |
 | 百炼用户拿错 Key | 模糊报错，来回沟通 5 条 Issue 评论 | 配置时提示"请使用 sk-sp- 开头的 Coding Plan Key"，测试时立即检出 |

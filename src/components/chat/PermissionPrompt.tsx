@@ -98,11 +98,13 @@ function AskUserQuestionUI({
     onSubmit('allow', { questions: toolInput.questions, answers });
   };
 
-  // 中文注释：功能名称「AskUserQuestion 全量回答校验」。
-  // 用法：要求所有问题都被回答后才能提交，避免模型收到半成品问卷结果继续执行。
+  // Require ALL questions to be answered before enabling Submit.
+  // `some` would allow partial submissions where unanswered questions
+  // produce empty-string answers — the model would continue as if the
+  // interview completed when it actually didn't.
   const hasAnswer = questions.length > 0 && questions.every((_, i) => {
     const qIdx = String(i);
-    return (selections[qIdx]?.size || 0) > 0 || (useOther[qIdx] && otherTexts[qIdx]?.trim());
+    return (selections[qIdx]?.size || 0) > 0 || (useOther[qIdx] && !!otherTexts[qIdx]?.trim());
   });
 
   return (
@@ -402,23 +404,33 @@ export function PermissionPrompt({
     }
   };
 
-  // Auto-approve when full_access is active
+  // Tools that require user interaction even in full_access mode.
+  // AskUserQuestion's entire purpose is to get user input — auto-approving
+  // would return empty answers, defeating the purpose.
+  const NEVER_AUTO_APPROVE = new Set(['AskUserQuestion']);
+
+  // Auto-approve when full_access is active — except for interactive tools
   const autoApprovedRef = useRef<string | null>(null);
   useEffect(() => {
     if (
       permissionProfile === 'full_access' &&
       pendingPermission &&
       !permissionResolved &&
-      !isResolving &&
-      autoApprovedRef.current !== pendingPermission.permissionRequestId
+      autoApprovedRef.current !== pendingPermission.permissionRequestId &&
+      !NEVER_AUTO_APPROVE.has(pendingPermission.toolName)
     ) {
       autoApprovedRef.current = pendingPermission.permissionRequestId;
       handleResponse('allow');
     }
   }, [permissionProfile, pendingPermission, permissionResolved, isResolving, onPermissionResponse]);
 
-  // Don't render permission UI when full_access
-  if (permissionProfile === 'full_access') return null;
+  // Don't render permission UI when full_access — EXCEPT for interactive tools
+  if (
+    permissionProfile === 'full_access' &&
+    (!pendingPermission || !NEVER_AUTO_APPROVE.has(pendingPermission.toolName))
+  ) {
+    return null;
+  }
 
   // Nothing to show
   if (!pendingPermission && !permissionResolved) return null;

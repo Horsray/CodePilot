@@ -507,8 +507,40 @@ function getExpandedShellPath(): string {
   }
 }
 
-function getPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+/**
+ * Try to bind a specific port. Resolves true if free, false if taken.
+ * Both EADDRINUSE and other errors count as "not free" (we'll try the next).
+ */
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen(port, '127.0.0.1', () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+/**
+ * Stable port range for the embedded Next.js server.
+ *
+ * IMPORTANT: localStorage in the renderer is keyed by origin (scheme+host+port).
+ * If we pick a random OS-assigned port (`listen(0)`) every launch, localStorage
+ * is effectively wiped on every restart — which silently breaks the theme,
+ * default model badge, last-selected provider, working-directory memory, and
+ * any other UI state that uses localStorage. (See B-004 in issue tracker.)
+ *
+ * We try this range in order so the origin stays consistent across restarts.
+ * Range chosen: 47823–47830 (8 ports). These are unassigned by IANA and
+ * uncommon in practice. 8 candidates handles up to 8 concurrent CodePilot
+ * instances before falling back to OS-assigned, which is plenty for normal use.
+ */
+const STABLE_PORTS = [47823, 47824, 47825, 47826, 47827, 47828, 47829, 47830];
+
+/** Allocate an OS-assigned port (last-resort fallback when all stable ports fail). */
+async function getDynamicPort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
     const server = net.createServer();
     server.unref();
     server.on('error', reject);
@@ -522,6 +554,66 @@ function getPort(): Promise<number> {
       }
     });
   });
+}
+
+/**
+ * Start the embedded server, choosing an available stable port.
+ *
+ * The previous implementation just probed `isPortFree` then returned the
+ * port — a classic TOCTOU race when two packaged instances launch close
+ * together (both observe 47823 free, the second one then loses with
+ * EADDRINUSE and the app crashes). This function actually attempts to bind
+ * each candidate via the real subprocess and advances to the next one if
+ * the server fails to come up due to a port conflict.
+ *
+ * Returns the bound port. Sets the global `serverProcess` as a side effect.
+ * Throws only if every candidate AND the OS-assigned fallback fail.
+ */
+async function startServerOnStablePort(): Promise<number> {
+  for (const candidate of STABLE_PORTS) {
+    // Quick pre-check skips obviously-occupied ports without spawning.
+    // Not a guarantee — but cheap, and avoids a process spawn for the common
+    // case where another app already owns 47823.
+    if (!(await isPortFree(candidate))) {
+      console.log(`[port] ${candidate} is in use, trying next stable port`);
+      continue;
+    }
+
+    console.log(`[port] Attempting stable port ${candidate}...`);
+    serverProcess = startServer(candidate);
+    try {
+      await waitForServer(candidate);
+      console.log(`[port] Bound stable port ${candidate} — localStorage origin will be consistent across restarts`);
+      return candidate;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isPortConflict = /EADDRINUSE|address.+(?:already )?in use|listen EACCES/i.test(msg);
+      console.warn(
+        `[port] Port ${candidate} failed${isPortConflict ? ' (collided with another process)' : ''}: ${msg.slice(0, 200)}` +
+        (isPortConflict ? ' — trying next stable port' : ''),
+      );
+      // Make sure the failed subprocess is dead before trying again — otherwise
+      // we'd leak processes on each retry.
+      try { serverProcess?.kill(); } catch { /* already gone */ }
+      serverProcess = null;
+
+      // Non-port errors (Next.js boot crash, missing file, etc.) won't be
+      // fixed by switching ports, but we still try the rest because the cost
+      // is small and a transient error on the first port shouldn't be fatal.
+    }
+  }
+
+  // Every stable port failed — last resort: OS-assigned dynamic port.
+  // localStorage will be lost on next restart, but at least the app boots.
+  console.warn(
+    `[port] All stable ports (${STABLE_PORTS[0]}-${STABLE_PORTS[STABLE_PORTS.length - 1]}) failed; ` +
+    `falling back to OS-assigned port. UI settings stored in localStorage (theme, last model, etc.) ` +
+    `may not persist across this restart.`,
+  );
+  const dynamicPort = await getDynamicPort();
+  serverProcess = startServer(dynamicPort);
+  await waitForServer(dynamicPort);
+  return dynamicPort;
 }
 
 async function waitForServer(port: number, timeout = 30000): Promise<void> {
@@ -1354,21 +1446,21 @@ app.whenReady().then(async () => {
     let port: number;
 
     if (isDev) {
-      port = 3000;
+      const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : NaN;
+      port = Number.isNaN(envPort) ? 3000 : envPort;
       console.log(`Dev mode: connecting to http://127.0.0.1:${port}`);
       serverPort = port;
       createWindow(`http://127.0.0.1:${port}`);
     } else {
-      port = await getPort();
-      console.log(`Starting server on port ${port}...`);
-      serverProcess = startServer(port);
-      serverPort = port;
-
-      // Show window immediately with loading screen
+      // Show window immediately with loading screen so user sees progress
+      // even if port acquisition takes a moment.
       createWindow();
 
-      // Wait for server in background, then navigate to real URL
-      await waitForServer(port);
+      // startServerOnStablePort actually binds the subprocess on each
+      // candidate port and advances on EADDRINUSE — closing the TOCTOU
+      // race window from the previous "probe-then-release" approach.
+      port = await startServerOnStablePort();
+      serverPort = port;
       console.log('Server is ready');
       if (mainWindow) {
         mainWindow.loadURL(`http://127.0.0.1:${port}`);
@@ -1428,11 +1520,9 @@ app.on('activate', async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     try {
       if (!isDev && !serverProcess) {
-        const port = await getPort();
-        serverProcess = startServer(port);
-        // Show loading window immediately
+        // Show loading window immediately so user sees progress
         createWindow();
-        await waitForServer(port);
+        const port = await startServerOnStablePort();
         serverPort = port;
         if (mainWindow) {
           mainWindow.loadURL(`http://127.0.0.1:${port}`);

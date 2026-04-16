@@ -116,6 +116,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('open-setup-center', handler);
   }, []);
 
+  // Hash bridge: error messages render `[Open Settings](/settings#providers)`
+  // markdown links as fallback when the frontend cannot directly dispatch the
+  // open-setup-center event (e.g. rendering inside the SSE text stream). When
+  // such a link is clicked the hash changes to `#providers`, and we surface
+  // the SetupCenter Provider card here.
+  useEffect(() => {
+    const maybeOpenFromHash = () => {
+      if (typeof window === 'undefined') return;
+      if (window.location.hash === '#providers') {
+        setSetupInitialCard('provider');
+        setSetupOpen(true);
+        // Clear the hash so a second navigation to /#providers fires again.
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    };
+    maybeOpenFromHash();
+    window.addEventListener('hashchange', maybeOpenFromHash);
+    return () => window.removeEventListener('hashchange', maybeOpenFromHash);
+  }, []);
+
   // Sync with viewport after hydration to avoid SSR mismatch
   useEffect(() => {
     setChatListOpenRaw(window.matchMedia(`(min-width: ${LG_BREAKPOINT}px)`).matches);

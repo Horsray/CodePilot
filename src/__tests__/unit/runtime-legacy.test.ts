@@ -1,6 +1,11 @@
+/**
+ * Pin the legacy-runtime coercion used by both SettingsCli migration and
+ * RuntimeBadge display. If these rules drift between call sites the UI and
+ * the persisted value disagree.
+ */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLegacyRuntimeForDisplay, isConcreteRuntime } from '../../lib/runtime/legacy';
+import { resolveLegacyRuntimeForDisplay, isConcreteRuntime } from '@/lib/runtime/legacy';
 
 describe('resolveLegacyRuntimeForDisplay', () => {
   it('preserves explicit claude-code-sdk regardless of CLI state', () => {

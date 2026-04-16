@@ -47,12 +47,13 @@ export async function POST(request: Request) {
 
     const session = await pollRegistration(sessionId);
 
-    // 中文注释：功能名称「飞书注册会话收尾」。
-    // 用法：成功/失败/过期后延迟清理，避免前端刷新时会话立刻丢失。
+    // Clean up terminal sessions after a delay. unref() so the timer doesn't
+    // hold the event loop alive in tests.
     if (session.status === 'completed' || session.status === 'failed' || session.status === 'expired') {
       setTimeout(() => cancelRegistration(sessionId), 30_000).unref();
     }
 
+    // On success: verify credentials and optionally restart bridge
     let botName: string | undefined;
     let verifyError: string | undefined;
     let bridgeRestartError: string | undefined;
@@ -63,6 +64,7 @@ export async function POST(request: Request) {
       botName = verify.botName;
       verifyError = verify.error;
 
+      // Auto-restart bridge if already running
       if (getStatus().running) {
         try {
           const result = await restart();
@@ -82,6 +84,7 @@ export async function POST(request: Request) {
       error_code: session.errorCode || undefined,
       error_detail: session.errorDetail || undefined,
       bridge_restart_error: bridgeRestartError,
+      // Pass current interval so frontend can respect slow_down
       interval_ms: session.status === 'waiting' ? session.interval : undefined,
     });
   } catch (err) {

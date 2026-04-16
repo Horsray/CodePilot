@@ -3,11 +3,10 @@
 CodePilot — 多模型 AI Agent 桌面客户端，基于 Electron + Next.js。
 本项目是https://github.com/op7418/CodePilot的fork分支版本
 与原始版本的主要差异在：
-- 新增了终端和控制台的支持
-- 新增了内置浏览器的支持
 - 新增了对cc switch的支持，用以切换本地/api/中转平台的模型调用
 - 新增了对中转平台的媒体渠道生成支持
 - 修改了文件树功能的ui和交互
+- 新增了增强的Git面板（暂存、diff、stash、分支创建、AI commit等）
 
 ## Fork 同步须知
 

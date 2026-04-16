@@ -13,6 +13,15 @@ import type { AgentRuntime, RuntimeStreamOptions } from './types';
 import type { ClaudeStreamOptions } from '@/types';
 import { findClaudeBinary } from '../platform';
 import { getConversation } from '../conversation-registry';
+import { getSetting, getActiveProvider } from '../db';
+// Static import. Used to be `require('../claude-client')` for lazy loading,
+// but Turbopack's ESM↔CJS interop returns the module wrapped in `{ default: ... }`
+// instead of the named-export shape webpack used to produce, which breaks the
+// destructuring and surfaces as "Error: streamClaudeSdk is not a function" the
+// moment a DB-provider request hits the SDK runtime. Lazy loading was a
+// micro-optimization (claude-client is imported elsewhere too via
+// streamClaude), so it's safe to drop in favor of a static import that both
+// bundlers handle correctly.
 import { disposeSessionPool } from '../cli-session-pool';
 import { streamClaudeSdk } from '../claude-client';
 
@@ -22,6 +31,8 @@ export const sdkRuntime: AgentRuntime = {
   description: 'Claude Code CLI agent with built-in tools, MCP, and permissions.',
 
   stream(options: RuntimeStreamOptions): ReadableStream<string> {
+
+
     // Convert RuntimeStreamOptions → ClaudeStreamOptions
     const ro = options.runtimeOptions || {};
     const sdkOptions: ClaudeStreamOptions = {

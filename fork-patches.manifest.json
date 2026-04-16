@@ -14,7 +14,6 @@
         "electron/main.ts"
       ],
       "ownedPaths": [
-        "src/components/layout/BrowserTabView.tsx",
         "src/components/layout/panels/PreviewPanel.tsx",
         "src/components/layout/panels/AssistantPanel.tsx",
         "src/components/layout/panels/DashboardPanel.tsx"
@@ -35,26 +34,6 @@
         "src/components/layout/panels/FileTreePanel.tsx"
       ],
       "syncStrategy": "整组保留 fork，实现层不回退到 upstream。"
-    },
-    {
-      "id": "terminal-console",
-      "kind": "overlay",
-      "owner": "fork",
-      "summary": "终端、控制台、PTY 与底部面板。",
-      "entrypoints": [
-        "src/components/layout/BottomPanelContainer.tsx",
-        "src/components/layout/panels/WebTerminalPanel.tsx",
-        "src/app/api/terminal/**"
-      ],
-      "ownedPaths": [
-        "electron/terminal-manager.ts",
-        "src/lib/pty-manager.ts",
-        "src/components/terminal/**",
-        "src/components/console/**",
-        "src/hooks/useTerminal.ts",
-        "src/hooks/useWebTerminal.ts"
-      ],
-      "syncStrategy": "终端能力整组保留，仅同步外层 UI/状态接口。"
     },
     {
       "id": "provider-cc-switch-olmx",

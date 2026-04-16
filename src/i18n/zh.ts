@@ -75,10 +75,13 @@ const zh: Record<TranslationKey, string> = {
   'chat.referencedContexts': '参考了 {{count}} 个上下文',
   'chat.deleteConfirm': '确定要删除这条消息吗？',
   'chat.searchPlaceholder': '搜索历史对话...',
-  'skillNudge.message': '本次工作流在第 {step} 步前后使用了至少 {toolCount} 个不同工具，建议沉淀为可复用 Skill。',
+  'skillNudge.message': '本次工作流使用了 {step} 个步骤和 {toolCount} 种工具，可以保存为 Skill 以便一键复用。',
   'skillNudge.saveButton': '保存为 Skill',
-  'skillNudge.savePrompt': '请帮我把我们刚完成的工作流整理成一个可复用的 Skill，包括清晰的名称、描述以及分步骤实现方式。',
+  'skillNudge.savePrompt': '请帮我把这次对话中的工作流程保存为一个可复用的 Skill。',
 
+  // ── Message queue ────────────────────────────────────────────
+  'messageQueue.queued': '已排队',
+  'messageQueue.cancel': '取消排队消息',
   // ── Settings: General ───────────────────────────────────────
   'settings.title': '设置',
   'settings.description': '管理 CodePilot 和 Claude Code 设置',

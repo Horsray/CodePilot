@@ -11,6 +11,7 @@ import { buildSystemPrompt } from '../agent-system-prompt';
 import { resolveProvider } from '../provider-resolver';
 import { disposeAll as disposeMcp } from '../mcp-connection-manager';
 import { isOAuthUsable } from '../openai-oauth-manager';
+import { wrapController } from '../safe-stream';
 
 // Track active AbortControllers for interrupt support
 const activeControllers = new Map<string, AbortController>();
@@ -76,12 +77,14 @@ export const nativeRuntime: AgentRuntime = {
     // Clean up controller when stream ends
     const reader = stream.getReader();
     const cleanup = new ReadableStream<string>({
-      async start(controller) {
+      async start(controllerRaw) {
+        const controller = wrapController(controllerRaw);
         try {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             controller.enqueue(value);
+            if (controller.closed) break; // consumer aborted — stop pulling
           }
         } finally {
           activeControllers.delete(options.sessionId);

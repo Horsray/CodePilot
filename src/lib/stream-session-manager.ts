@@ -437,8 +437,13 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     });
 
     if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || 'Failed to send message');
+      const err = await response.json().catch(() => ({}));
+      if (err?.code === 'NEEDS_PROVIDER_SETUP' && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('open-setup-center', {
+          detail: { initialCard: err.initialCard ?? 'provider' },
+        }));
+      }
+      throw new Error(err?.error || 'Failed to send message');
     }
 
     const reader = response.body?.getReader();
@@ -527,7 +532,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         emit(stream, 'snapshot-updated');
       },
       onSkillNudge: (data) => {
-        // 中文注释：功能名称「技能提示广播」，用法是在复杂多步工作流结束后向聊天页派发持久横幅提示。
+        // Broadcast as window event — ChatView listens and renders a
+        // persistent banner. We don't use the snapshot because the nudge
+        // should persist after the stream completes (snapshot gets cleared).
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('skill-nudge', {
             detail: { sessionId: params.sessionId, ...data },
@@ -536,11 +543,16 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onContextCompressed: (data) => {
         markMeaningfulProgress();
+        // Dispatch the 'context-compressed' window event that ChatView
+        // uses to flip hasSummary state and show the context indicator.
+        // Also show a brief human-readable status line so the user knows
+        // compression happened.
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('context-compressed', {
             detail: { sessionId: params.sessionId, ...data },
           }));
         }
+        // Show the compression message briefly in the status bar
         if (data.message) {
           stream.snapshot = { ...stream.snapshot, statusText: data.message };
           emit(stream, 'snapshot-updated');

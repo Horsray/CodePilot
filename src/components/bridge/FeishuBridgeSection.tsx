@@ -102,24 +102,19 @@ export function FeishuBridgeSection() {
   } | null>(null);
   const { t } = useTranslation();
 
-  // 中文注释：功能名称「飞书一键创建状态」。
-  // 用法：保存设备流轮询状态，让设置页能直接完成创建、绑定、验证和取消。
+  // ── Quick Create state ──
   const [registering, setRegistering] = useState(false);
   const [regStatus, setRegStatus] = useState<{ variant: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const regPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const regSessionIdRef = useRef<string | null>(null);
   const regAbortRef = useRef<AbortController | null>(null);
+  // Bumps on every cancel / completion so in-flight polls from a previous run
+  // can detect they are stale and bail out instead of mutating UI state.
   const regRunIdRef = useRef(0);
 
   const stopPolling = useCallback(() => {
-    if (regPollRef.current) {
-      clearTimeout(regPollRef.current);
-      regPollRef.current = null;
-    }
-    if (regAbortRef.current) {
-      regAbortRef.current.abort();
-      regAbortRef.current = null;
-    }
+    if (regPollRef.current) { clearTimeout(regPollRef.current); regPollRef.current = null; }
+    if (regAbortRef.current) { regAbortRef.current.abort(); regAbortRef.current = null; }
     regRunIdRef.current += 1;
   }, []);
 
@@ -186,11 +181,11 @@ export function FeishuBridgeSection() {
     fetchSettings();
   }, [fetchSettings]);
 
+  // ── Quick Create handlers (must be after fetchSettings) ──
   const handleQuickCreate = useCallback(async () => {
     setRegistering(true);
     setRegStatus(null);
     setVerifyResult(null);
-
     try {
       const res = await fetch('/api/bridge/feishu/register/start', { method: 'POST' });
       const data = await res.json();
@@ -199,21 +194,21 @@ export function FeishuBridgeSection() {
         setRegistering(false);
         return;
       }
-
       regSessionIdRef.current = data.session_id;
+      // Take a fresh run id and abort controller for this session
       regRunIdRef.current += 1;
       const myRunId = regRunIdRef.current;
       const abortCtrl = new AbortController();
       regAbortRef.current = abortCtrl;
       window.open(data.verification_url, '_blank');
 
+      // Adaptive polling — respects slow_down from server
       let pollInterval = 5000;
       const isStale = () => myRunId !== regRunIdRef.current || abortCtrl.signal.aborted;
       const schedulePoll = () => {
         if (isStale()) return;
         regPollRef.current = setTimeout(pollFn, pollInterval);
       };
-
       const pollFn = async () => {
         if (isStale()) return;
         try {
@@ -223,15 +218,18 @@ export function FeishuBridgeSection() {
             body: JSON.stringify({ session_id: data.session_id }),
             signal: abortCtrl.signal,
           });
+          // If the user cancelled while we were awaiting, bail out without mutating state.
           if (isStale()) return;
+          // Non-2xx: server error (including "Session not found" after cancel).
+          // Do NOT fall through to schedulePoll — treat as terminal for this run.
           if (!pr.ok) {
+            if (isStale()) return;
             stopPolling();
             regSessionIdRef.current = null;
             setRegistering(false);
             setRegStatus({ variant: 'error', message: t('feishu.createFailed') });
             return;
           }
-
           const pd = await pr.json();
           if (isStale()) return;
 
@@ -262,34 +260,40 @@ export function FeishuBridgeSection() {
               empty_credentials: t('feishu.errorEmptyCredentials'),
               lark_empty_credentials: t('feishu.errorLarkEmptyCredentials'),
             };
-            const message = (pd.error_code && errorCodeMap[pd.error_code]) || pd.error_detail || t('feishu.createFailed');
+            const message = (pd.error_code && errorCodeMap[pd.error_code])
+              || pd.error_detail
+              || t('feishu.createFailed');
             setRegStatus({ variant: 'error', message });
           } else if (pd.status === 'waiting') {
             if (pd.interval_ms) pollInterval = pd.interval_ms;
             schedulePoll();
           } else {
+            // Unknown status — treat as terminal error to avoid a hidden retry loop
             stopPolling();
             regSessionIdRef.current = null;
             setRegistering(false);
             setRegStatus({ variant: 'error', message: t('feishu.createFailed') });
           }
         } catch (err) {
+          // AbortError from user cancel — bail silently
           if ((err as { name?: string })?.name === 'AbortError' || isStale()) return;
+          // True network error — retry with current interval
           schedulePoll();
         }
       };
-
       pollFn();
     } catch {
       setRegistering(false);
       setRegStatus({ variant: 'error', message: t('feishu.createFailed') });
     }
-  }, [fetchSettings, stopPolling, t]);
+  }, [t, fetchSettings, stopPolling]);
 
   const handleCancelCreate = useCallback(() => {
     stopPolling();
     setRegistering(false);
     setRegStatus(null);
+    // Also cancel on server so a late browser confirmation won't
+    // silently complete and create an orphan app binding.
     const sid = regSessionIdRef.current;
     regSessionIdRef.current = null;
     if (sid) {
@@ -297,7 +301,7 @@ export function FeishuBridgeSection() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sid }),
-      }).catch(() => {});
+      }).catch(() => { /* best-effort */ });
     }
   }, [stopPolling]);
 
@@ -410,13 +414,12 @@ export function FeishuBridgeSection() {
         description={appId ? undefined : t("feishu.quickCreateDesc")}
       >
         {appId ? (
+          /* ── Bound state: show app info + rebind option ── */
           <div className="space-y-3">
             <div className="flex items-center gap-3">
               <CheckCircle size={18} className="shrink-0 text-green-500" />
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium">
-                  {t("feishu.appId")}: <span className="font-mono text-muted-foreground">{appId}</span>
-                </div>
+                <div className="text-sm font-medium">{t("feishu.appId")}: <span className="font-mono text-muted-foreground">{appId}</span></div>
                 <div className="text-xs text-muted-foreground">
                   {t("feishu.domain")}: {domain === 'lark' ? 'Lark' : t("feishu.domainFeishu")}
                 </div>
@@ -434,7 +437,7 @@ export function FeishuBridgeSection() {
             {regStatus && (
               <StatusBanner
                 variant={regStatus.variant}
-                icon={regStatus.variant === "success"
+                icon={regStatus.variant === 'success'
                   ? <CheckCircle size={16} className="shrink-0" />
                   : <Warning size={16} className="shrink-0" />}
               >
@@ -443,6 +446,7 @@ export function FeishuBridgeSection() {
             )}
           </div>
         ) : (
+          /* ── Unbound state: show create button ── */
           <div className="space-y-3">
             <div className="flex items-center gap-3">
               {!registering ? (
@@ -464,7 +468,7 @@ export function FeishuBridgeSection() {
             {regStatus && (
               <StatusBanner
                 variant={regStatus.variant}
-                icon={regStatus.variant === "success"
+                icon={regStatus.variant === 'success'
                   ? <CheckCircle size={16} className="shrink-0" />
                   : <Warning size={16} className="shrink-0" />}
               >
@@ -475,97 +479,82 @@ export function FeishuBridgeSection() {
         )}
       </SettingsCard>
 
+      {/* ── Manual Config (collapsed) ── */}
       <details className="group">
         <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none">
           {t("feishu.manualConfig")}
         </summary>
         <div className="mt-3">
-      <SettingsCard
-        title={t("feishu.credentials")}
-        description={t("feishu.credentialsDesc")}
-      >
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">
-              {t("feishu.appId")}
-            </label>
-            <Input
-              value={appId}
-              onChange={(e) => setAppId(e.target.value)}
-              placeholder="cli_xxxxxxxxxx"
-              className="font-mono text-sm"
-            />
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">
-              {t("feishu.appSecret")}
-            </label>
-            <Input
-              type="password"
-              value={appSecret}
-              onChange={(e) => setAppSecret(e.target.value)}
-              placeholder="xxxxxxxxxxxxxxxxxxxxxxxx"
-              className="font-mono text-sm"
-            />
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">
-              {t("feishu.domain")}
-            </label>
-            <Select value={domain} onValueChange={setDomain}>
-              <SelectTrigger className="w-full text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="feishu">
-                  {t("feishu.domainFeishu")}
-                </SelectItem>
-                <SelectItem value="lark">
-                  {t("feishu.domainLark")}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">
-              {t("feishu.domainHint")}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <SaveButton
-            dirty={credentialsDirty}
-            saving={credentialsSaving}
-            onClick={handleSaveCredentials}
-            label={t("common.save")}
-            savedLabel={t("feishu.saved")}
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleVerify}
-            disabled={verifying || !appId}
+          <SettingsCard
+            title={t("feishu.credentials")}
+            description={t("feishu.credentialsDesc")}
           >
-            {verifying ? (
-              <SpinnerGap
-                size={14}
-                className="animate-spin mr-1.5"
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                  {t("feishu.appId")}
+                </label>
+                <Input
+                  value={appId}
+                  onChange={(e) => setAppId(e.target.value)}
+                  placeholder="cli_xxxxxxxxxx"
+                  className="font-mono text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                  {t("feishu.appSecret")}
+                </label>
+                <Input
+                  type="password"
+                  value={appSecret}
+                  onChange={(e) => setAppSecret(e.target.value)}
+                  placeholder="xxxxxxxxxxxxxxxxxxxxxxxx"
+                  className="font-mono text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                  {t("feishu.domain")}
+                </label>
+                <Select value={domain} onValueChange={setDomain}>
+                  <SelectTrigger className="w-full text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="feishu">{t("feishu.domainFeishu")}</SelectItem>
+                    <SelectItem value="lark">{t("feishu.domainLark")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <SaveButton
+                dirty={credentialsDirty}
+                saving={credentialsSaving}
+                onClick={handleSaveCredentials}
+                label={t("common.save")}
+                savedLabel={t("feishu.saved")}
               />
-            ) : null}
-            {t("feishu.verify")}
-          </Button>
-        </div>
-
-        {verifyResult && (
-          <StatusBanner
-            variant={verifyResult.ok ? "success" : "error"}
-            icon={verifyResult.ok ? <CheckCircle size={16} className="shrink-0" /> : <Warning size={16} className="shrink-0" />}
-          >
-            {verifyResult.message}
-          </StatusBanner>
-        )}
-      </SettingsCard>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleVerify}
+                disabled={verifying || !appId}
+              >
+                {verifying ? <SpinnerGap size={14} className="animate-spin mr-1.5" /> : null}
+                {t("feishu.verify")}
+              </Button>
+            </div>
+            {verifyResult && (
+              <StatusBanner
+                variant={verifyResult.ok ? "success" : "error"}
+                icon={verifyResult.ok ? <CheckCircle size={16} className="shrink-0" /> : <Warning size={16} className="shrink-0" />}
+              >
+                {verifyResult.message}
+              </StatusBanner>
+            )}
+          </SettingsCard>
         </div>
       </details>
 
@@ -695,9 +684,6 @@ export function FeishuBridgeSection() {
           <li>{t("feishu.step1")}</li>
           <li>{t("feishu.step2")}</li>
           <li>{t("feishu.step3")}</li>
-          <li>{t("feishu.step4")}</li>
-          <li>{t("feishu.step5")}</li>
-          <li>{t("feishu.step6")}</li>
         </ol>
       </SettingsCard>
     </div>

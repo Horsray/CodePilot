@@ -14,6 +14,7 @@ import { ImageGenToggle } from './ImageGenToggle';
 import { Button } from '@/components/ui/button';
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
+import type { TranslationKey } from '@/i18n';
 import { PermissionPrompt } from './PermissionPrompt';
 import { FileReviewBar } from './FileReviewBar';
 import { BatchExecutionDashboard, BatchContextSync } from './batch-image-gen';
@@ -28,6 +29,13 @@ import {
   getRewindPoints,
   respondToPermission,
 } from '@/lib/stream-session-manager';
+
+interface QueuedMessage {
+  content: string;
+  files?: FileAttachment[];
+  systemPromptAppend?: string;
+  displayOverride?: string;
+}
 
 interface ChatViewProps {
   sessionId: string;
@@ -180,6 +188,10 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   useEffect(() => {
     if (isStreaming) setSkillNudge(null);
   }, [isStreaming]);
+
+  // ── Message queue — allows sending while AI is responding ──
+  const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
+  const dequeuingRef = useRef(false);
 
   // Pending image generation notices
   const pendingImageNoticesRef = useRef<string[]>([]);
@@ -412,27 +424,9 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     [sessionId, setPendingApprovalSessionId]
   );
 
-  const sendMessage = useCallback(
-    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => {
-      if (isStreaming) return;
-
-      const displayUserContent = displayOverride || content;
-      let displayContent = displayUserContent;
-      if (files && files.length > 0) {
-        const fileMeta = files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size }));
-        displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
-      }
-
-      const userMessage: Message = {
-        id: 'temp-' + Date.now(),
-        session_id: sessionId,
-        role: 'user',
-        content: displayContent,
-        created_at: new Date().toISOString(),
-        token_usage: null,
-      };
-      cappedSetMessages((prev) => [...prev, userMessage]);
-
+  /** Start an API stream for the given content. Does NOT add a user message to the list. */
+  const doStartStream = useCallback(
+    (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => {
       const notices = pendingImageNoticesRef.current.length > 0
         ? [...pendingImageNoticesRef.current]
         : undefined;
@@ -463,15 +457,69 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           console.log('[ChatView] SDK init meta received:', meta);
         },
       });
-
-      // If the message window is stale (tailTrimmedRef), reconciliation will
-      // happen on stream completion via onStreamCompleted — at that point both
-      // user and assistant messages are persisted, so no race is possible.
     },
-    [sessionId, isStreaming, mode, currentModel, currentProviderId, selectedEffort, context1m, buildThinkingConfig, handleModeChange]
+    [sessionId, mode, currentModel, currentProviderId, selectedEffort, context1m, buildThinkingConfig, handleModeChange]
+  );
+
+  const sendMessage = useCallback(
+    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => {
+      const displayUserContent = displayOverride || content;
+      let displayContent = displayUserContent;
+      if (files && files.length > 0) {
+        const fileMeta = files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size }));
+        displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
+      }
+
+      // Queue message if currently streaming — hold above input, send after completion
+      if (isStreaming) {
+        setMessageQueue((prev) => [...prev, { content, files, systemPromptAppend, displayOverride }]);
+        return;
+      }
+
+      const userMessage: Message = {
+        id: 'temp-' + Date.now(),
+        session_id: sessionId,
+        role: 'user',
+        content: displayContent,
+        created_at: new Date().toISOString(),
+        token_usage: null,
+      };
+      cappedSetMessages((prev) => [...prev, userMessage]);
+      doStartStream(content, files, systemPromptAppend, displayOverride);
+    },
+    [sessionId, isStreaming, doStartStream, cappedSetMessages]
   );
 
   sendMessageRef.current = sendMessage;
+
+  // ── Dequeue: when streaming finishes and queue is non-empty, send next ──
+  useEffect(() => {
+    if (!isStreaming && messageQueue.length > 0 && !dequeuingRef.current) {
+      dequeuingRef.current = true;
+      const [next, ...rest] = messageQueue;
+      setMessageQueue(rest);
+      // Add the queued message to the conversation as a normal user message
+      const displayUserContent = next.displayOverride || next.content;
+      let displayContent = displayUserContent;
+      if (next.files && next.files.length > 0) {
+        const fileMeta = next.files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size }));
+        displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
+      }
+      const userMessage: Message = {
+        id: 'temp-' + Date.now(),
+        session_id: sessionId,
+        role: 'user',
+        content: displayContent,
+        created_at: new Date().toISOString(),
+        token_usage: null,
+      };
+      cappedSetMessages((prev) => [...prev, userMessage]);
+      doStartStream(next.content, next.files, next.systemPromptAppend, next.displayOverride);
+    }
+    if (isStreaming) {
+      dequeuingRef.current = false;
+    }
+  }, [isStreaming, messageQueue, doStartStream, cappedSetMessages, sessionId]);
 
   // Expose widget drill-down bridge: widgets can call window.__widgetSendMessage(text)
   // to trigger follow-up questions (e.g. clicking a node to get deeper explanation)
@@ -617,6 +665,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onLoadMore={loadEarlierMessages}
         rewindPoints={rewindPoints}
         sessionId={sessionId}
+        startedAt={streamSnapshot?.startedAt}
         isAssistantProject={isAssistantProject}
         assistantName={assistantName}
       />
@@ -628,6 +677,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         toolUses={toolUses}
         permissionProfile={permissionProfile}
       />
+      {/* Skill nudge banner — shown after complex multi-step workflows */}
       {skillNudge && !isStreaming && (
         <div className="mx-auto w-full max-w-3xl border-t border-border bg-background px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -666,6 +716,30 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
       {/* Global File Review Bar */}
       <FileReviewBar sessionId={sessionId} />
+
+      {/* Queued message banner — shown above input when messages are waiting */}
+      {messageQueue.length > 0 && (
+        <div className="mx-auto w-full max-w-3xl px-4 pb-1">
+          {messageQueue.map((qm, i) => (
+            <div key={i} className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 mb-1">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 256 256" className="shrink-0 text-muted-foreground"><path fill="currentColor" d="M128 24a104 104 0 1 0 104 104A104.11 104.11 0 0 0 128 24Zm0 192a88 88 0 1 1 88-88a88.1 88.1 0 0 1-88 88Zm64-88a8 8 0 0 1-8 8H128a8 8 0 0 1-8-8V72a8 8 0 0 1 16 0v48h56a8 8 0 0 1 0 16Z"/></svg>
+              <span className="flex-1 truncate text-sm text-muted-foreground">
+                {(qm.displayOverride || qm.content).length > 80
+                  ? (qm.displayOverride || qm.content).slice(0, 77) + '...'
+                  : (qm.displayOverride || qm.content)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setMessageQueue((prev) => prev.filter((_, idx) => idx !== i))}
+                className="shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors"
+                aria-label={t('messageQueue.cancel' as TranslationKey)}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <MessageInput
         key={sessionId}

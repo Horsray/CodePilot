@@ -50,11 +50,15 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
   private lastMessageIdByChat = new Map<string, string>();
   /** Track active reaction IDs per chatId so we can remove them on completion. */
   private activeReactions = new Map<string, { messageId: string; reactionId: string }>();
-  /** Bot's open_id, resolved after gateway starts. Used for @mention detection. */
+  /** Bot's open_id, resolved after gateway starts. Used for @mention detection (#384). */
   private botOpenId = '';
   /** Periodic retry timer for resolveBotIdentity when the initial probe fails. */
   private identityRetryTimer: ReturnType<typeof setInterval> | null = null;
-  /** Generation guard so stale identity probes can't mutate a restarted plugin. */
+  /**
+   * Bumps on each start/stop so in-flight identity probes from a previous
+   * start can detect they are stale and bail out before mutating state or
+   * scheduling new timers.
+   */
   private identityGeneration = 0;
 
   loadConfig(): FeishuConfig | null {
@@ -92,14 +96,30 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
     this.gateway = new FeishuGateway(this.config);
 
     // Register message handler — pushes to internal queue.
+    // Reads this.botOpenId at call time so mention checks activate
+    // once resolveBotIdentity() completes after gateway.start().
+    //
+    // For messages with attached resources (image/file/audio/video, #291), we
+    // download in the background and enqueue after attachments are ready. Text
+    // messages bypass the download step entirely.
     this.gateway.registerMessageHandler((data: unknown) => {
       const parsed = parseMessageWithResources(data, this.config!, this.botOpenId);
       if (!parsed) return;
 
+      // Access control gate: enforce dmPolicy / groupPolicy / allowFrom /
+      // groupAllowFrom before enqueuing. Without this check these settings
+      // were dead config on Feishu — unlike Telegram/Discord/QQ adapters.
+      //
+      // Must use the RAW chat_id (before thread-session wrapping). When
+      // threadSession is enabled, parseMessageWithResources encodes
+      // "oc_xxx:thread:<root>" into address.chatId for routing, but groupAllowFrom
+      // stores plain oc_xxx values, so matching against the wrapped address
+      // would drop every legitimate thread message on allowlisted groups.
       const addrUserId = parsed.message.address.userId || '';
       const rawChatId = parsed.message.address.chatId.split(':thread:')[0];
       if (!isUserAuthorized(this.config!, addrUserId, rawChatId)) {
-        console.log('[feishu/plugin]', 'Dropping unauthorized message from', addrUserId, 'in', rawChatId);
+        console.log('[feishu/plugin]', 'Dropping unauthorized message from',
+          addrUserId, 'in', rawChatId);
         return;
       }
 
@@ -107,9 +127,11 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
         this.enqueueMessage(parsed.message);
         return;
       }
-
+      // Download resources then enqueue. Fire-and-forget — the gateway handler
+      // must not block long-running downloads.
       this.downloadAndEnqueue(parsed.message, parsed.resources).catch((err) => {
         console.warn('[feishu/plugin]', 'Resource download failed:', err);
+        // Still enqueue with whatever text we have so the conversation continues
         this.enqueueMessage(parsed.message);
       });
     });
@@ -133,10 +155,12 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
       const messageId = event?.context?.open_message_id || event?.open_message_id || '';
       const userId = event?.operator?.open_id || event?.open_id || '';
 
-      // 中文注释：功能名称「飞书卡片点击权限校验」。
-      // 用法：避免未在 allowFrom / groupAllowFrom 白名单内的用户，通过旧卡片按钮执行审批或切项目操作。
+      // Access control gate: reject card clicks from unauthorized users.
+      // Required to prevent a non-whitelisted user from approving permissions
+      // or switching projects via buttons on an existing bot card.
       if (chatId && !isUserAuthorized(this.config!, userId, chatId)) {
-        console.log('[feishu/plugin]', 'Rejecting card action from unauthorized user', userId, 'in', chatId);
+        console.log('[feishu/plugin]', 'Rejecting card action from unauthorized user',
+          userId, 'in', chatId);
         return { toast: { type: 'warning' as const, content: '无权限操作' } };
       }
 
@@ -199,6 +223,13 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
 
     await this.gateway.start();
 
+    // Resolve bot identity so mention filtering works (#384).
+    // Fire-and-forget with retries — if it fails, mention detection simply no-ops
+    // but the bot still functions normally for DMs and un-gated groups.
+    //
+    // Capture the current generation so stop() → new start() cycles can cancel
+    // any in-flight probe from the previous run (prevents a stale probe from
+    // writing botOpenId on a stopped plugin or scheduling a new retry timer).
     this.identityGeneration += 1;
     const probeGeneration = this.identityGeneration;
     this.resolveBotIdentity(probeGeneration).catch((err) => {
@@ -206,7 +237,101 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
     });
   }
 
+  /**
+   * Fetch bot open_id with retry so mention features degrade gracefully.
+   *
+   * Behavior:
+   * - 3 quick attempts on startup (2s/4s/6s backoff)
+   * - If all startup attempts fail, schedule a slow periodic retry every 60s
+   *   so a transient API outage doesn't permanently disable requireMention
+   *   for the rest of the process lifetime.
+   * - Until resolved, requireMention fails open (inbound.ts gate checks
+   *   botOpenId truthiness). This avoids dropping every group message during
+   *   startup but does mean un-mentioned messages slip through the gap.
+   *
+   * The probe carries a generation snapshot. If stop() (or a subsequent
+   * start()) has bumped the generation since this probe was launched, all
+   * mutations and the retry-timer schedule are suppressed so a stale probe
+   * can't repopulate state after shutdown.
+   */
+  private async resolveBotIdentity(generation: number, maxRetries = 3): Promise<void> {
+    const client = this.gateway?.getRestClient();
+    if (!client) return;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (this.identityGeneration !== generation) return; // stale — bail
+      const info = await getBotInfo(client);
+      if (this.identityGeneration !== generation) return; // stopped during await
+      if (info?.openId) {
+        this.botOpenId = info.openId;
+        if (this.config?.requireMention) {
+          console.log('[feishu/plugin]', `Bot identity resolved (attempt ${attempt}); requireMention gate now active`);
+        }
+        return;
+      }
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
+    if (this.identityGeneration !== generation) return; // don't schedule stale retries
+    console.warn(
+      '[feishu/plugin]',
+      'Could not resolve bot identity — mention detection disabled; will retry every 60s'
+    );
+    this.startIdentityRetryTimer(generation);
+  }
+
+  /**
+   * Slow background retry to recover from transient bot identity failures.
+   * Polls every 60s until identity resolves, then stops. Canceled on stop().
+   *
+   * The timer callback checks the generation so an interval scheduled by a
+   * previous start() cycle can't mutate state on a fresh plugin instance.
+   *
+   * Each callback captures its own handle (`myTimer`) so a stale callback
+   * can only clear its own timer, never a timer belonging to a later
+   * generation. Without this capture, a queued stale callback would see the
+   * generation mismatch and then clearInterval(this.identityRetryTimer),
+   * which might point at the fresh timer of a subsequent start() cycle,
+   * silently killing recovery for the new session.
+   */
+  private startIdentityRetryTimer(generation: number): void {
+    if (this.identityRetryTimer) return;
+    // eslint-disable-next-line prefer-const
+    let myTimer: ReturnType<typeof setInterval>;
+    const clearSelf = () => {
+      clearInterval(myTimer);
+      // Only detach the shared field if it still points at our timer —
+      // otherwise we'd clear a newer generation's recovery timer.
+      if (this.identityRetryTimer === myTimer) {
+        this.identityRetryTimer = null;
+      }
+    };
+    myTimer = setInterval(async () => {
+      if (this.identityGeneration !== generation) {
+        clearSelf();
+        return;
+      }
+      const client = this.gateway?.getRestClient();
+      if (!client) return;
+      const info = await getBotInfo(client);
+      if (this.identityGeneration !== generation) {
+        clearSelf();
+        return;
+      }
+      if (info?.openId) {
+        this.botOpenId = info.openId;
+        clearSelf();
+        if (this.config?.requireMention) {
+          console.log('[feishu/plugin]', 'Bot identity resolved via background retry; requireMention gate now active');
+        }
+      }
+    }, 60_000);
+    this.identityRetryTimer = myTimer;
+  }
+
   async stop(): Promise<void> {
+    // Invalidate any in-flight identity probe so it can't mutate state
+    // or schedule a new retry timer after shutdown.
     this.identityGeneration += 1;
     if (this.identityRetryTimer) {
       clearInterval(this.identityRetryTimer);
@@ -228,6 +353,33 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
     return this.gateway?.isRunning() ?? false;
   }
 
+  /**
+   * Download resources then enqueue the message with populated attachments (#291).
+   * Called from the message handler when non-text messages arrive. Partial
+   * failures (some downloads fail) still enqueue — the LLM can see what succeeded.
+   */
+  private async downloadAndEnqueue(
+    base: InboundMessage,
+    resources: import('./inbound').PendingResource[],
+  ): Promise<void> {
+    const client = this.gateway?.getRestClient();
+    if (!client) {
+      this.enqueueMessage(base);
+      return;
+    }
+
+    const attachments: import('@/types').FileAttachment[] = [];
+    for (const r of resources) {
+      const att = await downloadResource(client, r.messageId, r.fileKey, r.resourceType);
+      if (att) attachments.push(att);
+    }
+
+    this.enqueueMessage({
+      ...base,
+      attachments: attachments.length > 0 ? attachments : undefined,
+    });
+  }
+
   private enqueueMessage(msg: InboundMessage): void {
     // Track messageId for reaction acknowledgment (skip callback messages)
     if (msg.messageId && !msg.callbackData) {
@@ -240,87 +392,6 @@ export class FeishuChannelPlugin implements ChannelPlugin<FeishuConfig> {
     } else {
       this.messageQueue.push(msg);
     }
-  }
-
-  private async resolveBotIdentity(generation: number, maxRetries = 3): Promise<void> {
-    const client = this.gateway?.getRestClient();
-    if (!client) return;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      if (this.identityGeneration !== generation) return;
-      const info = await getBotInfo(client);
-      if (this.identityGeneration !== generation) return;
-      if (info?.openId) {
-        this.botOpenId = info.openId;
-        if (this.config?.requireMention) {
-          console.log('[feishu/plugin]', `Bot identity resolved (attempt ${attempt}); requireMention gate now active`);
-        }
-        return;
-      }
-      if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 2000 * attempt));
-      }
-    }
-
-    if (this.identityGeneration !== generation) return;
-    console.warn('[feishu/plugin]', 'Could not resolve bot identity; will retry every 60s');
-    this.startIdentityRetryTimer(generation);
-  }
-
-  private startIdentityRetryTimer(generation: number): void {
-    if (this.identityRetryTimer) return;
-    let myTimer: ReturnType<typeof setInterval>;
-    const clearSelf = () => {
-      clearInterval(myTimer);
-      if (this.identityRetryTimer === myTimer) {
-        this.identityRetryTimer = null;
-      }
-    };
-
-    myTimer = setInterval(async () => {
-      if (this.identityGeneration !== generation) {
-        clearSelf();
-        return;
-      }
-      const client = this.gateway?.getRestClient();
-      if (!client) return;
-      const info = await getBotInfo(client);
-      if (this.identityGeneration !== generation) {
-        clearSelf();
-        return;
-      }
-      if (info?.openId) {
-        this.botOpenId = info.openId;
-        clearSelf();
-        if (this.config?.requireMention) {
-          console.log('[feishu/plugin]', 'Bot identity resolved via background retry; requireMention gate now active');
-        }
-      }
-    }, 60_000);
-
-    this.identityRetryTimer = myTimer;
-  }
-
-  private async downloadAndEnqueue(
-    base: InboundMessage,
-    resources: import('./inbound').PendingResource[],
-  ): Promise<void> {
-    const client = this.gateway?.getRestClient();
-    if (!client) {
-      this.enqueueMessage(base);
-      return;
-    }
-
-    const attachments: import('@/types').FileAttachment[] = [];
-    for (const resource of resources) {
-      const att = await downloadResource(client, resource.messageId, resource.fileKey, resource.resourceType);
-      if (att) attachments.push(att);
-    }
-
-    this.enqueueMessage({
-      ...base,
-      attachments: attachments.length > 0 ? attachments : undefined,
-    });
   }
 
   async consumeOne(): Promise<InboundMessage | null> {

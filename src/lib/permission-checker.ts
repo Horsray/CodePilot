@@ -123,12 +123,33 @@ const DANGEROUS_PATTERNS = [
  * @param mode - Permission mode (explore/normal/trust). Defaults to 'normal'.
  * @param userRules - Additional user-defined rules (appended after mode defaults)
  */
+/**
+ * Tools that ALWAYS require user interaction regardless of permission mode.
+ * Even in trust mode (which auto-allows everything), these tools must
+ * show their UI because the tool's purpose IS the user interaction.
+ *
+ * - AskUserQuestion: model asks structured questions → user picks options
+ * - ExitPlanMode: plan approval UI → user approves/rejects
+ *
+ * Without this, trust mode would auto-allow these tools and they'd
+ * return empty/default answers, defeating their purpose.
+ */
+const ALWAYS_ASK_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
 export function checkPermission(
   toolName: string,
   input: unknown,
   mode: PermissionMode = 'normal',
   userRules: PermissionRule[] = [],
 ): PermissionCheckResult {
+  // Interactive tools — always ask regardless of mode
+  if (ALWAYS_ASK_TOOLS.has(toolName)) {
+    return {
+      action: 'ask',
+      reason: `${toolName} requires user interaction`,
+    };
+  }
+
   // Bash danger check — always ask for dangerous commands regardless of mode
   if (toolName === 'Bash' && input && typeof input === 'object' && 'command' in input) {
     const command = (input as { command: string }).command;

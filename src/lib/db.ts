@@ -1333,7 +1333,7 @@ export function clearSessionMessages(sessionId: string): void {
 }
 
 // ==========================================
-// Session History Search
+// Session History Search (codepilot_session_search tool)
 // ==========================================
 
 export interface SessionSearchResult {
@@ -1342,12 +1342,24 @@ export interface SessionSearchResult {
   sessionTitle: string;
   role: 'user' | 'assistant';
   createdAt: string;
+  /** Snippet extracted from content with query context (up to ~200 chars). */
   snippet: string;
 }
 
 /**
- * 中文注释：功能名称「历史消息搜索」。
- * 用法：在本地消息历史中按关键字搜索，返回命中消息所属会话与片段摘要，供后续会话检索工具或 UI 复用。
+ * Full-text search across message history.
+ *
+ * Uses SQL LIKE for portability (no FTS5 dependency). Matches are case-insensitive
+ * via LIKE's default behavior with ASCII text. For CJK queries the match is exact
+ * byte-sequence substring — good enough for v1.
+ *
+ * Results are ordered by created_at DESC (most recent first) and joined with
+ * chat_sessions to include session titles. Heartbeat ACK messages are excluded
+ * from results when the schema has that column.
+ *
+ * @param query Search term. Wildcards `_` and `%` are treated as literals.
+ * @param options.sessionId Optional filter to a specific session.
+ * @param options.limit Max results (default 5).
  */
 export function searchMessages(
   query: string,
@@ -1358,6 +1370,7 @@ export function searchMessages(
 
   if (!query || query.trim() === '') return [];
 
+  // Escape LIKE wildcards in the user query so they're treated as literals.
   const escapedQuery = query.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
   const pattern = `%${escapedQuery}%`;
 
@@ -1365,9 +1378,7 @@ export function searchMessages(
   try {
     const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
     hasAckColumn = cols.some(c => c.name === 'is_heartbeat_ack');
-  } catch {
-    // ignore — assume column does not exist on older schemas
-  }
+  } catch { /* ignore — assume no ack column */ }
 
   const ackFilter = hasAckColumn ? ' AND (m.is_heartbeat_ack = 0 OR m.is_heartbeat_ack IS NULL)' : '';
 
@@ -1402,23 +1413,27 @@ export function searchMessages(
     content: string;
   }>;
 
+  // Build snippet around the first match position in each row.
   const lowerQuery = query.toLowerCase();
-  return rows.map((row) => ({
+  return rows.map(row => ({
     messageId: row.messageId,
     sessionId: row.sessionId,
     sessionTitle: row.sessionTitle,
     role: row.role,
     createdAt: row.createdAt,
-    snippet: buildSearchSnippet(row.content, lowerQuery),
+    snippet: buildSnippet(row.content, lowerQuery),
   }));
 }
 
-function buildSearchSnippet(content: string, lowerQuery: string): string {
+/** Extract a ~200-char snippet around the first match (case-insensitive). */
+function buildSnippet(content: string, lowerQuery: string): string {
   if (!content) return '';
   const lowerContent = content.toLowerCase();
   const idx = lowerContent.indexOf(lowerQuery);
   if (idx === -1) {
-    return content.length > 200 ? `${content.slice(0, 200)}…` : content;
+    // Fall back to the first 200 chars — happens when content is a JSON blob
+    // and the query matches bytes inside quoted strings.
+    return content.length > 200 ? content.slice(0, 200) + '…' : content;
   }
   const start = Math.max(0, idx - 80);
   const end = Math.min(content.length, idx + lowerQuery.length + 120);

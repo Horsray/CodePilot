@@ -6,12 +6,14 @@
  *
  * The PersonalAgent archetype auto-configures Bot capability, IM scopes,
  * event subscriptions (im.message.receive_v1, card.action.trigger), and
- * long-connection mode — no manual setup needed.
+ * long-connection mode — no manual setup needed (verified by POC 2026-04-13).
  *
  * Session state is stored in globalThis to survive Next.js HMR.
  */
 
 import { setSetting } from '@/lib/db';
+
+// ── Types ────────────────────────────────────────────────────────
 
 export type RegistrationErrorCode =
   | 'timeout'
@@ -50,11 +52,16 @@ interface RegistrationPollResponse {
   error?: string;
 }
 
+// ── Constants ────────────────────────────────────────────────────
+
 const FEISHU_ACCOUNTS = 'https://accounts.feishu.cn';
 const LARK_ACCOUNTS = 'https://accounts.larksuite.com';
 const REGISTRATION_PATH = '/oauth/v1/app/registration';
 const MAX_INTERVAL_MS = 60_000;
-const SESSION_CLEANUP_MS = 10 * 60_000;
+const SESSION_CLEANUP_MS = 10 * 60_000; // 10 minutes
+
+// ── Session storage (globalThis, survives HMR) ───────────────────
+
 const GLOBAL_KEY = '__feishu_registration_sessions__';
 
 function getSessions(): Map<string, FeishuRegistrationSession> {
@@ -63,6 +70,12 @@ function getSessions(): Map<string, FeishuRegistrationSession> {
   return g[GLOBAL_KEY] as Map<string, FeishuRegistrationSession>;
 }
 
+// ── Public API ───────────────────────────────────────────────────
+
+/**
+ * Start a new app registration session.
+ * Returns sessionId + verificationUrl for the frontend to open in a browser.
+ */
 export async function startRegistration(): Promise<{ sessionId: string; verificationUrl: string }> {
   const res = await fetch(`${FEISHU_ACCOUNTS}${REGISTRATION_PATH}`, {
     method: 'POST',
@@ -91,31 +104,39 @@ export async function startRegistration(): Promise<{ sessionId: string; verifica
   const sessions = getSessions();
   sessions.set(sessionId, session);
 
-  // 中文注释：功能名称「飞书注册会话自动清理」。
-  // 用法：避免开发环境热更新后残留过期会话长期占用内存。
-  setTimeout(() => {
-    sessions.delete(sessionId);
-  }, SESSION_CLEANUP_MS).unref();
+  // Auto-cleanup after TTL. unref() so the timer doesn't block Node from
+  // exiting — in production the process is long-lived so this is a no-op,
+  // but in tests each session would otherwise keep the event loop alive
+  // for the full 10 minutes.
+  setTimeout(() => { sessions.delete(sessionId); }, SESSION_CLEANUP_MS).unref();
 
   return { sessionId, verificationUrl: data.verification_uri_complete };
 }
 
+/**
+ * Poll a registration session for completion.
+ * On success, writes credentials to the DB automatically.
+ */
 export async function pollRegistration(sessionId: string): Promise<FeishuRegistrationSession> {
   const sessions = getSessions();
   const session = sessions.get(sessionId);
   if (!session) throw new Error('Session not found');
   if (session.status !== 'waiting') return session;
 
+  // Check expiration
   if (Date.now() > session.expiresAt) {
     session.status = 'expired';
     session.errorCode = 'timeout';
     return session;
   }
 
+  // Use lark endpoint if previously detected as lark tenant
   const accountsBase = session.domain === 'lark' ? LARK_ACCOUNTS : FEISHU_ACCOUNTS;
   const result = await doPoll(accountsBase, session.deviceCode);
 
-  if (result.error === 'authorization_pending') return session;
+  if (result.error === 'authorization_pending') {
+    return session; // still waiting
+  }
 
   if (result.error === 'slow_down') {
     session.interval = Math.min(session.interval + 5000, MAX_INTERVAL_MS);
@@ -141,14 +162,18 @@ export async function pollRegistration(sessionId: string): Promise<FeishuRegistr
     return session;
   }
 
+  // Success — check if we need Lark retry
   let clientId = result.client_id || '';
   let clientSecret = result.client_secret || '';
   let domain: 'feishu' | 'lark' = 'feishu';
 
   if (!clientSecret && result.user_info?.tenant_brand === 'lark') {
+    // Lark tenant — switch to lark endpoint and keep polling until success/failure,
+    // matching the official CLI behavior (full retry loop, not single shot).
     session.domain = 'lark';
     const larkResult = await doPoll(LARK_ACCOUNTS, session.deviceCode);
     if (larkResult.error === 'authorization_pending' || larkResult.error === 'slow_down') {
+      // Still pending on Lark side — let the next pollRegistration call retry
       if (larkResult.error === 'slow_down') {
         session.interval = Math.min(session.interval + 5000, MAX_INTERVAL_MS);
       }
@@ -172,6 +197,7 @@ export async function pollRegistration(sessionId: string): Promise<FeishuRegistr
     return session;
   }
 
+  // Write credentials to DB
   setSetting('bridge_feishu_app_id', clientId);
   setSetting('bridge_feishu_app_secret', clientSecret);
   setSetting('bridge_feishu_domain', domain);
@@ -184,13 +210,21 @@ export async function pollRegistration(sessionId: string): Promise<FeishuRegistr
   return session;
 }
 
+/**
+ * Cancel and remove a registration session.
+ */
 export function cancelRegistration(sessionId: string): void {
   getSessions().delete(sessionId);
 }
 
+/**
+ * Get current session state without polling.
+ */
 export function getRegistrationSession(sessionId: string): FeishuRegistrationSession | null {
   return getSessions().get(sessionId) || null;
 }
+
+// ── Internal ─────────────────────────────────────────────────────
 
 async function doPoll(accountsBase: string, deviceCode: string): Promise<RegistrationPollResponse> {
   const res = await fetch(`${accountsBase}${REGISTRATION_PATH}`, {
@@ -200,8 +234,8 @@ async function doPoll(accountsBase: string, deviceCode: string): Promise<Registr
     signal: AbortSignal.timeout(15_000),
   });
 
-  // 中文注释：功能名称「飞书轮询结果解析」。
-  // 用法：设备流会把 waiting/slow_down 也放在 400 响应体里，所以这里统一解析 body。
+  // Always parse body — Device Flow returns HTTP 400 for authorization_pending/slow_down,
+  // which is standard behavior, not a real error. The error field in the body tells us what to do.
   try {
     return await res.json();
   } catch {

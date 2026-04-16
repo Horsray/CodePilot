@@ -28,17 +28,23 @@ export function FileAwareSubmitButton({
   disabled?: boolean;
   inputValue: string;
   hasBadge: boolean;
+  /** Whether the Image Agent toggle is currently enabled */
   isImageAgentOn?: boolean;
 }) {
   const attachments = usePromptInputAttachments();
   const hasFiles = attachments.files.length > 0;
   const isStreaming = status === 'streaming' || status === 'submitted';
+
+  // During streaming only plain text can queue. Slash commands, badges, and
+  // Image Agent are all blocked by handleSubmit(), so the button must not
+  // advertise sendability for those paths.
   const trimmed = inputValue.trim();
   const canQueue = isStreaming
     && !!trimmed
     && !hasBadge
     && !trimmed.startsWith('/')
     && !isImageAgentOn;
+
   const enabled = isSubmitEnabled({
     inputValue,
     hasBadge,
@@ -170,7 +176,11 @@ export function FileAttachmentsCapsules() {
 }
 
 /**
- * Slash-command badge chip — command only, no long description text.
+ * Slash-command badge chip — shows just the command label. Description used
+ * to be rendered next to it but took too much horizontal space (user feedback),
+ * and is already visible in the picker before selection anyway.
+ *
+ * Used by CommandBadgeList for both single- and multi-badge display.
  */
 export function CommandBadge({
   command,
@@ -196,7 +206,9 @@ export function CommandBadge({
 }
 
 /**
- * Wrapper that renders zero or more command badges above the textarea.
+ * Wrapper that renders zero or more CommandBadges above the textarea. Uses
+ * flex-wrap so the chips flow to a new line when they won't fit. Replaces
+ * the old single-badge render block in MessageInput.
  */
 export function CommandBadgeList({
   badges,

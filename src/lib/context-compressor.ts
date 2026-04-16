@@ -5,9 +5,19 @@
  * messages into a summary stored in the session. Subsequent fallback contexts
  * use "summary + recent messages" instead of raw full history.
  *
- * Uses the same lightweight LLM call pattern as memory-extractor.ts,
- * but routes compression through the auxiliary-model chain so it can
- * prefer cheaper/smaller models across providers when available.
+ * Model resolution uses `resolveAuxiliaryModel('compact')` from
+ * provider-resolver.ts, which gives us the 5-tier fallback chain:
+ *   1. Per-task env override (AUXILIARY_COMPACT_PROVIDER/_MODEL)
+ *   2. Main provider's roleModels.small (if not sdkProxyOnly)
+ *   3. Main provider's roleModels.haiku
+ *   4. Other non-sdkProxyOnly provider's small/haiku slot
+ *   5. Main provider + main model (ultimate floor — never null)
+ *
+ * This was upgraded from the simpler `resolveProvider({ useCase: 'small' })`
+ * call in an earlier version, which only implemented tier 2 and had no
+ * cross-provider fallback for sdkProxyOnly main providers. See
+ * docs/research/hermes-agent-analysis.md §3.2 and docs/exec-plans/active/
+ * hermes-inspired-runtime-upgrade.md task 3.5b for the rationale.
  */
 
 import { roughTokenEstimate } from './context-estimator';
@@ -88,9 +98,37 @@ export async function compressConversation(params: CompressParams): Promise<Comp
     const { resolveAuxiliaryModel } = await import('./provider-resolver');
     const { normalizeMessageContent } = await import('./message-normalizer');
 
-    // 中文注释：功能名称「压缩辅助模型选择」，用法是在上下文压缩时优先使用辅助路由选出的轻量模型，而不是总落到主模型。
-    const auxiliary = resolveAuxiliaryModel('compact', { providerId, sessionModel });
+    // Resolve auxiliary model via the 5-tier chain introduced in task 3.2.
+    // Produces { providerId, modelId, source } — never null.
+    // When `source === 'main_floor'`, the chain found no small/haiku slot
+    // anywhere, so compression will run on the main model (at main-model
+    // cost). This is an intentional floor so compression never silently
+    // fails just because no cheap model is configured.
+    //
+    // **Session context is critical**: pass providerId + sessionModel so
+    // that "main" resolves to THIS session's active provider, not the
+    // global default. Without this, a session that overrides the default
+    // provider would get auxiliary models from the wrong credentials.
+    const auxiliary = resolveAuxiliaryModel('compact', {
+      providerId,
+      sessionProviderId: providerId,
+      sessionModel,
+    });
+
+    // Prefer the task-level override's provider/model when it gave us one
+    // that matches neither null nor the main. Otherwise we keep the
+    // caller-supplied providerId so SDK subprocess routing stays stable.
     const effectiveModel = auxiliary.modelId || sessionModel || 'haiku';
+    const effectiveProviderId = auxiliary.providerId !== 'env' ? auxiliary.providerId : providerId;
+
+    if (auxiliary.source === 'main_floor') {
+      console.warn(
+        `[context-compressor] No cheap auxiliary model configured — ` +
+        `falling back to main provider/model (${effectiveProviderId}/${effectiveModel}). ` +
+        `Set AUXILIARY_COMPACT_PROVIDER + AUXILIARY_COMPACT_MODEL or configure ` +
+        `roleModels.small on a non-sdkProxyOnly provider to save cost.`,
+      );
+    }
 
     // Clean messages before summarizing: strip file metadata, extract tool summaries
     const formatted = messages.map(m => {
@@ -119,9 +157,9 @@ ${formatted}
 Summary:`;
 
     // SDK subprocess for transport (compatible with third-party proxies),
-    // but model selected via provider resolver (respects roleModels.small + upstreamModelId).
+    // model + provider selected via resolveAuxiliaryModel's 5-tier chain.
     const result = await generateTextViaSdk({
-      providerId: auxiliary.providerId === 'env' ? undefined : auxiliary.providerId,
+      providerId: effectiveProviderId || undefined,
       model: effectiveModel,
       system,
       prompt,

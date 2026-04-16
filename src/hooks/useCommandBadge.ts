@@ -4,14 +4,20 @@ import type { CommandBadge, CliBadge } from '@/types';
 export type { CommandBadge, CliBadge } from '@/types';
 
 export interface UseCommandBadgeReturn {
+  /** Active slash-command/skill badges. Empty array = no badge. Multi-element
+   * array only happens when all entries are `agent_skill` kind (multi-skill
+   * selection); other kinds replace instead of appending — it makes no sense to
+   * run /clear AND /help together. */
   badges: CommandBadge[];
+  /** Add a badge. For `agent_skill` kind, appends (with de-dup by command);
+   * for other kinds, replaces any existing badges entirely. */
   addBadge: (badge: CommandBadge) => void;
+  /** Remove a single badge by its command identifier. */
+  removeBadge: (command: string) => void;
+  /** Clear all badges. */
   clearBadges: () => void;
-  badge: CommandBadge | null;
-  setBadge: (badge: CommandBadge | null) => void;
   cliBadge: CliBadge | null;
   setCliBadge: (badge: CliBadge | null) => void;
-  removeBadge: (command?: string) => void;
   removeCliBadge: () => void;
   hasBadge: boolean;
 }
@@ -22,13 +28,15 @@ export function useCommandBadge(
   const [badges, setBadges] = useState<CommandBadge[]>([]);
   const [cliBadge, setCliBadge] = useState<CliBadge | null>(null);
 
-  // 中文注释：功能名称「命令徽章追加策略」。
-  // 用法：agent_skill 允许多选去重，其他类型保持单选替换，兼容官方输入交互。
   const addBadge = useCallback((incoming: CommandBadge) => {
     setBadges((prev) => {
+      // Non-skill badges (slash/codepilot/sdk commands) replace — "run /clear
+      // AND /help" isn't a meaningful action.
       if (incoming.kind !== 'agent_skill') {
         return [incoming];
       }
+      // For skills: if any existing badge is non-skill kind, replace.
+      // Otherwise append, de-duplicating by command.
       const allSkills = prev.every((b) => b.kind === 'agent_skill');
       if (!allSkills) return [incoming];
       if (prev.some((b) => b.command === incoming.command)) return prev;
@@ -36,22 +44,17 @@ export function useCommandBadge(
     });
   }, []);
 
-  const setBadge = useCallback((incoming: CommandBadge | null) => {
-    setBadges(incoming ? [incoming] : []);
-  }, []);
+  const removeBadge = useCallback(
+    (command: string) => {
+      setBadges((prev) => prev.filter((b) => b.command !== command));
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    },
+    [textareaRef],
+  );
 
   const clearBadges = useCallback(() => {
     setBadges([]);
   }, []);
-
-  const removeBadge = useCallback((command?: string) => {
-    setBadges((prev) => {
-      if (prev.length === 0) return prev;
-      if (!command) return prev.slice(0, -1);
-      return prev.filter((b) => b.command !== command);
-    });
-    setTimeout(() => textareaRef.current?.focus(), 0);
-  }, [textareaRef]);
 
   const removeCliBadge = useCallback(() => {
     setCliBadge(null);
@@ -61,12 +64,10 @@ export function useCommandBadge(
   return {
     badges,
     addBadge,
+    removeBadge,
     clearBadges,
-    badge: badges[0] || null,
-    setBadge,
     cliBadge,
     setCliBadge,
-    removeBadge,
     removeCliBadge,
     hasBadge: badges.length > 0 || !!cliBadge,
   };
