@@ -9,43 +9,43 @@ import {
   HoverCardTrigger,
   HoverCardContent,
 } from '@/components/ui/hover-card';
+import { resolveLegacyRuntimeForDisplay, type ConcreteRuntime } from '@/lib/runtime/legacy';
 
 interface RuntimeBadgeProps {
   providerId?: string;
 }
 
-type RuntimeMode = 'auto' | 'native' | 'claude-code-sdk';
-
-const LABELS: Record<RuntimeMode, { en: string; zh: string }> = {
-  auto: { en: 'Agent: Auto', zh: 'Agent 引擎：自动' },
+const LABELS: Record<ConcreteRuntime, { en: string; zh: string }> = {
   native: { en: 'Agent: AI SDK', zh: 'Agent 引擎：AI SDK' },
   'claude-code-sdk': { en: 'Agent: Claude Code', zh: 'Agent 引擎：Claude Code' },
 };
 
 export function RuntimeBadge({ providerId }: RuntimeBadgeProps) {
-  const [runtimeSetting, setRuntimeSetting] = useState<RuntimeMode>('auto');
+  const [runtimeSetting, setRuntimeSetting] = useState<ConcreteRuntime>('claude-code-sdk');
   const router = useRouter();
   const { t } = useTranslation();
   const isZh = t('nav.chats') === '对话';
 
   // OpenAI models can't use Claude Code SDK — forced to AI SDK
   const isNonAnthropicProvider = providerId === 'openai-oauth';
-  const effectiveRuntime: RuntimeMode = isNonAnthropicProvider ? 'native' : runtimeSetting;
-  // Only flag as "overridden" when the user explicitly chose Claude Code
-  // (not auto, since auto would fall back to AI SDK anyway if CLI is unavailable)
+  const effectiveRuntime: ConcreteRuntime = isNonAnthropicProvider ? 'native' : runtimeSetting;
   const isOverridden = isNonAnthropicProvider && runtimeSetting === 'claude-code-sdk';
 
   useEffect(() => {
-    const loadRuntime = () => {
-      fetch('/api/settings/app')
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          const setting = data?.settings?.agent_runtime;
-          if (setting && ['auto', 'native', 'claude-code-sdk'].includes(setting)) {
-            setRuntimeSetting(setting as RuntimeMode);
-          }
-        })
-        .catch(() => {});
+    const loadRuntime = async () => {
+      try {
+        const [settingsRes, statusRes] = await Promise.all([
+          fetch('/api/settings/app').catch(() => null),
+          fetch('/api/claude-status').catch(() => null),
+        ]);
+        const settings = settingsRes?.ok ? await settingsRes.json() : null;
+        const status = statusRes?.ok ? await statusRes.json() : null;
+        const saved = settings?.settings?.agent_runtime;
+        const cliConnected = !!status?.connected;
+        setRuntimeSetting(resolveLegacyRuntimeForDisplay(saved, cliConnected));
+      } catch {
+        /* ignore — keep previous runtimeSetting */
+      }
     };
     loadRuntime();
     const handler = () => loadRuntime();
@@ -81,9 +81,7 @@ export function RuntimeBadge({ providerId }: RuntimeBadgeProps) {
           </>
         ) : (
           <p className="text-muted-foreground">
-            {effectiveRuntime === 'auto'
-              ? (isZh ? '自动选择：有 Claude Code CLI 时用 Claude Code，否则用 AI SDK' : 'Auto: uses Claude Code when CLI is installed, otherwise AI SDK')
-              : effectiveRuntime === 'native'
+            {effectiveRuntime === 'native'
               ? (isZh ? 'AI SDK：内置多模型引擎，无需 CLI' : 'AI SDK: built-in multi-model engine, no CLI required')
               : (isZh ? 'Claude Code：通过 CLI 子进程驱动' : 'Claude Code: driven by CLI subprocess')
             }

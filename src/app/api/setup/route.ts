@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSetting, setSetting, getDb } from '@/lib/db';
+import { getSetting, setSetting } from '@/lib/db';
 import { findClaudeBinary } from '@/lib/platform';
+import { hasCodePilotProvider } from '@/lib/provider-presence';
 
 export async function GET() {
   try {
@@ -22,36 +23,14 @@ export async function GET() {
       }
     }
 
-    // Provider status — always check real credentials first, skipped is only a fallback
+    // 中文注释：功能名称「Setup Provider 状态对齐聊天预检」。
+    // 用法：让初始化向导与 /api/chat 的 provider 判断共用同一来源，避免向导显示已完成但聊天入口仍拦截。
     let provider: 'not-configured' | 'completed' | 'skipped' | 'needs-fix' = 'not-configured';
-    const db = getDb();
-    const row = db.prepare('SELECT COUNT(*) as cnt FROM api_providers').get() as { cnt: number } | undefined;
-    if (row && row.cnt > 0) {
+    if (hasCodePilotProvider()) {
       provider = 'completed';
     } else {
-      // Check env-based or app-settings-based credentials
-      const appToken = getSetting('anthropic_auth_token');
-      if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || appToken) {
-        provider = 'completed';
-      } else {
-        // Check if Claude Code CLI is available — it acts as a provider via SDK proxy
-        // (the built-in 'env' provider in /api/providers/models always lists Claude Code,
-        // so we must recognise the CLI as a valid provider to keep the UI consistent)
-        try {
-          const binary = findClaudeBinary();
-          if (binary) {
-            provider = 'completed';
-          }
-        } catch {
-          // CLI not found — continue to fallback
-        }
-
-        if (provider === 'not-configured') {
-          // No real provider found — check if user previously skipped setup
-          const providerSkipped = getSetting('setup_provider_skipped');
-          provider = providerSkipped === 'true' ? 'skipped' : 'not-configured';
-        }
-      }
+      const providerSkipped = getSetting('setup_provider_skipped');
+      provider = providerSkipped === 'true' ? 'skipped' : 'not-configured';
     }
 
     // Project status

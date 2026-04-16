@@ -13,8 +13,8 @@ import type { AgentRuntime, RuntimeStreamOptions } from './types';
 import type { ClaudeStreamOptions } from '@/types';
 import { findClaudeBinary } from '../platform';
 import { getConversation } from '../conversation-registry';
-import { getSetting, getActiveProvider } from '../db';
 import { disposeSessionPool } from '../cli-session-pool';
+import { streamClaudeSdk } from '../claude-client';
 
 export const sdkRuntime: AgentRuntime = {
   id: 'claude-code-sdk',
@@ -22,12 +22,6 @@ export const sdkRuntime: AgentRuntime = {
   description: 'Claude Code CLI agent with built-in tools, MCP, and permissions.',
 
   stream(options: RuntimeStreamOptions): ReadableStream<string> {
-    // Lazy import to avoid loading SDK when not needed
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { streamClaudeSdk } = require('../claude-client') as {
-      streamClaudeSdk: (options: ClaudeStreamOptions) => ReadableStream<string>;
-    };
-
     // Convert RuntimeStreamOptions → ClaudeStreamOptions
     const ro = options.runtimeOptions || {};
     const sdkOptions: ClaudeStreamOptions = {

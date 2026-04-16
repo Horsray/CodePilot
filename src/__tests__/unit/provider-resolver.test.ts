@@ -461,7 +461,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const env = toClaudeCodeEnv({ PATH: '/usr/bin' }, resolved);
@@ -501,7 +501,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const env = toClaudeCodeEnv({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'old-key' }, resolved);
@@ -543,7 +543,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const env = toClaudeCodeEnv({ PATH: '/usr/bin', SOME_CUSTOM_VAR: 'old' }, resolved);
@@ -586,7 +586,7 @@ describe('Provider Resolver', () => {
         },
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const env = toClaudeCodeEnv({}, resolved);
@@ -639,7 +639,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved);
@@ -668,7 +668,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved);
@@ -698,7 +698,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved);
@@ -727,7 +727,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved);
@@ -753,7 +753,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved, 'opus');

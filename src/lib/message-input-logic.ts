@@ -85,6 +85,21 @@ export function filterItems(items: PopoverItem[], filter: string): PopoverItem[]
 }
 
 /**
+ * 中文注释：功能名称「触发区间拆分」。
+ * 用法：从输入框里移除 `/xxx` 或 `@xxx` 触发片段，保留前后正文，供 badge/file mention 回填复用。
+ */
+function splitAroundTrigger(
+  inputValue: string,
+  triggerPos: number,
+  popoverFilter: string,
+): { before: string; after: string } {
+  const before = inputValue.slice(0, triggerPos);
+  const cursorEnd = triggerPos + popoverFilter.length + 1;
+  const after = inputValue.slice(cursorEnd);
+  return { before, after };
+}
+
+/**
  * Determines what happens when an item is selected from the popover.
  * Used by insertItem in useSlashCommands.
  */
@@ -102,6 +117,7 @@ export function resolveItemSelection(
 
   // Non-immediate commands: show as badge
   if (popoverMode === 'skill') {
+    const { before, after } = splitAroundTrigger(inputValue, triggerPos, popoverFilter);
     return {
       action: 'set_badge',
       badge: {
@@ -111,13 +127,12 @@ export function resolveItemSelection(
         kind: item.kind || 'slash_command',
         installedSource: item.installedSource,
       },
+      newInputValue: before + after,
     };
   }
 
   // File mention: insert into text
-  const before = inputValue.slice(0, triggerPos);
-  const cursorEnd = triggerPos + popoverFilter.length + 1;
-  const after = inputValue.slice(cursorEnd);
+  const { before, after } = splitAroundTrigger(inputValue, triggerPos, popoverFilter);
   const insertText = `@${item.value} `;
   return {
     action: 'insert_file_mention',
@@ -129,7 +144,27 @@ export function resolveItemSelection(
  * Badge dispatch logic — what prompt is sent for each badge kind.
  * Used by handleSubmit in MessageInput.
  */
-export function dispatchBadge(badge: CommandBadge, userContent: string): BadgeDispatchResult {
+export function dispatchBadge(
+  badgeOrBadges: CommandBadge | CommandBadge[],
+  userContent: string,
+): BadgeDispatchResult {
+  const badges = Array.isArray(badgeOrBadges) ? badgeOrBadges : [badgeOrBadges];
+  if (badges.length === 0) {
+    return { prompt: userContent, displayLabel: userContent };
+  }
+
+  if (badges.length > 1 && badges.every((b) => b.kind === 'agent_skill')) {
+    const skillNames = badges.map((b) => b.label).join(', ');
+    const displayLabel = userContent
+      ? `${badges.map((b) => `/${b.label}`).join(' ')}\n${userContent}`
+      : badges.map((b) => `/${b.label}`).join(' ');
+    const agentPrompt = userContent
+      ? `Use the ${skillNames} skills. User context: ${userContent}`
+      : `Please use the ${skillNames} skills.`;
+    return { prompt: agentPrompt, displayLabel };
+  }
+
+  const badge = badges[0];
   const baseLabel = `/${badge.label}`;
   // Show user's text in the chat bubble so it's not "swallowed"
   const displayLabel = userContent ? `${baseLabel}\n${userContent}` : baseLabel;

@@ -28,6 +28,7 @@ import {
 } from './db';
 import { ensureTokenFresh } from './openai-oauth-manager';
 import { CODEX_API_ENDPOINT } from './openai-oauth';
+import { hasClaudeSettingsCredentials } from './claude-settings';
 import { readCCSwitchClaudeSettings } from './cc-switch';
 
 // ── Resolution result ───────────────────────────────────────────
@@ -619,11 +620,13 @@ function buildResolution(
   provider = effectiveProvider;
 
   if (!provider) {
-    // Environment-based provider (no DB record) — credentials come from shell env or legacy DB settings
+    // 中文注释：功能名称「env 组凭据探测」。
+    // 用法：在无 DB provider 时，同时识别 shell env、旧设置和 ~/.claude/settings.json，避免聊天入口过早误判未配置。
     const envHasCredentials = !!(
       process.env.ANTHROPIC_API_KEY ||
       process.env.ANTHROPIC_AUTH_TOKEN ||
-      getSetting('anthropic_auth_token')
+      getSetting('anthropic_auth_token') ||
+      hasClaudeSettingsCredentials()
     );
     // Read user-configured global default model — only use it if it's an env-provider model
     const globalDefaultModel = getSetting('global_default_model') || undefined;
@@ -751,9 +754,9 @@ function buildResolution(
   // Has credentials?
   const hasCredentials = !!(provider.api_key) || authStyle === 'env_only';
 
-  // Settings sources — always include 'user' so SDK can load skills from
-  // ~/.claude/skills/. Env override conflicts are handled by envOverrides.
-  const settingSources = ['user', 'project', 'local'];
+  // 中文注释：功能名称「DB Provider 的 settingSources 收口」。
+  // 用法：显式 Provider 只保留 `user`，项目级 MCP 由 loadProjectMcpServers 手动回注，认证隔离由 shadow HOME 处理。
+  const settingSources = ['user'];
 
   return {
     provider,

@@ -18,7 +18,7 @@ import { SlashCommandPopover } from './SlashCommandPopover';
 import { CliToolsPopover } from './CliToolsPopover';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
 import { EffortSelectorDropdown } from './EffortSelectorDropdown';
-import { FileAwareSubmitButton, AttachFileButton, FileTreeAttachmentBridge, FileAttachmentsCapsules, CommandBadge, CliBadge } from './MessageInputParts';
+import { FileAwareSubmitButton, AttachFileButton, FileTreeAttachmentBridge, FileAttachmentsCapsules, CommandBadgeList, CliBadge } from './MessageInputParts';
 import {
   Tooltip,
   TooltipContent,
@@ -115,7 +115,11 @@ export function MessageInput({
     }
   }, [modelName, modelOptions, currentProviderIdValue, onModelChange, onProviderModelChange]);
 
-  const { badge, setBadge, cliBadge, setCliBadge, removeBadge, removeCliBadge, hasBadge } = useCommandBadge(textareaRef);
+  const { badges, badge, addBadge, setBadge, cliBadge, setCliBadge, removeBadge, removeCliBadge, hasBadge } = useCommandBadge(textareaRef);
+  const handleSetBadge = useCallback((nextBadge: Parameters<typeof setBadge>[0]) => {
+    if (nextBadge) addBadge(nextBadge);
+    else setBadge(null);
+  }, [addBadge, setBadge]);
 
   const cliToolsFetch = useCliToolsFetch({
     popoverMode: popover.popoverMode,
@@ -147,7 +151,7 @@ export function MessageInput({
     setTriggerPos: popover.setTriggerPos,
     closePopover: popover.closePopover,
     onCommand,
-    setBadge,
+    setBadge: handleSetBadge,
     isStreaming,
   });
 
@@ -204,7 +208,7 @@ export function MessageInput({
     };
 
     // If Image Agent toggle is on and no badge, send via normal LLM with systemPromptAppend
-    if (imageGen.state.enabled && !badge && !isStreaming) {
+    if (imageGen.state.enabled && badges.length === 0 && !isStreaming) {
       const files = await convertFiles();
       if (!content && files.length === 0) return;
 
@@ -224,9 +228,9 @@ export function MessageInput({
     }
 
     // If badge is active, dispatch by kind
-    if (badge && !isStreaming) {
+    if (badges.length > 0 && !isStreaming) {
       const files = await convertFiles();
-      const { prompt, displayLabel } = dispatchBadge(badge, content);
+      const { prompt, displayLabel } = dispatchBadge(badges, content);
       setBadge(null);
       setInputValue('');
       onSend(prompt, files.length > 0 ? files : undefined, undefined, displayLabel);
@@ -260,7 +264,7 @@ export function MessageInput({
 
     onSend(content || 'Please review the attached file(s).', hasFiles ? files : undefined, cliAppend);
     setInputValue('');
-  }, [inputValue, onSend, onCommand, disabled, isStreaming, popover, badge, cliBadge, imageGen, setBadge, setCliBadge]);
+  }, [inputValue, onSend, onCommand, disabled, isStreaming, popover, badges, cliBadge, imageGen, setBadge, setCliBadge]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -268,7 +272,7 @@ export function MessageInput({
         popoverMode: popover.popoverMode,
         popoverHasItems: popover.popoverItems.length > 0,
         inputValue,
-        hasBadge: !!badge,
+        hasBadge: badges.length > 0,
         hasCliBadge: !!cliBadge,
       });
 
@@ -331,7 +335,7 @@ export function MessageInput({
         }
       }
     },
-    [popover, slashCommands, cliToolsFetch, badge, cliBadge, inputValue, removeBadge, removeCliBadge]
+    [popover, slashCommands, cliToolsFetch, badges, cliBadge, inputValue, removeBadge, removeCliBadge]
   );
 
   // Effort selector state — guard against undefined when model not found in current provider's list
@@ -407,14 +411,8 @@ export function MessageInput({
           >
             {/* Bridge: listens for file tree "+" button events */}
             <FileTreeAttachmentBridge />
-            {/* Command badge */}
-            {badge && (
-              <CommandBadge
-                command={badge.command}
-                description={badge.description}
-                onRemove={removeBadge}
-              />
-            )}
+            {/* Command badges */}
+            <CommandBadgeList badges={badges} onRemove={removeBadge} />
             {/* CLI badge */}
             {cliBadge && (
               <CliBadge name={cliBadge.name} onRemove={removeCliBadge} />
@@ -480,6 +478,7 @@ export function MessageInput({
                 disabled={disabled}
                 inputValue={inputValue}
                 hasBadge={hasBadge}
+                isImageAgentOn={imageGen.state.enabled}
               />
             </PromptInputFooter>
           </PromptInput>

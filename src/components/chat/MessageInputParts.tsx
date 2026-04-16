@@ -21,16 +21,24 @@ export function FileAwareSubmitButton({
   disabled,
   inputValue,
   hasBadge,
+  isImageAgentOn,
 }: {
   status: ChatStatus;
   onStop?: () => void;
   disabled?: boolean;
   inputValue: string;
   hasBadge: boolean;
+  isImageAgentOn?: boolean;
 }) {
   const attachments = usePromptInputAttachments();
   const hasFiles = attachments.files.length > 0;
   const isStreaming = status === 'streaming' || status === 'submitted';
+  const trimmed = inputValue.trim();
+  const canQueue = isStreaming
+    && !!trimmed
+    && !hasBadge
+    && !trimmed.startsWith('/')
+    && !isImageAgentOn;
   const enabled = isSubmitEnabled({
     inputValue,
     hasBadge,
@@ -41,12 +49,14 @@ export function FileAwareSubmitButton({
 
   return (
     <PromptInputSubmit
-      status={status}
-      onStop={onStop}
+      status={canQueue ? 'ready' : status}
+      onStop={canQueue ? undefined : onStop}
       disabled={!enabled}
       className="rounded-full"
     >
-      {isStreaming ? (
+      {canQueue ? (
+        <ArrowUp size={16} />
+      ) : isStreaming ? (
         <Stop size={16} />
       ) : (
         <ArrowUp size={16} />
@@ -160,34 +170,47 @@ export function FileAttachmentsCapsules() {
 }
 
 /**
- * Slash-command badge displayed above the textarea.
+ * Slash-command badge chip — command only, no long description text.
  */
 export function CommandBadge({
   command,
-  description,
   onRemove,
 }: {
   command: string;
-  description?: string;
   onRemove: () => void;
 }) {
   return (
-    <div className="flex w-full items-center gap-1.5 px-3 pt-2.5 pb-0 order-first">
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 text-primary pl-2.5 pr-1.5 py-1 text-xs font-medium border border-primary/20">
-        <span className="font-mono">{command}</span>
-        {description && (
-          <span className="text-primary/60 text-[10px]">{description}</span>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onRemove}
-          className="ml-0.5 h-auto w-auto rounded-full p-0.5 hover:bg-primary/20"
-        >
-          <X size={12} />
-        </Button>
-      </span>
+    <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 text-primary pl-2.5 pr-1 py-1 text-xs font-medium border border-primary/20">
+      <span className="font-mono">{command}</span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={onRemove}
+        className="ml-0.5 h-auto w-auto rounded-full p-0.5 hover:bg-primary/20"
+      >
+        <X size={12} />
+      </Button>
+    </span>
+  );
+}
+
+/**
+ * Wrapper that renders zero or more command badges above the textarea.
+ */
+export function CommandBadgeList({
+  badges,
+  onRemove,
+}: {
+  badges: ReadonlyArray<{ command: string }>;
+  onRemove: (command: string) => void;
+}) {
+  if (badges.length === 0) return null;
+  return (
+    <div className="flex w-full flex-wrap items-center gap-1.5 px-3 pt-2.5 pb-0 order-first">
+      {badges.map((b) => (
+        <CommandBadge key={b.command} command={b.command} onRemove={() => onRemove(b.command)} />
+      ))}
     </div>
   );
 }

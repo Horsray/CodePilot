@@ -923,28 +923,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
 
         // Permission handler: sends SSE event and waits for user response
         queryOptions.canUseTool = async (toolName, input, opts) => {
-          // Auto-approve CodePilot's own in-process MCP tools — they are internal
-          // and the user has already opted in by enabling the relevant mode.
-          // Note: SDK prefixes MCP tool names with mcp__<server>__, so we check
-          // both bare and prefixed names.
-          const autoApprovedTools = [
-            'codepilot_generate_image',
-            'codepilot_import_media',
-            'codepilot_load_widget_guidelines',
-            'codepilot_cli_tools_list',
-            'codepilot_cli_tools_add',
-            'codepilot_cli_tools_remove',
-            'codepilot_cli_tools_check_updates',
-            'codepilot_dashboard_pin',
-            'codepilot_dashboard_list',
-            'codepilot_dashboard_refresh',
-            'codepilot_dashboard_update',
-            'codepilot_dashboard_remove',
-          ];
-          if (autoApprovedTools.some(t => toolName === t || toolName.endsWith(`__${t}`))) {
-            return { behavior: 'allow' as const, updatedInput: input };
-          }
-
           const permissionRequestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
           const permEvent: PermissionRequestEvent = {
