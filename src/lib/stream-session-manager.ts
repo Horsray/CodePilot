@@ -32,9 +32,7 @@ interface ActiveStream {
   abortController: AbortController;
   snapshot: SessionStreamSnapshot;
   idleCheckTimer: ReturnType<typeof setInterval> | null;
-  lastTransportEventTime: number;
-  lastMeaningfulEventTime: number;
-  lastKeepAliveTime: number;
+  lastEventTime: number;
   gcTimer: ReturnType<typeof setTimeout> | null;
   /** Tracked ad-hoc timeouts — cleaned up when the stream ends. */
   pendingTimers: Set<ReturnType<typeof setTimeout>>;
@@ -43,22 +41,15 @@ interface ActiveStream {
   accumulatedThinking: string;
   /** All thinking blocks concatenated (preserved for finalMessageContent) */
   fullThinking: string;
-  /** Structured thinking segments with model info */
-  thinkingSegments: Array<{ text: string; model?: string }>;
-  /** Map of tool_use_id to modelId */
-  toolModels: Record<string, string>;
   /** Tracks whether non-thinking content has arrived since last thinking delta */
   thinkingPhaseEnded: boolean;
   toolUsesArray: ToolUseInfo[];
   toolResultsArray: ToolResultInfo[];
   toolOutputAccumulated: string;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
-  lastStatusPayload: Record<string, any> | null;
-  activeToolExecution: { toolId: string; toolName: string; startedAt: number } | null;
-  abortReason: 'transport_idle' | 'no_meaningful_progress' | null;
+  isIdleTimeout: boolean;
   sendMessageFn: ((content: string, files?: FileAttachment[]) => void) | null;
   rewindPoints: Array<{ userMessageId: string }>;
-  referencedContexts: string[];
 }
 
 export interface StartStreamParams {
@@ -95,80 +86,7 @@ export interface StartStreamParams {
 const GLOBAL_KEY = '__streamSessionManager__' as const;
 const LISTENERS_KEY = '__streamSessionListeners__' as const;
 const STREAM_IDLE_TIMEOUT_MS = 330_000;
-const STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS = 300_000; // Increased to 5 minutes to match backend
-const MCP_TOOL_TIMEOUT_MS = 300_000; // 5 minutes — same as non-MCP tools; 60s was too aggressive and killed legitimate long-running MCP tools
 const GC_DELAY_MS = 5 * 60 * 1000; // 5 minutes
-
-function isMcpTool(toolName?: string | null): boolean {
-  return !!toolName && toolName.startsWith('mcp__');
-}
-
-function makeSyntheticToolErrorResult(
-  toolUseId: string,
-  toolName: string,
-  reason: string,
-): ToolResultInfo {
-  return {
-    tool_use_id: toolUseId,
-    content: `[tool-error] ${toolName}: ${reason}`,
-    is_error: true,
-  };
-}
-
-function upsertToolResult(stream: ActiveStream, res: ToolResultInfo): void {
-  const existingIdx = stream.toolResultsArray.findIndex((item) => item.tool_use_id === res.tool_use_id);
-  if (existingIdx >= 0) {
-    const next = [...stream.toolResultsArray];
-    next[existingIdx] = res;
-    stream.toolResultsArray = next;
-  } else {
-    stream.toolResultsArray = [...stream.toolResultsArray, res];
-  }
-}
-
-function buildStructuredFinalContent(stream: ActiveStream, textContent: string | null): string | null {
-  // Capture the final segment if it hasn't been pushed yet
-  const finalSegments = [...stream.thinkingSegments];
-  if (stream.accumulatedThinking.trim()) {
-    finalSegments.push({ text: stream.accumulatedThinking, model: stream.lastStatusPayload?.model });
-  }
-
-  const blocks: Array<Record<string, unknown>> = [];
-  
-  // Add thinking blocks with model info
-  for (const segment of finalSegments) {
-    blocks.push({ type: 'thinking', thinking: segment.text, model: segment.model });
-  }
-
-  if (textContent) {
-    blocks.push({ type: 'text', text: textContent });
-  }
-  for (const tu of stream.toolUsesArray) {
-    blocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input, model: stream.toolModels[tu.id] });
-    const tr = stream.toolResultsArray.find((r) => r.tool_use_id === tu.id);
-    if (tr) {
-      blocks.push({
-        type: 'tool_result',
-        tool_use_id: tr.tool_use_id,
-        content: tr.content,
-        ...(tr.is_error ? { is_error: true } : {}),
-        ...(tr.media && tr.media.length > 0 ? { media: tr.media } : {}),
-      });
-    }
-  }
-
-  if (blocks.length === 0) return null;
-  if (blocks.length === 1 && blocks[0].type === 'text') return textContent;
-  return JSON.stringify(blocks);
-}
-
-function clearServerSdkSession(sessionId: string): void {
-  fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sdk_session_id: '' }),
-  }).catch(() => {});
-}
 
 function getStreamsMap(): Map<string, ActiveStream> {
   if (!(globalThis as Record<string, unknown>)[GLOBAL_KEY]) {
@@ -194,21 +112,17 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     sessionId: stream.sessionId,
     phase: stream.snapshot.phase,
     streamingContent: stream.accumulatedText,
-    streamingThinkingContent: stream.fullThinking
-      ? stream.fullThinking + '\n\n---\n\n' + stream.accumulatedThinking
-      : stream.accumulatedThinking,
+    streamingThinkingContent: stream.accumulatedThinking,
     toolUses: [...stream.toolUsesArray],
     toolResults: [...stream.toolResultsArray],
     streamingToolOutput: stream.toolOutputAccumulated,
     statusText: stream.snapshot.statusText,
-    statusPayload: stream.lastStatusPayload || undefined,
     pendingPermission: stream.snapshot.pendingPermission,
     permissionResolved: stream.snapshot.permissionResolved,
     tokenUsage: stream.snapshot.tokenUsage,
     startedAt: stream.snapshot.startedAt,
     completedAt: stream.snapshot.completedAt,
     error: stream.snapshot.error,
-    referencedContexts: [...stream.referencedContexts],
     finalMessageContent: stream.snapshot.finalMessageContent,
   };
 }
@@ -298,27 +212,20 @@ export function startStream(params: StartStreamParams): void {
       finalMessageContent: null,
     },
     idleCheckTimer: null,
-    lastTransportEventTime: Date.now(),
-    lastMeaningfulEventTime: Date.now(),
-    lastKeepAliveTime: 0,
+    lastEventTime: Date.now(),
     gcTimer: null,
     pendingTimers: new Set(),
     accumulatedText: '',
     accumulatedThinking: '',
     fullThinking: '',
-    thinkingSegments: [],
-    toolModels: {},
     thinkingPhaseEnded: false,
     toolUsesArray: [],
     toolResultsArray: [],
     toolOutputAccumulated: '',
     toolTimeoutInfo: null,
-    lastStatusPayload: null,
-    activeToolExecution: null,
-    abortReason: null,
+    isIdleTimeout: false,
     sendMessageFn: params.sendMessageFn ?? null,
     rewindPoints: [],
-    referencedContexts: [],
   };
 
   map.set(params.sessionId, stream);
@@ -329,51 +236,13 @@ export function startStream(params: StartStreamParams): void {
 }
 
 async function runStream(stream: ActiveStream, params: StartStreamParams): Promise<void> {
-  // 中文注释：功能名称「传输活跃心跳」，用法是在收到任意 SSE 事件时刷新链路时间，
-  // 仅用于判断连接是否断开，不代表模型真的还在推进。
-  const markTransportActive = () => { stream.lastTransportEventTime = Date.now(); };
-  // 中文注释：功能名称「有效进展打点」，用法是在收到文本、思维、工具开始/结束、工具进度等真实推进事件时刷新，
-  // 避免 keep_alive 心跳把“假活跃”误判成正常推理。
-  const markMeaningfulProgress = () => {
-    const now = Date.now();
-    stream.lastTransportEventTime = now;
-    stream.lastMeaningfulEventTime = now;
-  };
+  const markActive = () => { stream.lastEventTime = Date.now(); };
 
-  // 中文注释：功能名称「双层 watchdog」，用法是区分“连接断开”和“有心跳但无有效进展”两类卡死。
+  // Idle timeout checker
   stream.idleCheckTimer = setInterval(() => {
-    const now = Date.now();
-    const activeToolTimeoutMs = isMcpTool(stream.activeToolExecution?.toolName)
-      ? MCP_TOOL_TIMEOUT_MS
-      : STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS;
-
-    if (now - stream.lastMeaningfulEventTime >= activeToolTimeoutMs) {
+    if (Date.now() - stream.lastEventTime >= STREAM_IDLE_TIMEOUT_MS) {
       cleanupTimers(stream);
-      // 中文注释：功能名称「工具卡死转工具超时」，用法是在某个工具运行中长时间无进展时，
-      // 优先走 tool-timeout 分支，把错误反馈给 AI 继续修复，而不是直接落成全局 90s 中止。
-      if (stream.activeToolExecution) {
-        stream.toolTimeoutInfo = {
-          toolName: stream.activeToolExecution.toolName,
-          elapsedSeconds: Math.max(1, Math.round((now - stream.activeToolExecution.startedAt) / 1000)),
-        };
-        upsertToolResult(
-          stream,
-          makeSyntheticToolErrorResult(
-            stream.activeToolExecution.toolId,
-            stream.activeToolExecution.toolName,
-            `timed out after ${Math.max(1, Math.round((now - stream.activeToolExecution.startedAt) / 1000))}s`,
-          ),
-        );
-        stream.abortReason = null;
-      } else {
-        stream.abortReason = 'no_meaningful_progress';
-      }
-      stream.abortController.abort();
-      return;
-    }
-    if (now - stream.lastTransportEventTime >= STREAM_IDLE_TIMEOUT_MS) {
-      cleanupTimers(stream);
-      stream.abortReason = 'transport_idle';
+      stream.isIdleTimeout = true;
       stream.abortController.abort();
     }
   }, 10_000);
@@ -431,7 +300,6 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         ...(params.thinking ? { thinking: params.thinking } : {}),
         ...(params.context1m ? { context_1m: true } : {}),
         ...(params.displayOverride ? { displayOverride: params.displayOverride } : {}),
-        permission_mode: 'bypassPermissions',
       }),
       signal: stream.abortController.signal,
     });
@@ -450,64 +318,41 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     if (!reader) throw new Error('No response stream');
 
     const result = await consumeSSEStream(reader, {
-      onText: (acc: string, model?: string) => {
-        markMeaningfulProgress();
-        if (model) {
-          stream.lastStatusPayload = { ...stream.lastStatusPayload, model };
-        }
+      onText: (acc) => {
+        markActive();
         stream.accumulatedText = acc;
         stream.thinkingPhaseEnded = true;
         throttledTextEmit();
       },
-      onThinking: (delta: string, model?: string) => {
-        markMeaningfulProgress();
-        const currentModel = model || stream.lastStatusPayload?.model;
-
+      onThinking: (delta) => {
+        markActive();
         // If non-thinking content has arrived since last thinking delta,
         // this is a new thinking phase (e.g. after a tool_use round-trip).
+        // Reset the live accumulator so the UI shows only the current phase.
         if (stream.thinkingPhaseEnded) {
+          // Save previous thinking to full history before resetting
           if (stream.accumulatedThinking) {
             stream.fullThinking += (stream.fullThinking ? '\n\n---\n\n' : '') + stream.accumulatedThinking;
-            stream.thinkingSegments.push({ text: stream.accumulatedThinking, model: stream.lastStatusPayload?.model });
           }
           stream.accumulatedThinking = '';
           stream.thinkingPhaseEnded = false;
         }
-        
-        if (model) {
-          stream.lastStatusPayload = { ...stream.lastStatusPayload, model };
-        }
         stream.accumulatedThinking += delta;
         emit(stream, 'snapshot-updated');
       },
-      onToolUse: (tool: ToolUseInfo, model?: string) => {
-        markMeaningfulProgress();
+      onToolUse: (tool) => {
+        markActive();
         flushTextThrottle(); // Ensure text is up-to-date before tool events
         stream.thinkingPhaseEnded = true;
-        
-        const currentModel = model || stream.lastStatusPayload?.model;
-        if (currentModel) {
-          stream.toolModels[tool.id] = currentModel;
-          stream.lastStatusPayload = { ...stream.lastStatusPayload, model: currentModel };
-        }
-
         stream.toolOutputAccumulated = '';
-        stream.activeToolExecution = {
-          toolId: tool.id,
-          toolName: tool.name,
-          startedAt: Date.now(),
-        };
         if (!stream.toolUsesArray.some(t => t.id === tool.id)) {
           stream.toolUsesArray = [...stream.toolUsesArray, tool];
         }
         emit(stream, 'snapshot-updated');
       },
       onToolResult: (res) => {
-        markMeaningfulProgress();
+        markActive();
         stream.toolOutputAccumulated = '';
-        if (stream.activeToolExecution?.toolId === res.tool_use_id) {
-          stream.activeToolExecution = null;
-        }
         const existingIdx = stream.toolResultsArray.findIndex(r => r.tool_use_id === res.tool_use_id);
         if (existingIdx >= 0) {
           const next = [...stream.toolResultsArray];
@@ -521,13 +366,13 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         window.dispatchEvent(new Event('refresh-file-tree'));
       },
       onToolOutput: (data) => {
-        markMeaningfulProgress();
+        markActive();
         const next = stream.toolOutputAccumulated + (stream.toolOutputAccumulated ? '\n' : '') + data;
         stream.toolOutputAccumulated = next.length > 2000 ? next.slice(-2000) : next;
         emit(stream, 'snapshot-updated');
       },
       onToolProgress: (toolName, elapsed) => {
-        markMeaningfulProgress();
+        markActive();
         stream.snapshot = { ...stream.snapshot, statusText: `Running ${toolName}... (${elapsed}s)` };
         emit(stream, 'snapshot-updated');
       },
@@ -542,7 +387,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         }
       },
       onContextCompressed: (data) => {
-        markMeaningfulProgress();
+        markActive();
         // Dispatch the 'context-compressed' window event that ChatView
         // uses to flip hasSummary state and show the context indicator.
         // Also show a brief human-readable status line so the user knows
@@ -561,18 +406,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
               stream.snapshot = { ...stream.snapshot, statusText: undefined };
               emit(stream, 'snapshot-updated');
             }
-          }, 5000);
+          }, 5000); // Show for 5s so user can read it
         }
       },
       onStatus: (text) => {
-        markMeaningfulProgress();
-        // Detect compression notifications and broadcast window events
-        if (text === 'context_compressed') {
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('context-compressed', { detail: { sessionId: params.sessionId } }));
-          }
-          return; // Don't show this as a status line — it's a metadata signal
-        }
+        markActive();
         if (text === 'context_compressing_retry') {
           // Show a brief status while PTL auto-retry is in progress
           stream.snapshot = { ...stream.snapshot, statusText: 'Compressing context...' };
@@ -595,11 +433,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         }
       },
       onResult: (usage) => {
-        markMeaningfulProgress();
+        markActive();
         stream.snapshot = { ...stream.snapshot, tokenUsage: usage };
       },
       onPermissionRequest: (permData) => {
-        markMeaningfulProgress();
+        markActive();
         stream.snapshot = {
           ...stream.snapshot,
           pendingPermission: permData,
@@ -608,74 +446,34 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         emit(stream, 'permission-request');
       },
       onToolTimeout: (toolName, elapsedSeconds) => {
-        markMeaningfulProgress();
+        markActive();
         stream.toolTimeoutInfo = { toolName, elapsedSeconds };
-        if (stream.activeToolExecution) {
-          upsertToolResult(
-            stream,
-            makeSyntheticToolErrorResult(
-              stream.activeToolExecution.toolId,
-              stream.activeToolExecution.toolName,
-              `timed out after ${elapsedSeconds}s`,
-            ),
-          );
-        }
       },
       onModeChanged: (sdkMode) => {
-        markMeaningfulProgress();
+        markActive();
         if (params.onModeChanged) {
           params.onModeChanged(sdkMode);
         }
       },
       onTaskUpdate: () => {
-        markMeaningfulProgress();
+        markActive();
         window.dispatchEvent(new CustomEvent('tasks-updated'));
       },
       onRewindPoint: (sdkUserMessageId) => {
-        markMeaningfulProgress();
+        markActive();
         stream.rewindPoints = [...stream.rewindPoints, { userMessageId: sdkUserMessageId }];
       },
-      onReferencedContexts: (files) => {
-        markMeaningfulProgress();
-        stream.referencedContexts = files;
-        emit(stream, 'snapshot-updated');
-      },
-      onUiAction: (action) => {
-        markMeaningfulProgress();
-        if (action.action === 'open_browser' && action.url) {
-          window.dispatchEvent(new CustomEvent('browser-navigate', {
-            detail: {
-              url: action.url,
-              newTab: action.newTab !== false,
-            },
-          }));
-        }
-        if (action.action === 'open_terminal') {
-          window.dispatchEvent(new CustomEvent('terminal-ensure-visible', {
-            detail: {
-              tab: action.tab || 'terminal',
-              terminalId: action.terminalId,
-            },
-          }));
-        }
-      },
       onKeepAlive: () => {
-        markTransportActive();
-        stream.lastKeepAliveTime = Date.now();
+        markActive();
       },
       onError: (acc) => {
-        markMeaningfulProgress();
+        markActive();
         stream.accumulatedText = acc;
         emit(stream, 'snapshot-updated');
       },
       onInitMeta: (meta) => {
-        markMeaningfulProgress();
+        markActive();
         params.onInitMeta?.(meta);
-      },
-      onStatusPayload: (payload) => {
-        markMeaningfulProgress();
-        stream.lastStatusPayload = payload;
-        emit(stream, 'snapshot-updated');
       },
     });
 
@@ -688,13 +486,34 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     const finalToolResults = stream.toolResultsArray;
     const hasTools = finalToolUses.length > 0 || finalToolResults.length > 0;
 
-    let messageContent: string | null = accumulated.trim();
+    let messageContent = accumulated.trim();
     // Combine all thinking phases for persistence
     const allThinking = [stream.fullThinking, stream.accumulatedThinking]
       .filter(s => s.trim()).join('\n\n---\n\n');
     const hasThinking = allThinking.length > 0;
     if ((hasTools || hasThinking) && (messageContent || hasThinking)) {
-      messageContent = buildStructuredFinalContent(stream, accumulated.trim());
+      const contentBlocks: Array<Record<string, unknown>> = [];
+      // Include thinking block if present — rendered as collapsed Reasoning in MessageItem
+      if (hasThinking) {
+        contentBlocks.push({ type: 'thinking', thinking: allThinking });
+      }
+      if (accumulated.trim()) {
+        contentBlocks.push({ type: 'text', text: accumulated.trim() });
+      }
+      for (const tu of finalToolUses) {
+        contentBlocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
+        const tr = finalToolResults.find(r => r.tool_use_id === tu.id);
+        if (tr) {
+          contentBlocks.push({
+            type: 'tool_result',
+            tool_use_id: tr.tool_use_id,
+            content: tr.content,
+            ...(tr.is_error ? { is_error: true } : {}),
+            ...(tr.media && tr.media.length > 0 ? { media: tr.media } : {}),
+          });
+        }
+      }
+      messageContent = JSON.stringify(contentBlocks);
     }
 
     // Update snapshot with completion info
@@ -711,8 +530,6 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     stream.accumulatedText = '';
     stream.accumulatedThinking = '';
     stream.fullThinking = '';
-    stream.thinkingSegments = [];
-    stream.toolModels = {};
     stream.thinkingPhaseEnded = false;
     stream.toolUsesArray = [];
     stream.toolResultsArray = [];
@@ -729,43 +546,22 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     flushTextThrottle();
     cleanupTimers(stream);
 
-    const buildFinalContent = (textContent: string | null): string | null => buildStructuredFinalContent(stream, textContent);
+    // Helper: build finalMessageContent preserving any accumulated thinking.
+    // On error/stop branches we previously only serialized accumulatedText,
+    // silently dropping reasoning blocks that the user had already seen.
+    const buildFinalContent = (textContent: string | null): string | null => {
+      const allThinking = [stream.fullThinking, stream.accumulatedThinking]
+        .filter(s => s.trim()).join('\n\n---\n\n');
+      if (!allThinking) return textContent;
+      // Wrap as content-block JSON so MessageItem can render the thinking block
+      const blocks: Array<Record<string, unknown>> = [];
+      blocks.push({ type: 'thinking', thinking: allThinking });
+      if (textContent) blocks.push({ type: 'text', text: textContent });
+      return JSON.stringify(blocks);
+    };
 
     if (error instanceof DOMException && error.name === 'AbortError') {
-      if (stream.abortReason === 'no_meaningful_progress') {
-        const stalledSecs = Math.round(STREAM_MEANINGFUL_PROGRESS_TIMEOUT_MS / 1000);
-        const heartbeatStillAlive = stream.lastKeepAliveTime > stream.lastMeaningfulEventTime;
-        const detail = heartbeatStillAlive
-          ? `推理在 ${stalledSecs}s 内没有新的有效进展，系统已自动中止。本次连接心跳仍在持续到达，所以更像是模型或工具内部卡住，而不是网络直接断开。`
-          : `推理在 ${stalledSecs}s 内没有新的有效进展，系统已自动中止。这段时间里没有新的文本、思维、工具更新或权限事件。`;
-        const textPart = stream.accumulatedText.trim()
-          ? stream.accumulatedText.trim() + `\n\n**错误:** ${detail}\n\n建议重试本轮；如果反复出现，请改用不同方案，或检查当前工具调用与 provider 稳定性。`
-          : `**错误:** ${detail}\n\n建议重试本轮；如果反复出现，请改用不同方案，或检查当前工具调用与 provider 稳定性。`;
-
-        stream.snapshot = {
-          ...buildSnapshot(stream),
-          phase: 'error',
-          completedAt: Date.now(),
-          error: `No meaningful progress timeout (${stalledSecs}s)`,
-          finalMessageContent: buildFinalContent(textPart),
-          statusText: undefined,
-          pendingPermission: null,
-          permissionResolved: null,
-        };
-        stream.accumulatedText = '';
-        stream.accumulatedThinking = '';
-        stream.fullThinking = '';
-        stream.thinkingSegments = [];
-        stream.toolModels = {};
-        stream.thinkingPhaseEnded = false;
-        stream.toolUsesArray = [];
-        stream.toolResultsArray = [];
-        stream.toolOutputAccumulated = '';
-        stream.abortReason = null;
-        emit(stream, 'completed');
-        clearServerSdkSession(stream.sessionId);
-        scheduleGC(stream);
-      } else if (stream.abortReason === 'transport_idle') {
+      if (stream.isIdleTimeout) {
         // Idle timeout
         const idleSecs = Math.round(STREAM_IDLE_TIMEOUT_MS / 1000);
         const textPart = stream.accumulatedText.trim()
@@ -788,23 +584,17 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolUsesArray = [];
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';
-        stream.abortReason = null;
         emit(stream, 'completed');
-        clearServerSdkSession(stream.sessionId);
+        // Clear stale SDK session so next message starts fresh
+        fetch(`/api/chat/sessions/${encodeURIComponent(stream.sessionId)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sdk_session_id: '' }),
+        }).catch(() => {});
         scheduleGC(stream);
       } else if (stream.toolTimeoutInfo) {
         // Tool timeout — auto-retry
         const timeoutInfo = stream.toolTimeoutInfo;
-        if (stream.activeToolExecution) {
-          upsertToolResult(
-            stream,
-            makeSyntheticToolErrorResult(
-              stream.activeToolExecution.toolId,
-              stream.activeToolExecution.toolName,
-              `timed out after ${timeoutInfo.elapsedSeconds}s`,
-            ),
-          );
-        }
         const textPart = stream.accumulatedText.trim()
           ? stream.accumulatedText.trim() + `\n\n*(tool ${timeoutInfo.toolName} timed out after ${timeoutInfo.elapsedSeconds}s)*`
           : null;
@@ -825,10 +615,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';
         stream.toolTimeoutInfo = null;
-        stream.activeToolExecution = null;
-        stream.abortReason = null;
         emit(stream, 'completed');
-        clearServerSdkSession(stream.sessionId);
         scheduleGC(stream);
 
         // Auto-retry via sendMessageFn
@@ -836,7 +623,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           const fn = stream.sendMessageFn;
           streamTimeout(stream, () => {
             fn(
-              `上一个工具 "${timeoutInfo.toolName}" 在运行 ${timeoutInfo.elapsedSeconds} 秒后超时了。请检查当前执行状态，尝试改用不同的指令或优化方案，避免再次执行可能导致卡住的操作。`
+              `The previous tool "${timeoutInfo.toolName}" timed out after ${timeoutInfo.elapsedSeconds} seconds. Please try a different approach to accomplish the task. Avoid repeating the same operation that got stuck.`
             );
           }, 500);
         }
@@ -861,10 +648,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolUsesArray = [];
         stream.toolResultsArray = [];
         stream.toolOutputAccumulated = '';
-        stream.activeToolExecution = null;
-        stream.abortReason = null;
         emit(stream, 'completed');
-        clearServerSdkSession(stream.sessionId);
         scheduleGC(stream);
       }
     } else {
@@ -886,10 +670,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       stream.toolUsesArray = [];
       stream.toolResultsArray = [];
       stream.toolOutputAccumulated = '';
-      stream.activeToolExecution = null;
-      stream.abortReason = null;
       emit(stream, 'completed');
-      clearServerSdkSession(stream.sessionId);
       scheduleGC(stream);
     }
   }

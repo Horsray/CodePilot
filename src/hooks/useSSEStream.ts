@@ -22,8 +22,8 @@ export interface SkillNudgeData {
 }
 
 export interface SSECallbacks {
-  onText: (accumulated: string, model?: string) => void;
-  onToolUse: (tool: ToolUseInfo, model?: string) => void;
+  onText: (accumulated: string) => void;
+  onToolUse: (tool: ToolUseInfo) => void;
   onToolResult: (result: ToolResultInfo) => void;
   onToolOutput: (data: string) => void;
   onToolProgress: (toolName: string, elapsedSeconds: number) => void;
@@ -34,14 +34,11 @@ export interface SSECallbacks {
   onModeChanged: (mode: string) => void;
   onTaskUpdate: (sessionId: string) => void;
   onRewindPoint: (sdkUserMessageId: string) => void;
-  onReferencedContexts?: (files: string[]) => void;
-  onUiAction?: (action: { action: string; url?: string; tab?: string; terminalId?: string; newTab?: boolean }) => void;
-  onThinking?: (delta: string, model?: string) => void;
+  onThinking?: (delta: string) => void;
   onKeepAlive: () => void;
   onError: (accumulated: string) => void;
   onSkillNudge?: (data: SkillNudgeData) => void;
   onContextCompressed?: (data: { message: string; messagesCompressed: number; tokensSaved: number }) => void;
-  onStatusPayload?: (payload: Record<string, unknown>) => void;
   onInitMeta?: (meta: {
     tools?: unknown;
     slash_commands?: unknown;
@@ -52,11 +49,9 @@ export interface SSECallbacks {
   }) => void;
 }
 
-// 中文注释：功能名称「SSE 非正常断流识别」，用法是在流没有收到 done 终止事件就结束时抛出，
-// 让上层能够区分"正常完成"和"传输被静默掐断"，从而触发自动恢复而不是误判成功。
 /**
  * Parse a single SSE line (after stripping "data: " prefix) and dispatch
- * to the appropriate callback.  Returns the updated accumulating text.
+ * to the appropriate callback.  Returns the updated accumulated text.
  */
 function handleSSEEvent(
   event: SSEEvent,
@@ -66,12 +61,12 @@ function handleSSEEvent(
   switch (event.type) {
     case 'text': {
       const next = accumulated + event.data;
-      callbacks.onText(next, event.model);
+      callbacks.onText(next);
       return next;
     }
 
     case 'thinking': {
-      callbacks.onThinking?.(event.data, event.model);
+      callbacks.onThinking?.(event.data);
       return accumulated;
     }
 
@@ -82,7 +77,7 @@ function handleSSEEvent(
           id: toolData.id,
           name: toolData.name,
           input: toolData.input,
-        }, event.model);
+        });
       } catch {
         // skip malformed tool_use data
       }
@@ -123,21 +118,11 @@ function handleSSEEvent(
     case 'status': {
       try {
         const statusData = JSON.parse(event.data);
-        callbacks.onStatusPayload?.(statusData);
-        // Skip internal-only status events (e.g. resume fallback notifications, perf)
-        if (statusData._internal || statusData.subtype === 'perf' || statusData.subtype === 'step_complete') {
+        // Skip internal-only status events (e.g. resume fallback notifications)
+        if (statusData._internal) {
           return accumulated;
         }
-        if (statusData.subtype === 'ui_action' && statusData.action) {
-          callbacks.onUiAction?.({
-            action: statusData.action,
-            url: statusData.url,
-            tab: statusData.tab,
-            terminalId: statusData.terminalId,
-            newTab: statusData.newTab,
-          });
-          return accumulated;
-        }
+        // Skill nudge — dedicated handler for persistent UI banner
         if (statusData.subtype === 'skill_nudge' && statusData.payload) {
           callbacks.onSkillNudge?.({
             message: statusData.message || statusData.payload.message || '',
@@ -237,18 +222,6 @@ function handleSSEEvent(
         }
       } catch {
         // skip malformed rewind_point data
-      }
-      return accumulated;
-    }
-
-    case 'referenced_contexts': {
-      try {
-        const refData = JSON.parse(event.data);
-        if (Array.isArray(refData.files)) {
-          callbacks.onReferencedContexts?.(refData.files);
-        }
-      } catch {
-        // skip malformed referenced_contexts data
       }
       return accumulated;
     }
@@ -370,8 +343,8 @@ export function useSSEStream() {
 
       // Proxy through ref so callers always hit the latest callbacks
       const proxied: SSECallbacks = {
-        onText: (a, m) => callbacksRef.current?.onText(a, m),
-        onToolUse: (t, m) => callbacksRef.current?.onToolUse(t, m),
+        onText: (a) => callbacksRef.current?.onText(a),
+        onToolUse: (t) => callbacksRef.current?.onToolUse(t),
         onToolResult: (r) => callbacksRef.current?.onToolResult(r),
         onToolOutput: (d) => callbacksRef.current?.onToolOutput(d),
         onToolProgress: (n, s) => callbacksRef.current?.onToolProgress(n, s),
@@ -382,12 +355,9 @@ export function useSSEStream() {
         onModeChanged: (m) => callbacksRef.current?.onModeChanged(m),
         onTaskUpdate: (s) => callbacksRef.current?.onTaskUpdate(s),
         onRewindPoint: (id) => callbacksRef.current?.onRewindPoint(id),
-        onReferencedContexts: (f) => callbacksRef.current?.onReferencedContexts?.(f),
-        onUiAction: (action) => callbacksRef.current?.onUiAction?.(action),
-        onThinking: (d, m) => callbacksRef.current?.onThinking?.(d, m),
+        onThinking: (d) => callbacksRef.current?.onThinking?.(d),
         onKeepAlive: () => callbacksRef.current?.onKeepAlive(),
         onError: (a) => callbacksRef.current?.onError(a),
-        onStatusPayload: (payload) => callbacksRef.current?.onStatusPayload?.(payload),
         onInitMeta: (m) => callbacksRef.current?.onInitMeta?.(m),
       };
 

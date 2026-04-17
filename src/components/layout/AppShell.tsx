@@ -11,8 +11,7 @@ import { FeatureAnnouncementDialog } from "./FeatureAnnouncementDialog";
 import { UpdateBanner } from "./UpdateBanner";
 import { UnifiedTopBar } from "./UnifiedTopBar";
 import { PanelZone } from "./PanelZone";
-import { BottomPanelContainer } from "./BottomPanelContainer";
-import { PanelContext, type PreviewViewMode, type WorkspaceTab } from "@/hooks/usePanel";
+import { PanelContext, type PreviewViewMode } from "@/hooks/usePanel";
 import { UpdateContext } from "@/hooks/useUpdate";
 import { useUpdateChecker } from "@/hooks/useUpdateChecker";
 import { ImageGenContext, useImageGenState } from "@/hooks/useImageGen";
@@ -26,7 +25,6 @@ import { useGitStatus } from "@/hooks/useGitStatus";
 import { SetupCenter } from '@/components/setup/SetupCenter';
 import { Toaster } from '@/components/ui/toast';
 import { useNotificationPoll } from '@/hooks/useNotificationPoll';
-import { PreviewPanel } from "./panels/PreviewPanel";
 
 const SPLIT_SESSIONS_KEY = "codepilot:split-sessions";
 const SPLIT_ACTIVE_COLUMN_KEY = "codepilot:split-active-column";
@@ -70,17 +68,6 @@ function defaultViewMode(filePath: string): PreviewViewMode {
 }
 
 const LG_BREAKPOINT = 1024;
-
-function getFileTabTitle(filePath: string): string {
-  return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath;
-}
-
-function createWorkspaceId(prefix: string): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${prefix}:${crypto.randomUUID()}`;
-  }
-  return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -137,18 +124,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Sync with viewport after hydration to avoid SSR mismatch
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setChatListOpenRaw(window.matchMedia(`(min-width: ${LG_BREAKPOINT}px)`).matches);
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Panel width state with localStorage persistence
   const [chatListWidth, setChatListWidth] = useState(240);
 
   // Restore persisted width after hydration
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const saved = localStorage.getItem("codepilot_chatlist_width");
     if (saved) setChatListWidth(parseInt(saved));
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleChatListResize = useCallback((delta: number) => {
     setChatListWidth((w) => Math.min(CHATLIST_MAX, Math.max(CHATLIST_MIN, w + delta)));
@@ -172,13 +163,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [fileTreeOpen, setFileTreeOpen] = useState(false);
   const [gitPanelOpen, setGitPanelOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [dashboardPanelOpen, setDashboardPanelOpen] = useState(false);
   const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
   const [isAssistantWorkspace, setIsAssistantWorkspace] = useState(false);
-  const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
-  const [bottomPanelTab, setBottomPanelTab] = useState<"console">("console");
-  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
-  const [activeWorkspaceTabId, setActiveWorkspaceTabIdRaw] = useState<string | null>(null);
 
   // --- Git summary (derived from polling hook, no setState needed) ---
   const [currentWorktreeLabel, setCurrentWorktreeLabel] = useState("");
@@ -201,14 +189,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const handler = () => {
       const activeIds = getActiveSessionIds();
-      
-      setActiveStreamingSessions(prev => {
-        if (prev.size !== activeIds.length) return new Set(activeIds);
-        for (const id of activeIds) {
-          if (!prev.has(id)) return new Set(activeIds);
-        }
-        return prev;
-      });
+      setActiveStreamingSessions(activeIds.length > 0 ? new Set(activeIds) : EMPTY_SET);
 
       const approvals = new Set<string>();
       for (const sid of activeIds) {
@@ -217,14 +198,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           approvals.add(sid);
         }
       }
-      
-      setPendingApprovalSessionIds(prev => {
-        if (prev.size !== approvals.size) return approvals;
-        for (const id of approvals) {
-          if (!prev.has(id)) return approvals;
-        }
-        return prev;
-      });
+      setPendingApprovalSessionIds(approvals.size > 0 ? approvals : EMPTY_SET);
     };
     window.addEventListener('stream-session-event', handler);
     return () => window.removeEventListener('stream-session-event', handler);
@@ -334,6 +308,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isSplitActive && !pathname.startsWith("/chat")) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSplitSessions([]);
       setActiveColumnIdRaw("");
     }
@@ -379,88 +354,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Reset doc preview and panels when navigating between pages/sessions
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setPreviewFileRaw(null);
     setPreviewOpen(false);
   }, [pathname]);
-
-  const setActiveWorkspaceTabId = useCallback((id: string | null) => {
-    setActiveWorkspaceTabIdRaw(id);
-  }, []);
-
-  const openPreviewTab = useCallback((path: string) => {
-    const existingTab = workspaceTabs.find((tab) => tab.kind === "preview" && tab.filePath === path);
-    setPreviewFileRaw(path);
-    setPreviewViewMode(defaultViewMode(path));
-    setPreviewOpen(false);
-    if (existingTab) {
-      setActiveWorkspaceTabIdRaw(existingTab.id);
-      return;
-    }
-    const id = createWorkspaceId("preview");
-    setWorkspaceTabs((prev) => [
-      ...prev,
-      {
-        id,
-        kind: "preview",
-        title: getFileTabTitle(path),
-        filePath: path,
-        closable: true,
-      },
-    ]);
-    setActiveWorkspaceTabIdRaw(id);
-  }, [workspaceTabs]);
-
-  const closeWorkspaceTab = useCallback((id: string) => {
-    setWorkspaceTabs((prev) => {
-      const index = prev.findIndex((tab) => tab.id === id);
-      if (index === -1) return prev;
-      const next = prev.filter((tab) => tab.id !== id);
-      if (activeWorkspaceTabId === id) {
-        const fallback = next[index] || next[index - 1] || next[0] || null;
-        setActiveWorkspaceTabIdRaw(fallback?.id ?? null);
-      }
-      return next;
-    });
-  }, [activeWorkspaceTabId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled && (isChatRoute || isSplitActive)) {
-        setActiveWorkspaceTabIdRaw(null);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [pathname, sessionId, isChatRoute, isSplitActive]);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const url = (e as CustomEvent).detail?.url;
-      if (typeof url === "string" && url.trim()) {
-        window.open(url, "_blank");
-      }
-    };
-    window.addEventListener("browser-navigate", handler);
-    return () => window.removeEventListener("browser-navigate", handler);
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const tab = (e as CustomEvent).detail?.tab;
-      if (tab === "console") setBottomPanelTab("console");
-      setBottomPanelOpen(true);
-    };
-    window.addEventListener("terminal-ensure-visible", handler);
-    return () => window.removeEventListener("terminal-ensure-visible", handler);
-  }, [setBottomPanelOpen, setBottomPanelTab]);
-
-  const activeWorkspaceTab = useMemo(
-    () => workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId) || null,
-    [workspaceTabs, activeWorkspaceTabId]
-  );
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Keep chat list state in sync when resizing across the breakpoint
   useEffect(() => {
@@ -509,25 +408,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setGitPanelOpen,
       previewOpen,
       setPreviewOpen,
+      terminalOpen,
+      setTerminalOpen,
       dashboardPanelOpen,
       setDashboardPanelOpen,
       assistantPanelOpen,
       setAssistantPanelOpen,
       isAssistantWorkspace,
       setIsAssistantWorkspace,
-      bottomPanelOpen,
-      setBottomPanelOpen,
-      bottomPanelTab,
-      setBottomPanelTab,
       currentBranch,
       gitDirtyCount,
       currentWorktreeLabel,
       setCurrentWorktreeLabel,
-      workspaceTabs,
-      activeWorkspaceTabId,
-      setActiveWorkspaceTabId,
-      openPreviewTab,
-      closeWorkspaceTab,
       workingDirectory,
       setWorkingDirectory,
       sessionId,
@@ -544,8 +436,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setPreviewFile,
       previewViewMode,
       setPreviewViewMode,
+      bottomPanelOpen: false,
+      setBottomPanelOpen: () => {},
+      bottomPanelTab: "console" as const,
+      setBottomPanelTab: () => {},
+      workspaceTabs: [],
+      activeWorkspaceTabId: null,
+      setActiveWorkspaceTabId: () => {},
+      openPreviewTab: () => {},
+      closeWorkspaceTab: () => {},
     }),
-    [fileTreeOpen, gitPanelOpen, previewOpen, dashboardPanelOpen, assistantPanelOpen, isAssistantWorkspace, bottomPanelOpen, bottomPanelTab, workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, openPreviewTab, closeWorkspaceTab, currentBranch, gitDirtyCount, currentWorktreeLabel, workingDirectory, sessionId, sessionTitle, streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, previewFile, setPreviewFile, previewViewMode]
+    [fileTreeOpen, gitPanelOpen, previewOpen, terminalOpen, dashboardPanelOpen, assistantPanelOpen, isAssistantWorkspace, currentBranch, gitDirtyCount, currentWorktreeLabel, workingDirectory, sessionId, sessionTitle, streamingSessionId, pendingApprovalSessionId, activeStreamingSessions, pendingApprovalSessionIds, previewFile, setPreviewFile, previewViewMode]
   );
 
   const imageGenValue = useImageGenState();
@@ -577,31 +478,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div className="flex flex-1 min-h-0 overflow-hidden">
                 <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                   <main className="relative flex-1 overflow-hidden">
-                    {isChatRoute || isSplitActive ? (
-                      activeWorkspaceTab ? (
-                        <div className="absolute inset-0 min-h-0">
-                          {activeWorkspaceTab.kind === "preview" && activeWorkspaceTab.filePath ? (
-                            <PreviewPanel
-                              standalone
-                              filePath={activeWorkspaceTab.filePath}
-                              onClose={() => closeWorkspaceTab(activeWorkspaceTab.id)}
-                            />
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div className="absolute inset-0 min-h-0">
-                          {isSplitActive ? (
-                            <SplitChatContainer />
-                          ) : (
-                            <ErrorBoundary>{children}</ErrorBoundary>
-                          )}
-                        </div>
-                      )
+                    {isSplitActive ? (
+                      <SplitChatContainer />
                     ) : (
                       <ErrorBoundary>{children}</ErrorBoundary>
                     )}
                   </main>
-                  {isChatDetailRoute && <BottomPanelContainer />}
                 </div>
                 {isChatDetailRoute && <PanelZone />}
               </div>

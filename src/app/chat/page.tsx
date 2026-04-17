@@ -1029,7 +1029,6 @@ export default function NewChatPage() {
           messages={messages}
           streamingContent={streamingContent}
           streamingThinkingContent={streamingThinkingContent}
-          referencedContexts={referencedContexts}
           isStreaming={isStreaming}
           sessionId={createdSessionId}
           toolUses={toolUses}

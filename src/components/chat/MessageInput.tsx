@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useCallback, useEffect, useMemo, type KeyboardEvent, type FormEvent } from 'react';
+import { useRef, useState, useCallback, useEffect, type KeyboardEvent, type FormEvent } from 'react';
 import { Terminal } from "@/components/ui/icon";
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
@@ -49,9 +49,6 @@ interface MessageInputProps {
   onProviderModelChange?: (providerId: string, model: string) => void;
   workingDirectory?: string;
   onAssistantTrigger?: () => void;
-  /** Explicit mode (code, plan, ask) — if provided, overrides current internal session mode */
-  mode?: 'code' | 'plan' | 'ask' | string;
-  onModeChange?: (mode: string) => void;
   /** Effort selection lifted to parent for inclusion in the stream chain */
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
@@ -78,8 +75,6 @@ export function MessageInput({
   onProviderModelChange,
   workingDirectory,
   onAssistantTrigger,
-  mode,
-  onModeChange,
   effort: effortProp,
   onEffortChange,
   sdkInitMeta,
@@ -108,7 +103,7 @@ export function MessageInput({
 
   // --- Extracted hooks ---
   const popover = usePopoverState(modelName);
-  const { providerGroups, currentProviderIdValue, modelOptions, currentModelOption, globalDefaultModel, globalDefaultProvider } = useProviderModels(providerId, modelName, imageGen.state.enabled);
+  const { providerGroups, currentProviderIdValue, modelOptions, currentModelOption, globalDefaultModel, globalDefaultProvider } = useProviderModels(providerId, modelName);
 
   // Auto-correct model when it doesn't exist in the current provider's model list.
   // This prevents sending an unsupported model name (e.g. 'opus' to MiniMax which only has 'sonnet').

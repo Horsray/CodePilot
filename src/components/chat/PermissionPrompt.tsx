@@ -23,7 +23,6 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { SpinnerGap } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import type { ToolUIPart } from 'ai';
 import type { PermissionRequestEvent } from '@/types';
@@ -388,21 +387,6 @@ export function PermissionPrompt({
   permissionProfile,
 }: PermissionPromptProps) {
   const { t } = useTranslation();
-  const [isResolving, setIsResolved] = useState(false);
-
-  // Reset resolving state when permission changes
-  useEffect(() => {
-    setIsResolved(false);
-  }, [pendingPermission?.permissionRequestId]);
-
-  const handleResponse = async (decision: 'allow' | 'allow_session' | 'deny', updatedInput?: Record<string, unknown>, denyMessage?: string) => {
-    setIsResolved(true);
-    try {
-      await onPermissionResponse(decision, updatedInput, denyMessage);
-    } catch {
-      setIsResolved(false);
-    }
-  };
 
   // Tools that require user interaction even in full_access mode.
   // AskUserQuestion's entire purpose is to get user input — auto-approving
@@ -420,9 +404,9 @@ export function PermissionPrompt({
       !NEVER_AUTO_APPROVE.has(pendingPermission.toolName)
     ) {
       autoApprovedRef.current = pendingPermission.permissionRequestId;
-      handleResponse('allow');
+      onPermissionResponse('allow');
     }
-  }, [permissionProfile, pendingPermission, permissionResolved, isResolving, onPermissionResponse]);
+  }, [permissionProfile, pendingPermission, permissionResolved, onPermissionResponse]);
 
   // Don't render permission UI when full_access — EXCEPT for interactive tools
   if (
@@ -436,17 +420,19 @@ export function PermissionPrompt({
   if (!pendingPermission && !permissionResolved) return null;
 
   // Only show the resolved status text (not the full UI) when already resolved.
-  const isResolved = !!permissionResolved || isResolving;
+  // This prevents stacking — once resolved, we show a minimal status line that
+  // auto-hides quickly (the stream-session-manager clears it after 1s).
+  const isResolved = !!permissionResolved;
 
   const getConfirmationState = (): ToolUIPart['state'] => {
-    if (permissionResolved || isResolving) return 'approval-responded';
+    if (permissionResolved) return 'approval-responded';
     if (pendingPermission) return 'approval-requested';
     return 'input-available';
   };
 
   const getApproval = () => {
     if (!pendingPermission && !permissionResolved) return undefined;
-    if (permissionResolved === 'allow' || (isResolving && !permissionResolved)) {
+    if (permissionResolved === 'allow') {
       return { id: pendingPermission?.permissionRequestId || '', approved: true as const };
     }
     if (permissionResolved === 'deny') {
@@ -462,16 +448,13 @@ export function PermissionPrompt({
         <ExitPlanModeUI
           toolInput={pendingPermission.toolInput as Record<string, unknown>}
           toolUses={toolUses}
-          onApprove={() => handleResponse('allow')}
-          onDeny={() => handleResponse('deny')}
-          onDenyWithMessage={(msg) => handleResponse('deny', undefined, msg)}
+          onApprove={() => onPermissionResponse('allow')}
+          onDeny={() => onPermissionResponse('deny')}
+          onDenyWithMessage={(msg) => onPermissionResponse('deny', undefined, msg)}
         />
       )}
-      {pendingPermission?.toolName === 'ExitPlanMode' && (permissionResolved === 'allow' || (isResolving && !permissionResolved)) && (
-        <p className="py-1 text-xs text-status-success-foreground flex items-center gap-2">
-          {isResolving && <SpinnerGap className="animate-spin" size={12} />}
-          Plan approved — executing
-        </p>
+      {pendingPermission?.toolName === 'ExitPlanMode' && permissionResolved === 'allow' && (
+        <p className="py-1 text-xs text-status-success-foreground">Plan approved — executing</p>
       )}
       {pendingPermission?.toolName === 'ExitPlanMode' && permissionResolved === 'deny' && (
         <p className="py-1 text-xs text-status-error-foreground">Plan rejected</p>
@@ -481,14 +464,11 @@ export function PermissionPrompt({
       {pendingPermission?.toolName === 'AskUserQuestion' && !isResolved && (
         <AskUserQuestionUI
           toolInput={pendingPermission.toolInput as Record<string, unknown>}
-          onSubmit={(decision, updatedInput) => handleResponse(decision, updatedInput)}
+          onSubmit={(decision, updatedInput) => onPermissionResponse(decision, updatedInput)}
         />
       )}
       {pendingPermission?.toolName === 'AskUserQuestion' && isResolved && (
-        <p className="py-1 text-xs text-status-success-foreground flex items-center gap-2">
-          {isResolving && <SpinnerGap className="animate-spin" size={12} />}
-          Answer submitted
-        </p>
+        <p className="py-1 text-xs text-status-success-foreground">Answer submitted</p>
       )}
 
       {/* Generic confirmation for other tools — only show when not yet resolved */}
@@ -512,23 +492,20 @@ export function PermissionPrompt({
             <ConfirmationActions>
               <ConfirmationAction
                 variant="outline"
-                onClick={() => handleResponse('deny')}
-                disabled={isResolving}
+                onClick={() => onPermissionResponse('deny')}
               >
                 Deny
               </ConfirmationAction>
               <ConfirmationAction
                 variant="outline"
-                onClick={() => handleResponse('allow')}
-                disabled={isResolving}
+                onClick={() => onPermissionResponse('allow')}
               >
-                {isResolving ? <SpinnerGap className="animate-spin" size={14} /> : 'Allow Once'}
+                Allow Once
               </ConfirmationAction>
               {pendingPermission.suggestions && pendingPermission.suggestions.length > 0 && (
                 <ConfirmationAction
                   variant="default"
-                  onClick={() => handleResponse('allow_session')}
-                  disabled={isResolving}
+                  onClick={() => onPermissionResponse('allow_session')}
                 >
                   {t('streaming.allowForSession')}
                 </ConfirmationAction>
@@ -549,11 +526,10 @@ export function PermissionPrompt({
       {/* Resolved status for generic tools — minimal one-liner */}
       {pendingPermission?.toolName !== 'AskUserQuestion' && pendingPermission?.toolName !== 'ExitPlanMode' && isResolved && (
         <p className={cn(
-          "py-1 text-xs flex items-center gap-2",
-          permissionResolved === 'allow' || isResolving ? 'text-status-success-foreground' : 'text-status-error-foreground'
+          "py-1 text-xs",
+          permissionResolved === 'allow' ? 'text-status-success-foreground' : 'text-status-error-foreground'
         )}>
-          {isResolving && <SpinnerGap className="animate-spin" size={12} />}
-          {permissionResolved === 'allow' || isResolving ? t('streaming.allowed') : t('streaming.denied')}
+          {permissionResolved === 'allow' ? t('streaming.allowed') : t('streaming.denied')}
         </p>
       )}
     </div>

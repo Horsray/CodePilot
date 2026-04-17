@@ -9,7 +9,7 @@ import type { AgentRuntime, RuntimeStreamOptions } from './types';
 import { runAgentLoop } from '../agent-loop';
 import { buildSystemPrompt } from '../agent-system-prompt';
 import { resolveProvider } from '../provider-resolver';
-import { disposeAll as disposeMcp } from '../mcp-connection-manager';
+import { syncMcpConnections, disposeAll as disposeMcp } from '../mcp-connection-manager';
 import { isOAuthUsable } from '../openai-oauth-manager';
 import { wrapController } from '../safe-stream';
 
@@ -23,42 +23,31 @@ export const nativeRuntime: AgentRuntime = {
 
   stream(options: RuntimeStreamOptions): ReadableStream<string> {
     const cwd = options.workingDirectory || process.cwd();
-    const ro = options.runtimeOptions || {};
-    const isImageAgentMode = !!ro.imageAgentMode;
 
-    // If a system prompt is already provided (e.g. from chat route/assembleContext),
-    // use it directly. Otherwise, build a fresh one.
-    const systemPromptResult = options.systemPrompt
-      ? { prompt: options.systemPrompt, referencedFiles: options.referencedContexts || [] }
-      : isImageAgentMode
-        ? { prompt: '', referencedFiles: [] }
-        : buildSystemPrompt({
-            sessionId: options.sessionId,
-            workingDirectory: cwd,
-            modelId: options.model,
-            includeAgentsMd: options.includeAgentsMd,
-            includeClaudeMd: options.includeClaudeMd,
-            enableAgentsSkills: options.enableAgentsSkills,
-            syncProjectRules: options.syncProjectRules,
-            knowledgeBaseEnabled: options.knowledgeBaseEnabled,
-          });
+    const systemPromptResult = buildSystemPrompt({
+      userPrompt: options.systemPrompt,
+      workingDirectory: cwd,
+      modelId: options.model,
+    });
+    const systemPrompt = typeof systemPromptResult === 'string'
+      ? systemPromptResult
+      : (systemPromptResult as { prompt?: string }).prompt;
 
     // Create or reuse abort controller
     const abortController = options.abortController || new AbortController();
     activeControllers.set(options.sessionId, abortController);
 
+    const ro = options.runtimeOptions || {};
     const maxSteps = (ro.maxSteps as number) || undefined;
     const files = ro.files as import('@/types').FileAttachment[] | undefined;
 
     const stream = runAgentLoop({
       prompt: options.prompt,
       sessionId: options.sessionId,
-      traceId: options.traceId,
       providerId: options.providerId,
       sessionProviderId: options.sessionProviderId,
       model: options.model,
-      systemPrompt: systemPromptResult.prompt,
-      referencedContexts: systemPromptResult.referencedFiles,
+      systemPrompt,
       workingDirectory: cwd,
       abortController,
       // tools assembled inside agent-loop with permission context

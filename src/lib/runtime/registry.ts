@@ -17,7 +17,6 @@
 
 import type { AgentRuntime } from './types';
 import { getSetting } from '@/lib/db';
-import { prewarmClaudePath } from '../cli-session-pool';
 
 const runtimes = new Map<string, AgentRuntime>();
 
@@ -53,7 +52,7 @@ export function resolveRuntime(overrideId?: string, _providerId?: string): Agent
   if (cliDisabled) {
     const native = getRuntime('native');
     if (native) return native;
-    throw new Error('Native runtime not registered but required. This is a bug.');
+    throw new Error('Native runtime not registered but CLI is disabled. This is a bug.');
   }
 
   // 1. Explicit override
@@ -74,11 +73,7 @@ export function resolveRuntime(overrideId?: string, _providerId?: string): Agent
   //    /api/chat by hasCodePilotProvider(); if we reach this point the user
   //    has at least one provider source the caller expects to work.
   const sdk = getRuntime('claude-code-sdk');
-  if (sdk?.isAvailable()) {
-    // Pre-warm Claude binary path so the next spawn doesn't pay cold-start delay
-    try { prewarmClaudePath(); } catch { /* best effort */ }
-    return sdk;
-  }
+  if (sdk?.isAvailable()) return sdk;
 
   const native = getRuntime('native');
   if (native?.isAvailable()) return native;

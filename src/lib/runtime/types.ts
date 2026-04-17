@@ -48,7 +48,6 @@ export interface RuntimeStreamOptions {
   // ── Core (all runtimes) ──
   prompt: string;
   sessionId: string;
-  traceId?: string;
   model?: string;
   systemPrompt?: string;
   workingDirectory?: string;
@@ -74,15 +73,6 @@ export interface RuntimeStreamOptions {
   // ── Callbacks ──
   onRuntimeStatusChange?: (status: string) => void;
 
-  // ── Context Inclusion ──
-  includeAgentsMd?: boolean;
-  includeClaudeMd?: boolean;
-  enableAgentsSkills?: boolean;
-  syncProjectRules?: boolean;
-  knowledgeBaseEnabled?: boolean;
-  // 中文注释：系统提示词引用文件列表，用法是在已组装 prompt 时把引用上下文继续传给 runtime。
-  referencedContexts?: string[];
-  
   /**
    * Passthrough for runtime-specific options.
    *

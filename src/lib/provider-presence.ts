@@ -1,6 +1,6 @@
 /**
- * provider-presence.ts — Single-source-of-truth: does CodePilot itself have
- * a usable provider to talk to a model with?
+ * provider-presence.ts — Single-source-of-truth: "does CodePilot itself have
+ * a usable provider to talk to a model with?"
  *
  * Scope (intentionally narrow, by user requirement 2026-04-15):
  *   - DB provider records with usable auth (api_key, Bedrock/Vertex flag)

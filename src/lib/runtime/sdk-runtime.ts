@@ -22,7 +22,6 @@ import { getSetting, getActiveProvider } from '../db';
 // micro-optimization (claude-client is imported elsewhere too via
 // streamClaude), so it's safe to drop in favor of a static import that both
 // bundlers handle correctly.
-import { disposeSessionPool } from '../cli-session-pool';
 import { streamClaudeSdk } from '../claude-client';
 
 export const sdkRuntime: AgentRuntime = {
@@ -31,7 +30,6 @@ export const sdkRuntime: AgentRuntime = {
   description: 'Claude Code CLI agent with built-in tools, MCP, and permissions.',
 
   stream(options: RuntimeStreamOptions): ReadableStream<string> {
-
 
     // Convert RuntimeStreamOptions → ClaudeStreamOptions
     const ro = options.runtimeOptions || {};
@@ -92,8 +90,6 @@ export const sdkRuntime: AgentRuntime = {
   },
 
   dispose(): void {
-    // SDK manages its own subprocess lifecycle, but clean up
-    // our session tracking pool to avoid stale session IDs
-    try { disposeSessionPool(); } catch { /* best effort */ }
+    // SDK manages its own subprocess lifecycle
   },
 };

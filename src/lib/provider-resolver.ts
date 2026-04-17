@@ -29,7 +29,6 @@ import {
 import { ensureTokenFresh } from './openai-oauth-manager';
 import { CODEX_API_ENDPOINT } from './openai-oauth';
 import { hasClaudeSettingsCredentials } from './claude-settings';
-import { readCCSwitchClaudeSettings } from './cc-switch';
 
 // ── Resolution result ───────────────────────────────────────────
 
@@ -648,11 +647,6 @@ function buildResolution(
   provider: ApiProvider | undefined,
   opts: ResolveOptions,
 ): ResolvedProvider {
-  const effectiveProvider = hydrateCCSwitchProvider(provider);
-
-  // 中文注释：功能名称「CC Switch 实时配置注入」，用法是在每次 provider 解析时覆盖旧的 DB 快照，避免切换后必须新建服务商。
-  provider = effectiveProvider;
-
   if (!provider) {
     // Environment-based provider (no DB record) — credentials come from shell env,
     // legacy DB settings, or ~/.claude/settings.json (managed by cc-switch etc.).
@@ -753,10 +747,7 @@ function buildResolution(
   //   3. Global default model (only if it belongs to this provider)
   //   4. Provider's roleModels.default (preset default, e.g. "ark-code-latest")
   //   5. Global default_model setting (legacy)
-  // 中文注释：功能名称「CC Switch 模型优先级修正」，用法是在未显式选模型时优先跟随 CC Switch 当前默认模型，而不是会话旧模型。
-  const requestedModel = isCCSwitchProvider(provider)
-    ? (opts.model || roleModels.default || opts.sessionModel || applicableGlobalDefault || getSetting('default_model') || undefined)
-    : (opts.model || opts.sessionModel || applicableGlobalDefault || roleModels.default || getSetting('default_model') || undefined);
+  const requestedModel = opts.model || opts.sessionModel || applicableGlobalDefault || roleModels.default || getSetting('default_model') || undefined;
   let model = requestedModel;
   let upstreamModel: string | undefined;
   let modelDisplayName: string | undefined;
@@ -848,67 +839,6 @@ function buildResolution(
     availableModels,
     settingSources,
   };
-}
-
-function hydrateCCSwitchProvider(provider: ApiProvider | undefined): ApiProvider | undefined {
-  if (!provider || !isCCSwitchProvider(provider)) return provider;
-
-  const resolved = readCCSwitchClaudeSettings();
-  if (!resolved) return provider;
-
-  const parseObj = (json: string | undefined | null): Record<string, string> => {
-    if (!json) return {};
-    try {
-      const parsed = JSON.parse(json);
-      if (typeof parsed === 'object' && parsed !== null) {
-        return parsed as Record<string, string>;
-      }
-    } catch {
-      // Ignore parse errors and keep current values.
-    }
-    return {};
-  };
-
-  const roleModels = parseObj(provider.role_models_json);
-  const liveRoleModels: Record<string, string> = {};
-  if (typeof resolved.roleModels.default === 'string' && resolved.roleModels.default.trim()) {
-    liveRoleModels.default = resolved.roleModels.default.trim();
-  } else if (typeof resolved.currentModel === 'string' && resolved.currentModel.trim()) {
-    liveRoleModels.default = resolved.currentModel.trim();
-  }
-  if (typeof resolved.roleModels.sonnet === 'string' && resolved.roleModels.sonnet.trim()) {
-    liveRoleModels.sonnet = resolved.roleModels.sonnet.trim();
-  }
-  if (typeof resolved.roleModels.opus === 'string' && resolved.roleModels.opus.trim()) {
-    liveRoleModels.opus = resolved.roleModels.opus.trim();
-  }
-  if (typeof resolved.roleModels.haiku === 'string' && resolved.roleModels.haiku.trim()) {
-    liveRoleModels.haiku = resolved.roleModels.haiku.trim();
-  }
-
-  const envOverrides = parseObj(provider.env_overrides_json || provider.extra_env);
-  const liveModels = Array.isArray(resolved.models)
-    ? resolved.models.map(m => m.trim()).filter(Boolean)
-    : [];
-  if (liveModels.length > 0) {
-    envOverrides.model_names = liveModels.join(',');
-  }
-
-  return {
-    ...provider,
-    // 中文注释：功能名称「CC Switch 实时字段覆盖」，用法是允许把旧值清空并完全跟随 settings.json 当前值。
-    base_url: resolved.baseUrl,
-    api_key: resolved.apiKey,
-    role_models_json: JSON.stringify({ ...roleModels, ...liveRoleModels }),
-    env_overrides_json: JSON.stringify(envOverrides),
-  };
-}
-
-function isCCSwitchProvider(provider: ApiProvider | undefined): boolean {
-  if (!provider) return false;
-  if (provider.provider_type === 'cc-switch') return true;
-  const normalizedName = (provider.name || '').trim().toLowerCase();
-  return normalizedName === 'cc switch' || normalizedName === 'cc-switch';
 }
 
 /**
@@ -1133,12 +1063,11 @@ export function resolveAuxiliaryModel(
       const allProviders = getAllProviders();
       for (const p of allProviders) {
         if (p.id === main.provider.id) continue;
-        const hydrated = hydrateCCSwitchProvider(p) || p;
-        const protocol = (hydrated.protocol as Protocol) || inferProtocolFromLegacy(hydrated.provider_type, hydrated.base_url);
-        const preset = findPresetForLegacy(hydrated.base_url, hydrated.provider_type, protocol);
+        const protocol = (p.protocol as Protocol) || inferProtocolFromLegacy(p.provider_type, p.base_url);
+        const preset = findPresetForLegacy(p.base_url, p.provider_type, protocol);
         others.push({
-          id: hydrated.id,
-          roleModels: computeEffectiveRoleModels(hydrated, preset, protocol),
+          id: p.id,
+          roleModels: computeEffectiveRoleModels(p, preset, protocol),
           isSdkProxyOnly: preset?.sdkProxyOnly ?? false,
         });
       }

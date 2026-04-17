@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,14 +26,10 @@ import {
   findMatchingPreset,
   type QuickPreset,
 } from "./provider-presets";
-import type {
-  ApiProvider,
-  ProviderModelGroup,
-} from "@/types";
+import type { ApiProvider, ProviderModelGroup } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
 import Anthropic from "@lobehub/icons/es/Anthropic";
-import { isOfficialGeminiImageProvider } from "@/lib/image-provider-utils";
 import { ProviderOptionsSection } from "./ProviderOptionsSection";
 import {
   Select,
@@ -291,15 +286,6 @@ export function ProviderManager() {
   };
 
   const sorted = [...providers].sort((a, b) => a.sort_order - b.sort_order);
-  const selectableGroups = useMemo(
-    () => providerGroups.filter((group) =>
-      group.provider_id !== 'env'
-      && group.provider_type !== 'gemini-image'
-      && group.provider_type !== 'generic-image'
-      && group.models.length > 0
-    ),
-    [providerGroups],
-  );
 
   // Save global default model — also syncs default_provider_id for backend consumers
   const handleGlobalDefaultModelChange = useCallback(async (compositeValue: string) => {
@@ -545,7 +531,7 @@ export function ProviderManager() {
                   />
                 )}
                 {/* Gemini Image model selector — capsule buttons */}
-                {provider.provider_type === 'gemini-image' && isOfficialGeminiImageProvider(provider) && (
+                {provider.provider_type === 'gemini-image' && (
                   <div className="ml-[34px] mt-2 flex items-center gap-1.5">
                     <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型' : 'Model'}:</span>
                     {GEMINI_IMAGE_MODELS.map((m) => {

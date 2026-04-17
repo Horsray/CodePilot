@@ -26,12 +26,9 @@ import { findClaudeBinary, invalidateClaudePathCache } from './platform';
 import { notifyPermissionRequest, notifyGeneric } from './telegram-bot';
 import { classifyError, formatClassifiedError } from './error-classifier';
 import { resolveWorkingDirectory } from './working-directory';
-import { sendNotification } from './notification-manager';
-import { registerSdkSession, releaseSession, needsResume, prewarmClaudePath } from './cli-session-pool';
-import { prepareSdkSubprocessEnv } from './sdk-subprocess-env';
-import { loadProjectMcpServers } from './mcp-loader';
 import { wrapController } from './safe-stream';
 import { type ShadowHome } from './claude-home-shadow';
+import { prepareSdkSubprocessEnv } from './sdk-subprocess-env';
 // Static imports for resolveRuntime/detectTransport — used to be lazy
 // `require('./runtime')` / `require('./provider-transport')`, but Turbopack's
 // CJS↔ESM interop returns `{ default: ... }` shape that broke destructuring
@@ -354,7 +351,7 @@ export async function generateTextViaSdk(params: {
 
   // Same provider-owned auth isolation as the main streaming path: when an
   // explicit DB provider is selected, this auxiliary call must NOT pick up
-  // cc-switch credentials from ~/.claude/settings.json or ~/.claude/json.
+  // cc-switch credentials from ~/.claude/settings.json or ~/.claude.json.
   // See src/lib/sdk-subprocess-env.ts.
   const setup = prepareSdkSubprocessEnv(resolved);
   const sdkEnv = setup.env;
@@ -472,7 +469,6 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     // Universal fields
     prompt: options.prompt,
     sessionId: options.sessionId,
-    traceId: options.traceId,
     model: options.model,
     systemPrompt: options.systemPrompt,
     workingDirectory: options.workingDirectory,
@@ -487,11 +483,6 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     onRuntimeStatusChange: options.onRuntimeStatusChange,
-    includeAgentsMd: options.includeAgentsMd,
-    includeClaudeMd: options.includeClaudeMd,
-    enableAgentsSkills: options.enableAgentsSkills,
-    syncProjectRules: options.syncProjectRules,
-    knowledgeBaseEnabled: options.knowledgeBaseEnabled,
 
     // Runtime-specific fields (SDK Runtime reads these from runtimeOptions)
     runtimeOptions: {
@@ -554,8 +545,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       });
       // Flag to prevent infinite PTL retry loops (at most one retry per request)
       let ptlRetryAttempted = false;
-      let toolWatchdog: ReturnType<typeof setInterval> | null = null;
-      let forcedToolTimeout: { toolName: string; elapsedSeconds: number } | null = null;
       // Per-request shadow ~/.claude/ for DB-provider isolation. Built lazily
       // below once we know whether we have an explicit DB provider; cleaned up
       // in the outer finally block. See src/lib/claude-home-shadow.ts.
@@ -855,71 +844,11 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         // ['user', 'project', 'local'] and resolves enabledPlugins on its own,
         // ensuring parity with Claude CLI.
 
-        // Smart context loading: only resume when there's meaningful conversation history.
-        // This avoids the resume overhead for fresh/short conversations where DB history
-        // is sufficient, making CodePilot feel as snappy as the terminal for new chats.
-        //
-        // Threshold rationale:
-        //   0 history msgs (brand new chat) → skip resume, identical to terminal
-        //   1-2 history msgs (short chat)   → skip resume, DB context is enough
-        //   3+ history msgs                  → resume to preserve SDK session context
-        const historyCount = conversationHistory ? conversationHistory.length : 0;
-        const hasSdkSession = !!sdkSessionId;
-        let shouldResume = hasSdkSession && needsResume(historyCount);
-
-        // Detect broken SDK sessions: if the last assistant message contains
-        // tool_use blocks without a matching tool_result from the user, the
-        // SDK subprocess is mid-roundtrip. Resuming would fail because the
-        // SDK expects a tool_result that never arrives. Clear the session
-        // and start fresh instead.
-        if (shouldResume && conversationHistory && conversationHistory.length > 0) {
-          const lastMsg = conversationHistory[conversationHistory.length - 1];
-          if (lastMsg.role === 'assistant') {
-            let hasToolUse = false;
-            const toolUseIds = new Set<string>();
-            try {
-              const blocks = JSON.parse(lastMsg.content);
-              if (Array.isArray(blocks)) {
-                for (const block of blocks) {
-                  if (block.type === 'tool_use' && block.id) {
-                    hasToolUse = true;
-                    toolUseIds.add(block.id);
-                  }
-                }
-              }
-            } catch {
-              // content is plain text, not structured blocks — no tool_use
-            }
-            // If assistant ended with tool_use and there's no follow-up user
-            // message with tool_result, the session is broken.
-            if (hasToolUse && toolUseIds.size > 0) {
-              // Check remaining messages (should be none, but verify)
-              // Since this IS the last message, there's no user reply with tool_result
-              console.warn(
-                `[claude-client] Detected broken session: assistant sent tool_use without tool_result. ` +
-                `Clearing sdk_session_id to start fresh.`,
-              );
-              shouldResume = false;
-              if (sessionId) {
-                try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
-              }
-            }
-          }
-        }
-
-        // Register session lifecycle tracking
-        if (sdkSessionId && sessionId) {
-          registerSdkSession(sessionId, sdkSessionId);
-        }
-
-        // If we have an SDK session but are skipping resume due to short history,
-        // clear the stale session ID so it doesn't accumulate
-        if (hasSdkSession && !shouldResume) {
-          if (sessionId) {
-            try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
-          }
-        }
-
+        // Resume session if we have an SDK session ID from a previous conversation turn.
+        // Pre-check: verify working_directory exists before attempting resume.
+        // Resume depends on session context (cwd/project scope), so if the
+        // original working_directory no longer exists, resume will fail.
+        let shouldResume = !!sdkSessionId;
         if (shouldResume && workingDirectory && resolvedWorkingDirectory.source !== 'requested') {
           console.warn(
             `[claude-client] Working directory "${workingDirectory}" does not exist, skipping resume`,
@@ -945,7 +874,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             data: JSON.stringify({
               notification: true,
               title: 'Resuming session',
-              message: 'Loading conversation context...',
+              message: 'Reconnecting to previous conversation...',
             }),
           }));
           queryOptions.resume = sdkSessionId;
@@ -953,6 +882,30 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
 
         // Permission handler: sends SSE event and waits for user response
         queryOptions.canUseTool = async (toolName, input, opts) => {
+          // Auto-approve CodePilot's own in-process MCP tools — they are internal
+          // and the user has already opted in by enabling the relevant mode.
+          // Auto-approve CodePilot's own in-process MCP tools — they are internal
+          // and the user has already opted in by enabling the relevant mode.
+          // Note: SDK prefixes MCP tool names with mcp__<server>__, so we check
+          // both bare and prefixed names.
+          const autoApprovedTools = [
+            'codepilot_generate_image',
+            'codepilot_import_media',
+            'codepilot_load_widget_guidelines',
+            'codepilot_cli_tools_list',
+            'codepilot_cli_tools_add',
+            'codepilot_cli_tools_remove',
+            'codepilot_cli_tools_check_updates',
+            'codepilot_dashboard_pin',
+            'codepilot_dashboard_list',
+            'codepilot_dashboard_refresh',
+            'codepilot_dashboard_update',
+            'codepilot_dashboard_remove',
+          ];
+          if (autoApprovedTools.some(t => toolName === t || toolName.endsWith(`__${t}`))) {
+            return { behavior: 'allow' as const, updatedInput: input };
+          }
+
           const permissionRequestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
           const permEvent: PermissionRequestEvent = {
@@ -1073,24 +1026,26 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           }
 
           if (imageFiles.length > 0) {
-            // Performance Optimization: Only keep the 2 most recent images
-            // to prevent the payload from ballooning and slowing down connections.
-            // This is consistent with our "preserve recent context" strategy.
-            const MAX_RECENT_IMAGES = 2;
-            const limitedImages = imageFiles.slice(-MAX_RECENT_IMAGES);
+            // Limit media items: keep the MOST RECENT images (drop oldest first),
+            // consistent with "preserve recent context" strategy.
+            const MAX_MEDIA_ITEMS = 100;
+            const limitedImages = imageFiles.length > MAX_MEDIA_ITEMS
+              ? imageFiles.slice(-MAX_MEDIA_ITEMS)
+              : imageFiles;
             const droppedCount = imageFiles.length - limitedImages.length;
 
-            // In resumed sessions, we only need to send the pixels for images
-            // that the agent hasn't seen yet. However, to be safe and compatible
-            // with all providers, we send the last N images.
-            
+            // In imageAgentMode, skip file path references so Claude doesn't
+            // try to use built-in tools to analyze images from disk. It will
+            // see the images via vision (base64 content blocks) and follow the
+            // IMAGE_AGENT_SYSTEM_PROMPT to output image-gen-request blocks.
+            // In normal mode, append disk paths — only for the images actually included.
             const textWithImageRefs = imageAgentMode
               ? textPrompt
               : (() => {
                   const workDir = resolvedWorkingDirectory.path;
-                  const allImagePaths = getUploadedFilePaths(imageFiles, workDir);
-                  const imageReferences = allImagePaths
-                    .map((p, i) => `[User attached image: ${p} (${imageFiles[i].name})]`)
+                  const imagePaths = getUploadedFilePaths(limitedImages, workDir);
+                  const imageReferences = imagePaths
+                    .map((p, i) => `[User attached image: ${p} (${limitedImages[i].name})]`)
                     .join('\n');
                   return `${imageReferences}\n\n${textPrompt}`;
                 })();
@@ -1111,23 +1066,18 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                 }
               }
               if (!imgData) continue;
-
-              // Ensure we use a supported media type
-              const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-              const effectiveMimeType = (img.type && supportedTypes.includes(img.type)) ? img.type : 'image/png';
-
               contentBlocks.push({
                 type: 'image',
                 source: {
                   type: 'base64',
-                  media_type: effectiveMimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+                  media_type: (img.type || 'image/png') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
                   data: imgData,
                 },
               });
             }
 
             if (droppedCount > 0) {
-              contentBlocks.push({ type: 'text', text: `[Note: ${droppedCount} older image(s) were omitted to optimize performance.]` });
+              contentBlocks.push({ type: 'text', text: `[Note: ${droppedCount} older image(s) were omitted due to the ${MAX_MEDIA_ITEMS}-image limit per request.]` });
             }
             contentBlocks.push({ type: 'text', text: textWithImageRefs });
 
@@ -1162,45 +1112,19 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         // Wrap the iterator so we can detect resume failures on the first message
         if (shouldResume) {
           try {
-            // Peek at the first message to verify resume works, but with a timeout
-            // to avoid blocking the UI on "Reconnecting..." if the SDK is just slow.
+            // Peek at the first message to verify resume works
             const iter = conversation[Symbol.asyncIterator]();
-            const firstPromise = iter.next();
-            
-            const timeoutPromise = new Promise<{ _timeout: boolean }>((resolve) => 
-              setTimeout(() => resolve({ _timeout: true }), 3000)
-            );
-            
-            const first = await Promise.race([firstPromise, timeoutPromise]) as IteratorResult<SDKAssistantMessage | SDKUserMessage | SDKResultMessage | SDKResultSuccess | SDKPartialAssistantMessage | SDKSystemMessage | SDKToolProgressMessage, void> | { _timeout: boolean };
+            const first = await iter.next();
 
-            if (first && '_timeout' in first && (first as { _timeout: boolean })._timeout) {
-              // It took >3s. Clear "Reconnecting..." and assume resume is proceeding slowly.
-              controller.enqueue(formatSSE({
-                type: 'status',
-                data: JSON.stringify({ notification: true, message: 'session_resumed' })
-              }));
-              
-              conversation = (async function* () {
-                const actualFirst = await firstPromise;
-                if (!actualFirst.done) yield actualFirst.value;
-                while (true) {
-                  const next = await iter.next();
-                  if (next.done) break;
-                  yield next.value;
-                }
-              })() as ReturnType<typeof query>;
-            } else if (first && 'done' in first) {
-              // Re-wrap into an async iterable that yields the first message then the rest
-              const iterResult = first as IteratorResult<SDKAssistantMessage | SDKUserMessage | SDKResultMessage | SDKResultSuccess | SDKPartialAssistantMessage | SDKSystemMessage | SDKToolProgressMessage, void>;
-              conversation = (async function* () {
-                if (!iterResult.done) yield iterResult.value;
-                while (true) {
-                  const next = await iter.next();
-                  if (next.done) break;
-                  yield next.value;
-                }
-              })() as ReturnType<typeof query>;
-            }
+            // Re-wrap into an async iterable that yields the first message then the rest
+            conversation = (async function* () {
+              if (!first.done) yield first.value;
+              while (true) {
+                const next = await iter.next();
+                if (next.done) break;
+                yield next.value;
+              }
+            })() as ReturnType<typeof query>;
           } catch (resumeError) {
             const errMsg = resumeError instanceof Error ? resumeError.message : String(resumeError);
             console.warn('[claude-client] Resume failed, retrying without resume:', errMsg);
@@ -1237,33 +1161,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         let tokenUsage: TokenUsage | null = null;
         // Track pending TodoWrite tool_use_ids so we can sync after successful execution
         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
-        const pendingToolExecutions = new Map<string, { toolName: string; startedAt: number; timeoutEmitted: boolean }>();
-        // 中文注释：功能名称「SDK 工具墙钟超时」，用法是独立于 tool_progress 事件监控工具总耗时，
-        // 避免工具静默卡死时永远等不到前端可见的超时反馈。
-        toolWatchdog = toolTimeoutSeconds > 0
-          ? setInterval(() => {
-              if (abortController?.signal.aborted || forcedToolTimeout) return;
-              const now = Date.now();
-              for (const pendingTool of pendingToolExecutions.values()) {
-                const elapsedSeconds = Math.round((now - pendingTool.startedAt) / 1000);
-                if (elapsedSeconds < toolTimeoutSeconds || pendingTool.timeoutEmitted) continue;
-                pendingTool.timeoutEmitted = true;
-                forcedToolTimeout = {
-                  toolName: pendingTool.toolName,
-                  elapsedSeconds,
-                };
-                controller.enqueue(formatSSE({
-                  type: 'tool_timeout',
-                  data: JSON.stringify({
-                    tool_name: pendingTool.toolName,
-                    elapsed_seconds: elapsedSeconds,
-                  }),
-                }));
-                abortController?.abort();
-                break;
-              }
-            }, 1000)
-          : null;
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
             break;
@@ -1285,11 +1182,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
               // Check for tool use blocks
               for (const block of assistantMsg.message.content) {
                 if (block.type === 'tool_use') {
-                  pendingToolExecutions.set(block.id, {
-                    toolName: block.name,
-                    startedAt: Date.now(),
-                    timeoutEmitted: false,
-                  });
                   controller.enqueue(formatSSE({
                     type: 'tool_use',
                     data: JSON.stringify({
@@ -1324,9 +1216,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
               if (Array.isArray(content)) {
                 for (const block of content) {
                   if (block.type === 'tool_result') {
-                    if (block.tool_use_id) {
-                      pendingToolExecutions.delete(block.tool_use_id);
-                    }
                     let resultContent = typeof block.content === 'string'
                       ? block.content
                       : Array.isArray(block.content)
@@ -1497,12 +1386,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                   }));
                   if (!autoTrigger) {
                     notifyGeneric(title, taskMsg.summary || '', telegramOpts).catch(() => {});
-                    sendNotification({
-                      title,
-                      body: taskMsg.summary || '',
-                      priority: taskMsg.status === 'completed' ? 'normal' : 'urgent',
-                      sound: true,
-                    }).catch(() => {});
                   }
                 }
               }
@@ -1559,12 +1442,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                 // Skip Telegram for auto-trigger turns (onboarding/heartbeat)
                 if (!autoTrigger) {
                   notifyGeneric(errTitle, errMsg, telegramOpts).catch(() => {});
-                  sendNotification({
-                    title: errTitle,
-                    body: errMsg,
-                    priority: 'urgent',
-                    sound: true,
-                  }).catch(() => {});
                 }
               }
               break;
@@ -1579,16 +1456,9 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           }
         }
 
-        // Release session back to the idle pool so it can be reused
-        // for follow-up messages without a full cold start
-        if (sessionId) {
-          releaseSession(sessionId);
-        }
-
         controller.enqueue(formatSSE({ type: 'done', data: '' }));
         controller.close();
       } catch (error) {
-        if (toolWatchdog) clearInterval(toolWatchdog);
         const rawMessage = error instanceof Error ? error.message : 'Unknown error';
         // Log full error details for debugging (visible in terminal / dev tools)
         const stderrContent = error instanceof Error ? (error as { stderr?: string }).stderr : undefined;
@@ -1599,30 +1469,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           stderr: stderrContent,
           code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         });
-
-        if (forcedToolTimeout) {
-          // Clear sdk_session_id because the SDK subprocess is in a broken
-          // state: it has a pending tool_use without a matching tool_result.
-          // If we don't clear, the next message will try to resume this stale
-          // session and the SDK will complain about missing tool result.
-          if (sessionId) {
-            try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
-          }
-          controller.enqueue(formatSSE({
-            type: 'error',
-            data: JSON.stringify({
-              category: 'TOOL_TIMEOUT',
-              userMessage: `工具 "${forcedToolTimeout.toolName}" 在 ${forcedToolTimeout.elapsedSeconds}s 内没有完成，系统已自动中止本轮，避免界面一直卡住。`,
-              actionHint: '请重试本轮，或改用不同方案，避免重复执行刚才卡住的工具操作。',
-              retryable: true,
-              details: `Wall-clock timeout hit for ${forcedToolTimeout.toolName}.`,
-              rawMessage,
-            }),
-          }));
-          controller.enqueue(formatSSE({ type: 'done', data: '' }));
-          controller.close();
-          return;
-        }
 
         // Look up preset meta for recovery action URLs
         const presetForMeta = resolved.provider?.base_url
@@ -1811,17 +1657,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         // Send structured error JSON so frontend can parse category + hints
         // Falls back gracefully for older frontends that only read raw text
         const errorMessage = formatClassifiedError(classified);
-
-        // Send system notification for error/abnormal disconnection
-        if (!autoTrigger) {
-          sendNotification({
-            title: '会话异常中断',
-            body: classified.userMessage || '与 AI 代理的连接已断开。',
-            priority: 'urgent',
-            sound: true,
-          }).catch(() => {});
-        }
-
         controller.enqueue(formatSSE({
           type: 'error',
           data: JSON.stringify({
@@ -1854,14 +1689,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
 
         controller.close();
       } finally {
-        if (toolWatchdog) clearInterval(toolWatchdog);
         unregisterConversation(sessionId);
-        // Release session to idle pool (idempotent — safe to call on both
-        // success and error paths). On error, the sdk_session_id was already
-        // cleared above, so releaseSession will clear the pool entry too.
-        if (sessionId) {
-          releaseSession(sessionId);
-        }
         // Tear down shadow ~/.claude/ if we built one. Best-effort — the OS
         // will eventually GC tmpdir even if this fails.
         if (shadowHome) {
