@@ -228,6 +228,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         let step = 0;
         const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
         let lastToolNames: string[] = []; // for doom loop detection
+        let doomLoopCounter = 0; // tracks consecutive identical tool calls
         const distinctTools = new Set<string>(); // for skill-nudge heuristic
         let messages = historyMessages;
 
@@ -357,7 +358,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           // Consume the fullStream
           let hasToolCalls = false;
           let hasContent = false; // tracks whether any actual content was produced
-          const stepToolNames: string[] = [];
+          const stepToolCalls: string[] = [];
 
           for await (const event of result.fullStream) {
             switch (event.type) {
@@ -373,7 +374,8 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
 
               case 'tool-call':
                 hasToolCalls = true;
-                stepToolNames.push(event.toolName);
+                // Use tool name + serialized input for more accurate doom loop detection
+                stepToolCalls.push(`${event.toolName}:${JSON.stringify(event.input)}`);
                 distinctTools.add(event.toolName);
                 controller.enqueue(formatSSE({
                   type: 'tool_use',
@@ -429,15 +431,30 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             break;
           }
 
-          // Doom loop detection: same tool(s) called 3 times in a row
-          const toolKey = stepToolNames.sort().join(',');
-          const lastKey = lastToolNames.sort().join(',');
-          if (toolKey === lastKey) {
-            const repeatCount = (step > 1) ? DOOM_LOOP_THRESHOLD : 1;
-            // Simple heuristic: track repeats via a counter we'd need to add
-            // For now, just detect immediate repeats and break after threshold
+          // Doom loop detection: exact same tool(s) with identical inputs called 3 times in a row
+          const toolKey = stepToolCalls.sort().join('|');
+          const lastKey = lastToolNames.sort().join('|');
+          
+          if (step > 1 && toolKey && toolKey === lastKey) {
+            doomLoopCounter++;
+            if (doomLoopCounter >= DOOM_LOOP_THRESHOLD - 1) {
+              const summaryToolNames = [...distinctTools].join(', ');
+              console.error(`[agent-loop] Doom loop detected: ${summaryToolNames} called ${doomLoopCounter + 1} times with identical inputs. Breaking.`);
+              reportNativeError('UNKNOWN', new Error(`Doom loop detected with tools: ${summaryToolNames}`), { modelId, sessionId });
+              controller.enqueue(formatSSE({
+                type: 'error',
+                data: JSON.stringify({
+                  category: 'DOOM_LOOP_DETECTED',
+                  userMessage: `检测到模型陷入死循环（连续多次调用相同的工具且参数完全一致：${summaryToolNames}），为避免浪费 Token，已自动阻断。请检查需求或重新表述。`,
+                }),
+              }));
+              break;
+            }
+          } else {
+            doomLoopCounter = 0;
           }
-          lastToolNames = stepToolNames;
+          
+          lastToolNames = stepToolCalls;
 
           // Update messages for next iteration.
           // streamText returns the full message list including our input + model response.

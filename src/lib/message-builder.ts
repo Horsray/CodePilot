@@ -251,10 +251,15 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
   };
 
   // Build a map of tool_use_id → toolName so tool_result can reference it
+  // AND track which tool calls actually have a corresponding result
   const toolNameMap = new Map<string, string>();
+  const completedToolUseIds = new Set<string>();
+
   for (const block of blocks) {
     if (block.type === 'tool_use') {
       toolNameMap.set(block.id, block.name);
+    } else if (block.type === 'tool_result') {
+      completedToolUseIds.add(block.tool_use_id);
     }
   }
 
@@ -278,6 +283,12 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
         break;
 
       case 'tool_use':
+        // Skip tool calls that have no corresponding result to prevent AI_MissingToolResultsError
+        // (e.g. if the run was interrupted by doom loop detection or a crash)
+        if (!completedToolUseIds.has(block.id)) {
+          break;
+        }
+
         // If we have pending tool results, flush them first
         if (toolResults.length > 0) {
           flushToolResults();

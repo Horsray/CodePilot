@@ -1,0 +1,16 @@
+[     803ms] [LOG] Sat Apr 18 2026 00:33:56 GMT+0800 (中国标准时间) @ https://xueqiu.com/u21pn7x6/r8lw5pzu/psk8uqfi:0
+[    2651ms] [LOG] Sat Apr 18 2026 00:33:58 GMT+0800 (中国标准时间) @ https://o.alicdn.com/frontend-lib/common-lib/jquery.min.js:0
+[    4422ms] [WARNING] 获取弹窗配置失败: TypeError: Cannot read properties of undefined (reading 'data')
+    at https://assets.imedao.com/ugc/js/vue-common-b039d220b8.js:2:92520 @ https://assets.imedao.com/ugc/js/raven-ff524be6f0.min.js:1
+[    4422ms] [ERROR] 获取Footer数据失败: TypeError: Cannot read properties of undefined (reading 'data')
+    at https://assets.imedao.com/ugc/js/vue-common-b039d220b8.js:2:92520 @ https://assets.imedao.com/ugc/js/raven-ff524be6f0.min.js:1
+[    4426ms] [ERROR] TypeError: Cannot read properties of undefined (reading 'data')
+    at https://assets.imedao.com/ugc/js/vue-common-b039d220b8.js:2:92520 @ https://assets.imedao.com/ugc/js/raven-ff524be6f0.min.js:1
+[    4427ms] Uncaught (in promise) TypeError: Cannot read properties of undefined (reading 'data')
+    at <anonymous> (https://assets.imedao.com/ugc/js/vue-common-b039d220b8.js:1:92519)
+[    4427ms] Uncaught (in promise) TypeError: Cannot read properties of undefined (reading 'data')
+    at <anonymous> (https://assets.imedao.com/ugc/js/vue-common-b039d220b8.js:1:92519)
+[    4427ms] Uncaught (in promise) TypeError: Cannot read properties of undefined (reading 'data')
+    at <anonymous> (https://assets.imedao.com/ugc/js/vue-common-b039d220b8.js:1:92519)
+[    4733ms] Uncaught (in promise) TypeError: Cannot read properties of undefined (reading 'data')
+    at <anonymous> (https://assets.imedao.com/ugc/js/vue-common-b039d220b8.js:1:92519)

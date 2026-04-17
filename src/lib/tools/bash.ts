@@ -43,11 +43,22 @@ export function createBashTool(ctx: ToolContext) {
         const collect = (data: Buffer) => {
           if (truncated) return;
           totalBytes += data.length;
+          let chunkStr = '';
           if (totalBytes > MAX_OUTPUT_BYTES) {
             truncated = true;
-            chunks.push(data.subarray(0, MAX_OUTPUT_BYTES - (totalBytes - data.length)));
+            const allowedBuffer = data.subarray(0, MAX_OUTPUT_BYTES - (totalBytes - data.length));
+            chunks.push(allowedBuffer);
+            chunkStr = allowedBuffer.toString('utf-8');
           } else {
             chunks.push(data);
+            chunkStr = data.toString('utf-8');
+          }
+          
+          if (ctx.emitSSE && chunkStr) {
+            ctx.emitSSE({
+              type: 'tool_output',
+              data: chunkStr
+            });
           }
         };
 

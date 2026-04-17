@@ -1,0 +1,827 @@
+diff --git a/src/components/ai-elements/tool-actions-group.tsx b/src/components/ai-elements/tool-actions-group.tsx
+index edc68d3..69328c1 100644
+--- a/src/components/ai-elements/tool-actions-group.tsx
++++ b/src/components/ai-elements/tool-actions-group.tsx
+@@ -1,6 +1,6 @@
+ 'use client';
+ 
+-import React, { useState, createElement } from 'react';
++import React, { useState, useEffect, createElement, useMemo } from 'react';
+ import { motion, AnimatePresence } from 'motion/react';
+ import type { Icon } from "@phosphor-icons/react";
+ import {
+@@ -22,17 +22,20 @@ import {
+   Code,
+   FilePlus,
+   CaretDown,
++  Check,
++  X,
+ } from "@phosphor-icons/react";
+ import { cn } from '@/lib/utils';
+ import { Shimmer } from '@/components/ai-elements/shimmer';
+ import { useStickToBottomContext } from 'use-stick-to-bottom';
++import { usePanel } from '@/hooks/usePanel';
+ import { Streamdown } from 'streamdown';
+ import { cjk } from '@streamdown/cjk';
+ import { math } from '@streamdown/math';
+ import { mermaid } from '@streamdown/mermaid';
+ 
+ const thinkingPlugins = { cjk, math, mermaid };
+-import type { MediaBlock } from '@/types';
++import type { MediaBlock, TimelineStep } from '@/types';
+ 
+ // ---------------------------------------------------------------------------
+ // Types
+@@ -48,13 +51,15 @@ export interface ToolAction {
+ }
+ 
+ interface ToolActionsGroupProps {
+-  tools: ToolAction[];
++  /** Optional legacy props for compatibility */
++  tools?: ToolAction[];
++  thinkingContent?: string;
++  /** Preferred prop: chronological timeline steps */
++  steps?: TimelineStep[];
+   isStreaming?: boolean;
+   streamingToolOutput?: string;
+   /** When true, skip the collapsible header and render the tool list directly */
+   flat?: boolean;
+-  /** Thinking/reasoning content — rendered as the first expandable item inside the group */
+-  thinkingContent?: string;
+   /** Status text from SSE stream */
+   statusText?: string;
+   /** Session ID for rewind operations */
+@@ -125,13 +130,15 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
+       })();
+ 
+       return (
+-        <div className="mt-1 rounded bg-muted/40 px-2 py-1.5 font-mono text-[11px] text-muted-foreground/80 max-h-[140px] overflow-auto whitespace-pre-wrap break-all">
+-          {cmd && <div className="text-foreground/70">$ {cmd}</div>}
+-          {displayLines && (
+-            <div className={cn("mt-1", isRunning ? "text-muted-foreground/50" : "text-muted-foreground/60")}>
+-              {displayLines}
+-            </div>
+-          )}
++        <div className="mt-1 ml-[11px] border-l-[2px] border-border/40 pl-4">
++          <div className="rounded bg-muted/40 px-2 py-1.5 font-mono text-[11px] text-muted-foreground/80 max-h-[140px] overflow-auto whitespace-pre-wrap break-all">
++            {cmd && <div className="text-foreground/70">$ {cmd}</div>}
++            {displayLines && (
++              <div className={cn("mt-1", isRunning ? "text-muted-foreground/50" : "text-muted-foreground/60")}>
++                {displayLines}
++              </div>
++            )}
++          </div>
+         </div>
+       );
+     },
+@@ -186,7 +193,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
+       const visible = lines.slice(-8);
+ 
+       return (
+-        <div className="mt-1 ml-4 border-l-2 border-border/30 pl-2 space-y-0.5">
++        <div className="mt-1 ml-[11px] border-l-[2px] border-border/40 pl-4 space-y-0.5">
+           {visible.map((line, i) => {
+             const isActive = line.startsWith('>');
+             const isDone = line.startsWith('[+]');
+@@ -307,31 +314,97 @@ function isContextTool(name: string): boolean {
+   return CONTEXT_TOOLS.has(name.toLowerCase());
+ }
+ 
++function isActionTool(name: string): boolean {
++  const n = name.toLowerCase();
++  return ['bash', 'execute', 'run', 'shell', 'execute_command', 'write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'notebookedit', 'notebook_edit'].includes(n);
++}
++
+ type Segment =
+-  | { kind: 'context'; tools: ToolAction[] }
+-  | { kind: 'single'; tool: ToolAction };
++  | { kind: 'context_group'; tools: ToolAction[] }
++  | { kind: 'context_single'; tool: ToolAction }
++  | { kind: 'action'; tool: ToolAction }
++  | { kind: 'thinking'; content: string };
++
++function computeSegments(
++  tools: ToolAction[],
++  thinkingContent?: string,
++  steps?: TimelineStep[]
++): Segment[] {
++  if (steps && steps.length > 0) {
++    const linear: Array<{ kind: 'thinking'; content: string } | { kind: 'tool'; tool: ToolAction }> = [];
++    steps.forEach(step => {
++      if (step.reasoning?.trim()) {
++        linear.push({ kind: 'thinking', content: step.reasoning });
++      }
++      step.toolCalls.forEach(tc => {
++        linear.push({
++          kind: 'tool',
++          tool: {
++            id: tc.id,
++            name: tc.name,
++            input: tc.input,
++            result: tc.result,
++            isError: tc.isError,
++            media: (tc as any).media,
++          }
++        });
++      });
++    });
++
++    const segments: Segment[] = [];
++    let contextBuffer: ToolAction[] = [];
++
++    const flushContext = () => {
++      if (contextBuffer.length >= 3) {
++        segments.push({ kind: 'context_group', tools: contextBuffer });
++      } else {
++        for (const t of contextBuffer) {
++          segments.push({ kind: 'context_single', tool: t });
++        }
++      }
++      contextBuffer = [];
++    };
++
++    for (const item of linear) {
++      if (item.kind === 'thinking') {
++        flushContext();
++        segments.push({ kind: 'thinking', content: item.content });
++      } else {
++        if (isActionTool(item.tool.name)) {
++          flushContext();
++          segments.push({ kind: 'action', tool: item.tool });
++        } else {
++          contextBuffer.push(item.tool);
++        }
++      }
++    }
++    flushContext();
++    return segments;
++  }
+ 
+-function computeSegments(tools: ToolAction[]): Segment[] {
+   const segments: Segment[] = [];
+-  let contextBuffer: ToolAction[] = [];
++  if (thinkingContent?.trim()) {
++    segments.push({ kind: 'thinking', content: thinkingContent });
++  }
+ 
++  let contextBuffer: ToolAction[] = [];
+   const flushContext = () => {
+     if (contextBuffer.length >= 3) {
+-      segments.push({ kind: 'context', tools: contextBuffer });
++      segments.push({ kind: 'context_group', tools: contextBuffer });
+     } else {
+       for (const t of contextBuffer) {
+-        segments.push({ kind: 'single', tool: t });
++        segments.push({ kind: 'context_single', tool: t });
+       }
+     }
+     contextBuffer = [];
+   };
+ 
+   for (const tool of tools) {
+-    if (isContextTool(tool.name)) {
+-      contextBuffer.push(tool);
+-    } else {
++    if (isActionTool(tool.name)) {
+       flushContext();
+-      segments.push({ kind: 'single', tool });
++      segments.push({ kind: 'action', tool });
++    } else {
++      contextBuffer.push(tool);
+     }
+   }
+   flushContext();
+@@ -339,17 +412,21 @@ function computeSegments(tools: ToolAction[]): Segment[] {
+ }
+ 
+ function ContextGroup({ tools }: { tools: ToolAction[] }) {
+-  const [expanded, setExpanded] = useState(false);
+   const hasRunning = tools.some((t) => t.result === undefined);
+   const hasError = tools.some((t) => t.isError);
+   const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
++  const [expanded, setExpanded] = useState(hasRunning);
++
++  useEffect(() => {
++    setExpanded(hasRunning);
++  }, [hasRunning]);
+ 
+   return (
+     <div>
+       <button
+         type="button"
+         onClick={() => setExpanded((prev) => !prev)}
+-        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
++        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-[13px] hover:bg-muted/30 rounded-sm transition-colors"
+       >
+         <MagnifyingGlass size={14} className="shrink-0 text-muted-foreground" />
+         <CaretRight
+@@ -360,7 +437,7 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
+           )}
+         />
+         <span className="font-medium text-muted-foreground">
+-          {hasRunning ? `Gathering context (${tools.length})` : `Gathered context (${tools.length} files)`}
++          {hasRunning ? `正在收集上下文 (${tools.length})` : `已收集上下文 (${tools.length})`}
+         </span>
+         <span className="ml-auto">
+           <StatusDot status={groupStatus} />
+@@ -375,9 +452,9 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
+             transition={{ duration: 0.15, ease: 'easeOut' }}
+             style={{ overflow: 'hidden' }}
+           >
+-            <div className="ml-6 border-l-2 border-border/30 pl-2">
++            <div className="ml-[11px] border-l-[2px] border-border/40 pl-4 space-y-0.5">
+               {tools.map((tool, i) => (
+-                <ToolActionRow key={tool.id || `ctx-${i}`} tool={tool} />
++                <ContextSingleRow key={tool.id || `ctx-${i}`} tool={tool} />
+               ))}
+             </div>
+           </motion.div>
+@@ -418,7 +495,7 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?:
+         }}
+         onMouseEnter={() => setHovered(true)}
+         onMouseLeave={() => setHovered(false)}
+-        className="flex items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors w-full"
++        className="flex items-center gap-2 px-2 py-1 min-h-[28px] text-[13px] hover:bg-muted/30 rounded-sm transition-colors w-full"
+       >
+         {hovered ? (
+           <CaretRight
+@@ -431,7 +508,7 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?:
+         ) : (
+           <Brain size={14} className="shrink-0 text-muted-foreground" />
+         )}
+-        <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
++        <span className="font-mono text-muted-foreground/70 truncate flex-1 text-left">
+           {isStreaming ? <Shimmer duration={1.5}>{summary}</Shimmer> : summary}
+         </span>
+       </button>
+@@ -444,9 +521,9 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?:
+             transition={{ duration: 0.15, ease: 'easeOut' }}
+             style={{ overflow: 'hidden' }}
+           >
+-            <div className="ml-6 px-2 py-1.5 text-xs text-muted-foreground/70 border-l-2 border-border/30 prose prose-sm dark:prose-invert max-w-none">
+-              <Streamdown plugins={thinkingPlugins}>{content}</Streamdown>
+-            </div>
++              <div className="text-[12.5px] leading-relaxed text-muted-foreground/80 prose prose-sm dark:prose-invert max-w-none">
++                <Streamdown plugins={thinkingPlugins}>{content}</Streamdown>
++              </div>
+           </motion.div>
+         )}
+       </AnimatePresence>
+@@ -458,24 +535,54 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?:
+ // Compact row for a single tool action
+ // ---------------------------------------------------------------------------
+ 
+-function ToolActionRow({ tool, streamingToolOutput }: { tool: ToolAction; streamingToolOutput?: string }) {
++const MCP_TOOL_NAME_MAP: Record<string, string> = {
++  'mcp__memory__search_nodes': '搜索记忆节点',
++  'mcp__memory__read_graph': '读取记忆图谱',
++  'mcp__memory__create_entities': '创建记忆实体',
++  'mcp__fetch__fetch_markdown': '抓取网页(Markdown)',
++  'mcp__fetch__fetch_readable': '抓取网页(Readable)',
++  'mcp__fetch__fetch_json': '抓取网页(JSON)',
++};
++
++function getToolDisplayName(name: string): string {
++  return MCP_TOOL_NAME_MAP[name] || name;
++}
++
++function ContextSingleRow({ tool, streamingToolOutput }: { tool: ToolAction; streamingToolOutput?: string }) {
+   const renderer = getRenderer(tool.name);
+-  const summary = renderer.getSummary(tool.input, tool.name);
++  // Enhance summary for MCP tools that output raw JSON names
++  const baseSummary = renderer.getSummary(tool.input, tool.name);
++  const summary = MCP_TOOL_NAME_MAP[tool.name] ? baseSummary.replace(tool.name, MCP_TOOL_NAME_MAP[tool.name]) : baseSummary;
++  
+   const filePath = getFilePath(tool.input);
+   const status = getStatus(tool);
+   const hasDetail = renderer.icon === Terminal || renderer.icon === Lightning;
+-  const showDetail = hasDetail && renderer.renderDetail && (status === 'running' || streamingToolOutput || tool.result);
++  const detailVisible = hasDetail && renderer.renderDetail && (status === 'running' || !!streamingToolOutput || !!tool.result);
++  const [expanded, setExpanded] = useState(status === 'running');
++  const [showRaw, setShowRaw] = useState(false);
++
++  useEffect(() => {
++    setExpanded(status === 'running');
++  }, [status]);
++
++  // For non-Bash/Agent tools, show raw input/result when expanded
++  const hasRawContent = !hasDetail && (tool.result || (tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0));
+ 
+   return (
+     <div>
+-      <div className="flex items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors">
++      <button
++        type="button"
++        onClick={() => {
++          if (detailVisible || hasRawContent) {
++            if (hasRawContent) setShowRaw(prev => !prev);
++            else setExpanded((prev) => !prev);
++          }
++        }}
++        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-[13px] hover:bg-muted/30 rounded-sm transition-colors text-left"
++      >
+         {createElement(renderer.icon, { size: 14, className: "shrink-0 text-muted-foreground" })}
+ 
+-        {renderer.label && (
+-          <span className="font-medium text-muted-foreground shrink-0">{renderer.label}</span>
+-        )}
+-
+-        <span className="font-mono text-muted-foreground/60 truncate flex-1">
++        <span className="font-mono text-muted-foreground/70 truncate flex-1">
+           {summary}
+         </span>
+ 
+@@ -489,9 +596,101 @@ function ToolActionRow({ tool, streamingToolOutput }: { tool: ToolAction; stream
+           <ImageIcon size={14} className="shrink-0 text-primary/60" />
+         )}
+ 
++        {detailVisible && (
++          <CaretRight
++            size={10}
++            className={cn(
++              "shrink-0 text-muted-foreground/50 transition-transform duration-200",
++              expanded && "rotate-90",
++            )}
++          />
++        )}
++        {hasRawContent ? (
++          <CaretRight
++            size={10}
++            className={cn(
++              "shrink-0 text-muted-foreground/50 transition-transform duration-200",
++              showRaw && "rotate-90",
++            )}
++          />
++        ) : null}
+         <StatusDot status={status} />
++      </button>
++      {detailVisible && expanded && renderer.renderDetail?.(tool, streamingToolOutput)}
++      {hasRawContent && showRaw ? (
++          <div className="mt-1 ml-[11px] space-y-1.5 border-l-[2px] border-border/40 pl-4">
++            {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
++              <div className="rounded bg-muted/40 px-2 py-1.5">
++                <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1">Input</h5>
++                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[200px] overflow-auto">
++                  {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
++                </pre>
++              </div>
++            ) : null}
++          {tool.result ? (
++            <div className={cn(
++              "rounded px-2 py-1.5",
++              tool.isError ? "bg-destructive/10" : "bg-muted/40",
++            )}>
++              <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1">
++                {tool.isError ? 'Error' : 'Result'}
++              </h5>
++              <pre className={cn(
++                "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
++                tool.isError ? "text-destructive/80" : "text-muted-foreground/80",
++              )}>
++                {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
++              </pre>
++            </div>
++          ) : null}
++        </div>
++      ) : null}
++    </div>
++  );
++}
++
++function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rewindId }: { tool: ToolAction; isStreaming?: boolean; streamingToolOutput?: string; sessionId?: string; rewindId?: string }) {
++  const k = toolKind2(tool.name);
++  if (k === 'write' || k === 'create') {
++    const diff = extractDiff(tool);
++    if (diff) {
++      return (
++        <div className="rounded-lg border border-border/40 shadow-sm overflow-hidden bg-muted/20">
++          <FileReviewRow diff={diff} sessionId={sessionId} rewindId={rewindId} />
++        </div>
++      );
++    }
++  }
++  
++  if (k === 'bash') {
++    const cmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
++    const status = getStatus(tool);
++    return (
++      <div className="rounded-lg border border-border/40 shadow-sm overflow-hidden bg-muted/20">
++        <div className="flex items-center gap-2 px-3 py-2 text-[12px] bg-muted/30">
++          <Terminal size={14} className="text-muted-foreground shrink-0" />
++          <span className="font-medium text-foreground/80 truncate flex items-center">
++            {status === 'running' ? '正在执行命令' : status === 'error' ? '命令执行失败' : '命令已执行'}
++            <span className="ml-2 font-mono text-muted-foreground/70 font-normal truncate max-w-[300px]">{cmd}</span>
++          </span>
++          <span className="ml-auto shrink-0">
++             <StatusDot status={status} />
++          </span>
++        </div>
++        {(tool.result || streamingToolOutput) && (
++          <div className="border-t border-border/20 bg-muted/10 px-3 py-2">
++            <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[300px] overflow-auto">
++              {status === 'running' ? streamingToolOutput : tool.result}
++            </pre>
++          </div>
++        )}
+       </div>
+-      {showDetail && renderer.renderDetail?.(tool, streamingToolOutput)}
++    );
++  }
++  
++  return (
++    <div className="rounded-lg border border-border/40 shadow-sm overflow-hidden bg-muted/20 p-1">
++      <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} />
+     </div>
+   );
+ }
+@@ -571,42 +770,70 @@ export function extractDiff(t: ToolAction): DiffInfo | null {
+ function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionId?: string; rewindId?: string }) {
+   const [open, setOpen] = useState(false);
+   const { stopScroll } = useStickToBottomContext();
++  const { openPreviewTab } = usePanel();
+ 
+   const openFile = () => {
+-    fetch('/api/open-file', {
+-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({ path: diff.fullPath }),
+-    }).catch(() => {});
++    if (diff.fullPath) {
++      openPreviewTab(diff.fullPath);
++    }
+   };
+ 
+   return (
+-    <div className="border-t border-border/20 first:border-t-0">
++    <div className="border-t border-border/20 first:border-t-0 bg-background/60">
+       <div className="flex items-center gap-2 px-4 py-3 text-[12px]">
+         <div className={cn(
+-          'flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
+-          diff.mode === 'create' ? 'bg-emerald-500/12' : 'bg-amber-500/12',
++          'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset',
++          diff.mode === 'create'
++            ? 'bg-emerald-500/10 text-emerald-500 ring-emerald-500/20'
++            : 'bg-amber-500/10 text-amber-500 ring-amber-500/20',
+         )}>
+           {diff.mode === 'create'
+-            ? <FilePlus size={12} className="text-emerald-500/70" />
+-            : <NotePencil size={12} className="text-amber-500/70" />}
++            ? <FilePlus size={13} className="text-emerald-500/80" />
++            : <NotePencil size={13} className="text-amber-500/80" />}
++        </div>
++        <div className="min-w-0 flex-1">
++          <div className="flex items-center gap-2">
++            <button
++              type="button"
++              onClick={openFile}
++              className="truncate font-mono text-[13px] text-foreground/85 transition hover:text-foreground"
++            >
++              {diff.filename}
++            </button>
++            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground/70">
++              {diff.mode === 'create' ? '新增文件' : '修改文件'}
++            </span>
++          </div>
++          {diff.fullPath && (
++            <div className="truncate text-[10px] text-muted-foreground/45">
++              {diff.fullPath}
++            </div>
++          )}
++        </div>
++        <div className="flex items-center gap-3 shrink-0">
++          <div className="flex items-center gap-1.5 font-mono text-[11px]">
++            {diff.added > 0 && <span className="text-emerald-500/80">+{diff.added}</span>}
++            {diff.removed > 0 && <span className="text-red-500/70">-{diff.removed}</span>}
++          </div>
++          <button
++            type="button"
++            onClick={openFile}
++            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground/65 transition hover:bg-muted hover:text-foreground"
++            title="在编辑区打开文件"
++          >
++            <ArrowSquareOut size={12} />
++            <span>打开文件</span>
++          </button>
++          <button
++            type="button"
++            onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}
++            className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-2 py-1 text-[11px] text-foreground/75 transition hover:bg-muted"
++            title={open ? '收起 diff' : '展开 diff'}
++          >
++            <span>{open ? '收起 diff' : '查看 diff'}</span>
++            <CaretDown size={13} className={cn('transition-transform', open && 'rotate-180')} />
++          </button>
+         </div>
+-        <button
+-          type="button"
+-          onClick={openFile}
+-          className="flex min-w-0 flex-1 items-center gap-2 text-left transition hover:text-foreground"
+-        >
+-          <span className="truncate font-mono text-[13px] text-foreground/78">{diff.filename}</span>
+-        </button>
+-        {diff.added > 0 && <span className="text-emerald-500/70">+{diff.added}</span>}
+-        {diff.removed > 0 && <span className="text-red-500/65">-{diff.removed}</span>}
+-        <button
+-          type="button"
+-          onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}
+-          className="rounded px-1 text-muted-foreground/45 transition hover:text-muted-foreground/70"
+-          title={open ? '收起 diff' : '展开 diff'}
+-        >
+-          <CaretDown size={13} className={cn('transition-transform', open && 'rotate-180')} />
+-        </button>
+       </div>
+ 
+       <AnimatePresence initial={false}>
+@@ -650,6 +877,9 @@ export function CompletionBar({
+   const pending = changedFiles.length;
+ 
+   if (pending === 0) return null;
++  const reviewHint = errCount > 0
++    ? `${errCount} 个工具步骤报错`
++    : '查看这一轮对话产出的文件修改';
+ 
+   return (
+     <div className="mt-2 flex justify-start">
+@@ -658,21 +888,26 @@ export function CompletionBar({
+           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+             <Code size={14} weight="bold" />
+           </div>
+-          <div className="min-w-0 flex-1 text-[13px] text-foreground/90 flex items-center gap-2">
+-            <span className="font-medium">{pending} 个文件已更改</span>
+-            <div className="flex items-center gap-1.5 ml-1">
+-              <span className="text-emerald-500 font-mono">+{totalAdded}</span>
+-              <span className="text-red-500 font-mono">-{totalRemoved}</span>
++          <div className="min-w-0 flex-1">
++            <div className="text-[13px] text-foreground/90 flex items-center gap-2">
++              <span className="font-medium">{pending} 个文件已更改</span>
++              <div className="flex items-center gap-1.5 ml-1">
++                <span className="text-emerald-500 font-mono">+{totalAdded}</span>
++                <span className="text-red-500 font-mono">-{totalRemoved}</span>
++              </div>
+             </div>
++            <div className="mt-0.5 text-[11px] text-muted-foreground/65">{reviewHint}</div>
++          </div>
++          <div className="flex items-center gap-2 shrink-0">
++            <button
++              type="button"
++              onClick={() => setExpanded((value) => !value)}
++              className="inline-flex items-center gap-1.5 rounded-md bg-muted/50 px-2.5 py-1 text-[12px] font-medium text-foreground/70 transition hover:bg-muted hover:text-foreground"
++            >
++              <span>{expanded ? '收起' : '查看变更'}</span>
++              <CaretDown size={12} className={cn('transition-transform', expanded && 'rotate-180')} />
++            </button>
+           </div>
+-          <button
+-            type="button"
+-            onClick={() => setExpanded((value) => !value)}
+-            className="inline-flex items-center gap-1.5 rounded-md bg-muted/50 px-2.5 py-1 text-[12px] font-medium text-foreground/70 transition hover:bg-muted hover:text-foreground"
+-          >
+-            <span>查看变更</span>
+-            <CaretDown size={12} className={cn('transition-transform', expanded && 'rotate-180')} />
+-          </button>
+         </div>
+ 
+         <AnimatePresence initial={false}>
+@@ -701,133 +936,142 @@ export function CompletionBar({
+ // Main group component
+ // ---------------------------------------------------------------------------
+ 
++type GroupSegment =
++  | { type: 'single'; tool: ToolAction }
++  | { type: 'context_group'; tools: ToolAction[] }
++  | { type: 'thinking'; content: string };
++
+ export function ToolActionsGroup({
+-  tools,
++  tools = [],
++  thinkingContent,
++  steps,
+   isStreaming = false,
+   streamingToolOutput,
+   flat = false,
+-  thinkingContent,
+   statusText,
+   sessionId,
+   rewindUserMessageId,
+-  referencedFiles,
++  referencedFiles = [],
+ }: ToolActionsGroupProps) {
+   const hasRunningTool = tools.some((t) => t.result === undefined);
+-
+-  // Track whether user has manually toggled and their chosen state
++  const hasPendingWork = hasRunningTool || !!thinkingContent || !!statusText || (isStreaming && tools.length === 0);
+   const [userExpandedState, setUserExpandedState] = useState<boolean | null>(null);
+-
+-  // Derived: if user has toggled, use their choice; otherwise auto-expand based on streaming state
+-  const expanded = userExpandedState !== null ? userExpandedState : (hasRunningTool || isStreaming);
+-
+-  if (tools.length === 0 && !thinkingContent) return null;
++  const expanded = userExpandedState !== null ? userExpandedState : hasPendingWork;
++
++  useEffect(() => {
++    if (userExpandedState === null) return;
++    if (hasPendingWork) return;
++    setUserExpandedState(false);
++  }, [hasPendingWork, userExpandedState]);
++
++  // Compute a unified linear sequence of items (thinking blocks + tool calls)
++  const segments = useMemo(() => computeSegments(tools, thinkingContent, steps), [tools, thinkingContent, steps]);
++
++  if (tools.length === 0 && !thinkingContent && (!steps || steps.length === 0)) return null;
++
++  const renderSegments = () => {
++    const blocks: React.ReactNode[] = [];
++    let currentLineGroup: React.ReactNode[] = [];
++    
++    const flushLineGroup = () => {
++      if (currentLineGroup.length > 0) {
++        blocks.push(
++          <div key={`line-${blocks.length}`} className="ml-[11px] border-l-[2px] border-border/40 pl-4 space-y-1 my-2.5">
++            {currentLineGroup}
++          </div>
++        );
++        currentLineGroup = [];
++      }
++    };
++
++    segments.forEach((segment, idx) => {
++      if (segment.kind === 'action') {
++        flushLineGroup();
++        blocks.push(
++          <div key={`action-${idx}`} className="my-3 ml-2.5">
++            <ActionToolCard 
++              tool={segment.tool} 
++              isStreaming={isStreaming && segment.tool.result === undefined} 
++              streamingToolOutput={isStreaming && segment.tool.result === undefined ? streamingToolOutput : undefined}
++              sessionId={sessionId}
++              rewindId={rewindUserMessageId}
++            />
++          </div>
++        );
++      } else if (segment.kind === 'thinking') {
++        currentLineGroup.push(<ThinkingRow key={`think-${idx}`} content={segment.content} isStreaming={isStreaming} />);
++      } else if (segment.kind === 'context_group') {
++        currentLineGroup.push(<ContextGroup key={`ctx-group-${idx}`} tools={segment.tools} />);
++      } else if (segment.kind === 'context_single') {
++        currentLineGroup.push(<ContextSingleRow key={`ctx-single-${idx}`} tool={segment.tool} streamingToolOutput={isStreaming && segment.tool.result === undefined ? streamingToolOutput : undefined} />);
++      }
++    });
++    flushLineGroup();
++    
++    return <>{blocks}</>;
++  };
+ 
+   // Flat mode: skip header, render tool list directly
+   if (flat) {
+-    const lastRunningId = [...tools].reverse().find((t) => t.result === undefined)?.id;
+     return (
+-      <div className="w-[min(100%,48rem)]">
+-        <div className="border-l-2 border-border/50 pl-2 ml-1.5">
+-          {thinkingContent && <ThinkingRow content={thinkingContent} isStreaming={isStreaming} />}
+-          {computeSegments(tools).map((seg, i) =>
+-            seg.kind === 'context' ? (
+-              <ContextGroup key={`ctx-group-${i}`} tools={seg.tools} />
+-            ) : (
+-              <ToolActionRow
+-                key={seg.tool.id || `tool-${i}`}
+-                tool={seg.tool}
+-                streamingToolOutput={seg.tool.id === lastRunningId ? streamingToolOutput : undefined}
+-              />
+-            )
+-          )}
+-        </div>
++      <div className="my-2">
++        {renderSegments()}
+       </div>
+     );
+   }
+ 
+-  const runningCount = tools.filter((t) => t.result === undefined).length;
+-  const doneCount = tools.length - runningCount;
+-  const runningDesc = getRunningDescription(tools);
+-
+-  const handleToggle = () => {
+-    setUserExpandedState((prev) => prev !== null ? !prev : !expanded);
+-  };
++  const hasError = tools.some((t) => t.isError);
++  const groupStatus = hasRunningTool ? 'running' : hasError ? 'error' : 'success';
+ 
+-  // Build summary text parts
+-  const summaryParts: string[] = [];
+-  if (runningCount > 0) summaryParts.push(`${runningCount} running`);
+-  if (doneCount > 0) summaryParts.push(`${doneCount} completed`);
+-  if (runningCount === 0 && isStreaming) summaryParts.push('generating response');
+-  if (summaryParts.length === 0) summaryParts.push(`${tools.length} actions`);
++  // Filter out raw JSON payloads from statusText
++  const displayStatusText = statusText && (!statusText.startsWith('{') && !statusText.includes('"subtype"')) ? statusText : undefined;
+ 
+   return (
+-    <div className="w-[min(100%,48rem)]">
+-      {/* Header — content left, caret right */}
+-      <button
+-        type="button"
+-        onClick={handleToggle}
+-        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
+-      >
+-        <span className="inline-flex items-center justify-center rounded bg-muted/80 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/70 tabular-nums">
+-          {tools.length + (thinkingContent ? 1 : 0)}
+-        </span>
+-
+-        <span className="text-muted-foreground/60 truncate">
+-          {summaryParts.join(' · ')}
+-        </span>
+-
+-        {/* Show running task description */}
+-        {runningDesc && (
+-          <span className="text-muted-foreground/40 text-[11px] font-mono truncate max-w-[40%]">
+-            {hasRunningTool ? <Shimmer duration={1.5}>{runningDesc}</Shimmer> : runningDesc}
+-          </span>
+-        )}
+-
+-        <CaretRight
+-          size={12}
+-          className={cn(
+-            "shrink-0 text-muted-foreground/60 transition-transform duration-200 ml-auto",
+-            expanded && "rotate-90"
+-          )}
+-        />
+-      </button>
++    <div className="my-2">
++      {tools.length > 0 || (steps && steps.length > 0) ? (
++        <button
++          type="button"
++          onClick={() => setUserExpandedState(!expanded)}
++          className="w-full flex items-center justify-between py-1.5 text-[13px] text-muted-foreground hover:text-foreground transition-colors group"
++        >
++          <div className="flex items-center gap-2 truncate">
++            <div className="flex items-center justify-center bg-muted/60 dark:bg-muted/40 rounded px-1.5 min-w-[20px] h-[18px] text-[11px] font-medium text-foreground/80">
++              {tools.length > 0 ? tools.length : (steps?.length || 1)}
++            </div>
++            
++            <span className="truncate group-hover:text-foreground transition-colors">
++              {displayStatusText || 
++               (hasRunningTool ? '正在思考与执行中...' : 
++                groupStatus === 'error' ? '执行遇到错误' : `${tools.length > 0 ? tools.length : (steps?.length || 1)}个已完成 · 思考与执行完毕`)}
++              {referencedFiles && referencedFiles.length > 0 && ` · 引用 ${referencedFiles.length} 个上下文`}
++            </span>
++          </div>
++          <CaretDown
++            size={14}
++            className={cn("shrink-0 transition-transform duration-200 opacity-50 group-hover:opacity-100", expanded && "rotate-180")}
++          />
++        </button>
++      ) : (
++        displayStatusText && (
++          <div className="py-1.5 text-[13px] text-muted-foreground">
++            {displayStatusText}
++          </div>
++        )
++      )}
+ 
+-      {/* Expanded list — left vertical line like blockquote */}
+       <AnimatePresence initial={false}>
+         {expanded && (
+           <motion.div
+-            initial={{ height: 0 }}
+-            animate={{ height: 'auto' }}
+-            exit={{ height: 0 }}
+-            transition={{ duration: 0.15, ease: 'easeOut' }}
+-            style={{ overflow: 'hidden', transformOrigin: 'top' }}
++            initial={{ height: 0, opacity: 0 }}
++            animate={{ height: 'auto', opacity: 1 }}
++            exit={{ height: 0, opacity: 0 }}
++            transition={{ duration: 0.2, ease: 'easeOut' }}
++            style={{ overflow: 'hidden' }}
+           >
+-            <motion.div
+-              initial={{ opacity: 0, y: -4 }}
+-              animate={{ opacity: 1, y: 0 }}
+-              exit={{ opacity: 0, y: -4 }}
+-              transition={{ duration: 0.12, ease: 'easeOut' }}
+-            >
+-              <div className="ml-1.5 mt-0.5 border-l-2 border-border/50 pl-2">
+-                {thinkingContent && <ThinkingRow content={thinkingContent} isStreaming={isStreaming} />}
+-                {(() => {
+-                  const segments = computeSegments(tools);
+-                  // Find the last running tool to attach streamingToolOutput
+-                  const lastRunningId = [...tools].reverse().find((t) => t.result === undefined)?.id;
+-                  return segments.map((seg, i) =>
+-                    seg.kind === 'context' ? (
+-                      <ContextGroup key={`ctx-group-${i}`} tools={seg.tools} />
+-                    ) : (
+-                      <ToolActionRow
+-                        key={seg.tool.id || `tool-${i}`}
+-                        tool={seg.tool}
+-                        streamingToolOutput={seg.tool.id === lastRunningId ? streamingToolOutput : undefined}
+-                      />
+-                    )
+-                  );
+-                })()}
+-              </div>
+-            </motion.div>
++            <div className="py-2">
++              {/* renderSegments handles its own borders */}
++              {renderSegments()}
++            </div>
+           </motion.div>
+         )}
+       </AnimatePresence>

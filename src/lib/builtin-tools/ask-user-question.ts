@@ -80,13 +80,26 @@ export function createAskUserQuestionTools() {
         const data = input as unknown as Record<string, unknown>;
         const answers = (data.answers || {}) as Record<string, string>;
 
+        console.log('[AskUserQuestion.execute] received input:', {
+          hasQuestions: !!(data.questions),
+          questionCount: Array.isArray(data.questions) ? data.questions.length : 0,
+          hasAnswers: !!data.answers,
+          answerKeys: Object.keys(answers),
+          answers,
+          rawInputKeys: Object.keys(data),
+        });
+
         if (Object.keys(answers).length === 0) {
+          console.warn('[AskUserQuestion.execute] No answers found — user did not provide any input');
           return 'The user did not provide any answers.';
         }
 
-        return Object.entries(answers)
+        const formatted = Object.entries(answers)
           .map(([question, answer]) => `Q: ${question}\nA: ${answer}`)
           .join('\n\n');
+
+        console.log('[AskUserQuestion.execute] returning:', formatted.slice(0, 500));
+        return formatted;
       },
     }),
   };

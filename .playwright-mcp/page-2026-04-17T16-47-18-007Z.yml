@@ -1,0 +1,2238 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - iframe [ref=e6]:
+      - generic [ref=f2e2]:
+        - list:
+          - listitem [ref=f2e3] [cursor=pointer]:
+            - link "闲钱理财存活期宝（关联基金） 2.03 % 最高7日年化收益(04-17) 〉" [ref=f2e4]:
+              - /url: https://acttg.eastmoney.com/pub/web_act_ggds_db_01_01_01_0?spm=00002.sbb
+              - generic [ref=f2e5]:
+                - heading "闲钱理财存活期宝（关联基金）" [level=3] [ref=f2e6]
+                - paragraph [ref=f2e7]:
+                  - text: "2.03"
+                  - generic [ref=f2e8]: "%"
+                - paragraph [ref=f2e9]: 最高7日年化收益(04-17)
+              - generic [ref=f2e12]: 〉
+          - listitem [ref=f2e13] [cursor=pointer]:
+            - link "稳健理财 67.81 % 近1年收益 〉" [ref=f2e14]:
+              - /url: https://acttg.eastmoney.com/pub/web_act_ggds_db_01_01_02_0?spm=00002.sbb
+              - generic [ref=f2e15]:
+                - heading "稳健理财" [level=3] [ref=f2e16]
+                - paragraph [ref=f2e17]:
+                  - text: "67.81"
+                  - generic [ref=f2e18]: "%"
+                - paragraph [ref=f2e19]: 近1年收益
+              - generic [ref=f2e22]: 〉
+          - listitem [ref=f2e23] [cursor=pointer]:
+            - link "连续3年五星评级基金 62.25 % 近3年收益率 〉" [ref=f2e24]:
+              - /url: https://acttg.eastmoney.com/pub/web_act_ggds_db_01_01_03_0
+              - generic [ref=f2e25]:
+                - heading "连续3年五星评级基金" [level=3] [ref=f2e26]
+                - paragraph [ref=f2e27]:
+                  - text: "62.25"
+                  - generic [ref=f2e28]: "%"
+                - paragraph [ref=f2e29]: 近3年收益率
+              - generic [ref=f2e32]: 〉
+          - listitem [ref=f2e33] [cursor=pointer]:
+            - link "看好的盘不错过 40.27 % 近3年收益率 〉" [ref=f2e34]:
+              - /url: https://acttg.eastmoney.com/pub/web_act_ggds_db_01_01_04_0?spm=00002.sbb
+              - generic [ref=f2e35]:
+                - heading "看好的盘不错过" [level=3] [ref=f2e36]
+                - paragraph [ref=f2e37]:
+                  - text: "40.27"
+                  - generic [ref=f2e38]: "%"
+                - paragraph [ref=f2e39]: 近3年收益率
+              - generic [ref=f2e42]: 〉
+    - generic [ref=e7]:
+      - list:
+        - listitem [ref=e8]:
+          - link "财经" [ref=e9] [cursor=pointer]:
+            - /url: http://finance.eastmoney.com/
+        - listitem [ref=e10]: "|"
+        - listitem [ref=e11]:
+          - link "焦点" [ref=e12] [cursor=pointer]:
+            - /url: http://finance.eastmoney.com/yaowen.html
+        - listitem [ref=e13]: "|"
+        - listitem [ref=e14]:
+          - link "股票" [ref=e15] [cursor=pointer]:
+            - /url: http://stock.eastmoney.com/
+        - listitem [ref=e16]: "|"
+        - listitem [ref=e17]:
+          - link "新股" [ref=e19] [cursor=pointer]:
+            - /url: http://stock.eastmoney.com/newstock.html
+        - listitem [ref=e20]: "|"
+        - listitem [ref=e21]:
+          - link "期指" [ref=e22] [cursor=pointer]:
+            - /url: http://stock.eastmoney.com/gzqh.html
+        - listitem [ref=e23]: "|"
+        - listitem [ref=e24]:
+          - link "期权" [ref=e25] [cursor=pointer]:
+            - /url: http://option.eastmoney.com/
+        - listitem [ref=e26]: "|"
+        - listitem [ref=e27]:
+          - link "行情" [ref=e29] [cursor=pointer]:
+            - /url: http://quote.eastmoney.com/flash/sz300059.html
+        - listitem [ref=e30]: "|"
+        - listitem [ref=e31]:
+          - link "数据" [ref=e32] [cursor=pointer]:
+            - /url: http://data.eastmoney.com/
+        - listitem [ref=e33]: "|"
+        - listitem [ref=e34]:
+          - link "全球" [ref=e35] [cursor=pointer]:
+            - /url: http://stock.eastmoney.com/global.html
+        - listitem [ref=e36]: "|"
+        - listitem [ref=e37]:
+          - link "美股" [ref=e38] [cursor=pointer]:
+            - /url: http://stock.eastmoney.com/america.html
+        - listitem [ref=e39]: "|"
+        - listitem [ref=e40]:
+          - link "港股" [ref=e41] [cursor=pointer]:
+            - /url: http://hk.eastmoney.com/
+        - listitem [ref=e42]: "|"
+        - listitem [ref=e43]:
+          - link "期货" [ref=e44] [cursor=pointer]:
+            - /url: http://futures.eastmoney.com/
+        - listitem [ref=e45]: "|"
+        - listitem [ref=e46]:
+          - link "外汇" [ref=e47] [cursor=pointer]:
+            - /url: http://forex.eastmoney.com/
+        - listitem [ref=e48]: "|"
+        - listitem [ref=e49]:
+          - link "黄金" [ref=e50] [cursor=pointer]:
+            - /url: http://gold.eastmoney.com
+        - listitem [ref=e51]: "|"
+        - listitem [ref=e52]:
+          - link "银行" [ref=e53] [cursor=pointer]:
+            - /url: http://bank.eastmoney.com/
+        - listitem [ref=e54]: "|"
+        - listitem [ref=e55]:
+          - link "基金" [ref=e56] [cursor=pointer]:
+            - /url: http://www.1234567.com.cn/
+        - listitem [ref=e57]: "|"
+        - listitem [ref=e58]:
+          - link "理财" [ref=e59] [cursor=pointer]:
+            - /url: http://money.eastmoney.com/
+        - listitem [ref=e60]: "|"
+        - listitem [ref=e61]:
+          - link "保险" [ref=e62] [cursor=pointer]:
+            - /url: http://insurance.eastmoney.com/
+        - listitem [ref=e63]: "|"
+        - listitem [ref=e64]:
+          - link "债券" [ref=e65] [cursor=pointer]:
+            - /url: http://bond.eastmoney.com/
+        - listitem [ref=e66]: "|"
+        - listitem [ref=e67]:
+          - link "视频" [ref=e68] [cursor=pointer]:
+            - /url: http://video.eastmoney.com/
+        - listitem [ref=e69]: "|"
+        - listitem [ref=e70]:
+          - link "股吧" [ref=e72] [cursor=pointer]:
+            - /url: http://guba.eastmoney.com/
+        - listitem [ref=e73]: "|"
+        - listitem [ref=e74]:
+          - link "基金吧" [ref=e75] [cursor=pointer]:
+            - /url: http://fund2.eastmoney.com/
+        - listitem [ref=e76]: "|"
+        - listitem [ref=e77]:
+          - link "博客" [ref=e78] [cursor=pointer]:
+            - /url: http://blog.eastmoney.com/
+        - listitem [ref=e79]: "|"
+        - listitem [ref=e80]:
+          - link "财富号" [ref=e82] [cursor=pointer]:
+            - /url: http://caifuhao.eastmoney.com/
+        - listitem [ref=e83]: "|"
+        - listitem [ref=e84]:
+          - link "搜索" [ref=e85] [cursor=pointer]:
+            - /url: http://so.eastmoney.com/
+    - generic [ref=e86]:
+      - list:
+        - listitem [ref=e87]:
+          - iframe [ref=e88]:
+            - generic [ref=f3e2]:
+              - link [ref=f3e3] [cursor=pointer]:
+                - /url: //same.eastmoney.com/c?z=eastmoney&la=0&si=1&cg=5&c=22&ci=1&or=47&l=12649&bg=12649&b=16030&u=https%3A%2F%2Facttg.eastmoney.com%2Fpub%2Fweb_app_hqy_1tz_01_01_01_0
+                - img [ref=f3e4]
+              - img [ref=f3e6]
+        - listitem [ref=e89]:
+          - iframe [ref=e90]:
+            - link [ref=f4e3] [cursor=pointer]:
+              - /url: //same.eastmoney.com/c?z=eastmoney&la=0&si=1&cg=5&c=174&ci=1&or=4140&l=17059&bg=17060&b=19572&u=https%3A%2F%2Fqs.dfcfw.com%2F4037
+              - img [ref=f4e4]
+        - listitem [ref=e91]:
+          - iframe [ref=e92]:
+            - generic [ref=f5e2]:
+              - link [ref=f5e3] [cursor=pointer]:
+                - /url: //same.eastmoney.com/c?z=eastmoney&la=0&si=1&cg=5&c=23&ci=1&or=47&l=11144&bg=11144&b=12449&u=http%3A%2F%2Facttg.eastmoney.com%2Fpub%2Fweb_jcb_hqsy_2ty1_01_01_01_0
+                - img [ref=f5e4]
+              - img [ref=f5e6]
+    - generic [ref=e93]:
+      - generic [ref=e94]:
+        - link "东方财富网" [ref=e95] [cursor=pointer]:
+          - /url: http://www.eastmoney.com
+          - img "东方财富网" [ref=e96]
+        - link "行情中心" [ref=e97] [cursor=pointer]:
+          - /url: http://quote.eastmoney.com/center/
+          - img "行情中心" [ref=e98]
+      - generic [ref=e99]:
+        - link "全球财经快讯" [ref=e100] [cursor=pointer]:
+          - /url: http://kuaixun.eastmoney.com/
+        - link "数据中心" [ref=e101] [cursor=pointer]:
+          - /url: http://data.eastmoney.com/center/
+        - link "手机站" [ref=e102] [cursor=pointer]:
+          - /url: https://acttg.eastmoney.com/pub/web_act_ggds_dhlsf_01_01_01_0
+        - link "客户端" [ref=e103] [cursor=pointer]:
+          - /url: https://acttg.eastmoney.com/pub/web_act_ggds_dhlsf_01_01_02_0
+        - link "Choice数据" [ref=e104] [cursor=pointer]:
+          - /url: https://choice.eastmoney.com?adid=web_choice_hqpd_website_01_01_01_0
+        - link "手机买基金 国内外市场轻松投" [ref=e105] [cursor=pointer]:
+          - /url: http://acttg.eastmoney.com/pub/web_act_ggds_dhlsf_01_01_04_0
+    - generic [ref=e106]:
+      - generic [ref=e107]:
+        - link "行情中心" [ref=e109] [cursor=pointer]:
+          - /url: http://quote.eastmoney.com/center/
+          - text: 行情中心
+        - list [ref=e111]:
+          - listitem [ref=e112]:
+            - link "指数" [ref=e113] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/hszs.html
+          - listitem [ref=e114]: "|"
+          - listitem [ref=e115]:
+            - link "期指" [ref=e116] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/gridlist.html#futures_cffex
+          - listitem [ref=e117]: "|"
+          - listitem [ref=e118]:
+            - link "期权" [ref=e119] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/qqsc.html
+          - listitem [ref=e120]: "|"
+          - listitem [ref=e121]:
+            - link "个股" [ref=e122] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/
+          - listitem [ref=e123]: "|"
+          - listitem [ref=e124]:
+            - link "板块" [ref=e125] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/hsbk.html
+          - listitem [ref=e126]: "|"
+          - listitem [ref=e127]:
+            - link "排行" [ref=e128] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/gridlist.html#hs_a_board
+          - listitem [ref=e129]: "|"
+          - listitem [ref=e130]:
+            - link "新股" [ref=e131] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/gridlist.html#newshares
+          - listitem [ref=e132]: "|"
+          - listitem [ref=e133]:
+            - link "基金" [ref=e134] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/jjsc.html
+          - listitem [ref=e135]: "|"
+          - listitem [ref=e136]:
+            - link "港股" [ref=e137] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/ggsc.html
+          - listitem [ref=e138]: "|"
+          - listitem [ref=e139]:
+            - link "美股" [ref=e140] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/mgsc.html
+          - listitem [ref=e141]: "|"
+          - listitem [ref=e142]:
+            - link "期货" [ref=e143] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/futures.html
+          - listitem [ref=e144]: "|"
+          - listitem [ref=e145]:
+            - link "外汇" [ref=e146] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/whsc.html
+          - listitem [ref=e147]: "|"
+          - listitem [ref=e148]:
+            - link "黄金" [ref=e149] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/center/hjsc.html
+          - listitem [ref=e150]: "|"
+          - listitem [ref=e151]:
+            - link "自选股" [ref=e152] [cursor=pointer]:
+              - /url: http://quote.eastmoney.com/zixuan/
+          - listitem [ref=e153]: "|"
+          - listitem [ref=e154]:
+            - link "自选基金" [ref=e155] [cursor=pointer]:
+              - /url: http://favor.fund.eastmoney.com/
+        - generic [ref=e157]:
+          - generic [ref=e158]: "0"
+          - textbox "输入股票代码、名称、简拼或关键字" [ref=e159]
+          - button "搜索" [ref=e160] [cursor=pointer]
+      - generic [ref=e161]:
+        - link "全球股市" [ref=e163] [cursor=pointer]:
+          - /url: http://quote.eastmoney.com/center/global.html#global_3
+          - text: 全球股市
+        - generic [ref=e166]:
+          - generic [ref=e167]:
+            - generic "上滚" [ref=e168] [cursor=pointer]
+            - generic "下滚" [ref=e169] [cursor=pointer]
+          - generic [ref=e171]:
+            - link "上证" [ref=e1613] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/unify/r/1.000001
+              - strong [ref=e1614]: 上证
+            - text: ：
+            - generic [ref=e1615]: 4051.43 ↓-4.12 -0.10% 1.014万亿
+            - text: "元(涨:"
+            - link "954" [ref=e1616] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/center/gridlist.html?st=ChangePercent&sortType=C&sortRule=-1#sh_a_board
+            - text: "平:57 跌:"
+            - link "1335" [ref=e1617] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/center/gridlist.html?st=ChangePercent&sr=1&sortType=C&sortRule=1#sh_a_board
+            - text: )
+            - link "深证" [ref=e1618] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/unify/r/0.399001
+              - strong [ref=e1619]: 深证
+            - text: ：
+            - generic [ref=e1620]: 14885.42 ↑89.09 0.60% 1.412万亿
+            - text: "元(涨:"
+            - link "1155" [ref=e1621] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/center/gridlist.html?st=ChangePercent&sortType=C&sortRule=-1#sz_a_board
+            - text: "平:74 跌:"
+            - link "1693" [ref=e1622] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/center/gridlist.html?st=ChangePercent&sr=1&sortType=C&sortRule=1#sz_a_board
+            - text: )
+      - generic [ref=e180]:
+        - link "数据中心" [ref=e182] [cursor=pointer]:
+          - /url: http://js1.eastmoney.com/tg.aspx?ID=517
+          - text: 数据中心
+        - generic [ref=e184]:
+          - link "新股申购" [ref=e185] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=520
+          - link "新股日历" [ref=e186] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=522
+          - link "资金流向" [ref=e187] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=525
+          - link "AH股比价" [ref=e188] [cursor=pointer]:
+            - /url: //quote.eastmoney.com/center/gridlist.html#ah_comparison
+          - link "主力排名" [ref=e189] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=540
+          - link "板块资金" [ref=e190] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=615
+          - link "个股研报" [ref=e191] [cursor=pointer]:
+            - /url: http://data.eastmoney.com/report/stock.jshtml
+          - link "行业研报" [ref=e192] [cursor=pointer]:
+            - /url: http://data.eastmoney.com/report/industry.jshtml
+          - link "盈利预测" [ref=e193] [cursor=pointer]:
+            - /url: http://data.eastmoney.com/report/profitforecast.jshtml
+          - link "千股千评" [ref=e194] [cursor=pointer]:
+            - /url: http://data.eastmoney.com/stockcomment/
+          - link "年报季报" [ref=e195] [cursor=pointer]:
+            - /url: http://data.eastmoney.com/bbsj/
+          - link "龙虎榜单" [ref=e196] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=693
+          - link "限售解禁" [ref=e197] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=695
+          - link "大宗交易" [ref=e198] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=731
+          - link "期指持仓" [ref=e199] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=748
+          - link "融资融券" [ref=e200] [cursor=pointer]:
+            - /url: http://js1.eastmoney.com/tg.aspx?ID=609
+      - generic [ref=e201]:
+        - link "沪深港通" [ref=e203] [cursor=pointer]:
+          - /url: http://quote.eastmoney.com/center/hgtstock.html#_12
+          - text: 沪深港通
+        - table [ref=e207]:
+          - rowgroup [ref=e208]:
+            - row "沪股通 收盘当日额度充足 深股通 收盘当日额度充足 港股通(沪) 收盘净买额124.12亿 港股通(深) 收盘净买额45.98亿" [ref=e209]:
+              - cell "沪股通 收盘当日额度充足" [ref=e210]:
+                - link "沪股通" [ref=e211] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/gridlist.html#sh_hk_board
+                - text: 收盘
+                - link "当日额度充足" [ref=e213] [cursor=pointer]:
+                  - /url: http://data.eastmoney.com/hsgt/index.html
+              - cell "深股通 收盘当日额度充足" [ref=e214]:
+                - link "深股通" [ref=e215] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/gridlist.html#sz_hk_board
+                - text: 收盘
+                - link "当日额度充足" [ref=e217] [cursor=pointer]:
+                  - /url: http://data.eastmoney.com/hsgt/index.html
+              - cell "港股通(沪) 收盘净买额124.12亿" [ref=e218]:
+                - link "港股通(沪)" [ref=e219] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/gridlist.html#hk_sh_stocks
+                - text: 收盘
+                - link "净买额" [ref=e221] [cursor=pointer]:
+                  - /url: http://data.eastmoney.com/hsgt/index.html
+                - link "124.12亿" [ref=e222] [cursor=pointer]:
+                  - /url: http://data.eastmoney.com/hsgt/index.html
+              - cell "港股通(深) 收盘净买额45.98亿" [ref=e223]:
+                - link "港股通(深)" [ref=e224] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/gridlist.html#hk_sz_stocks
+                - text: 收盘
+                - link "净买额" [ref=e226] [cursor=pointer]:
+                  - /url: http://data.eastmoney.com/hsgt/index.html
+                - link "45.98亿" [ref=e227] [cursor=pointer]:
+                  - /url: http://data.eastmoney.com/hsgt/index.html
+    - generic [ref=e228]:
+      - generic [ref=e230]:
+        - generic [ref=e231]:
+          - link "行情首页" [ref=e232] [cursor=pointer]:
+            - /url: http://quote.eastmoney.com/center/
+          - text: ">"
+        - generic [ref=e233]:
+          - link "深证A股" [ref=e234] [cursor=pointer]:
+            - /url: //quote.eastmoney.com/center/gridlist.html#sz_a_board
+          - text: ">"
+        - generic [ref=e235]:
+          - link "光伏设备" [ref=e236] [cursor=pointer]:
+            - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1031
+          - text: ">"
+        - text: "*ST金刚"
+      - generic [ref=e238]:
+        - text: 最近访问：
+        - link "*ST金刚" [ref=e239] [cursor=pointer]:
+          - /url: //quote.eastmoney.com/unify/r/0.300093
+          - generic [ref=e240]: "*ST金刚"
+    - generic [ref=e241]:
+      - generic [ref=e242]:
+        - generic "*ST金刚" [ref=e243]
+        - text: "300093"
+        - generic [ref=e244]:
+          - generic [ref=e246]: 更名
+          - link "创业板" [ref=e247] [cursor=pointer]:
+            - /url: //quote.eastmoney.com/center/gridlist.html#gem_board
+        - link "+加自选" [ref=e1624] [cursor=pointer]:
+          - /url: "#"
+      - generic [ref=e248]:
+        - text: （2026-04-17 星期五 15:34:03）
+        - generic [ref=e249]: "交易状态: 休市"
+    - generic [ref=e251]:
+      - generic [ref=e253]:
+        - generic [ref=e255]: "21.00"
+        - generic [ref=e257]:
+          - generic [ref=e258]: "0.90"
+          - generic [ref=e259]: 4.48%
+      - table [ref=e262]:
+        - rowgroup [ref=e263]:
+          - row "今开： 20.23 最高： 21.16 涨停： 24.12 换手： 3.59% 成交量： 8.297万 市盈(动) ： 55.84 总市值： 113.4亿" [ref=e264]:
+            - cell "今开：" [ref=e265]
+            - cell "20.23" [ref=e266]:
+              - generic [ref=e267]: "20.23"
+            - cell "最高：" [ref=e268]
+            - cell "21.16" [ref=e269]:
+              - generic [ref=e270]: "21.16"
+            - cell "涨停：" [ref=e271]
+            - cell "24.12" [ref=e272]:
+              - generic [ref=e273]: "24.12"
+            - cell "换手：" [ref=e274]
+            - cell "3.59%" [ref=e275]:
+              - generic [ref=e276]: 3.59%
+            - cell "成交量：" [ref=e277]
+            - cell "8.297万" [ref=e278]:
+              - generic [ref=e279]: 8.297万
+            - cell "市盈(动) ：" [ref=e280]:
+              - text: 市盈(动)
+              - text: ：
+            - cell "55.84" [ref=e282]:
+              - generic [ref=e283]: "55.84"
+            - cell "总市值：" [ref=e284]
+            - cell "113.4亿" [ref=e285]:
+              - generic [ref=e286]: 113.4亿
+          - row "昨收： 20.10 最低： 20.00 跌停： 16.08 量比： 1.81 成交额： 1.712亿 市净： 5.65 流通市值： 48.51亿" [ref=e287]:
+            - cell "昨收：" [ref=e288]
+            - cell "20.10" [ref=e289]:
+              - generic [ref=e290]: "20.10"
+            - cell "最低：" [ref=e291]
+            - cell "20.00" [ref=e292]:
+              - generic [ref=e293]: "20.00"
+            - cell "跌停：" [ref=e294]
+            - cell "16.08" [ref=e295]:
+              - generic [ref=e296]: "16.08"
+            - cell "量比：" [ref=e297]
+            - cell "1.81" [ref=e298]:
+              - generic [ref=e299]: "1.81"
+            - cell "成交额：" [ref=e300]
+            - cell "1.712亿" [ref=e301]:
+              - generic [ref=e302]: 1.712亿
+            - cell "市净：" [ref=e303]
+            - cell "5.65" [ref=e304]:
+              - generic [ref=e305]: "5.65"
+            - cell "流通市值：" [ref=e306]
+            - cell "48.51亿" [ref=e307]:
+              - generic [ref=e308]: 48.51亿
+      - generic [ref=e1626]:
+        - link "持有该股的基金" [ref=e1627] [cursor=pointer]:
+          - /url: //data.eastmoney.com/zlsj/detail/300093-1.html
+        - link "查看*ST金刚买卖点" [ref=e1628] [cursor=pointer]:
+          - /url: http://acttg.eastmoney.com/pub/web_act_ggds_f10sf_01_01_01_0
+        - link "*ST金刚股价预警" [ref=e1629] [cursor=pointer]:
+          - /url: https://acttg.eastmoney.com/pub/web_act_ggds_f10sf_01_01_02_0
+    - list [ref=e310]:
+      - listitem [ref=e311]: 创业板特色指标
+      - listitem [ref=e312]:
+        - generic [ref=e313]:
+          - text: 是否注册制
+          - text: ：否
+      - listitem [ref=e315]:
+        - generic [ref=e316]:
+          - text: 协议控制架构
+          - text: ：否
+      - listitem [ref=e318]:
+        - generic [ref=e319]:
+          - text: 表决权差异
+          - text: ：否
+      - listitem [ref=e321]:
+        - generic [ref=e322]:
+          - text: 是否盈利
+          - text: ：是
+      - listitem [ref=e324]:
+        - generic [ref=e325]:
+          - text: 盘后成交量
+          - text: ：-
+      - listitem [ref=e327]:
+        - generic [ref=e328]:
+          - text: 盘后成交额
+          - text: ：-
+    - generic [ref=e330]:
+      - generic [ref=e331]:
+        - link "东方财富,看实时资金流。" [ref=e332] [cursor=pointer]:
+          - /url: https://zqhd.eastmoney.com/Html/aghd/pc/20170918/html/activity1.html
+        - link "东方财富电脑版" [ref=e333] [cursor=pointer]:
+          - /url: https://acttg.eastmoney.com/pub/pctg_hskh_act_wysfpcb_01_01_01_0
+        - link "东方财富手机版" [ref=e334] [cursor=pointer]:
+          - /url: http://acttg.eastmoney.com/pub/web_app_hqy_bjl_01_01_01_0
+      - generic [ref=e335]:
+        - generic [ref=e336]:
+          - text: F10档案：
+          - link "操盘必读" [ref=e337] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/cpbd
+          - link "公司概况" [ref=e338] [cursor=pointer]:
+            - /url: "https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/gsgk\t"
+          - link "经营分析" [ref=e339] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/jyfx
+          - link "核心题材" [ref=e340] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/hxtc
+          - link "股东研究" [ref=e341] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/gdyj
+          - link "公司大事" [ref=e342] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/gsds
+          - link "股本结构" [ref=e343] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/gbjg
+          - link "财务分析" [ref=e344] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/cwfx
+          - link "分红融资" [ref=e345] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/fhrz
+          - link "资本运作" [ref=e346] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/zbyz
+          - link "行业分析" [ref=e347] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/thbj
+          - link "关联个股" [ref=e348] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/glgg
+          - link "更多" [ref=e349] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ300093&color=b#/cpbd
+            - text: 更多
+        - generic [ref=e351]:
+          - link "特色数据：" [ref=e353] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stockdata/300093.html
+          - link "资金流向" [ref=e354] [cursor=pointer]:
+            - /url: //data.eastmoney.com/zjlx/300093.html
+          - link "主力控盘" [ref=e355] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stockcomment/300093.html
+          - link "机构散户" [ref=e356] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stockcomment/300093.html
+          - link "龙虎榜单" [ref=e357] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stock/lhb/300093.html
+          - link "深度数据" [ref=e358] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stockdata/300093.html
+          - link "大宗交易" [ref=e359] [cursor=pointer]:
+            - /url: //data.eastmoney.com/dzjy/detail/300093.html
+          - link "智能点评" [ref=e360] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stockcomment/stock/300093.html
+          - link "融资融券" [ref=e361] [cursor=pointer]:
+            - /url: //data.eastmoney.com/rzrq/detail/300093.html
+          - link "最新业绩" [ref=e362] [cursor=pointer]:
+            - /url: //data.eastmoney.com/bbsj/300093.html
+          - link "机构持仓" [ref=e363] [cursor=pointer]:
+            - /url: //data.eastmoney.com/zlsj/detail/300093.html
+          - link "限售解禁" [ref=e364] [cursor=pointer]:
+            - /url: //data.eastmoney.com/dxf/q/300093.html
+          - link "重大事项" [ref=e365] [cursor=pointer]:
+            - /url: //data.eastmoney.com/notices/stock/300093.html?f_node=5
+          - link "更多" [ref=e366] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stockdata/300093.html
+            - text: 更多
+    - generic [ref=e368]:
+      - generic [ref=e369]:
+        - generic [ref=e370]:
+          - list [ref=e372]:
+            - listitem [ref=e373]:
+              - link "我的自选股" [ref=e374] [cursor=pointer]:
+                - /url: //quote.eastmoney.com/zixuan/?from=zixuanmini
+            - listitem [ref=e375]:
+              - generic [ref=e376]: 最近访问
+          - generic [ref=e377]:
+            - table [ref=e379]:
+              - rowgroup [ref=e380]:
+                - row "- - -" [ref=e381]:
+                  - cell "-" [ref=e382]
+                  - cell "-" [ref=e383]
+                  - cell "-" [ref=e384]
+                - row "- - -" [ref=e385]:
+                  - cell "-" [ref=e386]
+                  - cell "-" [ref=e387]
+                  - cell "-" [ref=e388]
+                - row "- - -" [ref=e389]:
+                  - cell "-" [ref=e390]
+                  - cell "-" [ref=e391]
+                  - cell "-" [ref=e392]
+                - row "- - -" [ref=e393]:
+                  - cell "-" [ref=e394]
+                  - cell "-" [ref=e395]
+                  - cell "-" [ref=e396]
+                - row "- - -" [ref=e397]:
+                  - cell "-" [ref=e398]
+                  - cell "-" [ref=e399]
+                  - cell "-" [ref=e400]
+                - row "- - -" [ref=e401]:
+                  - cell "-" [ref=e402]
+                  - cell "-" [ref=e403]
+                  - cell "-" [ref=e404]
+            - link "查看更多自选股>>>" [ref=e406] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/zixuan/?from=zixuanmini
+        - generic [ref=e407]:
+          - list [ref=e409]:
+            - listitem [ref=e410]:
+              - link "大事提醒" [ref=e411] [cursor=pointer]:
+                - /url: //data.eastmoney.com/stockcalendar/300093.html
+            - listitem [ref=e412]:
+              - link "信息地雷" [ref=e413] [cursor=pointer]:
+                - /url: //quote.eastmoney.com/concept/sz300093.html#chart-k
+          - table [ref=e416]:
+            - rowgroup [ref=e417]:
+              - row "04-24 2026 股东大会 于2026-04-24召开2025年年度股东大会" [ref=e418]:
+                - cell "04-24 2026" [ref=e419]:
+                  - generic [ref=e420]: 04-24
+                  - generic [ref=e421]: "2026"
+                - cell "股东大会 于2026-04-24召开2025年年度股东大会" [ref=e422]:
+                  - generic [ref=e424]: 股东大会
+                  - generic "于2026-04-24召开2025年年度股东大会" [ref=e425]:
+                    - link "于2026-04-24召开2025年年度股东大会" [ref=e426] [cursor=pointer]:
+                      - /url: //data.eastmoney.com/gddh/list/300093.html
+              - row "04-23 2026 预约披露日 2026年第一季度季报预约2026年04月23日披露" [ref=e427]:
+                - cell "04-23 2026" [ref=e428]:
+                  - generic [ref=e429]: 04-23
+                  - generic [ref=e430]: "2026"
+                - cell "预约披露日 2026年第一季度季报预约2026年04月23日披露" [ref=e431]:
+                  - generic [ref=e433]: 预约披露日
+                  - generic "2026年第一季度季报预约2026年04月23日披露" [ref=e434]:
+                    - link "2026年第一季度季报预约2026年04月23日披露" [ref=e435] [cursor=pointer]:
+                      - /url: //data.eastmoney.com/bbsj/300093.html
+              - row "04-17 2026 股权质押 截止2026年04月17日质押总比例21.8%，质押总股数1.18亿股，质押总笔数7笔" [ref=e436]:
+                - cell "04-17 2026" [ref=e437]:
+                  - generic [ref=e438]: 04-17
+                  - generic [ref=e439]: "2026"
+                - cell "股权质押 截止2026年04月17日质押总比例21.8%，质押总股数1.18亿股，质押总笔数7笔" [ref=e440]:
+                  - generic [ref=e442]: 股权质押
+                  - generic "截止2026年04月17日质押总比例21.8%，质押总股数1.18亿股，质押总笔数7笔" [ref=e443]:
+                    - link "截止2026年04月17日质押总比例21.8%，质押总股数1.18亿股，质押总笔数7笔" [ref=e444] [cursor=pointer]:
+                      - /url: //data.eastmoney.com/gpzy/detail/300093.html
+              - row "04-16 2026 机构调研 2026年04月16日披露公司于2026年04月15日接待1家机构调研" [ref=e445]:
+                - cell "04-16 2026" [ref=e446]:
+                  - generic [ref=e447]: 04-16
+                  - generic [ref=e448]: "2026"
+                - cell "机构调研 2026年04月16日披露公司于2026年04月15日接待1家机构调研" [ref=e449]:
+                  - generic [ref=e451]: 机构调研
+                  - generic "2026年04月16日披露公司于2026年04月15日接待1家机构调研" [ref=e452]:
+                    - link "2026年04月16日披露公司于2026年04月15日接待1家机构调研" [ref=e453] [cursor=pointer]:
+                      - /url: //data.eastmoney.com/jgdy/gsjsdy/300093.html
+        - link "*ST金刚数据全景图" [ref=e454] [cursor=pointer]:
+          - /url: //data.eastmoney.com/stockdata/300093.html
+          - generic [ref=e455]: "*ST金刚数据全景图"
+        - generic [ref=e456]:
+          - list [ref=e458]:
+            - listitem [ref=e459]:
+              - generic [ref=e460]: 公司核心数据
+            - listitem [ref=e461]:
+              - link "公司数据全览" [ref=e462] [cursor=pointer]:
+                - /url: //data.eastmoney.com/stockdata/300093.html
+          - table [ref=e465]:
+            - rowgroup [ref=e466]:
+              - row "收益(四):0.376 PE(动):55.84" [ref=e1630]:
+                - cell "收益(四):0.376" [ref=e1631]:
+                  - link "收益(四)" [ref=e1632] [cursor=pointer]:
+                    - /url: //data.eastmoney.com/bbsj/300093.html
+                  - text: :0.376
+                - cell "PE(动):55.84" [ref=e1633]
+              - row "每股净资产:3.72 市净率:5.65" [ref=e1634]:
+                - cell "每股净资产:3.72" [ref=e1635]:
+                  - link "每股净资产" [ref=e473] [cursor=pointer]:
+                    - /url: //data.eastmoney.com/bbsj/300093.html
+                  - text: :3.72
+                - cell "市净率:5.65" [ref=e1636]
+              - row "总营收:3.010亿 同比:143.41%" [ref=e1637]:
+                - cell "总营收:3.010亿" [ref=e1638]
+                - cell "同比:143.41%" [ref=e1639]:
+                  - link "同比" [ref=e478] [cursor=pointer]:
+                    - /url: //data.eastmoney.com/bbsj/300093.html
+                  - text: :143.41%
+              - row "净利润:2.031亿 同比:125.53%" [ref=e1640]:
+                - cell "净利润:2.031亿" [ref=e1641]
+                - cell "同比:125.53%" [ref=e1642]
+              - row "毛利率:-51.23% 净利率:67.48%" [ref=e1643]:
+                - cell "毛利率:-51.23%" [ref=e1644]:
+                  - link "毛利率" [ref=e484] [cursor=pointer]:
+                    - /url: //data.eastmoney.com/bbsj/300093.html
+                  - text: :-51.23%
+                - cell "净利率:67.48%" [ref=e1645]
+              - row "ROE 加权净资产收益率 :0.00% 负债率:27.65%" [ref=e1646]:
+                - cell "ROE 加权净资产收益率 :0.00%" [ref=e1647]:
+                  - link "ROE 加权净资产收益率" [ref=e488] [cursor=pointer]:
+                    - /url: //data.eastmoney.com/bbsj/300093.html
+                    - text: ROE
+                    - generic "加权净资产收益率" [ref=e489]
+                  - text: :0.00%
+                - cell "负债率:27.65%" [ref=e1648]
+              - 'row "总股本: 5.400亿 总值:113.4亿" [ref=e1649]':
+                - 'cell "总股本: 5.400亿" [ref=e1650]'
+                - cell "总值:113.4亿" [ref=e1651]
+              - 'row "流通股: 2.310亿 流值:48.51亿" [ref=e1652]':
+                - 'cell "流通股: 2.310亿" [ref=e1653]'
+                - cell "流值:48.51亿" [ref=e1654]
+              - row "每股未分配利润:-2.927元" [ref=e1655]:
+                - cell "每股未分配利润:-2.927元" [ref=e1656]
+              - row "上市时间:2010-07-08" [ref=e1657]:
+                - cell "上市时间:2010-07-08" [ref=e1658]
+        - generic [ref=e501]:
+          - link "利润趋势" [ref=e503] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stockdata/300093.html#cwsj
+          - link "更多" [ref=e505] [cursor=pointer]:
+            - /url: //data.eastmoney.com/stockdata/300093.html#cwsj
+          - iframe [ref=e507]:
+            
+        - generic [ref=e508]:
+          - generic [ref=e509]: 十大流通股东
+          - link "更多" [ref=e511] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=sz300093&color=b#/gdyj
+          - table [ref=e512]:
+            - rowgroup [ref=e513]:
+              - row "公募 私募 社保 QFII" [ref=e514]:
+                - cell "公募" [ref=e515]
+                - cell "私募" [ref=e516]
+                - cell "社保" [ref=e517]
+                - cell "QFII" [ref=e518]
+              - row "0家(0) 0家(0) 0家(0) 0家(0)" [ref=e519]:
+                - cell "0家(0)" [ref=e520]
+                - cell "0家(0)" [ref=e521]
+                - cell "0家(0)" [ref=e522]
+                - cell "0家(0)" [ref=e523]
+          - table [ref=e524]:
+            - rowgroup [ref=e525]:
+              - row "股东情况 26-03-31 25-12-31" [ref=e526]:
+                - cell "股东情况" [ref=e527]
+                - cell "26-03-31" [ref=e528]
+                - cell "25-12-31" [ref=e529]
+              - row "股东户数 1.21万 1.35万" [ref=e530]:
+                - cell "股东户数" [ref=e531]
+                - cell "1.21万" [ref=e532]
+                - cell "1.35万" [ref=e533]
+              - row "较上期(%) -10.46 -12.00" [ref=e534]:
+                - cell "较上期(%)" [ref=e535]
+                - cell "-10.46" [ref=e536]
+                - cell "-12.00" [ref=e537]
+      - generic [ref=e538]:
+        - iframe [ref=e539]:
+          - link [ref=f6e3] [cursor=pointer]:
+            - /url: //same.eastmoney.com/c?z=eastmoney&la=0&si=1&cg=86&c=1063&ci=1&or=47&l=10879&bg=10879&b=15385&u=https%3A%2F%2Ffund.eastmoney.com%2Ftrade%2FGsList.html
+            - img [ref=f6e4]
+        - generic [ref=e540]:
+          - generic [ref=e541]:
+            - link "*ST金刚吧" [ref=e542] [cursor=pointer]:
+              - /url: //guba.eastmoney.com/list,300093.html
+            - link "机构散户" [ref=e543] [cursor=pointer]:
+              - /url: //data.eastmoney.com/stockcomment/300093.html
+            - link "精准买卖点" [ref=e544] [cursor=pointer]:
+              - /url: https://acttg.eastmoney.com/pub/web_act_ggds_hqtsf_01_01_01_0
+            - link "大单成交" [ref=e545] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/f1.html?code=300093&market=0
+            - link "盈利预测" [ref=e546] [cursor=pointer]:
+              - /url: //data.eastmoney.com/report/300093.html
+            - link "机构调研" [ref=e547] [cursor=pointer]:
+              - /url: https://acttg.eastmoney.com/pub/web_act_ggds_hqtsf_01_01_02_0
+            - link "问董秘" [ref=e548] [cursor=pointer]:
+              - /url: //guba.eastmoney.com/qa/qa_search.aspx?company=300093&keyword=&questioner=&qatype=1
+            - link [ref=e549] [cursor=pointer]:
+              - /url: "#"
+          - generic [ref=e550]:
+            - link "个股日历" [ref=e552] [cursor=pointer]:
+              - /url: //data.eastmoney.com/stockcalendar/300093.html
+            - list [ref=e554]:
+              - listitem [ref=e557]:
+                - link "预约披露日：2026年第一季度季报预约2026年04月23日披露" [ref=e558] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/bbsj/300093.html
+              - listitem [ref=e559]:
+                - link "股权质押：截止2026年04月17日质押总比例21.8%，质押总股数1.18亿股，质押总笔数7笔" [ref=e560] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/gpzy/detail/300093.html
+              - listitem [ref=e561]:
+                - link "机构调研：2026年04月16日披露公司于2026年04月15日接待1家机构调研" [ref=e562] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/jgdy/gsjsdy/300093.html
+              - listitem [ref=e563]:
+                - link "股权质押：截止2026年04月10日质押总比例21.8%，质押总股数1.18亿股，质押总笔数7笔" [ref=e564] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/gpzy/detail/300093.html
+              - listitem [ref=e565]:
+                - link "股东户数：2026年04月03日公布截止2025年12月31日股东户数13462户，比上期减少1835户" [ref=e566] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/gdhs/detail/300093.html
+              - listitem [ref=e567]:
+                - link "关联交易：2026年04月03日公布与广东中梁建筑工程有限公司(其它关联关系)发生1笔交易，合计金额7227.84万元，款项涉及购买商品" [ref=e568] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/gljy/detail/300093.html
+              - listitem [ref=e569]:
+                - link "股权质押：截止2026年04月03日质押总比例21.8%，质押总股数1.18亿股，质押总笔数7笔" [ref=e570] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/gpzy/detail/300093.html
+              - listitem [ref=e571]:
+                - link "业绩报表：2025年年报归属净利润2.031亿元，同比增长125.53%，基本每股收益0.84元" [ref=e572] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/bbsj/300093.html
+              - listitem [ref=e573]:
+                - link "关联交易：2026年04月03日公布与广东欧昊集团有限公司(控股股东)发生1笔交易，合计金额10.00亿元，款项涉及借款" [ref=e574] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/gljy/detail/300093.html
+              - listitem [ref=e1659]:
+                - link "股东大会：于2026-04-24召开2025年年度股东大会" [ref=e1660] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/gddh/list/300093.html
+          - generic [ref=e576]:
+            - generic [ref=e577]:
+              - list [ref=e578]:
+                - listitem [ref=e579]:
+                  - link "盘前" [ref=e580] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e581]:
+                  - link "盘后" [ref=e582] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e583]:
+                  - link "一天" [ref=e584] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e585]:
+                  - link "二天" [ref=e586] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e587]:
+                  - link "三天" [ref=e588] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e589]:
+                  - link "四天" [ref=e590] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e591]:
+                  - link "五天" [ref=e592] [cursor=pointer]:
+                    - /url: "#"
+              - link "订阅股价提醒" [ref=e593] [cursor=pointer]:
+                - /url: https://acttg.eastmoney.com/pub/web_act_ggds_hqtsf_01_01_03_0
+                - emphasis [ref=e594]
+                - text: 订阅股价提醒
+              - generic [ref=e595]:
+                - list [ref=e596]:
+                  - listitem [ref=e597]:
+                    - link "图片版" [ref=e598] [cursor=pointer]:
+                      - /url: "#"
+                  - listitem [ref=e599]:
+                    - link "动图版" [ref=e600] [cursor=pointer]:
+                      - /url: "#"
+                  - listitem [ref=e601]:
+                    - link "极速版" [ref=e602] [cursor=pointer]:
+                      - /url: //quote.eastmoney.com/unify/cr/0.300093
+                - link "全屏" [ref=e604] [cursor=pointer]:
+                  - /url: "#"
+            - generic [ref=e605]:
+              - link [ref=e606] [cursor=pointer]:
+                - /url: "#fullScreenChart"
+              - link [ref=e617] [cursor=pointer]:
+                - /url: //quote.eastmoney.com/unify/cr/0.300093?from=classic
+                - img [ref=e618]
+            - generic [ref=e619]:
+              - list [ref=e620]:
+                - listitem [ref=e621]:
+                  - link "日K" [ref=e622] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e623]:
+                  - link "周K" [ref=e624] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e625]:
+                  - link "月K" [ref=e626] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e627]:
+                  - link "5分钟" [ref=e628] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e629]:
+                  - link "15分钟" [ref=e630] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e631]:
+                  - link "30分钟" [ref=e632] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e633]:
+                  - link "60分钟" [ref=e634] [cursor=pointer]:
+                    - /url: "#"
+              - generic [ref=e635]:
+                - link "拉长K线" [ref=e636] [cursor=pointer]:
+                  - /url: "#"
+                - link "缩短K线" [ref=e637] [cursor=pointer]:
+                  - /url: "#"
+              - generic [ref=e639] [cursor=pointer]: 前复权
+              - link "全屏" [ref=e641] [cursor=pointer]:
+                - /url: "#"
+            - generic [ref=e642]:
+              - generic [ref=e645] [cursor=pointer]:
+                - generic [ref=e647]:
+                  - generic [ref=e648]: 主图指标
+                  - generic [ref=e651]: 无
+                  - generic [ref=e655]: 均线
+                  - generic [ref=e658]: EXPMA
+                  - generic [ref=e661]: SAR
+                  - generic [ref=e664]: BOLL
+                  - generic [ref=e667]: BBI
+                - list [ref=e668]:
+                  - listitem [ref=e669]: RSI
+                  - listitem [ref=e670]: KDJ
+                  - listitem [ref=e671]: MACD
+                  - listitem [ref=e672]: W%R
+                  - listitem [ref=e673]: DMI
+                  - listitem [ref=e674]: BIAS
+                  - listitem [ref=e675]: OBV
+                  - listitem [ref=e676]: CCI
+                  - listitem [ref=e677]: ROC
+              - generic [ref=e691]:
+                - generic [ref=e692] [cursor=pointer]:
+                  - text: 均线
+                  - emphasis [ref=e693]
+                - link [ref=e694] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/cr/0.300093#chart-k-cyq
+          - generic [ref=e695]:
+            - link "光伏设备" [ref=e697] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1031
+            - list [ref=e699]:
+              - listitem [ref=e700]:
+                - link "帝尔激光" [ref=e701] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/0.300776
+                - text: (99.36 20.00%)
+              - listitem [ref=e702]:
+                - link "明冠新材" [ref=e703] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/1.688560
+                - text: (17.78 19.97%)
+              - listitem [ref=e704]:
+                - link "连城数控" [ref=e705] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/0.920368
+                - text: (37.70 7.32%)
+              - listitem [ref=e706]:
+                - link "赛伍技术" [ref=e707] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/1.603212
+                - text: (13.84 5.89%)
+              - listitem [ref=e708]:
+                - link "欧普泰" [ref=e709] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/0.920414
+                - text: (13.03 5.51%)
+              - listitem [ref=e710]:
+                - link "安彩高科" [ref=e711] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/1.600207
+                - text: (5.70 5.36%)
+          - table [ref=e713]:
+            - rowgroup [ref=e714]:
+              - row "总市值 净资产 净利润 市盈率(动) 市净率 毛利率 净利率 ROE 加权净资产收益率" [ref=e715]:
+                - columnheader [ref=e716]
+                - columnheader "总市值" [ref=e717]
+                - columnheader "净资产" [ref=e718]
+                - columnheader "净利润" [ref=e719]
+                - columnheader "市盈率(动)" [ref=e720]
+                - columnheader "市净率" [ref=e721]
+                - columnheader "毛利率" [ref=e722]
+                - columnheader "净利率" [ref=e723]
+                - columnheader "ROE 加权净资产收益率" [ref=e724]:
+                  - text: ROE
+                  - generic "加权净资产收益率" [ref=e725]
+            - rowgroup [ref=e726]:
+              - row "*ST金刚 113.4亿 20.06亿 2.031亿 55.84 5.65 -51.23% 67.48% 0.00%" [ref=e1665]:
+                - cell "*ST金刚" [ref=e728]:
+                  - link "*ST金刚" [ref=e729] [cursor=pointer]:
+                    - /url: //data.eastmoney.com/stockdata/300093.html
+                - cell "113.4亿" [ref=e1666]
+                - cell "20.06亿" [ref=e1667]
+                - cell "2.031亿" [ref=e1668]
+                - cell "55.84" [ref=e1669]
+                - cell "5.65" [ref=e1670]
+                - cell "-51.23%" [ref=e1671]
+                - cell "67.48%" [ref=e1672]
+                - cell "0.00%" [ref=e1673]
+              - row "光伏设备 (行业平均) 261.1亿 90.10亿 -2.197亿 32.02 5 10.96% -5.82% -5.28%" [ref=e1674]:
+                - cell "光伏设备 (行业平均)" [ref=e739]:
+                  - link "光伏设备" [ref=e741] [cursor=pointer]:
+                    - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1031
+                  - generic [ref=e742]: (行业平均)
+                - cell "261.1亿" [ref=e1675]
+                - cell "90.10亿" [ref=e1676]
+                - cell "-2.197亿" [ref=e1677]
+                - cell "32.02" [ref=e1678]
+                - cell "5" [ref=e1679]
+                - cell "10.96%" [ref=e1680]
+                - cell "-5.82%" [ref=e1681]
+                - cell "-5.28%" [ref=e1682]
+              - row "行业排名 172|69 237|69 117|69 144|69 303|69 401|69 1|69 304|69" [ref=e1683]:
+                - cell "行业排名" [ref=e752]
+                - cell "172|69" [ref=e1684]
+                - cell "237|69" [ref=e1685]
+                - cell "117|69" [ref=e1686]
+                - cell "144|69" [ref=e1687]
+                - cell "303|69" [ref=e1688]
+                - cell "401|69" [ref=e1689]
+                - cell "1|69" [ref=e1690]
+                - cell "304|69" [ref=e1691]
+              - row "四分位属性 较高 较低 较高 较高 低 低 高 低" [ref=e1692]:
+                - cell "四分位属性" [ref=e762]: 四分位属性
+                - cell "较高" [ref=e1693]:
+                  - generic [ref=e765]:
+                    - list [ref=e767]:
+                      - listitem [ref=e768]
+                      - listitem [ref=e769]
+                      - listitem [ref=e770]
+                      - listitem [ref=e771]
+                    - text: 较高
+                - cell "较低" [ref=e1694]:
+                  - generic [ref=e773]:
+                    - list [ref=e775]:
+                      - listitem [ref=e776]
+                      - listitem [ref=e777]
+                      - listitem [ref=e778]
+                      - listitem [ref=e779]
+                    - text: 较低
+                - cell "较高" [ref=e1695]:
+                  - generic [ref=e781]:
+                    - list [ref=e783]:
+                      - listitem [ref=e784]
+                      - listitem [ref=e785]
+                      - listitem [ref=e786]
+                      - listitem [ref=e787]
+                    - text: 较高
+                - cell "较高" [ref=e1696]:
+                  - generic [ref=e789]:
+                    - list [ref=e791]:
+                      - listitem [ref=e792]
+                      - listitem [ref=e793]
+                      - listitem [ref=e794]
+                      - listitem [ref=e795]
+                    - text: 较高
+                - cell "低" [ref=e1697]:
+                  - generic [ref=e797]:
+                    - list [ref=e799]:
+                      - listitem [ref=e800]
+                      - listitem [ref=e801]
+                      - listitem [ref=e802]
+                      - listitem [ref=e803]
+                    - text: 低
+                - cell "低" [ref=e1698]:
+                  - generic [ref=e805]:
+                    - list [ref=e807]:
+                      - listitem [ref=e808]
+                      - listitem [ref=e809]
+                      - listitem [ref=e810]
+                      - listitem [ref=e811]
+                    - text: 低
+                - cell "高" [ref=e1699]:
+                  - generic [ref=e813]:
+                    - list [ref=e815]:
+                      - listitem [ref=e816]
+                      - listitem [ref=e817]
+                      - listitem [ref=e818]
+                      - listitem [ref=e819]
+                    - text: 高
+                - cell "低" [ref=e1700]:
+                  - generic [ref=e821]:
+                    - list [ref=e823]:
+                      - listitem [ref=e824]
+                      - listitem [ref=e825]
+                      - listitem [ref=e826]
+                      - listitem [ref=e827]
+                    - text: 低
+          - iframe [ref=e828]:
+            - link [ref=f7e3] [cursor=pointer]:
+              - /url: //same.eastmoney.com/c?z=eastmoney&la=0&si=1&cg=5&c=1182&ci=1&or=47&l=11720&bg=11720&b=13964&u=http%3A%2F%2Ffund.eastmoney.com%2Fdata%2Fxinfund.html
+              - img [ref=f7e4]
+        - generic [ref=e829]:
+          - generic [ref=e830]:
+            - list [ref=e832]:
+              - listitem [ref=e833]:
+                - generic [ref=e834]: 行情报价
+              - listitem [ref=e835]:
+                - link "资金流向" [ref=e836] [cursor=pointer]:
+                  - /url: //data.eastmoney.com/zjlx/300093.html
+            - generic [ref=e838]:
+              - generic [ref=e839]:
+                - text: 委比：
+                - generic [ref=e840]: "-73.21%"
+                - text: 委差：
+                - generic [ref=e841]: "-2061"
+              - table [ref=e843]:
+                - rowgroup [ref=e844]:
+                  - row "涨停： 24.12" [ref=e845]:
+                    - cell "涨停： 24.12" [ref=e846]:
+                      - text: 涨停：
+                      - generic [ref=e847]: "24.12"
+                  - row "卖五 - - -" [ref=e849]:
+                    - cell "卖五" [ref=e850]
+                    - cell "-" [ref=e851]
+                    - cell "-" [ref=e852]
+                    - cell "-" [ref=e853]
+                  - row "卖四 - - -" [ref=e854]:
+                    - cell "卖四" [ref=e855]
+                    - cell "-" [ref=e856]
+                    - cell "-" [ref=e857]
+                    - cell "-" [ref=e858]
+                  - row "卖三 - - -" [ref=e859]:
+                    - cell "卖三" [ref=e860]
+                    - cell "-" [ref=e861]
+                    - cell "-" [ref=e862]
+                    - cell "-" [ref=e863]
+                  - row "卖二 - - -" [ref=e864]:
+                    - cell "卖二" [ref=e865]
+                    - cell "-" [ref=e866]
+                    - cell "-" [ref=e867]
+                    - cell "-" [ref=e868]
+                  - row "卖一 21.00 2137" [ref=e869]:
+                    - cell "卖一" [ref=e870]
+                    - cell "21.00" [ref=e871]:
+                      - generic [ref=e872]: "21.00"
+                    - cell "2137" [ref=e873]:
+                      - generic [ref=e874]: "2137"
+                    - cell [ref=e875]
+                  - row "买一 20.99 258" [ref=e876]:
+                    - cell "买一" [ref=e877]
+                    - cell "20.99" [ref=e878]:
+                      - generic [ref=e879]: "20.99"
+                    - cell "258" [ref=e880]:
+                      - generic [ref=e881]: "258"
+                    - cell [ref=e882]
+                  - row "买二 - - -" [ref=e883]:
+                    - cell "买二" [ref=e884]
+                    - cell "-" [ref=e885]
+                    - cell "-" [ref=e886]
+                    - cell "-" [ref=e887]
+                  - row "买三 - - -" [ref=e888]:
+                    - cell "买三" [ref=e889]
+                    - cell "-" [ref=e890]
+                    - cell "-" [ref=e891]
+                    - cell "-" [ref=e892]
+                  - row "买四 - - -" [ref=e893]:
+                    - cell "买四" [ref=e894]
+                    - cell "-" [ref=e895]
+                    - cell "-" [ref=e896]
+                    - cell "-" [ref=e897]
+                  - row "买五 - - -" [ref=e898]:
+                    - cell "买五" [ref=e899]
+                    - cell "-" [ref=e900]
+                    - cell "-" [ref=e901]
+                    - cell "-" [ref=e902]
+                  - row "跌停： 16.08" [ref=e903]:
+                    - cell "跌停： 16.08" [ref=e904]:
+                      - text: 跌停：
+                      - generic [ref=e905]: "16.08"
+          - table [ref=e908]:
+            - rowgroup [ref=e909]:
+              - row "最新：21.00 均价：20.64" [ref=e910]:
+                - cell "最新：21.00" [ref=e911]:
+                  - text: 最新：
+                  - generic [ref=e912]: "21.00"
+                - cell "均价：20.64" [ref=e913]:
+                  - text: 均价：
+                  - generic [ref=e914]: "20.64"
+              - row "涨幅：4.48% 涨跌：0.90" [ref=e915]:
+                - cell "涨幅：4.48%" [ref=e916]:
+                  - text: 涨幅：
+                  - generic [ref=e917]: 4.48%
+                - cell "涨跌：0.90" [ref=e918]:
+                  - text: 涨跌：
+                  - generic [ref=e919]: "0.90"
+              - row "总手：8.297万 金额：1.712亿" [ref=e920]:
+                - cell "总手：8.297万" [ref=e921]:
+                  - text: 总手：
+                  - generic [ref=e922]: 8.297万
+                - cell "金额：1.712亿" [ref=e923]:
+                  - text: 金额：
+                  - generic [ref=e924]: 1.712亿
+              - row "换手：3.59% 量比：1.81" [ref=e925]:
+                - cell "换手：3.59%" [ref=e926]:
+                  - text: 换手：
+                  - generic [ref=e927]: 3.59%
+                - cell "量比：1.81" [ref=e928]:
+                  - text: 量比：
+                  - generic [ref=e929]: "1.81"
+              - row "最高：21.16 最低：20.00" [ref=e930]:
+                - cell "最高：21.16" [ref=e931]:
+                  - text: 最高：
+                  - generic [ref=e932]: "21.16"
+                - cell "最低：20.00" [ref=e933]:
+                  - text: 最低：
+                  - generic [ref=e934]: "20.00"
+              - row "今开：20.23 昨收：20.10" [ref=e935]:
+                - cell "今开：20.23" [ref=e936]:
+                  - text: 今开：
+                  - generic [ref=e937]: "20.23"
+                - cell "昨收：20.10" [ref=e938]:
+                  - text: 昨收：
+                  - generic [ref=e939]: "20.10"
+              - row "涨停：24.12 跌停：16.08" [ref=e940]:
+                - cell "涨停：24.12" [ref=e941]:
+                  - text: 涨停：
+                  - generic [ref=e942]: "24.12"
+                - cell "跌停：16.08" [ref=e943]:
+                  - text: 跌停：
+                  - generic [ref=e944]: "16.08"
+              - row "外盘：4.215万 内盘：4.083万" [ref=e945]:
+                - cell "外盘：4.215万" [ref=e946]:
+                  - text: 外盘：
+                  - generic [ref=e947]: 4.215万
+                - cell "内盘：4.083万" [ref=e948]:
+                  - text: 内盘：
+                  - generic [ref=e949]: 4.083万
+          - generic [ref=e950]:
+            - generic [ref=e951]:
+              - link "分时成交" [ref=e953] [cursor=pointer]:
+                - /url: //quote.eastmoney.com/f1.html?newcode=0.300093
+              - link "更多" [ref=e955] [cursor=pointer]:
+                - /url: //quote.eastmoney.com/f1.html?newcode=0.300093
+            - table [ref=e957]:
+              - rowgroup [ref=e958]:
+                - row "■大于20万内盘 ■大于20万外盘" [ref=e959]:
+                  - cell "■大于20万内盘 ■大于20万外盘" [ref=e960]
+              - rowgroup [ref=e961]:
+                - row "15:00:00 21.00 726" [ref=e1701]:
+                  - cell "15:00:00" [ref=e1702]
+                  - cell "21.00" [ref=e1703]:
+                    - generic [ref=e1704]: "21.00"
+                  - cell "726" [ref=e1706]:
+                    - generic [ref=e1707]: "726"
+                - row "14:57:00 21.00↑ 51" [ref=e1708]:
+                  - cell "14:57:00" [ref=e1709]
+                  - cell "21.00↑" [ref=e1710]:
+                    - generic [ref=e1711]: "21.00"
+                    - generic [ref=e1712]: ↑
+                  - cell "51" [ref=e1713]:
+                    - generic [ref=e1714]: "51"
+                - row "14:56:57 20.99 1" [ref=e1715]:
+                  - cell "14:56:57" [ref=e1716]
+                  - cell "20.99" [ref=e1717]:
+                    - generic [ref=e1718]: "20.99"
+                  - cell "1" [ref=e1720]:
+                    - generic [ref=e1721]: "1"
+                - row "14:56:54 20.99↓ 8" [ref=e1722]:
+                  - cell "14:56:54" [ref=e1723]
+                  - cell "20.99↓" [ref=e1724]:
+                    - generic [ref=e1725]: "20.99"
+                    - generic [ref=e1726]: ↓
+                  - cell "8" [ref=e1727]:
+                    - generic [ref=e1728]: "8"
+                - row "14:56:48 21.00↑ 110" [ref=e1729]:
+                  - cell "14:56:48" [ref=e1730]
+                  - cell "21.00↑" [ref=e1731]:
+                    - generic [ref=e1732]: "21.00"
+                    - generic [ref=e1733]: ↑
+                  - cell "110" [ref=e1734]:
+                    - generic [ref=e1735]: "110"
+                - row "14:56:42 20.99 15" [ref=e1736]:
+                  - cell "14:56:42" [ref=e1737]
+                  - cell "20.99" [ref=e1738]:
+                    - generic [ref=e1739]: "20.99"
+                  - cell "15" [ref=e1741]:
+                    - generic [ref=e1742]: "15"
+                - row "14:56:39 20.99 99" [ref=e1743]:
+                  - cell "14:56:39" [ref=e1744]
+                  - cell "20.99" [ref=e1745]:
+                    - generic [ref=e1746]: "20.99"
+                  - cell "99" [ref=e1748]:
+                    - generic [ref=e1749]: "99"
+                - row "14:56:36 20.99 37" [ref=e1750]:
+                  - cell "14:56:36" [ref=e1751]
+                  - cell "20.99" [ref=e1752]:
+                    - generic [ref=e1753]: "20.99"
+                  - cell "37" [ref=e1755]:
+                    - generic [ref=e1756]: "37"
+                - row "14:56:33 20.99 2" [ref=e1757]:
+                  - cell "14:56:33" [ref=e1758]
+                  - cell "20.99" [ref=e1759]:
+                    - generic [ref=e1760]: "20.99"
+                  - cell "2" [ref=e1762]:
+                    - generic [ref=e1763]: "2"
+                - row "14:56:30 20.99 1" [ref=e1764]:
+                  - cell "14:56:30" [ref=e1765]
+                  - cell "20.99" [ref=e1766]:
+                    - generic [ref=e1767]: "20.99"
+                  - cell "1" [ref=e1769]:
+                    - generic [ref=e1770]: "1"
+                - row "点击查看更多分时成交" [ref=e1002]:
+                  - cell "点击查看更多分时成交" [ref=e1003]:
+                    - link "点击查看更多分时成交" [ref=e1004] [cursor=pointer]:
+                      - /url: //quote.eastmoney.com/f1.html?newcode=0.300093
+          - generic [ref=e1006]:
+            - list [ref=e1008]:
+              - listitem [ref=e1009]:
+                - link "盘口异动" [ref=e1010] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/changes
+              - listitem [ref=e1011]:
+                - link "该股异动" [ref=e1012] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/changes/stocks/sz300093.html
+            - table [ref=e1015]:
+              - rowgroup [ref=e1016]:
+                - row "14:55:44 诺德股份 有大卖盘" [ref=e1771]:
+                  - cell "14:55:44" [ref=e1772]
+                  - cell "诺德股份" [ref=e1773]:
+                    - link "诺德股份" [ref=e1774] [cursor=pointer]:
+                      - /url: //quote.eastmoney.com/changes/stocks/sh600110.html
+                  - cell "有大卖盘" [ref=e1775]
+                - row "14:55:45 元创股份 大笔买入" [ref=e1776]:
+                  - cell "14:55:45" [ref=e1777]
+                  - cell "元创股份" [ref=e1778]:
+                    - link "元创股份" [ref=e1779] [cursor=pointer]:
+                      - /url: //quote.eastmoney.com/changes/stocks/sz001325.html
+                  - cell "大笔买入" [ref=e1780]
+                - row "14:56:13 *ST太和 封涨停板" [ref=e1781]:
+                  - cell "14:56:13" [ref=e1782]
+                  - cell "*ST太和" [ref=e1783]:
+                    - link "*ST太和" [ref=e1784] [cursor=pointer]:
+                      - /url: //quote.eastmoney.com/changes/stocks/sh605081.html
+                  - cell "封涨停板" [ref=e1785]
+                - row "14:56:43 *ST太和 打开涨停" [ref=e1786]:
+                  - cell "14:56:43" [ref=e1787]
+                  - cell "*ST太和" [ref=e1788]:
+                    - link "*ST太和" [ref=e1789] [cursor=pointer]:
+                      - /url: //quote.eastmoney.com/changes/stocks/sh605081.html
+                  - cell "打开涨停" [ref=e1790]
+                - row "15:00:00 深康佳Ｂ 封跌停板" [ref=e1791]:
+                  - cell "15:00:00" [ref=e1792]
+                  - cell "深康佳Ｂ" [ref=e1793]:
+                    - link "深康佳Ｂ" [ref=e1794] [cursor=pointer]:
+                      - /url: //quote.eastmoney.com/changes/stocks/sz200016.html
+                  - cell "封跌停板" [ref=e1795]
+                - row "点击查看更多>>>" [ref=e1796]:
+                  - cell "点击查看更多>>>" [ref=e1797]:
+                    - link "点击查看更多>>>" [ref=e1798] [cursor=pointer]:
+                      - /url: http://quote.eastmoney.com/changes
+          - iframe [ref=e1040]:
+            - generic [ref=f8e2]:
+              - link [ref=f8e3] [cursor=pointer]:
+                - /url: //same.eastmoney.com/c?z=eastmoney&la=0&si=1&cg=5&c=175&ci=1&or=3841&l=16135&bg=16135&b=18460&u=https%3A%2F%2Facttg.eastmoney.com%2Fpub%2Fpctg_hskh_act_gfcgrj_01_01_01_0
+                - img [ref=f8e4]
+              - img [ref=f8e6]
+    - generic [ref=e1041]:
+      - generic [ref=e1043]:
+        - list [ref=e1045]:
+          - listitem [ref=e1046]:
+            - generic [ref=e1047]: 所属板块
+          - listitem [ref=e1048]:
+            - generic [ref=e1049]: 阶段涨幅
+        - table [ref=e1052]:
+          - rowgroup [ref=e1053]:
+            - row "名称 涨跌幅 领涨股" [ref=e1054]:
+              - columnheader "名称" [ref=e1055]
+              - columnheader "涨跌幅" [ref=e1056]
+              - columnheader "领涨股" [ref=e1057]
+          - rowgroup [ref=e1058]:
+            - row "光伏电池组件 0.26% 航天机电" [ref=e1059]:
+              - cell "光伏电池组件" [ref=e1060]:
+                - link "光伏电池组件" [ref=e1061] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1315
+                  - generic "光伏电池组件" [ref=e1062]
+              - cell "0.26%" [ref=e1063]
+              - cell "航天机电" [ref=e1064]:
+                - link "航天机电" [ref=e1065] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/1.600151
+            - row "电力设备 1.12% 大金重工" [ref=e1066]:
+              - cell "电力设备" [ref=e1067]:
+                - link "电力设备" [ref=e1068] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1200
+                  - generic "电力设备" [ref=e1069]
+              - cell "1.12%" [ref=e1070]
+              - cell "大金重工" [ref=e1071]:
+                - link "大金重工" [ref=e1072] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/0.002487
+            - row "光伏设备 1.19% 帝尔激光" [ref=e1073]:
+              - cell "光伏设备" [ref=e1074]:
+                - link "光伏设备" [ref=e1075] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1031
+                  - generic "光伏设备" [ref=e1076]
+              - cell "1.19%" [ref=e1077]
+              - cell "帝尔激光" [ref=e1078]:
+                - link "帝尔激光" [ref=e1079] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/0.300776
+            - row "甘肃板块 -0.40% *ST金刚" [ref=e1080]:
+              - cell "甘肃板块" [ref=e1081]:
+                - link "甘肃板块" [ref=e1082] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK0152
+                  - generic "甘肃板块" [ref=e1083]
+              - cell "-0.40%" [ref=e1084]
+              - cell "*ST金刚" [ref=e1085]:
+                - link "*ST金刚" [ref=e1086] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/0.300093
+            - row "2025年报扭亏 - -" [ref=e1087]:
+              - cell "2025年报扭亏" [ref=e1088]:
+                - link "2025年报扭亏" [ref=e1089] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1679
+                  - generic "2025年报扭亏" [ref=e1090]
+              - cell "-" [ref=e1091]
+              - cell "-" [ref=e1092]:
+                - link "-" [ref=e1093] [cursor=pointer]:
+                  - /url: //quote.eastmoney.com/unify/r/-.-
+      - generic [ref=e1095]:
+        - generic [ref=e1096]:
+          - list [ref=e1097]:
+            - listitem [ref=e1098]:
+              - link "个股资讯" [ref=e1099] [cursor=pointer]:
+                - /url: //so.eastmoney.com/news/s?keyword=*ST%E9%87%91%E5%88%9A
+            - listitem [ref=e1100]:
+              - link "行业资讯" [ref=e1101] [cursor=pointer]:
+                - /url: //stock.eastmoney.com/hangye/hy1031.html
+          - link "更多" [ref=e1103] [cursor=pointer]:
+            - /url: //so.eastmoney.com/news/s?keyword=*ST%E9%87%91%E5%88%9A
+        - list [ref=e1106]:
+          - listitem [ref=e1799]:
+            - link "机构调研丨锂矿概念+锂电池+小金属 这家公司积极推动海外产能释放 目前正办理津巴布韦锂矿出口手续" [ref=e1800] [cursor=pointer]:
+              - /url: http://finance.eastmoney.com/a/202604163707335029.html
+            - generic [ref=e1801]: 04-16
+          - listitem [ref=e1802]:
+            - link "ST股掀“摘星脱帽”潮 净资产转正背后是真复苏还是财技粉饰？" [ref=e1803] [cursor=pointer]:
+              - /url: http://finance.eastmoney.com/a/202604153706130367.html
+            - generic [ref=e1804]: 04-15
+          - listitem [ref=e1805]:
+            - link "电力设备板块业绩飙涨 18股归母净利润增超100%" [ref=e1806] [cursor=pointer]:
+              - /url: http://finance.eastmoney.com/a/202604083698215916.html
+            - generic [ref=e1807]: 04-08
+          - listitem [ref=e1808]:
+            - link "申请“摘帽”，300093加速“算电协同”布局" [ref=e1809] [cursor=pointer]:
+              - /url: http://finance.eastmoney.com/a/202604043695589454.html
+            - generic [ref=e1810]: 04-04
+          - listitem [ref=e1811]:
+            - link "*ST金刚：2025年实现净利润2.03亿元 拟申请撤销退市风险警示" [ref=e1812] [cursor=pointer]:
+              - /url: http://finance.eastmoney.com/a/202604033694928627.html
+            - generic [ref=e1813]: 04-03
+      - generic [ref=e1114]:
+        - generic [ref=e1115]:
+          - link "公告" [ref=e1117] [cursor=pointer]:
+            - /url: //data.eastmoney.com/notices/stock/300093.html
+          - link "更多" [ref=e1119] [cursor=pointer]:
+            - /url: //data.eastmoney.com/notices/stock/300093.html
+        - list [ref=e1122]:
+          - listitem [ref=e1814]:
+            - link "*ST金刚:300093*ST金刚投资者关系管理信息20260416" [ref=e1815] [cursor=pointer]:
+              - /url: //data.eastmoney.com/notices/detail/300093/AN202604161821253076.html
+            - generic [ref=e1816]: 04-16
+          - listitem [ref=e1817]:
+            - link "*ST金刚:关于申请撤销公司股票退市风险警示及其他风险警示的公告" [ref=e1818] [cursor=pointer]:
+              - /url: //data.eastmoney.com/notices/detail/300093/AN202604021820995599.html
+            - generic [ref=e1819]: 04-03
+          - listitem [ref=e1820]:
+            - link "*ST金刚:关于变更公司注册资本暨修订《公司章程》的公告" [ref=e1821] [cursor=pointer]:
+              - /url: //data.eastmoney.com/notices/detail/300093/AN202604021820995597.html
+            - generic [ref=e1822]: 04-03
+          - listitem [ref=e1823]:
+            - link "*ST金刚:2025年度非经营性资金占用及其他关联资金往来情况汇总表" [ref=e1824] [cursor=pointer]:
+              - /url: //data.eastmoney.com/notices/detail/300093/AN202604021820995611.html
+            - generic [ref=e1825]: 04-03
+          - listitem [ref=e1826]:
+            - link "*ST金刚:关于非经营性资金占用及其他关联资金往来情况的专项审核说明" [ref=e1827] [cursor=pointer]:
+              - /url: //data.eastmoney.com/notices/detail/300093/AN202604021820995607.html
+            - generic [ref=e1828]: 04-03
+    - generic [ref=e1129]:
+      - generic [ref=e1131]:
+        - generic [ref=e1132]:
+          - generic [ref=e1134]:
+            - text: "["
+            - link "光伏设备" [ref=e1135] [cursor=pointer]:
+              - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1031
+            - text: "]相关个股"
+          - link "更多" [ref=e1137] [cursor=pointer]:
+            - /url: //quote.eastmoney.com/center/boardlist.html#boards2-90.BK1031
+        - generic [ref=e1139]:
+          - generic [ref=e1143] [cursor=pointer]: 股票涨跌幅排行
+          - table [ref=e1146]:
+            - rowgroup [ref=e1147]:
+              - row "名称 最新价 涨跌幅" [ref=e1148]:
+                - columnheader "名称" [ref=e1149]
+                - columnheader "最新价" [ref=e1150]
+                - columnheader "涨跌幅" [ref=e1151]
+            - rowgroup [ref=e1152]:
+              - row "帝尔激光 99.36 20.00%" [ref=e1153]:
+                - cell "帝尔激光" [ref=e1154]:
+                  - link "帝尔激光" [ref=e1155] [cursor=pointer]:
+                    - /url: //quote.eastmoney.com/unify/r/0.300776
+                - cell "99.36" [ref=e1156]
+                - cell "20.00%" [ref=e1157]
+              - row "明冠新材 17.78 19.97%" [ref=e1158]:
+                - cell "明冠新材" [ref=e1159]:
+                  - link "明冠新材" [ref=e1160] [cursor=pointer]:
+                    - /url: //quote.eastmoney.com/unify/r/1.688560
+                - cell "17.78" [ref=e1161]
+                - cell "19.97%" [ref=e1162]
+              - row "连城数控 37.70 7.32%" [ref=e1163]:
+                - cell "连城数控" [ref=e1164]:
+                  - link "连城数控" [ref=e1165] [cursor=pointer]:
+                    - /url: //quote.eastmoney.com/unify/r/0.920368
+                - cell "37.70" [ref=e1166]
+                - cell "7.32%" [ref=e1167]
+              - row "赛伍技术 13.84 5.89%" [ref=e1168]:
+                - cell "赛伍技术" [ref=e1169]:
+                  - link "赛伍技术" [ref=e1170] [cursor=pointer]:
+                    - /url: //quote.eastmoney.com/unify/r/1.603212
+                - cell "13.84" [ref=e1171]
+                - cell "5.89%" [ref=e1172]
+              - row "欧普泰 13.03 5.51%" [ref=e1173]:
+                - cell "欧普泰" [ref=e1174]:
+                  - link "欧普泰" [ref=e1175] [cursor=pointer]:
+                    - /url: //quote.eastmoney.com/unify/r/0.920414
+                - cell "13.03" [ref=e1176]
+                - cell "5.51%" [ref=e1177]
+      - generic [ref=e1179]:
+        - generic [ref=e1180]:
+          - link "个股研报" [ref=e1182] [cursor=pointer]:
+            - /url: //data.eastmoney.com/report/singlestock.jshtml?stockcode=300093
+          - link "更多" [ref=e1184] [cursor=pointer]:
+            - /url: //data.eastmoney.com/report/singlestock.jshtml?stockcode=300093
+        - table [ref=e1186]:
+          - rowgroup [ref=e1187]:
+            - row "机构 评级 研报" [ref=e1188]:
+              - columnheader "机构" [ref=e1189]
+              - columnheader "评级" [ref=e1190]
+              - columnheader "研报" [ref=e1191]
+              - columnheader [ref=e1192]
+          - rowgroup [ref=e1193]:
+            - row [ref=e1194]:
+              - cell [ref=e1195]
+              - cell [ref=e1196]
+              - cell [ref=e1197]
+              - cell [ref=e1198]
+            - row [ref=e1199]:
+              - cell [ref=e1200]
+              - cell [ref=e1201]
+              - cell [ref=e1202]
+              - cell [ref=e1203]
+            - row "暂无数据" [ref=e1204]:
+              - cell "暂无数据" [ref=e1205]
+            - row [ref=e1206]:
+              - cell [ref=e1207]
+              - cell [ref=e1208]
+              - cell [ref=e1209]
+              - cell [ref=e1210]
+            - row [ref=e1211]:
+              - cell [ref=e1212]
+              - cell [ref=e1213]
+              - cell [ref=e1214]
+              - cell [ref=e1215]
+      - generic [ref=e1217]:
+        - generic [ref=e1218]:
+          - link "行业研报" [ref=e1220] [cursor=pointer]:
+            - /url: //data.eastmoney.com/report/industry.jshtml?hyid=1031
+          - link "更多" [ref=e1222] [cursor=pointer]:
+            - /url: //data.eastmoney.com/report/industry.jshtml?hyid=1031
+        - table [ref=e1224]:
+          - rowgroup [ref=e1225]:
+            - row "机构 评级 研报" [ref=e1226]:
+              - columnheader "机构" [ref=e1227]
+              - columnheader "评级" [ref=e1228]
+              - columnheader "研报" [ref=e1229]
+              - columnheader [ref=e1230]
+          - rowgroup [ref=e1231]:
+            - row [ref=e1232]:
+              - cell [ref=e1233]
+              - cell [ref=e1234]
+              - cell [ref=e1235]
+              - cell [ref=e1236]
+            - row [ref=e1237]:
+              - cell [ref=e1238]
+              - cell [ref=e1239]
+              - cell [ref=e1240]
+              - cell [ref=e1241]
+            - row "暂无数据" [ref=e1242]:
+              - cell "暂无数据" [ref=e1243]
+            - row [ref=e1244]:
+              - cell [ref=e1245]
+              - cell [ref=e1246]
+              - cell [ref=e1247]
+              - cell [ref=e1248]
+            - row [ref=e1249]:
+              - cell [ref=e1250]
+              - cell [ref=e1251]
+              - cell [ref=e1252]
+              - cell [ref=e1253]
+    - generic [ref=e1254]:
+      - link "*ST金刚吧" [ref=e1256] [cursor=pointer]:
+        - /url: //guba.eastmoney.com/list,300093.html
+        - generic "*ST金刚吧" [ref=e1257]
+      - link "重要股东股权质押数据全览" [ref=e1259] [cursor=pointer]:
+        - /url: http://data.eastmoney.com/gpzy/
+      - generic [ref=e1260]:
+        - link "股吧首页" [ref=e1261] [cursor=pointer]:
+          - /url: http://guba.eastmoney.com/
+          - text: 股吧首页
+        - text: "|"
+        - link "热门个股吧" [ref=e1263] [cursor=pointer]:
+          - /url: http://guba.eastmoney.com/remenba.aspx?type=1
+        - text: "|"
+        - link "热门主题吧" [ref=e1264] [cursor=pointer]:
+          - /url: http://guba.eastmoney.com/remenba.aspx?type=2
+        - text: "|"
+        - link "更多" [ref=e1265] [cursor=pointer]:
+          - /url: //guba.eastmoney.com/list,300093.html
+    - generic [ref=e1266]:
+      - generic [ref=e1267]:
+        - generic [ref=e1268]:
+          - iframe [ref=e1269]:
+            - generic [ref=f11e3]:
+              - generic [ref=f11e4]:
+                - generic [ref=f11e7] [cursor=pointer]: 评论时间
+                - generic [ref=f11e8]: 排序方式：
+                - list [ref=f11e9]:
+                  - listitem [ref=f11e10] [cursor=pointer]:
+                    - heading "全部" [level=3] [ref=f11e11]:
+                      - link "全部" [ref=f11e12]:
+                        - /url: http://guba.eastmoney.com/list,300093.html
+                  - listitem [ref=f11e13] [cursor=pointer]:
+                    - heading "热门" [level=3] [ref=f11e14]:
+                      - link "热门" [ref=f11e15]:
+                        - /url: http://guba.eastmoney.com/list,300093,99.html
+                  - listitem [ref=f11e16] [cursor=pointer]:
+                    - heading "资讯" [level=3] [ref=f11e17]:
+                      - link "资讯" [ref=f11e18]:
+                        - /url: http://guba.eastmoney.com/list,300093,1,f.html
+                  - listitem [ref=f11e19] [cursor=pointer]:
+                    - heading "公告" [level=3] [ref=f11e20]:
+                      - link "公告" [ref=f11e21]:
+                        - /url: http://guba.eastmoney.com/list,300093,3,f.html
+                  - listitem [ref=f11e22] [cursor=pointer]:
+                    - heading "研报" [level=3] [ref=f11e23]:
+                      - link "研报" [ref=f11e24]:
+                        - /url: http://guba.eastmoney.com/list,300093,2,f.html
+                  - listitem [ref=f11e25] [cursor=pointer]:
+                    - heading "问董秘" [level=3] [ref=f11e26]:
+                      - link "问董秘" [ref=f11e27]:
+                        - /url: http://guba.eastmoney.com/qa/qa_search.aspx?company=300093&keyword=&questioner=&qatype=1
+              - table [ref=f11e29]:
+                - rowgroup [ref=f11e30]:
+                  - row "阅读 评论 标题 作者 最后更新" [ref=f11e31]:
+                    - cell "阅读" [ref=f11e32]
+                    - cell "评论" [ref=f11e33]
+                    - cell "标题" [ref=f11e34]
+                    - cell "作者" [ref=f11e35]
+                    - cell "最后更新" [ref=f11e36]
+                - rowgroup [ref=f11e37]:
+                  - row "82 3 对子顶 ywjzhen... 04-17 21:29" [ref=f11e38]:
+                    - cell "82" [ref=f11e39]
+                    - cell "3" [ref=f11e40]
+                    - cell "对子顶" [ref=f11e41]:
+                      - generic [ref=f11e42]:
+                        - emphasis
+                        - emphasis
+                        - link "对子顶" [ref=f11e43] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1694962445.html
+                    - cell "ywjzhen..." [ref=f11e44]:
+                      - link "ywjzhen..." [ref=f11e45] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/5177094839331030
+                    - cell "04-17 21:29" [ref=f11e46]
+                  - row "990 9 周一撤销ST，明牌了，直接涨停，参考创业板新规利 jrdji员工 04-17 20:02" [ref=f11e47]:
+                    - cell "990" [ref=f11e48]
+                    - cell "9" [ref=f11e49]
+                    - cell "周一撤销ST，明牌了，直接涨停，参考创业板新规利" [ref=f11e50]:
+                      - generic [ref=f11e51]:
+                        - emphasis
+                        - emphasis
+                        - link "周一撤销ST，明牌了，直接涨停，参考创业板新规利" [ref=f11e52] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1695224925.html
+                    - cell "jrdji员工" [ref=f11e53]:
+                      - link "jrdji员工" [ref=f11e54] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/8133094043680326
+                    - cell "04-17 20:02" [ref=f11e55]
+                  - row "211 1 @妙想金刚光伏是从哪一天开始申请摘帽？交易所在什 jrdji员工 04-17 20:00" [ref=f11e56]:
+                    - cell "211" [ref=f11e57]
+                    - cell "1" [ref=f11e58]
+                    - cell "@妙想金刚光伏是从哪一天开始申请摘帽？交易所在什" [ref=f11e59]:
+                      - generic [ref=f11e60]:
+                        - emphasis
+                        - emphasis
+                        - link "@妙想金刚光伏是从哪一天开始申请摘帽？交易所在什" [ref=f11e61] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1695323201.html
+                    - cell "jrdji员工" [ref=f11e62]:
+                      - link "jrdji员工" [ref=f11e63] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/8133094043680326
+                    - cell "04-17 20:00" [ref=f11e64]
+                  - row "37423 27 资讯 机构调研丨锂矿概念+锂电池+小金属 这家公司积极 盛新锂能资讯 04-17 19:34" [ref=f11e65]:
+                    - cell "37423" [ref=f11e66]
+                    - cell "27" [ref=f11e67]
+                    - cell "资讯 机构调研丨锂矿概念+锂电池+小金属 这家公司积极" [ref=f11e68]:
+                      - generic [ref=f11e69]:
+                        - emphasis [ref=f11e70]: 资讯
+                        - emphasis
+                        - link "机构调研丨锂矿概念+锂电池+小金属 这家公司积极" [ref=f11e71] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,002240,1694571765.html
+                    - cell "盛新锂能资讯" [ref=f11e72]:
+                      - link "盛新锂能资讯" [ref=f11e73] [cursor=pointer]:
+                        - /url: http://guba.eastmoney.com/list,002240.html
+                    - cell "04-17 19:34" [ref=f11e74]
+                  - row "54 2 22.90有没有机会回请各位大神指导一下？？？？ 全新装饰 04-17 19:27" [ref=f11e75]:
+                    - cell "54" [ref=f11e76]
+                    - cell "2" [ref=f11e77]
+                    - cell "22.90有没有机会回请各位大神指导一下？？？？" [ref=f11e78]:
+                      - generic [ref=f11e79]:
+                        - emphasis
+                        - emphasis
+                        - link "22.90有没有机会回请各位大神指导一下？？？？" [ref=f11e80] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1695303455.html
+                    - cell "全新装饰" [ref=f11e81]:
+                      - link "全新装饰" [ref=f11e82] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/3031315915372406
+                    - cell "04-17 19:27" [ref=f11e83]
+                  - row "374 2 @妙想公司申请撤销ST需要停牌一天吗？公司与主营 jrdji员工 04-17 16:58" [ref=f11e84]:
+                    - cell "374" [ref=f11e85]
+                    - cell "2" [ref=f11e86]
+                    - cell "@妙想公司申请撤销ST需要停牌一天吗？公司与主营" [ref=f11e87]:
+                      - generic [ref=f11e88]:
+                        - emphasis
+                        - emphasis
+                        - link "@妙想公司申请撤销ST需要停牌一天吗？公司与主营" [ref=f11e89] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1695250994.html
+                    - cell "jrdji员工" [ref=f11e90]:
+                      - link "jrdji员工" [ref=f11e91] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/8133094043680326
+                    - cell "04-17 16:58" [ref=f11e92]
+                  - row "151 3 金刚摘帽后随着算力推进，估计能涨到100 股友97f05... 04-17 15:27" [ref=f11e93]:
+                    - cell "151" [ref=f11e94]
+                    - cell "3" [ref=f11e95]
+                    - cell "金刚摘帽后随着算力推进，估计能涨到100" [ref=f11e96]:
+                      - generic [ref=f11e97]:
+                        - emphasis
+                        - emphasis
+                        - link "金刚摘帽后随着算力推进，估计能涨到100" [ref=f11e98] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1695201320.html
+                    - cell "股友97f05..." [ref=f11e99]:
+                      - link "股友97f05..." [ref=f11e100] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/7634096997095938
+                    - cell "04-17 15:27" [ref=f11e101]
+                  - row "137 3 来三个一字涨停板，可好？ zzy5188... 04-17 15:07" [ref=f11e102]:
+                    - cell "137" [ref=f11e103]
+                    - cell "3" [ref=f11e104]
+                    - cell "来三个一字涨停板，可好？" [ref=f11e105]:
+                      - generic [ref=f11e106]:
+                        - emphasis
+                        - emphasis
+                        - link "来三个一字涨停板，可好？" [ref=f11e107] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1695001310.html
+                    - cell "zzy5188..." [ref=f11e108]:
+                      - link "zzy5188..." [ref=f11e109] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/4064094672480584
+                    - cell "04-17 15:07" [ref=f11e110]
+                  - row "316 1 *ST金刚：北京通州算力项目获能耗批复规划超10 鬼谷子真人 04-17 15:01" [ref=f11e111]:
+                    - cell "316" [ref=f11e112]
+                    - cell "1" [ref=f11e113]
+                    - cell "*ST金刚：北京通州算力项目获能耗批复规划超10" [ref=f11e114]:
+                      - generic [ref=f11e115]:
+                        - emphasis
+                        - emphasis
+                        - link "*ST金刚：北京通州算力项目获能耗批复规划超10" [ref=f11e116] [cursor=pointer]:
+                          - /url: //caifuhao.eastmoney.com/news/20260417135425249039000
+                    - cell "鬼谷子真人" [ref=f11e117]:
+                      - link "鬼谷子真人" [ref=f11e118] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/6371094193261248
+                    - cell "04-17 15:01" [ref=f11e119]
+                  - row "34 0 今晚有没有通知休息一天啊 百万级别藏獒团对 04-17 14:33" [ref=f11e120]:
+                    - cell "34" [ref=f11e121]
+                    - cell "0" [ref=f11e122]
+                    - cell "今晚有没有通知休息一天啊" [ref=f11e123]:
+                      - generic [ref=f11e124]:
+                        - emphasis
+                        - emphasis
+                        - link "今晚有没有通知休息一天啊" [ref=f11e125] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1695190193.html
+                    - cell "百万级别藏獒团对" [ref=f11e126]:
+                      - link "百万级别藏獒团对" [ref=f11e127] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/2726325765624156
+                    - cell "04-17 14:33" [ref=f11e128]
+                  - row "50 1 金刚啊，你能回18块吗？ 在远处看风景咯 04-17 14:30" [ref=f11e129]:
+                    - cell "50" [ref=f11e130]
+                    - cell "1" [ref=f11e131]
+                    - cell "金刚啊，你能回18块吗？" [ref=f11e132]:
+                      - generic [ref=f11e133]:
+                        - emphasis
+                        - emphasis
+                        - link "金刚啊，你能回18块吗？" [ref=f11e134] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1695183126.html
+                    - cell "在远处看风景咯" [ref=f11e135]:
+                      - link "在远处看风景咯" [ref=f11e136] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/3817446842193904
+                    - cell "04-17 14:30" [ref=f11e137]
+                  - row "129 4 第一波目标30个棒棒棒糖 百万级别藏獒团对 04-17 14:18" [ref=f11e138]:
+                    - cell "129" [ref=f11e139]
+                    - cell "4" [ref=f11e140]
+                    - cell "第一波目标30个棒棒棒糖" [ref=f11e141]:
+                      - generic [ref=f11e142]:
+                        - emphasis
+                        - emphasis
+                        - link "第一波目标30个棒棒棒糖" [ref=f11e143] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1694775897.html
+                    - cell "百万级别藏獒团对" [ref=f11e144]:
+                      - link "百万级别藏獒团对" [ref=f11e145] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/2726325765624156
+                    - cell "04-17 14:18" [ref=f11e146]
+                  - row "593 1 突破30元的节奏 与你同发 04-17 13:57" [ref=f11e147]:
+                    - cell "593" [ref=f11e148]
+                    - cell "1" [ref=f11e149]
+                    - cell "突破30元的节奏" [ref=f11e150]:
+                      - generic [ref=f11e151]:
+                        - emphasis
+                        - emphasis [ref=f11e152]
+                        - link "突破30元的节奏" [ref=f11e153] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1694709529.html
+                    - cell "与你同发" [ref=f11e154]:
+                      - link "与你同发" [ref=f11e155] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/9586013733810870
+                    - cell "04-17 13:57" [ref=f11e156]
+                  - row "30 0 板块上去了，刚子冲啊 百万级别藏獒团对 04-17 10:41" [ref=f11e157]:
+                    - cell "30" [ref=f11e158]
+                    - cell "0" [ref=f11e159]
+                    - cell "板块上去了，刚子冲啊" [ref=f11e160]:
+                      - generic [ref=f11e161]:
+                        - emphasis
+                        - emphasis
+                        - link "板块上去了，刚子冲啊" [ref=f11e162] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1694955490.html
+                    - cell "百万级别藏獒团对" [ref=f11e163]:
+                      - link "百万级别藏獒团对" [ref=f11e164] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/2726325765624156
+                    - cell "04-17 10:41" [ref=f11e165]
+                  - row "41 0 能不能看一下圣阳 全新装饰 04-17 10:03" [ref=f11e166]:
+                    - cell "41" [ref=f11e167]
+                    - cell "0" [ref=f11e168]
+                    - cell "能不能看一下圣阳" [ref=f11e169]:
+                      - generic [ref=f11e170]:
+                        - emphasis
+                        - emphasis
+                        - link "能不能看一下圣阳" [ref=f11e171] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1694879238.html
+                    - cell "全新装饰" [ref=f11e172]:
+                      - link "全新装饰" [ref=f11e173] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/3031315915372406
+                    - cell "04-17 10:03" [ref=f11e174]
+                  - row "37 0 又开始套人了 股友KtSsd... 04-17 09:51" [ref=f11e175]:
+                    - cell "37" [ref=f11e176]
+                    - cell "0" [ref=f11e177]
+                    - cell "又开始套人了" [ref=f11e178]:
+                      - generic [ref=f11e179]:
+                        - emphasis
+                        - emphasis
+                        - link "又开始套人了" [ref=f11e180] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1694845746.html
+                    - cell "股友KtSsd..." [ref=f11e181]:
+                      - link "股友KtSsd..." [ref=f11e182] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/5541376571589718
+                    - cell "04-17 09:51" [ref=f11e183]
+                  - row "132 3 明天早盘是最后一刻的上车机会 生日王 04-17 09:38" [ref=f11e184]:
+                    - cell "132" [ref=f11e185]
+                    - cell "3" [ref=f11e186]
+                    - cell "明天早盘是最后一刻的上车机会" [ref=f11e187]:
+                      - generic [ref=f11e188]:
+                        - emphasis
+                        - emphasis
+                        - link "明天早盘是最后一刻的上车机会" [ref=f11e189] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1694630356.html
+                    - cell "生日王" [ref=f11e190]:
+                      - link "生日王" [ref=f11e191] [cursor=pointer]:
+                        - /url: //i.eastmoney.com/1770186587241708
+                    - cell "04-17 09:38" [ref=f11e192]
+                  - row "337 1 公告 *ST金刚:300093*ST金刚投资者关系管理 *ST金刚资讯 04-16 23:00" [ref=f11e193]:
+                    - cell "337" [ref=f11e194]
+                    - cell "1" [ref=f11e195]
+                    - cell "公告 *ST金刚:300093*ST金刚投资者关系管理" [ref=f11e196]:
+                      - generic [ref=f11e197]:
+                        - emphasis [ref=f11e198]: 公告
+                        - emphasis
+                        - link "*ST金刚:300093*ST金刚投资者关系管理" [ref=f11e199] [cursor=pointer]:
+                          - /url: http://guba.eastmoney.com/news,300093,1694084102.html
+                    - cell "*ST金刚资讯" [ref=f11e200]:
+                      - link "*ST金刚资讯" [ref=f11e201] [cursor=pointer]:
+                        - /url: http://guba.eastmoney.com/list,300093.html
+                    - cell "04-16 23:00" [ref=f11e202]
+              - link "点击查看更多*ST金刚热帖>>" [ref=f11e204] [cursor=pointer]:
+                - /url: http://guba.eastmoney.com/list,300093.html
+          - generic [ref=e1271]:
+            - generic [ref=e1272]:
+              - generic [ref=e1273]:
+                - generic [ref=e1274]: 发新帖
+                - generic [ref=e1276]:
+                  - text: 请在登录后，发表评论！
+                  - generic [ref=e1277]:
+                    - link "登录" [ref=e1278] [cursor=pointer]:
+                      - /url: https://passport2.eastmoney.com/pub/login?backurl=
+                    - text: "|"
+                    - link "5秒注册" [ref=e1279] [cursor=pointer]:
+                      - /url: https://passport2.eastmoney.com/pub/reg
+              - textbox [ref=e1281]
+              - generic [ref=e1282]:
+                - generic [ref=e1283]:
+                  - generic [ref=e1284] [cursor=pointer]:
+                    - emphasis [ref=e1285]
+                    - text: 表情
+                  - generic [ref=e1286] [cursor=pointer]:
+                    - emphasis [ref=e1287]
+                    - text: 添加图片
+                - generic [ref=e1289]:
+                  - button "发布" [ref=e1290] [cursor=pointer]
+                  - button "清空" [ref=e1291] [cursor=pointer]
+            - generic [ref=e1292]:
+              - text: 1.根据《证券法》规定，禁止编造、传播虚假信息或者误导性信息，扰乱证券市场；2.用户在本社区发表的所有资料、言论等仅代表个人观点，与本网站立场无关，不对您构成任何投资建议。用户应基于自己的独立判断，自行决定证券投资并承担相应风险。
+              - link "《东方财富社区管理规定》" [ref=e1293] [cursor=pointer]:
+                - /url: //guba.eastmoney.com/gltl.aspx
+            - list
+        - iframe [ref=e1294]:
+          - generic [ref=f9e2]:
+            - link [ref=f9e3] [cursor=pointer]:
+              - /url: //same.eastmoney.com/c?z=eastmoney&la=0&si=1&cg=5&c=638&ci=1&or=3841&l=16134&bg=16134&b=18458&u=https%3A%2F%2Femdesk.eastmoney.com%2Fpc_activity%2FPages%2FVIPTrade%2Fpages%2Findex.html
+              - img [ref=f9e4]
+            - img [ref=f9e6]
+      - generic [ref=e1295]:
+        - generic [ref=e1296]:
+          - generic [ref=e1299]: "*ST金刚网友调查"
+          - generic [ref=e1302]:
+            - generic [ref=e1303]:
+              - generic [ref=e1304]:
+                - radio "看涨" [ref=e1305]
+                - text: 看涨
+              - text: 71.30%
+            - generic [ref=e1307]:
+              - generic [ref=e1308]:
+                - radio "看跌" [ref=e1309]
+                - text: 看跌
+              - text: 28.70%
+            - button "投票" [ref=e1312] [cursor=pointer]
+            - generic [ref=e1313]: "统计时间: 2026-04-18"
+        - generic [ref=e1314]:
+          - link "机构名家" [ref=e1317] [cursor=pointer]:
+            - /url: //jigou.eastmoney.com/
+          - list [ref=e1320]:
+            - listitem [ref=e1321]:
+              - link "东吴证券：技术革新、规模量产、国产替代共同驱动环卫无人设备降本逻辑" [ref=e1322] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604173708187218.html
+            - listitem [ref=e1323]:
+              - link "国金证券：霍尔木兹海峡影响并非局限于油气价格 而是沿着原材料体系向工业生产端持续扩散" [ref=e1324] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604153705188787.html
+            - listitem [ref=e1325]:
+              - link "东吴证券：云涨价周期刚刚开始" [ref=e1326] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604143704689055.html
+            - listitem [ref=e1327]:
+              - link "东吴证券：正积极推进购买东海证券83.77%股权相关工作" [ref=e1328] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604143704547780.html
+            - listitem [ref=e1329]:
+              - link "东吴证券：“科特估”实践路径渐明，科技企业迎来五维估值新体系" [ref=e1330] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604143704465027.html
+            - listitem [ref=e1331]:
+              - link "东吴证券：算力租赁商业模式有望从“卖算力”转向“卖Token”" [ref=e1332] [cursor=pointer]:
+                - /url: http://biz.eastmoney.com/a/202604143703994374.html
+            - listitem [ref=e1333]:
+              - link "国金证券：债券市场正处于利于长端补涨和曲线压平的窗口期" [ref=e1334] [cursor=pointer]:
+                - /url: http://bond.eastmoney.com/a/202604143703689435.html
+            - listitem [ref=e1335]:
+              - link "国金策略：市场波动下降后 能源相关资产反而更加重要" [ref=e1336] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604123702218254.html
+            - listitem [ref=e1337]:
+              - link "申万宏源策略：最坏的时候正在过去" [ref=e1338] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604123702139868.html
+            - listitem [ref=e1339]:
+              - link "东吴策略：70年代两次石油危机历史规律与近年行情" [ref=e1340] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604123702129923.html
+            - listitem [ref=e1341]:
+              - link "放宽风险警示股涨跌幅需配套防范投机措施" [ref=e1342] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604143704908745.html
+            - listitem [ref=e1343]:
+              - link "桂浩明：国际油价上涨对全球经济冲击几何？" [ref=e1344] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604113702043416.html
+            - listitem [ref=e1345]:
+              - link "应健中：寒武纪引爆科创板 半年线成多空分水岭" [ref=e1346] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604113701931456.html
+            - listitem [ref=e1347]:
+              - link "贺宛男：本周大涨9.58%创下4年多新高 创业板强势领涨原因何在？" [ref=e1348] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604113701930148.html
+            - listitem [ref=e1349]:
+              - link "散户坚持长期价值投资方为正途" [ref=e1350] [cursor=pointer]:
+                - /url: http://biz.eastmoney.com/a/202604083698465934.html
+            - listitem [ref=e1351]:
+              - link "恒生科技大涨，有望创近4个月单日最大涨幅！张忆东：港股下半年仍有新高" [ref=e1352] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604083697748928.html
+            - listitem [ref=e1353]:
+              - link "证券时报头条评论：上市公司虚减利润与财务造假无异" [ref=e1354] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604083696886015.html
+            - listitem [ref=e1355]:
+              - link "张忆东：中国硬核资产迎战略配置机遇" [ref=e1356] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604063695759994.html
+            - listitem [ref=e1357]:
+              - link "应健中：补完缺口后 上证指数为何卡在这个点位？" [ref=e1358] [cursor=pointer]:
+                - /url: http://finance.eastmoney.com/a/202604043695534254.html
+    - generic [ref=e1359]:
+      - list:
+        - listitem [ref=e1360]:
+          - link "实时资金流" [ref=e1361] [cursor=pointer]:
+            - /url: //data.eastmoney.com/zjlx/300093.html
+        - listitem [ref=e1362]:
+          - link "财务指标" [ref=e1363] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=sz300093&color=b#/cwfx
+        - listitem [ref=e1364]:
+          - link "机构观点" [ref=e1365] [cursor=pointer]:
+            - /url: //data.eastmoney.com/report/300093.html
+        - listitem [ref=e1366]:
+          - link "行业排名" [ref=e1367] [cursor=pointer]:
+            - /url: https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=sz300093&color=b#/thbj
+      - list [ref=e1370]:
+        - listitem [ref=e1371]:
+          - link "知名财经专家解读市场动向" [ref=e1372] [cursor=pointer]:
+            - /url: http://acttg.eastmoney.com/pub/web_nr_hqzx_hqpmy_01_01_01_0
+    - generic [ref=e1373]:
+      - generic [ref=e1375]:
+        - generic [ref=e1377]: 实时成交分布图
+        - generic [ref=e1379]:
+          - link [ref=e1380] [cursor=pointer]:
+            - /url: //data.eastmoney.com/zjlx/300093.html
+          - list [ref=e1384]:
+            - listitem [ref=e1385]: 流入
+            - listitem [ref=e1386]: 流出
+            - listitem [ref=e1387]: 超大单(1808万)
+            - listitem [ref=e1389]: 超大单(825.3万)
+            - listitem [ref=e1391]: 大单(7206万)
+            - listitem [ref=e1393]: 大单(7233万)
+            - listitem [ref=e1395]: 中单(5683万)
+            - listitem [ref=e1397]: 中单(5935万)
+            - listitem [ref=e1399]: 小单(2237万)
+            - listitem [ref=e1401]: 小单(2941万)
+      - generic [ref=e1404]:
+        - list [ref=e1406]:
+          - listitem [ref=e1407]:
+            - link "实时资金流向图" [ref=e1408] [cursor=pointer]:
+              - /url: //data.eastmoney.com/zjlx/300093.html
+          - listitem [ref=e1409]:
+            - link "盘后资金流向趋势" [ref=e1410] [cursor=pointer]:
+              - /url: //data.eastmoney.com/zjlx/300093.html
+        - generic [ref=e1412]:
+          - generic [ref=e1415]:
+            - text: 主力净流入
+            - text: 超大单净流入
+            - text: 大单净流入
+            - text: 中单净流入
+            - text: 小单净流入
+          - table [ref=e1422]:
+            - rowgroup [ref=e1423]:
+              - row "今日主力净流入： 955.4万 主力净占比： 5.58% 今日超大单净流入： 982.4万 超大单净占比： 5.74%" [ref=e1424]:
+                - cell "今日主力净流入：" [ref=e1425]
+                - cell "955.4万" [ref=e1426]
+                - cell "主力净占比：" [ref=e1427]
+                - cell "5.58%" [ref=e1428]
+                - cell "今日超大单净流入：" [ref=e1429]
+                - cell "982.4万" [ref=e1430]
+                - cell "超大单净占比：" [ref=e1431]
+                - cell "5.74%" [ref=e1432]
+              - row "今日大单净流入： -27.01万 大单净占比： -0.16% 今日中单净流入： -251.6万 中单净占比： -1.47%" [ref=e1433]:
+                - cell "今日大单净流入：" [ref=e1434]
+                - cell "-27.01万" [ref=e1435]
+                - cell "大单净占比：" [ref=e1436]
+                - cell "-0.16%" [ref=e1437]
+                - cell "今日中单净流入：" [ref=e1438]
+                - cell "-251.6万" [ref=e1439]
+                - cell "中单净占比：" [ref=e1440]
+                - cell "-1.47%" [ref=e1441]
+              - row "今日小单净流入： -703.8万 小单净占比： -4.11%" [ref=e1442]:
+                - cell "今日小单净流入：" [ref=e1443]
+                - cell "-703.8万" [ref=e1444]
+                - cell "小单净占比：" [ref=e1445]
+                - cell "-4.11%" [ref=e1446]
+    - generic [ref=e1447]: 郑重声明：本网站所刊载的所有资料及图表仅供参考使用。投资者依据本网站提供的信息、资料及图表进行金融、证券等投资所造成的盈亏与本网站无关。本网站如因系统维护或升级而需暂停服务，或因线路及超出本公司控制范围的硬件故障或其它不可抗力而导致暂停服务，于暂停服务期间造成的一切不便与损失，本网站不负任何责任。
+  - generic [ref=e1449]:
+    - generic [ref=e1450]:
+      - generic [ref=e1451]:
+        - link "东方财富" [ref=e1453] [cursor=pointer]:
+          - /url: http://acttg.eastmoney.com/pub/web_dfcfsy_dbtg_wzl_01_01_01_1
+        - link [ref=e1454] [cursor=pointer]:
+          - /url: http://acttg.eastmoney.com/pub/web_app_dcsy_2wm_01_01_01_0
+          - emphasis [ref=e1455]
+        - text: 扫一扫下载APP
+      - generic [ref=e1456]:
+        - generic [ref=e1457]: 东方财富产品
+        - list [ref=e1458]:
+          - listitem [ref=e1459]:
+            - link "东方财富免费版" [ref=e1460] [cursor=pointer]:
+              - /url: https://acttg.eastmoney.com/pub/pctg_hskh_act_dfcfwmfb_01_01_01_0
+          - listitem [ref=e1461]:
+            - link "东方财富Level-2" [ref=e1462] [cursor=pointer]:
+              - /url: https://acttg.eastmoney.com/pub/pctg_hskh_act_dfcfwl2_01_01_01_0
+          - listitem [ref=e1463]:
+            - link "东方财富策略版" [ref=e1464] [cursor=pointer]:
+              - /url: https://www.dfcfw.com/CLB/
+          - listitem [ref=e1465]:
+            - link "妙想投研助理" [ref=e1466] [cursor=pointer]:
+              - /url: https://acttg.eastmoney.com/pub/web_dfcfsy_wzl_bottom_02_02_04_1
+          - listitem [ref=e1467]:
+            - link "Choice金融终端" [ref=e1468] [cursor=pointer]:
+              - /url: https://choice.eastmoney.com/terminal?adid=web_choice_dcsy_website_02_01_01_0
+      - generic [ref=e1469]:
+        - generic [ref=e1470]: 证券交易
+        - list [ref=e1471]:
+          - listitem [ref=e1472]:
+            - link "东方财富证券开户" [ref=e1473] [cursor=pointer]:
+              - /url: https://acttg.eastmoney.com/pub/web_kh_dcsy_dbtkwzl_01_01_01_0
+          - listitem [ref=e1474]:
+            - link "东方财富在线交易" [ref=e1475] [cursor=pointer]:
+              - /url: https://jywg.18.cn/Trade/Buy
+          - listitem [ref=e1476]:
+            - link "东方财富证券交易" [ref=e1477] [cursor=pointer]:
+              - /url: https://acttg.eastmoney.com/pub/pctg_hskh_act_dfcfzqjy_01_01_01_0
+      - generic [ref=e1478]:
+        - generic [ref=e1479]: 关注东方财富
+        - list [ref=e1480]:
+          - listitem [ref=e1481]:
+            - link "东方财富网微博" [ref=e1482] [cursor=pointer]:
+              - /url: http://weibo.com/dfcfw
+              - emphasis [ref=e1483]
+              - text: 东方财富网微博
+          - listitem [ref=e1484]:
+            - link "东方财富网微信" [ref=e1485] [cursor=pointer]:
+              - /url: javascript:;
+              - emphasis [ref=e1486]
+              - text: 东方财富网微信
+          - listitem [ref=e1487]:
+            - link "意见与建议" [ref=e1488] [cursor=pointer]:
+              - /url: http://corp.eastmoney.com/Lianxi_liuyan.asp
+              - emphasis [ref=e1489]
+              - text: 意见与建议
+      - generic [ref=e1490]:
+        - link "天天基金" [ref=e1492] [cursor=pointer]:
+          - /url: http://acttg.eastmoney.com/pub/web_ttjjsy_dbtg_wzl_01_01_01_1
+        - link [ref=e1493] [cursor=pointer]:
+          - /url: http://js1.eastmoney.com/tg.aspx?ID=4672
+          - emphasis [ref=e1494]
+        - text: 扫一扫下载APP
+      - generic [ref=e1495]:
+        - generic [ref=e1496]: 基金交易
+        - list [ref=e1497]:
+          - listitem [ref=e1498]:
+            - link "基金开户" [ref=e1499] [cursor=pointer]:
+              - /url: https://trade6.1234567.com.cn/reg/step1
+          - listitem [ref=e1500]:
+            - link "基金交易" [ref=e1501] [cursor=pointer]:
+              - /url: https://trade.1234567.com.cn/login
+          - listitem [ref=e1502]:
+            - link "活期宝" [ref=e1503] [cursor=pointer]:
+              - /url: http://huoqibao.1234567.com.cn/
+          - listitem [ref=e1504]:
+            - link "基金产品" [ref=e1505] [cursor=pointer]:
+              - /url: http://fund.eastmoney.com/trade/default.html
+          - listitem [ref=e1506]:
+            - link "稳健理财" [ref=e1507] [cursor=pointer]:
+              - /url: http://fund.eastmoney.com/gslc/
+      - generic [ref=e1508]:
+        - generic [ref=e1509]: 关注天天基金
+        - list [ref=e1510]:
+          - listitem [ref=e1511]:
+            - link "天天基金网微博" [ref=e1512] [cursor=pointer]:
+              - /url: http://weibo.com/ttfund
+              - emphasis [ref=e1513]
+              - text: 天天基金网微博
+          - listitem [ref=e1514]:
+            - link "天天基金网微信" [ref=e1515] [cursor=pointer]:
+              - /url: javascript:;
+              - emphasis [ref=e1516]
+              - text: 天天基金网微信
+      - generic [ref=e1517]:
+        - link "东方财富期货" [ref=e1519] [cursor=pointer]:
+          - /url: https://qs.dfcfw.com/1605
+        - link [ref=e1520] [cursor=pointer]:
+          - /url: http://acttg.eastmoney.com/pub/web_kh_dcsy_dibudfcfqh_01_01_01_1
+          - emphasis [ref=e1521]
+        - text: 扫一扫下载APP
+      - generic [ref=e1522]:
+        - generic [ref=e1523]: 期货交易
+        - list [ref=e1524]:
+          - listitem [ref=e1525]:
+            - link "期货手机开户" [ref=e1526] [cursor=pointer]:
+              - /url: https://qs.dfcfw.com/1606
+          - listitem [ref=e1527]:
+            - link "期货电脑开户" [ref=e1528] [cursor=pointer]:
+              - /url: https://qs.dfcfw.com/1607
+          - listitem [ref=e1529]:
+            - link "期货官方网站" [ref=e1530] [cursor=pointer]:
+              - /url: https://qs.dfcfw.com/1608
+    - generic [ref=e1531]:
+      - text: 信息网络传播视听节目许可证：0908328号 经营证券期货业务许可证编号：913101046312860336 违法和不良信息举报:021-61278686 举报邮箱：
+      - link "jubao@eastmoney.com" [ref=e1532] [cursor=pointer]:
+        - /url: mailto:jubao@eastmoney.com
+    - generic [ref=e1533]:
+      - emphasis [ref=e1534]
+      - text: 沪ICP证:沪B2-20070217
+      - link "网站备案号:沪ICP备05006054号-11" [ref=e1535] [cursor=pointer]:
+        - /url: https://beian.miit.gov.cn/
+      - link "沪公网安备 31010402000120号" [ref=e1536] [cursor=pointer]:
+        - /url: http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=31010402000120
+        - emphasis [ref=e1537]
+        - text: 沪公网安备 31010402000120号
+      - text: 版权所有:东方财富网 意见与建议:4000300059/952500
+    - generic [ref=e1538]:
+      - link "关于我们" [ref=e1539] [cursor=pointer]:
+        - /url: http://about.eastmoney.com
+      - link "可持续发展" [ref=e1540] [cursor=pointer]:
+        - /url: https://about.eastmoney.com/about/sdindex
+      - link "广告服务" [ref=e1541] [cursor=pointer]:
+        - /url: http://emhd2.eastmoney.com/market
+      - link "供应商平台" [ref=e1542] [cursor=pointer]:
+        - /url: https://srm.eastmoney.com/official-site/
+      - link "联系我们" [ref=e1543] [cursor=pointer]:
+        - /url: http://about.eastmoney.com/home/contact
+      - link "诚聘英才" [ref=e1544] [cursor=pointer]:
+        - /url: https://zhaopin.eastmoney.com/
+      - link "法律声明" [ref=e1545] [cursor=pointer]:
+        - /url: http://about.eastmoney.com/home/legal
+      - link "隐私保护" [ref=e1546] [cursor=pointer]:
+        - /url: http://about.eastmoney.com/home/conceal
+      - link "征稿启事" [ref=e1547] [cursor=pointer]:
+        - /url: http://about.eastmoney.com/home/parper
+      - link "友情链接" [ref=e1548] [cursor=pointer]:
+        - /url: http://about.eastmoney.com/home/links
+    - generic [ref=e1549]:
+      - img "亲爱的市民朋友，上海警方反诈劝阻电 话“962110”系专门针对避免您财产被 骗受损而设，请您一旦收到来电，立即 接听。" [ref=e1550]
+      - generic "上海网警网络110" [ref=e1551]
+      - generic "网络社会征信网" [ref=e1552]
+      - link "上海违法和违规信息举报中心" [ref=e1553] [cursor=pointer]:
+        - /url: http://www.shjbzx.cn/
+      - link "中国互联网违法和不良信息举报中心" [ref=e1554] [cursor=pointer]:
+        - /url: http://www.12377.cn
+  - generic [ref=e1555]:
+    - generic:
+      - generic [ref=e1556]:
+        - link "网站首页" [ref=e1557] [cursor=pointer]:
+          - /url: http://www.eastmoney.com/
+        - link "加收藏" [ref=e1558] [cursor=pointer]:
+          - /url: javascript:;
+        - link "移动客户端" [ref=e1560] [cursor=pointer]:
+          - /url: http://js5.eastmoney.com/tg.aspx?ID=431
+        - link "东方财富" [ref=e1562] [cursor=pointer]:
+          - /url: https://acttg.eastmoney.com/pub/pctg_hskh_act_wysfpcb_01_01_01_0
+        - link "天天基金网" [ref=e1564] [cursor=pointer]:
+          - /url: http://fund.eastmoney.com/
+        - link "东方财富证券" [ref=e1566] [cursor=pointer]:
+          - /url: http://acttg.eastmoney.com/pub/web_kh_dcsy_jycdl_01_01_01_1
+        - link "东方财富期货" [ref=e1568] [cursor=pointer]:
+          - /url: http://www.eastmoneyfutures.com/
+        - link "妙想" [ref=e1570] [cursor=pointer]:
+          - /url: https://acttg.eastmoney.com/pub/web_dfcfsy_dbtg_01_05_01_01_1
+        - link "Choice数据" [ref=e1572] [cursor=pointer]:
+          - /url: http://js5.eastmoney.com/tg.aspx?ID=789
+        - link "股吧" [ref=e1574] [cursor=pointer]:
+          - /url: http://guba.eastmoney.com/
+      - generic [ref=e1575]:
+        - link "登录" [ref=e1577] [cursor=pointer]:
+          - /url: https://passport2.eastmoney.com/pub/login?backurl=https%3A//quote.eastmoney.com/sz300093.html
+        - link "我的菜单" [ref=e1579] [cursor=pointer]:
+          - /url: http://i.eastmoney.com
+        - link "证券交易" [ref=e1581] [cursor=pointer]:
+          - /url: https://jy.xzsec.com/Trade/Buy
+        - link "基金交易" [ref=e1583] [cursor=pointer]:
+          - /url: https://trade.1234567.com.cn/Login
+  - generic [ref=e1584]:
+    - list [ref=e1585]:
+      - listitem [ref=e1586]: 动态
+      - listitem [ref=e1589]: 个人
+      - listitem [ref=e1592]: 自选
+      - listitem [ref=e1595]: 消息
+      - listitem [ref=e1598]: 搜索
+    - list [ref=e1601]:
+      - listitem "设置" [ref=e1602]
+      - listitem [ref=e1604]:
+        - link "涉企 举报" [ref=e1605] [cursor=pointer]:
+          - /url: https://help.eastmoney.com/more_info.html?pagetype=9
+          - text: 涉企
+          - text: 举报
+      - listitem [ref=e1606]:
+        - link "意见 反馈" [ref=e1607] [cursor=pointer]:
+          - /url: http://corp.eastmoney.com/liuyan.html
+          - text: 意见
+          - text: 反馈
+      - listitem [ref=e1608]
+      - listitem [ref=e1610]:
+        - generic [ref=e1611]:
+          - text: 回到
+          - text: 顶部

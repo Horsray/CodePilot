@@ -139,9 +139,19 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         const data = await res.json();
         window.dispatchEvent(new CustomEvent("session-created"));
         router.push(`/chat/${data.session.id}`);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast({
+          type: 'error',
+          message: errData.error || t('error.createSessionFailed' as TranslationKey) || 'Failed to create session',
+        });
       }
-    } catch {
-      // Silently fail
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      showToast({
+        type: 'error',
+        message: t('error.createSessionFailed' as TranslationKey) || `Failed to create session: ${msg}`,
+      });
     }
   }, [router, getCurrentModelAndProvider]);
 
@@ -322,9 +332,19 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         if (pathname === `/chat/${sessionId}`) {
           router.push("/chat");
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast({
+          type: 'error',
+          message: errData.error || t('error.deleteSessionFailed' as TranslationKey) || 'Failed to delete session',
+        });
       }
-    } catch {
-      // Silently fail
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      showToast({
+        type: 'error',
+        message: t('error.deleteSessionFailed' as TranslationKey) || `Failed to delete session: ${msg}`,
+      });
     } finally {
       setDeletingSession(null);
     }
@@ -342,9 +362,19 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
           prev.map((s) => (s.id === sessionId ? { ...s, title: newTitle } : s))
         );
         window.dispatchEvent(new CustomEvent("session-updated"));
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast({
+          type: 'error',
+          message: errData.error || t('error.renameSessionFailed' as TranslationKey) || 'Failed to rename session',
+        });
       }
-    } catch {
-      // Silently fail
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      showToast({
+        type: 'error',
+        message: t('error.renameSessionFailed' as TranslationKey) || `Failed to rename session: ${msg}`,
+      });
     }
   };
 
@@ -352,6 +382,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     if (!confirm(`Remove project "${workingDirectory.split('/').pop()}" and all its conversations?`)) return;
     const projectSessions = sessions.filter((s) => s.working_directory === workingDirectory);
     const deletedIds = new Set<string>();
+    let failedCount = 0;
     for (const session of projectSessions) {
       try {
         const res = await fetch(`/api/chat/sessions/${session.id}`, { method: "DELETE" });
@@ -360,10 +391,18 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
           if (isInSplit(session.id)) {
             removeFromSplit(session.id);
           }
+        } else {
+          failedCount++;
         }
       } catch {
-        // Continue with remaining
+        failedCount++;
       }
+    }
+    if (failedCount > 0) {
+      showToast({
+        type: 'error',
+        message: t('error.deleteSessionFailed' as TranslationKey) || `Failed to delete ${failedCount} session(s)`,
+      });
     }
     // Only remove sessions that were successfully deleted from backend
     if (deletedIds.size > 0) {
@@ -393,9 +432,19 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         const data = await res.json();
         window.dispatchEvent(new CustomEvent("session-created"));
         router.push(`/chat/${data.session.id}`);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast({
+          type: 'error',
+          message: errData.error || t('error.createSessionFailed' as TranslationKey) || 'Failed to create session',
+        });
       }
-    } catch {
-      // Silently fail
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      showToast({
+        type: 'error',
+        message: t('error.createSessionFailed' as TranslationKey) || `Failed to create session: ${msg}`,
+      });
     }
   };
 

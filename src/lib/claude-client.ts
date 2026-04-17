@@ -951,7 +951,18 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
 
           // Wait for user response (resolved by POST /api/chat/permission)
           // Store original input so registry can inject updatedInput on allow
-          const result = await registerPendingPermission(permissionRequestId, input, opts.signal);
+          // IMPORTANT: do NOT pass abortSignal here — the stream's AbortController
+          // may fire (SSE timeout, idle timeout) while the user is still
+          // answering. The permission has its own 5-minute independent timer.
+          console.log('[canUseTool] waiting for permission:', { permissionRequestId, toolName, hasInput: !!input });
+          const result = await registerPendingPermission(permissionRequestId, input);
+          console.log('[canUseTool] permission resolved:', {
+            permissionRequestId,
+            toolName,
+            behavior: result.behavior,
+            hasUpdatedInput: !!result.updatedInput,
+            updatedInputPreview: result.updatedInput ? JSON.stringify(result.updatedInput).slice(0, 300) : 'none',
+          });
 
           // Restore runtime status after permission resolved
           onRuntimeStatusChange?.('running');

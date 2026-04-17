@@ -16,7 +16,7 @@
  * that the chat route and frontend can call to manage session state.
  */
 
-import { getSetting, updateSdkSessionId } from './db';
+import { updateSdkSessionId } from './db';
 import { findClaudeBinary } from './platform';
 
 // ── Constants ──────────────────────────────────────────────────────
@@ -49,6 +49,7 @@ let prewarmedClaudePath: string | null = null;
 export function prewarmClaudePath(): void {
   if (prewarmedClaudePath !== null) return;
   try {
+    // 中文注释：预热 Claude 可执行文件路径；首次注册会话时调用，减少下一次启动前的路径探测开销。
     prewarmedClaudePath = findClaudeBinary() || null;
   } catch {
     // best effort

@@ -76,7 +76,7 @@ describe('message-builder buildCoreMessages (real import)', () => {
       assert.ok(Array.isArray(result[0].content), 'content should be multipart array');
       const parts = result[0].content as Array<{ type: string }>;
       assert.ok(parts.some(p => p.type === 'text'));
-      assert.ok(parts.some(p => p.type === 'image'));
+      assert.ok(parts.some(p => p.type === 'file'));
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

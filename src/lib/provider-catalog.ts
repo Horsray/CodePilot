@@ -496,6 +496,52 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
+  // ── Aliyun Bailian (API) ──
+  {
+    key: 'bailian-api',
+    name: 'Aliyun Bailian (API)',
+    description: 'Aliyun Bailian API — Qwen, GLM, Kimi, MiniMax (non-Coding Plan)',
+    descriptionZh: '阿里云百炼（非Coding Plan）— 通义千问、GLM、Kimi、MiniMax',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: 'https://dashscope.aliyuncs.com/apps/anthropic',
+    defaultEnvOverrides: {
+      ANTHROPIC_AUTH_TOKEN: '',
+      ANTHROPIC_BASE_URL: 'https://dashscope.aliyuncs.com/apps/anthropic',
+      ANTHROPIC_MODEL: 'qwen3.6-plus',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'Qwen3-Coder-Plus',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'qwen3.6-plus',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'Qwen3.5-Flash',
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+      ENABLE_TOOL_SEARCH: 'true',
+    },
+    defaultModels: [
+      { modelId: 'qwen3.6-plus', displayName: 'Qwen 3.6 Plus', role: 'default' },
+      { modelId: 'Qwen3-Coder-Plus', displayName: 'Qwen 3 Coder Plus', role: 'sonnet' },
+      { modelId: 'Qwen3.5-Flash', displayName: 'Qwen 3.5 Flash', role: 'haiku' },
+      { modelId: 'qwen3-coder-next', displayName: 'Qwen 3 Coder Next' },
+      { modelId: 'kimi-k2.5', displayName: 'Kimi K2.5' },
+      { modelId: 'glm-5', displayName: 'GLM-5' },
+      { modelId: 'glm-4.7', displayName: 'GLM-4.7' },
+      { modelId: 'MiniMax-M2.5', displayName: 'MiniMax-M2.5' },
+    ],
+    defaultRoleModels: {
+      default: 'qwen3.6-plus',
+      sonnet: 'Qwen3-Coder-Plus',
+      opus: 'qwen3.6-plus',
+      haiku: 'Qwen3.5-Flash',
+    },
+    fields: ['api_key', 'base_url', 'env_overrides', 'model_mapping'],
+    iconKey: 'bailian',
+    sdkProxyOnly: true,
+    meta: {
+      apiKeyUrl: 'https://bailian.console.aliyun.com',
+      docsUrl: 'https://help.aliyun.com/zh/model-studio/developer-reference/api-details',
+      billingModel: 'pay_as_you_go',
+      notes: ['使用普通 DashScope API Key（sk- 开头）', '支持按量计费，无需 Coding Plan 订阅'],
+    },
+  },
+
   // ── Aliyun Bailian ──
   {
     key: 'bailian',

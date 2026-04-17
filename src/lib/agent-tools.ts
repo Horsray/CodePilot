@@ -126,6 +126,12 @@ function wrapWithPermissions(
       execute: async (input: unknown, execOptions: unknown) => {
         emitEvent('tool:pre-use', { sessionId: ctx.sessionId, toolName: name, input });
         const result = checkPermission(name, input, ctx.permissionMode, getSessionRules(ctx.sessionId));
+        // 中文注释：输出权限判定日志，便于排查 AskUserQuestion 是否真正进入 ask 分支。
+        console.log('[permission] checkPermission', {
+          toolName: name,
+          permissionMode: ctx.permissionMode,
+          action: result.action,
+        });
 
         if (result.action === 'deny') {
           return `Permission denied: ${result.reason || 'Tool not allowed in current mode'}`;
@@ -133,6 +139,11 @@ function wrapWithPermissions(
 
         if (result.action === 'ask') {
           // Emit permission_request SSE and wait for user response
+          // 中文注释：记录 permission_request 发出时机，便于核对前端是否正确收到交互请求。
+          console.log('[permission] emitting permission_request', {
+            toolName: name,
+            permissionMode: ctx.permissionMode,
+          });
           const permId = crypto.randomBytes(8).toString('hex');
 
           // Persist to DB
@@ -160,13 +171,23 @@ function wrapWithPermissions(
           });
 
           // Wait for user response
+          // IMPORTANT: do NOT pass abortSignal — same rationale as SDK path:
+          // the stream's AbortController may fire while the user is still
+          // answering. The permission has its own 5-minute independent timer.
           const permResult = await registerPendingPermission(
             permId,
             (input || {}) as Record<string, unknown>,
-            ctx.abortSignal,
           );
 
           emitEvent('permission:resolved', { sessionId: ctx.sessionId, toolName: name, behavior: permResult.behavior });
+
+          console.log('[permission wrapper] resolved:', {
+            toolName: name,
+            behavior: permResult.behavior,
+            hasUpdatedInput: !!permResult.updatedInput,
+            updatedInputPreview: permResult.updatedInput ? JSON.stringify(permResult.updatedInput).slice(0, 300) : 'none',
+            originalInputKeys: Object.keys(input as Record<string, unknown>),
+          });
 
           if (permResult.behavior === 'deny') {
             return `Permission denied by user: ${permResult.message || 'Denied'}`;
@@ -198,4 +219,3 @@ function wrapWithPermissions(
 
   return wrapped;
 }
-

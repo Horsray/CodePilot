@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { Virtuoso } from "react-virtuoso";
 import {
   Folder,
   FolderOpen,
   File,
   FileCode,
-  Image,
+  Image as ImageIcon,
   FileZip,
   Plus,
   FolderPlus,
@@ -17,8 +18,6 @@ import {
   PencilSimple,
   ArrowSquareOut,
   ChatCircleText,
-  Check,
-  X,
   Play,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
@@ -102,7 +101,7 @@ const getFileIcon = (name: string, isDirectory: boolean, isOpen?: boolean) => {
     case "gif":
     case "svg":
     case "webp":
-      return <Image size={size} className={cn(iconClass, "text-purple-400")} />;
+      return <ImageIcon size={size} className={cn(iconClass, "text-purple-400")} />;
     case "mp3":
     case "wav":
     case "ogg":
@@ -153,12 +152,16 @@ const getFileIcon = (name: string, isDirectory: boolean, isOpen?: boolean) => {
   }
 };
 
-// 树节点组件
-interface TreeNodeProps {
+// 扁平化节点类型
+interface FlatNode {
   node: FileTreeNode;
   level: number;
-  searchQuery: string;
-  expanded: Set<string>;
+  isExpanded: boolean;
+}
+
+// 树节点组件
+interface TreeNodeProps {
+  flatNode: FlatNode;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
   selectedPath: string | null;
@@ -172,10 +175,7 @@ interface TreeNodeProps {
 }
 
 function TreeNode({
-  node,
-  level,
-  searchQuery,
-  expanded,
+  flatNode,
   onToggle,
   onSelect,
   selectedPath,
@@ -187,23 +187,10 @@ function TreeNode({
   onOpenInFinder,
   onAddToChat,
 }: TreeNodeProps) {
-  const isExpanded = expanded.has(node.path);
+  const { node, level, isExpanded } = flatNode;
   const isSelected = selectedPath === node.path;
   const isDirectory = node.type === "directory";
   const paddingLeft = level * 12 + 8;
-
-  // 搜索过滤
-  if (searchQuery && !node.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-    // 如果是文件夹，检查子节点是否匹配
-    if (isDirectory && node.children) {
-      const hasMatchingChild = node.children.some((child) =>
-        child.name.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      if (!hasMatchingChild) return null;
-    } else {
-      return null;
-    }
-  }
 
   const handleClick = () => {
     if (isDirectory) {
@@ -303,31 +290,6 @@ function TreeNode({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-
-      {/* 子节点 */}
-      {isDirectory && isExpanded && node.children && (
-        <div>
-          {node.children.map((child) => (
-            <TreeNode
-              key={child.path}
-              node={child}
-              level={level + 1}
-              searchQuery={searchQuery}
-              expanded={expanded}
-              onToggle={onToggle}
-              onSelect={onSelect}
-              selectedPath={selectedPath}
-              onNewFile={onNewFile}
-              onNewFolder={onNewFolder}
-              onRename={onRename}
-              onDelete={onDelete}
-              onCopyPath={onCopyPath}
-              onOpenInFinder={onOpenInFinder}
-              onAddToChat={onAddToChat}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -443,6 +405,51 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
     fetchTree();
   }, [fetchTree]);
 
+  // File Watcher SSE connection
+  useEffect(() => {
+    if (!workingDirectory) return;
+
+    let eventSource: EventSource | null = null;
+    let retryCount = 0;
+    let retryTimeout: NodeJS.Timeout | null = null;
+
+    const connect = () => {
+      eventSource = new EventSource(`/api/workspace/events?cwd=${encodeURIComponent(workingDirectory)}`);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "change") {
+            fetchTree();
+            // Optional: Also trigger git-refresh if needed, since file changes often affect git
+            window.dispatchEvent(new CustomEvent('git-refresh'));
+          }
+        } catch {
+          // Ignore
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource?.close();
+        // Exponential backoff retry (max 30s)
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+        retryCount++;
+        retryTimeout = setTimeout(connect, delay);
+      };
+
+      eventSource.onopen = () => {
+        retryCount = 0;
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (retryTimeout) clearTimeout(retryTimeout);
+      eventSource?.close();
+    };
+  }, [workingDirectory, fetchTree]);
+
   useEffect(() => {
     return () => {
       if (abortRef.current) {
@@ -529,7 +536,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
         message: err instanceof Error ? err.message : "创建失败",
       });
     }
-  }, [newItemDialog, fetchTree]);
+  }, [newItemDialog, fetchTree, workingDirectory]);
 
   // 重命名
   const handleRename = useCallback((path: string, isDirectory: boolean) => {
@@ -551,8 +558,6 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
     }
 
     const oldPath = renameDialog.path;
-    const parentPath = oldPath.split("/").slice(0, -1).join("/");
-    const newPath = `${parentPath}/${renameDialog.newName}`;
 
     try {
       const res = await fetch("/api/files/rename", {
@@ -673,6 +678,42 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
     }
   }, [onFileAdd]);
 
+  // 计算扁平化列表
+  const flatNodes = useMemo(() => {
+    const filterNodes = (nodesList: FileTreeNode[]): FileTreeNode[] => {
+      if (!searchQuery) return nodesList;
+      const q = searchQuery.toLowerCase();
+      return nodesList.reduce<FileTreeNode[]>((acc, node) => {
+        const isMatch = node.name.toLowerCase().includes(q);
+        if (node.type === "directory" && node.children) {
+          const filteredChildren = filterNodes(node.children);
+          if (isMatch || filteredChildren.length > 0) {
+            acc.push({ ...node, children: filteredChildren });
+          }
+        } else if (isMatch) {
+          acc.push(node);
+        }
+        return acc;
+      }, []);
+    };
+
+    const flattenNodes = (nodes: FileTreeNode[], level = 0): FlatNode[] => {
+      const result: FlatNode[] = [];
+      for (const node of nodes) {
+        // 如果有搜索词，强制展开包含匹配项的文件夹
+        const isExpanded = searchQuery ? true : expanded.has(node.path);
+        result.push({ node, level, isExpanded });
+        if (node.type === "directory" && isExpanded && node.children) {
+          result.push(...flattenNodes(node.children, level + 1));
+        }
+      }
+      return result;
+    };
+
+    const filteredTree = filterNodes(tree);
+    return flattenNodes(filteredTree);
+  }, [tree, searchQuery, expanded]);
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
       {/* Header - 标题和工具栏 */}
@@ -735,7 +776,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-auto py-1">
+      <div className="flex-1 overflow-hidden py-1">
         {loading && tree.length === 0 ? (
           <div className="flex items-center justify-center py-8">
             <ArrowsClockwise size={16} className="animate-spin text-muted-foreground" />
@@ -744,15 +785,18 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
           <p className="py-4 text-center text-xs text-muted-foreground">
             {error ? error : workingDirectory ? t("fileTree.noFiles") : t("fileTree.selectFolder")}
           </p>
+        ) : flatNodes.length === 0 ? (
+          <p className="py-4 text-center text-xs text-muted-foreground">
+            没有找到匹配的文件
+          </p>
         ) : (
-          <div>
-            {tree.map((node) => (
+          <Virtuoso
+            style={{ height: '100%', width: '100%' }}
+            data={flatNodes}
+            itemContent={(_index, flatNode) => (
               <TreeNode
-                key={node.path}
-                node={node}
-                level={0}
-                searchQuery={searchQuery}
-                expanded={expanded}
+                key={flatNode.node.path}
+                flatNode={flatNode}
                 onToggle={handleToggle}
                 onSelect={handleSelect}
                 selectedPath={selectedPath}
@@ -764,8 +808,8 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
                 onOpenInFinder={handleOpenInFinder}
                 onAddToChat={handleAddToChat}
               />
-            ))}
-          </div>
+            )}
+          />
         )}
       </div>
 

@@ -1,19 +1,15 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Check, 
   X, 
-  CaretDown,
-  CaretUp,
   CaretUpDown,
   NotePencil,
-  File as FileIcon,
   Code,
   Eye,
   XCircle,
-  ArrowSquareOut,
   ArrowUp,
   ArrowDown
 } from '@/components/ui/icon';
@@ -36,50 +32,110 @@ interface ModifiedFile {
 
 interface FileReviewBarProps {
   sessionId: string;
+  isStreaming?: boolean;
 }
 
-export function FileReviewBar({ sessionId }: FileReviewBarProps) {
+export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarProps) {
   const [modifiedFiles, setModifiedFiles] = useState<ModifiedFile[]>([]);
   const [totalAdded, setTotalAdded] = useState(0);
   const [totalRemoved, setTotalRemoved] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [diffModalFile, setDiffModalFile] = useState<ModifiedFile | null>(null);
+  const fetchControllerRef = useRef<AbortController | null>(null);
 
-  const fetchStatus = async () => {
-    if (!sessionId) return;
+  // 文件审查状态重置：切换会话、放弃修改或接口返回空结果时调用。
+  const resetReviewState = useCallback(() => {
+    setModifiedFiles([]);
+    setTotalAdded(0);
+    setTotalRemoved(0);
+    setExpanded(false);
+    setDiffModalFile(null);
+  }, []);
+
+  // 文件审查状态拉取：同一时间只保留一个请求，开始流式回复或切换会话时立即中止。
+  const fetchStatus = useCallback(async () => {
+    if (!sessionId || isStreaming) return;
+    fetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    fetchControllerRef.current = controller;
+
     try {
-      const res = await fetch(`/api/chat/review?sessionId=${sessionId}`);
+      const res = await fetch(`/api/chat/review?sessionId=${encodeURIComponent(sessionId)}`, {
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+
+      if (controller.signal.aborted) return;
+      if (res.status === 404) {
+        resetReviewState();
+        return;
+      }
       if (!res.ok) return;
+
       const data = await res.json();
-      if (data.modifiedFiles) {
-        setModifiedFiles(data.modifiedFiles);
-        setTotalAdded(data.totalAdded || 0);
-        setTotalRemoved(data.totalRemoved || 0);
+      if (controller.signal.aborted) return;
+
+      const nextFiles = Array.isArray(data.modifiedFiles) ? data.modifiedFiles : [];
+      setModifiedFiles(nextFiles);
+      setTotalAdded(data.totalAdded || 0);
+      setTotalRemoved(data.totalRemoved || 0);
+      if (nextFiles.length === 0) {
+        setExpanded(false);
+        setDiffModalFile(null);
       }
     } catch (e) {
-      console.error('Failed to fetch review status:', e);
+      if (controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
+        return;
+      }
+      // 网络短暂波动时静默降级，避免干扰聊天主流程。
+    } finally {
+      if (fetchControllerRef.current === controller) {
+        fetchControllerRef.current = null;
+      }
     }
-  };
+  }, [isStreaming, resetReviewState, sessionId]);
 
   useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 3000);
-    return () => clearInterval(interval);
-  }, [sessionId]);
+    if (!sessionId) {
+      fetchControllerRef.current?.abort();
+      resetReviewState();
+      return;
+    }
+
+    if (isStreaming) {
+      fetchControllerRef.current?.abort();
+      return;
+    }
+
+    void fetchStatus();
+    // 文件审查轮询：仅在当前会话空闲时启用，避免与聊天主请求并发争抢。
+    const interval = window.setInterval(() => {
+      void fetchStatus();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(interval);
+      fetchControllerRef.current?.abort();
+    };
+  }, [fetchStatus, isStreaming, resetReviewState, sessionId]);
 
   const pendingCount = modifiedFiles.length;
 
   const handleAccept = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setProcessing(true);
+    fetchControllerRef.current?.abort();
     try {
-      await fetch('/api/chat/review', {
+      const res = await fetch('/api/chat/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, action: 'accept' }),
       });
-      await fetchStatus();
+      if (!res.ok) {
+        throw new Error(`accept failed: ${res.status}`);
+      }
+      resetReviewState();
       setExpanded(false);
     } catch (e) {
       console.error('Failed to accept changes:', e);
@@ -92,13 +148,17 @@ export function FileReviewBar({ sessionId }: FileReviewBarProps) {
     e.stopPropagation();
     if (!window.confirm(`确定要放弃这 ${pendingCount} 个文件的所有更改吗？此操作不可撤销。`)) return;
     setProcessing(true);
+    fetchControllerRef.current?.abort();
     try {
-      await fetch('/api/chat/review', {
+      const res = await fetch('/api/chat/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, action: 'discard' }),
       });
-      await fetchStatus();
+      if (!res.ok) {
+        throw new Error(`discard failed: ${res.status}`);
+      }
+      resetReviewState();
       setExpanded(false);
       // Dispatch events to notify other components (like FileTree) to refresh
       window.dispatchEvent(new CustomEvent('session-updated'));
@@ -154,7 +214,7 @@ export function FileReviewBar({ sessionId }: FileReviewBarProps) {
               className="flex flex-1 items-center gap-2 px-3 hover:bg-muted/10 transition-colors h-full text-left min-w-0 group"
             >
               <span className="text-[13px] font-medium text-foreground/80 truncate">
-                {pendingCount} 个文件待审查
+                当前会话有 {pendingCount} 个文件待审查
               </span>
               <CaretUpDown size={14} className="text-muted-foreground/40 group-hover:text-muted-foreground transition-transform" />
               
@@ -169,7 +229,7 @@ export function FileReviewBar({ sessionId }: FileReviewBarProps) {
                 onClick={handleDiscard}
                 disabled={processing}
                 className="flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground transition-all disabled:opacity-50"
-                title="放弃所有更改"
+                title="放弃整个会话中的全部修改"
               >
                 <X size={16} />
               </button>
@@ -177,7 +237,7 @@ export function FileReviewBar({ sessionId }: FileReviewBarProps) {
                 onClick={handleAccept}
                 disabled={processing}
                 className="flex h-7 w-7 items-center justify-center bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm rounded-lg transition-all disabled:opacity-50 active:scale-95 ml-1"
-                title="采纳所有更改"
+                title="接受整个会话中的全部修改"
               >
                 <Check size={14} weight="bold" />
               </button>
@@ -420,4 +480,3 @@ function DiffModal({ file, onClose }: { file: ModifiedFile, onClose: () => void 
     document.body
   );
 }
-

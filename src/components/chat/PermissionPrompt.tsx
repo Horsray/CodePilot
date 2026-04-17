@@ -94,6 +94,11 @@ function AskUserQuestionUI({
       }
       answers[q.question] = selected.join(', ');
     });
+    console.log('[AskUserQuestionUI] submit:', {
+      questionCount: questions.length,
+      answers,
+      fullPayload: { questions: toolInput.questions, answers },
+    });
     onSubmit('allow', { questions: toolInput.questions, answers });
   };
 

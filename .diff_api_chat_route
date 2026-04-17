@@ -1,0 +1,271 @@
+diff --git a/src/app/api/chat/route.ts b/src/app/api/chat/route.ts
+index f0a3a79..08326fc 100644
+--- a/src/app/api/chat/route.ts
++++ b/src/app/api/chat/route.ts
+@@ -26,6 +26,8 @@ export const dynamic = 'force-dynamic';
+ export async function POST(request: NextRequest) {
+   let activeSessionId: string | undefined;
+   let activeLockId: string | undefined;
++  const requestStartedAt = Date.now();
++  const traceId = request.headers.get('x-codepilot-trace-id') || `chat-${Date.now().toString(36)}`;
+ 
+   try {
+     const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean } = await request.json();
+@@ -215,6 +217,35 @@ export async function POST(request: NextRequest) {
+     const systemPromptOverride: string | undefined = undefined;
+ 
+     const abortController = new AbortController();
++    const earlyStreamEvents: string[] = [];
++    // 中文注释：功能名称「首轮可见状态队列」，用法是在真正连接模型前先向前端推送阶段提示，
++    // 减少长时间静默造成的“像卡死”的体感。
++    const enqueueEarlySseEvent = (event: SSEEvent) => {
++      earlyStreamEvents.push(`data: ${JSON.stringify(event)}\n\n`);
++    };
++    const enqueueEarlyStatus = (message: string, extra?: Record<string, unknown>) => {
++      enqueueEarlySseEvent({
++        type: 'status',
++        data: JSON.stringify({
++          notification: true,
++          message,
++          ...(extra || {}),
++        }),
++      });
++    };
++    const enqueuePerfStatus = (name: string, detail?: Record<string, unknown>) => {
++      enqueueEarlySseEvent({
++        type: 'status',
++        data: JSON.stringify({
++          subtype: 'perf',
++          source: 'route',
++          name,
++          detail,
++          durationMs: Date.now() - requestStartedAt,
++          totalDurationMs: Date.now() - requestStartedAt,
++        }),
++      });
++    };
+ 
+     // Handle client disconnect
+     request.signal.addEventListener('abort', () => {
+@@ -247,6 +278,7 @@ export async function POST(request: NextRequest) {
+       role: m.role as 'user' | 'assistant',
+       content: m.content,
+     }));
++    const shouldDoHeavyContextPreflight = historyMsgs.length >= 8;
+ 
+     // Load session summary for compression-aware fallback
+     const sessionSummaryData = getSessionSummary(session_id);
+@@ -256,6 +288,7 @@ export async function POST(request: NextRequest) {
+     const isImageAgentMode = !!systemPromptAppend && systemPromptAppend.includes('image-gen-request');
+ 
+     // Unified context assembly — extracts workspace, CLI tools, widget prompt
++    enqueueEarlyStatus('Preparing context…');
+     const assembled = await assembleContext({
+       session,
+       entryPoint: 'desktop',
+@@ -269,6 +302,16 @@ export async function POST(request: NextRequest) {
+     const generativeUIEnabled = assembled.generativeUIEnabled;
+     const assistantProjectInstructions = assembled.assistantProjectInstructions;
+     const isAssistantProject = assembled.isAssistantProject;
++    enqueuePerfStatus('chat.route.context_assembled', {
++      referencedContextCount: assembled.referencedContexts?.length || 0,
++      isAssistantProject,
++    });
++    if (assembled.referencedContexts && assembled.referencedContexts.length > 0) {
++      enqueueEarlySseEvent({
++        type: 'referenced_contexts',
++        data: JSON.stringify({ files: assembled.referencedContexts }),
++      });
++    }
+ 
+     // Load MCP servers for the predicted runtime:
+     // - SDK Runtime: only needs servers with ${...} env placeholders (SDK loads the rest via settingSources)
+@@ -279,6 +322,10 @@ export async function POST(request: NextRequest) {
+     const mcpServers = predictNativeRuntime(effectiveProviderId)
+       ? loadAllMcpServers()
+       : loadCodePilotMcpServers();
++    enqueueEarlyStatus('Preparing tools…');
++    enqueuePerfStatus('chat.route.tools_prepared', {
++      mcpServerCount: Object.keys(mcpServers || {}).length,
++    });
+ 
+     // ── Context compression check ───────────────────────────────────
+     // Estimate next-turn context size and compress if over threshold.
+@@ -287,6 +334,9 @@ export async function POST(request: NextRequest) {
+     let compressionOccurred = false;
+     let compressionStats: { messagesCompressed: number; tokensSaved: number } | null = null;
+ 
++    if (shouldDoHeavyContextPreflight) {
++      enqueueEarlyStatus('Estimating context size…');
++    }
+     try {
+       const { estimateContextTokens } = await import('@/lib/context-estimator');
+       const { getContextWindow } = await import('@/lib/model-context');
+@@ -319,7 +369,7 @@ export async function POST(request: NextRequest) {
+         contextWindow * 0.7 - estimate.breakdown.system - estimate.breakdown.summary - estimate.breakdown.userMessage
+       );
+ 
+-      if (needsCompression(estimate.total, contextWindow, session_id)) {
++      if (shouldDoHeavyContextPreflight && needsCompression(estimate.total, contextWindow, session_id)) {
+         console.log(`[chat API] Context at ${((estimate.total / contextWindow) * 100).toFixed(1)}% — triggering compression`);
+ 
+         // Determine which messages to compress using normalized sizes (consistent with estimate)
+@@ -368,13 +418,16 @@ export async function POST(request: NextRequest) {
+     }
+ 
+     // Stream Claude response, using SDK session ID for resume if available
++    const isNative = predictNativeRuntime(effectiveProviderId);
+     console.log('[chat API] streamClaude params:', {
+       promptLength: content.length,
+       promptFirst200: content.slice(0, 200),
+       sdkSessionId: session.sdk_session_id || 'none',
+       systemPromptLength: finalSystemPrompt?.length || 0,
+       systemPromptFirst200: finalSystemPrompt?.slice(0, 200) || 'none',
++      runtime: isNative ? 'native' : 'sdk',
+     });
++    enqueueEarlyStatus('Starting model…');
+     const stream = streamClaude({
+       prompt: content,
+       sessionId: session_id,
+@@ -429,6 +482,9 @@ export async function POST(request: NextRequest) {
+       ? new ReadableStream<string>({
+           async start(controllerRaw) {
+             const controller = wrapController(controllerRaw);
++            for (const event of earlyStreamEvents) {
++              controller.enqueue(event);
++            }
+             const msgCount = compressionStats?.messagesCompressed ?? 0;
+             const tokensSaved = compressionStats?.tokensSaved ?? 0;
+             const displayMessage = tokensSaved > 0
+@@ -456,13 +512,32 @@ export async function POST(request: NextRequest) {
+             }
+           },
+         })
+-      : streamForClient;
++      : new ReadableStream<string>({
++          async start(controllerRaw) {
++            const controller = wrapController(controllerRaw);
++            for (const event of earlyStreamEvents) {
++              controller.enqueue(event);
++            }
++            const reader = streamForClient.getReader();
++            try {
++              while (true) {
++                const { done, value } = await reader.read();
++                if (done) break;
++                controller.enqueue(value);
++                if (controller.closed) break;
++              }
++            } finally {
++              controller.close();
++            }
++          },
++        });
+ 
+     return new Response(responseStream, {
+       headers: {
+         'Content-Type': 'text/event-stream',
+         'Cache-Control': 'no-cache',
+         'Connection': 'keep-alive',
++        'X-CodePilot-Trace-Id': traceId,
+       },
+     });
+   } catch (error) {
+@@ -493,12 +568,20 @@ async function collectStreamResponse(
+   const contentBlocks: MessageContentBlock[] = [];
+   let currentText = '';
+   let thinkingText = '';
++
++  const flushThinking = () => {
++    if (thinkingText.trim()) {
++      contentBlocks.push({ type: 'thinking', thinking: thinkingText.trim() });
++      thinkingText = '';
++    }
++  };
+   /** Tracks whether non-thinking content arrived since last thinking delta (for phase separation) */
+   let thinkingPhaseEnded = false;
+   let tokenUsage: TokenUsage | null = null;
+   let hasError = false;
+   let errorMessage = '';
+   let lastSavedAssistantMsgId: string | null = null;
++  let referencedContexts: string[] = [];
+   // Dedup layer: skip duplicate tool_result events by tool_use_id
+   const seenToolResultIds = new Set<string>();
+ 
+@@ -522,10 +605,12 @@ async function collectStreamResponse(
+               }
+               thinkingText += event.data;
+             } else if (event.type === 'text') {
+-              currentText += event.data;
+               if (thinkingText) thinkingPhaseEnded = true;
++              flushThinking();
++              currentText += event.data;
+             } else if (event.type === 'tool_use') {
+               if (thinkingText) thinkingPhaseEnded = true;
++              flushThinking();
+               // Flush any accumulated text before the tool use block
+               if (currentText.trim()) {
+                 contentBlocks.push({ type: 'text', text: currentText });
+@@ -606,6 +691,15 @@ async function collectStreamResponse(
+               } catch {
+                 // skip malformed status data
+               }
++            } else if (event.type === 'referenced_contexts') {
++              try {
++                const refData = JSON.parse(event.data) as { files?: unknown };
++                referencedContexts = Array.isArray(refData.files)
++                  ? refData.files.filter((item): item is string => typeof item === 'string')
++                  : [];
++              } catch {
++                // skip malformed referenced_contexts data
++              }
+             } else if (event.type === 'task_update') {
+               // Sync SDK TodoWrite tasks to local DB
+               try {
+@@ -653,11 +747,7 @@ async function collectStreamResponse(
+     if (currentText.trim()) {
+       contentBlocks.push({ type: 'text', text: currentText });
+     }
+-
+-    // Prepend thinking block if accumulated during stream
+-    if (thinkingText.trim()) {
+-      contentBlocks.unshift({ type: 'thinking', thinking: thinkingText.trim() });
+-    }
++    flushThinking();
+ 
+     if (contentBlocks.length > 0) {
+       // If the message is text-only (no tool calls), store as plain text
+@@ -687,6 +777,7 @@ async function collectStreamResponse(
+           'assistant',
+           content,
+           tokenUsage ? JSON.stringify(tokenUsage) : null,
++          referencedContexts.length > 0 ? JSON.stringify(referencedContexts) : null,
+         );
+         lastSavedAssistantMsgId = savedMsg.id;
+       }
+@@ -698,9 +789,7 @@ async function collectStreamResponse(
+     if (currentText.trim()) {
+       contentBlocks.push({ type: 'text', text: currentText });
+     }
+-    if (thinkingText.trim()) {
+-      contentBlocks.unshift({ type: 'thinking', thinking: thinkingText.trim() });
+-    }
++    flushThinking();
+     if (contentBlocks.length > 0) {
+       const hbRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
+       const errCleanedBlocks = contentBlocks.map(b =>
+@@ -717,7 +806,13 @@ async function collectStreamResponse(
+             .join('')
+             .trim();
+       if (content) {
+-        addMessage(sessionId, 'assistant', content);
++        addMessage(
++          sessionId,
++          'assistant',
++          content,
++          null,
++          referencedContexts.length > 0 ? JSON.stringify(referencedContexts) : null,
++        );
+       }
+     }
+   } finally {

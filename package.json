@@ -72,6 +72,7 @@
     "ansi-to-react": "^6.2.6",
     "better-sqlite3": "^12.6.2",
     "boring-avatars": "^2.0.4",
+    "chokidar": "^5.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -103,12 +104,14 @@
     "use-stick-to-bottom": "^1.1.2",
     "uuid": "^13.0.0",
     "ws": "^8.19.0",
-    "zlib-sync": "^0.1.10"
+    "zlib-sync": "^0.1.10",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.1",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/chokidar": "^1.7.5",
     "@types/dompurify": "^3.0.5",
     "@types/markdown-it": "^14.1.2",
     "@types/morphdom": "^2.3.0",

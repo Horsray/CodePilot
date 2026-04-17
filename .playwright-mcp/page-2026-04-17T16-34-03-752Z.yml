@@ -1,0 +1,778 @@
+- generic [ref=e2]:
+  - navigation [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - link [ref=e8] [cursor=pointer]:
+          - /url: /
+        - link "雪球 首页" [ref=e10] [cursor=pointer]:
+          - /url: /
+          - img "雪球" [ref=e11]
+          - generic [ref=e12]: 首页
+      - generic [ref=e13]:
+        - generic [ref=e14]:
+          - textbox "搜索" [ref=e15]
+          - button "" [ref=e17] [cursor=pointer]
+        - list [ref=e18]:
+          - listitem [ref=e19]:
+            - link "" [ref=e20] [cursor=pointer]:
+              - /url: /snb/web/cs?from=xq
+          - listitem [ref=e21]:
+            - link "下载App" [ref=e22] [cursor=pointer]:
+              - /url: "javascript:"
+          - listitem [ref=e23]:
+            - generic [ref=e24] [cursor=pointer]: 登录
+  - generic [ref=e25]:
+    - generic [ref=e26]:
+      - strong [ref=e27]: 公司概况
+      - list [ref=e28]:
+        - listitem [ref=e29]:
+          - link "公司简介" [ref=e30] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/GSJJ
+        - listitem [ref=e31]:
+          - link "公司高管" [ref=e32] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/GSGG
+      - strong [ref=e33]: 股权信息
+      - list [ref=e34]:
+        - listitem [ref=e35]:
+          - link "股本结构" [ref=e36] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/GBJG
+        - listitem [ref=e37]:
+          - link "十大股东" [ref=e38] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/SDGD
+        - listitem [ref=e39]:
+          - link "十大流通股东" [ref=e40] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/LTGD
+        - listitem [ref=e41]:
+          - link "基金持股" [ref=e42] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/JJCG
+        - listitem [ref=e43]:
+          - link "高管增减持" [ref=e44] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/GGZJC
+        - listitem [ref=e45]:
+          - link "股东人数" [ref=e46] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/GDRS
+        - listitem [ref=e47]:
+          - link "限售解禁" [ref=e48] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/XSJJ
+      - strong [ref=e49]: 股票交易
+      - list [ref=e50]:
+        - listitem [ref=e51]:
+          - link "成交明细" [ref=e52] [cursor=pointer]:
+            - /url: https://xueqiu.com/snowman/provider/zz/gp_detail?symbol=SZ300093
+        - listitem [ref=e53]:
+          - link "分价表" [ref=e54] [cursor=pointer]:
+            - /url: https://xueqiu.com/snowman/provider/zz/gp_price?symbol=SZ300093
+        - listitem [ref=e55]:
+          - link "大单统计" [ref=e56] [cursor=pointer]:
+            - /url: https://xueqiu.com/snowman/provider/zz/gp_dadan?symbol=SZ300093
+        - listitem [ref=e57]:
+          - link "大宗交易" [ref=e58] [cursor=pointer]:
+            - /url: http://data.eastmoney.com/dzjy/detail/300093.html
+        - listitem [ref=e59]:
+          - link "龙虎榜数据" [ref=e60] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/LHB
+        - listitem [ref=e61]:
+          - link "融资融券" [ref=e62] [cursor=pointer]:
+            - /url: http://stockdata.stock.hexun.com/rzrq/s300093.shtml
+      - strong [ref=e63]: 公司公告
+      - list [ref=e64]:
+        - listitem [ref=e65]:
+          - link "最新公告" [ref=e66] [cursor=pointer]:
+            - /url: http://www.szse.cn/disclosure/listed/notice/index.html?stock=300093
+        - listitem [ref=e67]:
+          - link "年度报告" [ref=e68] [cursor=pointer]:
+            - /url: http://money.finance.sina.com.cn/corp/go.php/vCB_Bulletin/stockid/300093/page_type/ndbg.phtml
+      - strong [ref=e69]: 公司运作
+      - list [ref=e70]:
+        - listitem [ref=e71]:
+          - link "股东大会" [ref=e72] [cursor=pointer]:
+            - /url: http://money.finance.sina.com.cn/corp/go.php/vGP_StockHolderMeeting/stockid/300093.phtml
+        - listitem [ref=e73]:
+          - link "收入构成" [ref=e74] [cursor=pointer]:
+            - /url: http://stockpage.10jqka.com.cn/300093/operate/#analysis
+        - listitem [ref=e75]:
+          - link "重大事项" [ref=e76] [cursor=pointer]:
+            - /url: http://q.stock.sohu.com/cn/300093/bw.shtml
+        - listitem [ref=e77]:
+          - link "分红送配" [ref=e78] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/FHPS
+        - listitem [ref=e79]:
+          - link "增发一览" [ref=e80] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/ZFYLB
+        - listitem [ref=e81]:
+          - link "内部交易" [ref=e82] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/INSIDER
+      - strong [ref=e83]: 财务数据
+      - list [ref=e84]:
+        - listitem [ref=e85]:
+          - link "业绩预告" [ref=e86] [cursor=pointer]:
+            - /url: http://money.finance.sina.com.cn/corp/go.php/vFD_AchievementNotice/stockid/300093.phtml
+        - listitem [ref=e87]:
+          - link "主要指标" [ref=e88] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/ZYCWZB
+        - listitem [ref=e89]:
+          - link "利润表" [ref=e90] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/GSLRB
+        - listitem [ref=e91]:
+          - link "资产负债表" [ref=e92] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/ZCFZB
+        - listitem [ref=e93]:
+          - link "现金流量表" [ref=e94] [cursor=pointer]:
+            - /url: /S/SZ300093/detail/#/XJLLB
+        - listitem [ref=e95]:
+          - link "所有者权益变动" [ref=e96] [cursor=pointer]:
+            - /url: http://vip.stock.finance.sina.com.cn/corp/go.php/vFD_BenifitChange/stockid/300093/displaytype/4.phtml
+        - listitem [ref=e97]:
+          - link "雪球选股器" [ref=e98] [cursor=pointer]:
+            - /url: /stock/screener
+      - strong [ref=e99]: 研究分析
+      - list [ref=e100]:
+        - listitem [ref=e101]:
+          - link "杜邦分析" [ref=e102] [cursor=pointer]:
+            - /url: https://vip.stock.finance.sina.com.cn/corp/go.php/vFD_DupontAnalysis/stockid/300093/displaytype/10.phtml
+        - listitem [ref=e103]:
+          - link "研究报告" [ref=e104] [cursor=pointer]:
+            - /url: http://vip.stock.finance.sina.com.cn/q/go.php/vReport_List/kind/search/index.phtml?t1=2&symbol=300093
+      - strong [ref=e105]: APP专享
+      - list [ref=e106]:
+        - listitem [ref=e107] [cursor=pointer]: 大盘异动
+        - listitem [ref=e108] [cursor=pointer]: 股价提醒
+        - listitem [ref=e109] [cursor=pointer]: 购买指数
+        - listitem [ref=e110] [cursor=pointer]: 相关ETF
+    - generic [ref=e111]:
+      - heading "*ST金刚(SZ:300093)" [level=1] [ref=e112]
+      - generic [ref=e113]:
+        - img "微信分享" [ref=e116] [cursor=pointer]
+        - link "" [ref=e118] [cursor=pointer]:
+          - /url: "#"
+        - link "加自选" [ref=e119] [cursor=pointer]:
+          - /url: "#"
+      - generic [ref=e121]:
+        - generic [ref=e122]:
+          - generic [ref=e123]:
+            - strong [ref=e125]: ¥21.00
+            - generic [ref=e126]: +0.90 +4.48%
+          - generic [ref=e127]:
+            - generic [ref=e128]: 4.42 万球友关注
+            - generic [ref=e129]: 休市 04-17 15:34:15 北京时间
+        - table [ref=e130]:
+          - rowgroup [ref=e131]:
+            - row "最高：21.16 今开：20.23 涨停：24.12 成交量：82971手" [ref=e132]:
+              - cell "最高：21.16" [ref=e133]
+              - cell "今开：20.23" [ref=e134]
+              - cell "涨停：24.12" [ref=e135]
+              - cell "成交量：82971手" [ref=e136]
+            - row "最低：20.00 昨收：20.10 跌停：16.08 成交额：1.71亿" [ref=e137]:
+              - cell "最低：20.00" [ref=e138]
+              - cell "昨收：20.10" [ref=e139]
+              - cell "跌停：16.08" [ref=e140]
+              - cell "成交额：1.71亿" [ref=e141]
+            - row "换手：3.59% 盘后量：0手 量比：1.81 总市值：113.40亿" [ref=e142]:
+              - cell "换手：3.59%" [ref=e143]
+              - cell "盘后量：0手" [ref=e144]
+              - cell "量比：1.81" [ref=e145]
+              - cell "总市值：113.40亿" [ref=e146]
+            - row "振幅：5.77% 盘后额：0.00 委比：-73.21% 流通值：48.51亿" [ref=e147]:
+              - cell "振幅：5.77%" [ref=e148]
+              - cell "盘后额：0.00" [ref=e149]
+              - cell "委比：-73.21%" [ref=e150]
+              - cell "流通值：48.51亿" [ref=e151]
+            - row "市盈率(动)：55.84 市盈率(TTM)：55.84 每股收益：0.38 股息(TTM)：--" [ref=e152]:
+              - cell "市盈率(动)：55.84" [ref=e153]
+              - cell "市盈率(TTM)：55.84" [ref=e154]
+              - cell "每股收益：0.38" [ref=e155]
+              - cell "股息(TTM)：--" [ref=e156]
+            - row "市盈率(静)：55.84 市净率：5.65 每股净资产：3.71 股息率(TTM)：--" [ref=e157]:
+              - cell "市盈率(静)：55.84" [ref=e158]
+              - cell "市净率：5.65" [ref=e159]
+              - cell "每股净资产：3.71" [ref=e160]
+              - cell "股息率(TTM)：--" [ref=e161]
+            - row "52周最高：21.16 总股本：5.40亿 质押率：21.80% 注册制：否" [ref=e162]:
+              - cell "52周最高：21.16" [ref=e163]
+              - cell "总股本：5.40亿" [ref=e164]
+              - cell "质押率：21.80%" [ref=e165]
+              - cell "注册制：否" [ref=e166]
+            - row "52周最低：5.48 流通股：2.31亿 商誉/净资产：-- 货币单位：CNY" [ref=e167]:
+              - cell "52周最低：5.48" [ref=e168]
+              - cell "流通股：2.31亿" [ref=e169]
+              - cell "商誉/净资产：--" [ref=e170]
+              - cell "货币单位：CNY" [ref=e171]
+      - generic [ref=e173]:
+        - generic [ref=e174] [cursor=pointer]:
+          - generic [ref=e175]:
+            - generic [ref=e176]: 分时
+            - generic [ref=e177]: 五日
+            - generic [ref=e178]: 日K
+            - generic [ref=e179]: 周K
+            - generic [ref=e180]: 月K
+            - generic [ref=e181]: 季K
+            - generic [ref=e182]: 年K
+            - generic [ref=e183]: 120分
+            - generic [ref=e184]: 60分
+            - generic [ref=e185]: 30分
+            - generic [ref=e186]: 15分
+            - generic [ref=e187]: 5分
+            - generic [ref=e188]: 1分
+          - list [ref=e189]:
+            - listitem [ref=e190]: 区间统计
+            - listitem [ref=e191]: 全屏显示
+        - paragraph [ref=e194] [cursor=pointer]: 手机版沪深Lv2行情
+      - generic [ref=e197]:
+        - img [ref=e198]
+        - generic [ref=e199]:
+          - generic [ref=e201]: $*ST金刚(SZ300093)$
+          - generic [ref=e202]:
+            - generic [ref=e203]:
+              - link "" [ref=e205] [cursor=pointer]:
+                - /url: ""
+                - generic [ref=e206]: 
+              - link "" [ref=e207] [cursor=pointer]:
+                - /url: javascript:;
+                - generic [ref=e208]: 
+              - link "" [ref=e209] [cursor=pointer]:
+                - /url: ""
+                - generic [ref=e210]: 
+              - link "" [ref=e211] [cursor=pointer]:
+                - /url: ""
+                - generic [ref=e212]: 
+              - link "" [ref=e213] [cursor=pointer]:
+                - /url: ""
+                - generic [ref=e214]: 
+              - link " 长文" [ref=e216] [cursor=pointer]:
+                - /url: https://mp.xueqiu.com/write/?position=pc_stock_post
+                - generic [ref=e217]: 
+                - text: 长文
+            - link "发布" [ref=e219]:
+              - /url: ""
+      - generic [ref=e220]:
+        - generic [ref=e221]:
+          - link "全部" [ref=e222] [cursor=pointer]:
+            - /url: ""
+          - link "讨论" [ref=e223] [cursor=pointer]:
+            - /url: ""
+          - link "交易" [ref=e224] [cursor=pointer]:
+            - /url: ""
+          - link "资讯" [ref=e225] [cursor=pointer]:
+            - /url: ""
+          - link "公告" [ref=e226] [cursor=pointer]:
+            - /url: ""
+        - generic [ref=e227]:
+          - generic [ref=e229]:
+            - link "新帖" [ref=e230] [cursor=pointer]:
+              - /url: ""
+            - link "热帖" [ref=e231] [cursor=pointer]:
+              - /url: ""
+          - generic [ref=e233]:
+            - textbox "搜索该股票相关信息" [ref=e234]
+            - generic [ref=e235]: 
+        - generic [ref=e236]:
+          - article [ref=e237]:
+            - link [ref=e238] [cursor=pointer]:
+              - /url: /7276729879
+              - img [ref=e239]
+            - generic [ref=e240]:
+              - generic [ref=e242]:
+                - link "浮盈皆浮云" [ref=e243] [cursor=pointer]:
+                  - /url: /7276729879
+                - link "昨天 13:59· 来自Android" [ref=e244] [cursor=pointer]:
+                  - /url: /7276729879/384394851
+              - generic [ref=e248]:
+                - link "$*ST金刚(SZ300093)$" [ref=e249] [cursor=pointer]:
+                  - /url: https://xueqiu.com/S/SZ300093
+                - text: 一只好股票一定要有散户源源不断的参与才能走得更远，庄不怕你卖，就怕你不买不参与进来，新旧散户交替接力生命力才会旺盛，待时机成熟时，自会有资金点火
+              - generic [ref=e250]:
+                - link " 转发" [ref=e251] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e252]: 
+                  - generic [ref=e253]: 转发
+                - link " 1" [ref=e254] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e255]: 
+                  - generic [ref=e256]: "1"
+                - link " 2" [ref=e257] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e258]: 
+                  - generic [ref=e259]: "2"
+                - link " 收藏" [ref=e260] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e261]: 
+                  - generic [ref=e262]: 收藏
+          - article [ref=e263]:
+            - link [ref=e264] [cursor=pointer]:
+              - /url: /S/SZ300093
+              - img [ref=e265]
+            - generic [ref=e266]:
+              - generic [ref=e268]:
+                - link "*ST金刚(SZ300093)" [ref=e269] [cursor=pointer]:
+                  - /url: /S/SZ300093
+                - link "04-16 09:33· 来自公告" [ref=e270] [cursor=pointer]:
+                  - /url: /S/SZ300093/384110365
+              - generic [ref=e274]:
+                - text: "*ST金刚：300093*ST金刚投资者关系管理信息20260416"
+                - link "网页链接" [ref=e275] [cursor=pointer]:
+                  - /url: http://static.cninfo.com.cn/finalpage/2026-04-16/1225109220.PDF
+              - generic [ref=e276]:
+                - link " 转发" [ref=e277] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e278]: 
+                  - generic [ref=e279]: 转发
+                - link " 讨论" [ref=e280] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e281]: 
+                  - generic [ref=e282]: 讨论
+                - link " 2" [ref=e283] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e284]: 
+                  - generic [ref=e285]: "2"
+                - link " 收藏" [ref=e286] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e287]: 
+                  - generic [ref=e288]: 收藏
+          - article [ref=e289]:
+            - link [ref=e290] [cursor=pointer]:
+              - /url: /tmtpost
+              - img [ref=e291]
+            - generic [ref=e292]:
+              - generic [ref=e294]:
+                - link "钛媒体APP" [ref=e295] [cursor=pointer]:
+                  - /url: /tmtpost
+                - link "04-14 12:40· 来自雪球" [ref=e296] [cursor=pointer]:
+                  - /url: /5899108858/383787717
+              - generic [ref=e298] [cursor=pointer]:
+                - heading "重整完成基本面焕新，算电协同重估增长空间" [level=3] [ref=e299]
+                - generic [ref=e301]:
+                  - text: 重整完成刚实现债务风险出清，*ST金刚（300093.SZ）就按下了战略转型的“加速键”。
+                  - text: 近日，金刚光伏披露的2025年报显示，2025年，公司实现营收3.01亿元，同比大增143.41%；归母净利润2.03亿元，一举扭亏为盈；定增预案则抛出24.31亿元募资计划，其中超七成资金拟投向算力业务，标志着公司已明...
+                - img [ref=e303]
+              - generic [ref=e304]:
+                - link " 转发" [ref=e305] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e306]: 
+                  - generic [ref=e307]: 转发
+                - link " 讨论" [ref=e308] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e309]: 
+                  - generic [ref=e310]: 讨论
+                - link " 3" [ref=e311] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e312]: 
+                  - generic [ref=e313]: "3"
+                - link " 收藏" [ref=e314] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e315]: 
+                  - generic [ref=e316]: 收藏
+          - article [ref=e317]:
+            - link [ref=e318] [cursor=pointer]:
+              - /url: /7276729879
+              - img [ref=e319]
+            - generic [ref=e320]:
+              - generic [ref=e322]:
+                - link "浮盈皆浮云" [ref=e323] [cursor=pointer]:
+                  - /url: /7276729879
+                - link "04-14 10:49· 来自Android" [ref=e324] [cursor=pointer]:
+                  - /url: /7276729879/383765654
+              - generic [ref=e328]:
+                - link "$*ST金刚(SZ300093)$" [ref=e329] [cursor=pointer]:
+                  - /url: https://xueqiu.com/S/SZ300093
+                - text: 一个务实涨股价，一个靠炒作拉股价，只有务实的公司才能走得更远更久
+              - generic [ref=e330]:
+                - link " 转发" [ref=e331] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e332]: 
+                  - generic [ref=e333]: 转发
+                - link " 讨论" [ref=e334] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e335]: 
+                  - generic [ref=e336]: 讨论
+                - link " 赞" [ref=e337] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e338]: 
+                  - generic [ref=e339]: 赞
+                - link " 收藏" [ref=e340] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e341]: 
+                  - generic [ref=e342]: 收藏
+          - article [ref=e343]:
+            - link [ref=e344] [cursor=pointer]:
+              - /url: /9079826787
+              - img [ref=e345]
+            - generic [ref=e346]:
+              - generic [ref=e348]:
+                - link "北极星电力网" [ref=e349] [cursor=pointer]:
+                  - /url: /9079826787
+                - link "04-13 10:52· 来自雪球" [ref=e350] [cursor=pointer]:
+                  - /url: /9079826787/383602623
+              - generic [ref=e352] [cursor=pointer]:
+                - heading "巨亏之下惊险“复活”！光伏企业还能这么玩……" [level=3] [ref=e353]
+                - generic [ref=e355]:
+                  - text: 遥望远方，一目了然；凝视当下，却愈加模糊。
+                  - text: 2026年，光伏行业仍在迷雾中挣扎，企业生存维艰，寒冬远未过去，行业破产警报已接连拉响。
+                  - text: 2026开年至今，老牌组件厂商亿晶光电及ST泉为相继被申请破产重整。据北极星统计，2024年以来，已有8家光伏上市公司启动预重整，但从进展来看，仅*ST聆...
+                - img [ref=e357]
+              - generic [ref=e358]:
+                - link " 转发" [ref=e359] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e360]: 
+                  - generic [ref=e361]: 转发
+                - link " 讨论" [ref=e362] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e363]: 
+                  - generic [ref=e364]: 讨论
+                - link " 2" [ref=e365] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e366]: 
+                  - generic [ref=e367]: "2"
+                - link " 收藏" [ref=e368] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e369]: 
+                  - generic [ref=e370]: 收藏
+          - article [ref=e371]:
+            - link [ref=e372] [cursor=pointer]:
+              - /url: /1263159844
+              - img [ref=e373]
+            - generic [ref=e374]:
+              - generic [ref=e376]:
+                - link "007xk" [ref=e377] [cursor=pointer]:
+                  - /url: /1263159844
+                - link "04-08 13:22· 来自Android" [ref=e378] [cursor=pointer]:
+                  - /url: /1263159844/382995523
+              - generic [ref=e382]:
+                - link "$*ST金刚(SZ300093)$" [ref=e383] [cursor=pointer]:
+                  - /url: https://xueqiu.com/S/SZ300093
+                - text: 只剩你还绿着了
+              - generic [ref=e384]:
+                - link " 转发" [ref=e385] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e386]: 
+                  - generic [ref=e387]: 转发
+                - link " 讨论" [ref=e388] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e389]: 
+                  - generic [ref=e390]: 讨论
+                - link " 赞" [ref=e391] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e392]: 
+                  - generic [ref=e393]: 赞
+                - link " 收藏" [ref=e394] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e395]: 
+                  - generic [ref=e396]: 收藏
+          - article [ref=e397]:
+            - link [ref=e398] [cursor=pointer]:
+              - /url: /9962958337
+              - img [ref=e399]
+            - generic [ref=e400]:
+              - generic [ref=e402]:
+                - link "小茅粉" [ref=e403] [cursor=pointer]:
+                  - /url: /9962958337
+                - link "04-07 10:54· 来自雪球" [ref=e404] [cursor=pointer]:
+                  - /url: /9962958337/382814188
+              - generic [ref=e408]:
+                - link "$*ST金刚(SZ300093)$" [ref=e409] [cursor=pointer]:
+                  - /url: https://xueqiu.com/S/SZ300093
+                - text: 筹码还没吃够，还得继续磨，都在等一季度的业绩落地。
+              - generic [ref=e410]:
+                - link " 转发" [ref=e411] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e412]: 
+                  - generic [ref=e413]: 转发
+                - link " 讨论" [ref=e414] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e415]: 
+                  - generic [ref=e416]: 讨论
+                - link " 赞" [ref=e417] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e418]: 
+                  - generic [ref=e419]: 赞
+                - link " 收藏" [ref=e420] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e421]: 
+                  - generic [ref=e422]: 收藏
+          - article [ref=e423]:
+            - link [ref=e424] [cursor=pointer]:
+              - /url: /8074342415
+              - img [ref=e425]
+            - generic [ref=e426]:
+              - generic [ref=e428]:
+                - link "执策揽真金" [ref=e429] [cursor=pointer]:
+                  - /url: /8074342415
+                - link "04-06 17:18· 来自雪球" [ref=e430] [cursor=pointer]:
+                  - /url: /8074342415/382750320
+              - generic [ref=e434]:
+                - link "$*ST金刚(SZ300093)$" [ref=e435] [cursor=pointer]:
+                  - /url: https://xueqiu.com/S/SZ300093
+                - text: 这股票还能翻倍 虽然庄是恶庄
+              - generic [ref=e436]:
+                - link " 转发" [ref=e437] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e438]: 
+                  - generic [ref=e439]: 转发
+                - link " 1" [ref=e440] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e441]: 
+                  - generic [ref=e442]: "1"
+                - link " 1" [ref=e443] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e444]: 
+                  - generic [ref=e445]: "1"
+                - link " 收藏" [ref=e446] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e447]: 
+                  - generic [ref=e448]: 收藏
+          - article [ref=e449]:
+            - link [ref=e450] [cursor=pointer]:
+              - /url: /9962958337
+              - img [ref=e451]
+            - generic [ref=e452]:
+              - generic [ref=e454]:
+                - link "小茅粉" [ref=e455] [cursor=pointer]:
+                  - /url: /9962958337
+                - link "04-03 11:06· 来自雪球" [ref=e456] [cursor=pointer]:
+                  - /url: /9962958337/382527000
+              - generic [ref=e460]:
+                - link "$*ST金刚(SZ300093)$" [ref=e461] [cursor=pointer]:
+                  - /url: https://xueqiu.com/S/SZ300093
+                - text: 机会是给有耐心的人的
+              - generic [ref=e462]:
+                - link " 转发" [ref=e463] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e464]: 
+                  - generic [ref=e465]: 转发
+                - link " 讨论" [ref=e466] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e467]: 
+                  - generic [ref=e468]: 讨论
+                - link " 1" [ref=e469] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e470]: 
+                  - generic [ref=e471]: "1"
+                - link " 收藏" [ref=e472] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e473]: 
+                  - generic [ref=e474]: 收藏
+          - article [ref=e475]:
+            - link [ref=e476] [cursor=pointer]:
+              - /url: /4326037532
+              - img [ref=e477]
+            - generic [ref=e478]:
+              - generic [ref=e480]:
+                - link "ST咚哥" [ref=e481] [cursor=pointer]:
+                  - /url: /4326037532
+                - link "修改于04-03 10:15· 来自雪球" [ref=e482] [cursor=pointer]:
+                  - /url: /4326037532/382508928
+              - generic [ref=e484] [cursor=pointer]:
+                - heading "两个ST出了年报，*ST金刚、ST银江" [level=3] [ref=e485]
+                - generic [ref=e487]:
+                  - text: 昨晚，*st金刚和st银江发布年报，先说下金刚，已申请摘帽，净资产和财报非标问题，经过重整，一般都能解决，金刚能摘帽也是预料之内的，不过，目前年报后申请摘帽的，还没有一个获批，申请后15个交易日没动静，就会进入材料补充阶段.
+                  - text: 目前处于这个阶段的有7家，第一个申请摘帽st阳光，依然在等...
+                - img [ref=e489]
+              - generic [ref=e490]:
+                - link " 转发" [ref=e491] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e492]: 
+                  - generic [ref=e493]: 转发
+                - link " 1" [ref=e494] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e495]: 
+                  - generic [ref=e496]: "1"
+                - link " 7" [ref=e497] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e498]: 
+                  - generic [ref=e499]: "7"
+                - link " 收藏" [ref=e500] [cursor=pointer]:
+                  - /url: ""
+                  - generic [ref=e501]: 
+                  - generic [ref=e502]: 收藏
+        - generic [ref=e503]:
+          - link "1" [ref=e504] [cursor=pointer]:
+            - /url: ""
+          - link "2" [ref=e505] [cursor=pointer]:
+            - /url: ""
+          - link "3" [ref=e506] [cursor=pointer]:
+            - /url: ""
+          - link "4" [ref=e507] [cursor=pointer]:
+            - /url: ""
+          - link "5" [ref=e508] [cursor=pointer]:
+            - /url: ""
+          - text: ...
+          - link "100" [ref=e509] [cursor=pointer]:
+            - /url: ""
+          - link "下一页" [ref=e510] [cursor=pointer]:
+            - /url: ""
+          - textbox [ref=e511]
+    - generic [ref=e512]:
+      - generic [ref=e513]:
+        - generic [ref=e515]: 简介
+        - generic [ref=e517]:
+          - text: 甘肃金刚光伏股份有限公司的主营业务是异质结(HJT)高效电池片、高效太阳能组件的研发、制造、销售。公司的主要产品是N型单晶异质结电...
+          - link "展开" [ref=e518] [cursor=pointer]:
+            - /url: "#"
+      - generic [ref=e519]:
+        - generic [ref=e521]: 业务
+        - generic [ref=e522]: 异质结(HJT)高效电池片、高效太阳能组件的研发、制造、销售。
+      - generic [ref=e523]:
+        - generic [ref=e525]: 大事件
+        - list [ref=e527]:
+          - listitem [ref=e528]: 2026-11-23解禁1.99亿股(预计值)，占总股本36.83%
+      - generic [ref=e529]:
+        - generic [ref=e531]: 44246人关注了该股票
+        - list [ref=e533]:
+          - listitem [ref=e534]:
+            - link [ref=e535] [cursor=pointer]:
+              - /url: /1865400361
+              - img [ref=e536]
+          - listitem [ref=e537]:
+            - link [ref=e538] [cursor=pointer]:
+              - /url: /2116377572
+              - img [ref=e539]
+          - listitem [ref=e540]:
+            - link [ref=e541] [cursor=pointer]:
+              - /url: /7847942693
+              - img [ref=e542]
+          - listitem [ref=e543]:
+            - link [ref=e544] [cursor=pointer]:
+              - /url: /3476457781
+              - img [ref=e545]
+          - listitem [ref=e546]:
+            - link [ref=e547] [cursor=pointer]:
+              - /url: /2232283835
+              - img [ref=e548]
+          - listitem [ref=e549]:
+            - link [ref=e550] [cursor=pointer]:
+              - /url: /5783508110
+              - img [ref=e551]
+          - listitem [ref=e552]:
+            - link [ref=e553] [cursor=pointer]:
+              - /url: /6308624087
+              - img [ref=e554]
+          - listitem [ref=e555]:
+            - link [ref=e556] [cursor=pointer]:
+              - /url: /3816469283
+              - img [ref=e557]
+          - listitem [ref=e558]:
+            - link [ref=e559] [cursor=pointer]:
+              - /url: /2670839909
+              - img [ref=e560]
+          - listitem [ref=e561]:
+            - link [ref=e562] [cursor=pointer]:
+              - /url: /3037238726
+              - img [ref=e563]
+          - listitem [ref=e564]:
+            - link [ref=e565] [cursor=pointer]:
+              - /url: /1641226170
+              - img [ref=e566]
+          - listitem [ref=e567]:
+            - link [ref=e568] [cursor=pointer]:
+              - /url: /1009011946
+              - img [ref=e569]
+          - listitem [ref=e570]:
+            - link [ref=e571] [cursor=pointer]:
+              - /url: /1394113207
+              - img [ref=e572]
+          - listitem [ref=e573]:
+            - link [ref=e574] [cursor=pointer]:
+              - /url: /6920039340
+              - img [ref=e575]
+      - generic [ref=e576]:
+        - generic [ref=e578]: 相关股票
+        - list [ref=e580]:
+          - generic [ref=e581]:
+            - generic [ref=e582]:
+              - link "*ST金灵" [ref=e583] [cursor=pointer]:
+                - /url: /S/SZ300091
+              - generic [ref=e584]: SZ300091
+            - generic [ref=e585]:
+              - generic [ref=e586]: "3.08"
+              - generic [ref=e587]: "-0.65%"
+          - generic [ref=e588]:
+            - generic [ref=e589]:
+              - link "ST易联众" [ref=e590] [cursor=pointer]:
+                - /url: /S/SZ300096
+              - generic [ref=e591]: SZ300096
+            - generic [ref=e592]:
+              - generic [ref=e593]: "9.75"
+              - generic [ref=e594]: +4.95%
+          - generic [ref=e595]:
+            - generic [ref=e596]:
+              - link "ST柯利达" [ref=e597] [cursor=pointer]:
+                - /url: /S/SH603828
+              - generic [ref=e598]: SH603828
+            - generic [ref=e599]:
+              - generic [ref=e600]: "5.87"
+              - generic [ref=e601]: "-2.33%"
+          - generic [ref=e602]:
+            - generic [ref=e603]:
+              - link "ST银江" [ref=e604] [cursor=pointer]:
+                - /url: /S/SZ300020
+              - generic [ref=e605]: SZ300020
+            - generic [ref=e606]:
+              - generic [ref=e607]: "3.84"
+              - generic [ref=e608]: +4.35%
+          - generic [ref=e609]:
+            - generic [ref=e610]:
+              - link "*ST海源" [ref=e611] [cursor=pointer]:
+                - /url: /S/SZ002529
+              - generic [ref=e612]: SZ002529
+            - generic [ref=e613]:
+              - generic [ref=e614]: "7.19"
+              - generic [ref=e615]: +0.28%
+      - generic [ref=e616]:
+        - generic [ref=e618]: 相关基金
+        - list [ref=e620]:
+          - generic [ref=e621]:
+            - generic [ref=e622]:
+              - link "汇丰晋信动态策略混合A" [ref=e623] [cursor=pointer]:
+                - /url: /S/F540003
+              - generic [ref=e624]: 基金季报中持仓包含*ST金刚所属板块
+              - generic [ref=e625]:
+                - generic [ref=e626]: 金牛奖
+                - generic [ref=e627]: 陆彬管理
+            - generic [ref=e628]:
+              - generic [ref=e629]: +31.42%
+              - generic [ref=e630]: 近1年
+          - generic [ref=e631]:
+            - generic [ref=e632]:
+              - link "汇丰晋信智造先锋股票A" [ref=e633] [cursor=pointer]:
+                - /url: /S/F001643
+              - generic [ref=e634]: 基金季报中持仓包含*ST金刚所属板块
+              - generic [ref=e635]:
+                - generic [ref=e636]: 6年老将
+                - generic [ref=e637]: 陆彬管理
+            - generic [ref=e638]:
+              - generic [ref=e639]: +44.34%
+              - generic [ref=e640]: 近1年
+          - generic [ref=e641]:
+            - generic [ref=e642]:
+              - link "华夏兴和混合" [ref=e643] [cursor=pointer]:
+                - /url: /S/F519918
+              - generic [ref=e644]: 基金季报中持仓包含*ST金刚所属板块
+              - generic [ref=e645]:
+                - generic [ref=e646]: 近4年业绩同类排名前15%
+                - generic [ref=e647]: 李彦管理
+            - generic [ref=e648]:
+              - generic [ref=e649]: +54.35%
+              - generic [ref=e650]: 近1年
+          - generic [ref=e651]:
+            - generic [ref=e652]:
+              - link "天弘中证光伏A" [ref=e653] [cursor=pointer]:
+                - /url: /S/F011102
+              - generic [ref=e654]: 基金季报中持仓包含*ST金刚所属板块
+              - generic [ref=e655]:
+                - generic [ref=e656]: 祁世超管理
+                - generic [ref=e657]: 21亿规模
+            - generic [ref=e658]:
+              - generic [ref=e659]: +63.58%
+              - generic [ref=e660]: 近1年
+          - generic [ref=e661]:
+            - generic [ref=e662]:
+              - link "汇丰晋信龙腾混合" [ref=e663] [cursor=pointer]:
+                - /url: /S/F540002
+              - generic [ref=e664]: 基金季报中持仓包含*ST金刚所属板块
+              - generic [ref=e665]:
+                - generic [ref=e666]: 陆彬管理
+                - generic [ref=e667]: 6年老将
+            - generic [ref=e668]:
+              - generic [ref=e669]: +30.51%
+              - generic [ref=e670]: 近1年
+  - contentinfo [ref=e671]:
+    - generic [ref=e675]: © 2026 XUEQIU.COM

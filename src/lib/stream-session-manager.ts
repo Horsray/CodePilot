@@ -123,6 +123,7 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     startedAt: stream.snapshot.startedAt,
     completedAt: stream.snapshot.completedAt,
     error: stream.snapshot.error,
+    referencedContexts: stream.snapshot.referencedContexts,
     finalMessageContent: stream.snapshot.finalMessageContent,
   };
 }
@@ -209,6 +210,7 @@ export function startStream(params: StartStreamParams): void {
       startedAt: Date.now(),
       completedAt: null,
       error: null,
+      referencedContexts: [],
       finalMessageContent: null,
     },
     idleCheckTimer: null,
@@ -256,12 +258,23 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
 
   // Adaptive text emit throttle — avoids excessive React re-renders during fast streaming.
   // Defined before try/catch so flushTextThrottle is accessible in the error path.
-  const TEXT_THROTTLE_MS = 100;
+  // 中文注释：功能名称「流式文本节流」，用法是将文本更新控制在接近 60fps，
+  // 既减少 React 抖动，又避免让用户觉得首轮输出“一卡一卡地跳”。
+  const TEXT_THROTTLE_MS = 16;
   let textEmitTimer: ReturnType<typeof setTimeout> | null = null;
   let textDirty = false;
+  // 中文注释：思考内容通常比正文更长，节流稍微放宽，减少大段 reasoning 导致的频繁重绘。
+  const THINKING_THROTTLE_MS = 48;
+  let thinkingEmitTimer: ReturnType<typeof setTimeout> | null = null;
+  let thinkingDirty = false;
 
   const emitTextUpdate = () => {
     textDirty = false;
+    emit(stream, 'snapshot-updated');
+  };
+
+  const emitThinkingUpdate = () => {
+    thinkingDirty = false;
     emit(stream, 'snapshot-updated');
   };
 
@@ -275,12 +288,27 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     }
   };
 
+  const throttledThinkingEmit = () => {
+    thinkingDirty = true;
+    if (!thinkingEmitTimer) {
+      thinkingEmitTimer = setTimeout(() => {
+        thinkingEmitTimer = null;
+        if (thinkingDirty) emitThinkingUpdate();
+      }, THINKING_THROTTLE_MS);
+    }
+  };
+
   const flushTextThrottle = () => {
     if (textEmitTimer) {
       clearTimeout(textEmitTimer);
       textEmitTimer = null;
     }
     if (textDirty) emitTextUpdate();
+    if (thinkingEmitTimer) {
+      clearTimeout(thinkingEmitTimer);
+      thinkingEmitTimer = null;
+    }
+    if (thinkingDirty) emitThinkingUpdate();
   };
 
   try {
@@ -338,7 +366,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           stream.thinkingPhaseEnded = false;
         }
         stream.accumulatedThinking += delta;
-        emit(stream, 'snapshot-updated');
+        throttledThinkingEmit();
       },
       onToolUse: (tool) => {
         markActive();
@@ -367,8 +395,8 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onToolOutput: (data) => {
         markActive();
-        const next = stream.toolOutputAccumulated + (stream.toolOutputAccumulated ? '\n' : '') + data;
-        stream.toolOutputAccumulated = next.length > 2000 ? next.slice(-2000) : next;
+        const next = stream.toolOutputAccumulated + data;
+        stream.toolOutputAccumulated = next.length > 5000 ? next.slice(-5000) : next;
         emit(stream, 'snapshot-updated');
       },
       onToolProgress: (toolName, elapsed) => {
@@ -408,6 +436,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
             }
           }, 5000); // Show for 5s so user can read it
         }
+      },
+      onReferencedContexts: (files) => {
+        markActive();
+        stream.snapshot = { ...stream.snapshot, referencedContexts: files };
+        emit(stream, 'snapshot-updated');
       },
       onStatus: (text) => {
         markActive();
@@ -790,13 +823,29 @@ export async function respondToPermission(
   emit(stream, 'snapshot-updated');
 
   try {
-    await fetch('/api/chat/permission', {
+    const response = await fetch('/api/chat/permission', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-  } catch {
-    // Best effort
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({}));
+      if (response.status === 409) {
+        console.warn(`[permission] Request already resolved or aborted: ${perm.permissionRequestId}`);
+        return; // Harmless, skip throwing error to avoid console spam
+      }
+      console.error('[permission] POST /api/chat/permission failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errBody,
+        permissionRequestId: perm.permissionRequestId,
+        hasUpdatedInput: !!updatedInput,
+        answerKeys: updatedInput ? Object.keys(updatedInput) : [],
+      });
+      throw new Error(`Permission server error: ${errBody.error || response.statusText} (status ${response.status})`);
+    }
+  } catch (e) {
+    console.error('[permission] respondToPermission error:', e);
   }
 
   // Clear permission state after delay (only if no new request arrived)

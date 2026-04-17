@@ -44,6 +44,7 @@
 
 | 文件 | 主题 | 状态 |
 |------|------|------|
+| active/chat-ui-performance-integration.md | 聊天 UI 收口 + 首轮响应提速 + 文件审查/上下文可见性回补 | Phase 0 完成，Phase 1 进行中 |
 | active/chat-latency-remediation.md | 聊天链路提速 + 模式入口收敛 + MCP 持久开关 | Phase 0 完成，Phase 1-4 待开始 |
 | active/agent-timeline-runtime-rebuild.md | 智能体时间线交互系统重构 | Phase 0 完成，Phase 1 进行中 |
 | active/context-storage-migration.md | 上下文共享与存储迁移 | Phase 0 部分完成，Phase 1-3 待开始 |
@@ -54,6 +55,7 @@
 | active/decouple-claude-code.md | 脱离 Claude Code 依赖 — 自建 Agent Runtime（Provider/Loop/Tools/MCP/Permission/Session/Skills/SubAgent） | Phase 0 完成，Phase 1-8 待开始 |
 | active/runtime-auto-and-onboarding.md | Runtime auto 简化（CLI binary check 代替凭据推断）+ Chat 入口拦截 + 错误归一翻译（复用现有 SetupCenter）+ FileTree hotfix + 百炼 catalog 替换 | Phase 0-4 已完成（commits bc308e9/2d06f50/d1fac18/3e03919/a32837e），Phase 5 待发版 |
 | active/issue-tracker.md | **统一问题跟踪** — 合并所有 Bug / Feature Request / Sentry 监控，持续更新（替代 open-issues + v0.48-post-release） | 持续维护 |
+| active/commercial-agent-upgrade.md | 商用级桌面 Agent 体验升级：Doom Loop 阻断、虚拟文件树、终端流式输出、状态解耦 | Phase 1 进行中，Phase 2-3 待开始 |
 | active/v0.48-post-release-issues.md | v0.48.0/0.48.1 发版后问题追查（已归档至 issue-tracker.md，保留原始记录） | 已归档 |
 ### Completed
 

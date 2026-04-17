@@ -1,0 +1,39 @@
+[    4815ms] [LOG] 2024/1/19 @ https://gbfek.dfcfw.com/deploy/fd_quote_editor/work/editor.js:21
+[    4895ms] [LOG] el JSHandle@node @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    4896ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    4900ms] [LOG] script.src https://gbapi.eastmoney.com/webarticlelist/api/Article/Articlelist?code=300093&sorttype=1&ps=36&from=CommonBaPost&deviceid=quoteweb&version=200&product=Guba&plat=Web&needzd=true&callback=jsonp_1776444426957_ayxyigsprbe @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6367ms] [LOG] json.re [Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object, Object] @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6367ms] [LOG] tempData {data: Array(18), stockbar_code: 300093, view_more_url: http://guba.eastmoney.com/list,300093.html, view_more_url_f: http://guba.eastmoney.com/list,300093,f.html, view_more_ba_name: *ST金刚} @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6368ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6368ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] execute app @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] post_title:对子顶 reply:3 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6369ms] [LOG] post_title:周一撤销ST，明牌了，直接涨停，参考创业板新规利 reply:9 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:@妙想金刚光伏是从哪一天开始申请摘帽？交易所在什 reply:1 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:机构调研丨锂矿概念+锂电池+小金属 这家公司积极 reply:27 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:22.90有没有机会回请各位大神指导一下？？？？ reply:2 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:@妙想公司申请撤销ST需要停牌一天吗？公司与主营 reply:2 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:金刚摘帽后随着算力推进，估计能涨到100 reply:3 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:来三个一字涨停板，可好？ reply:3 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:*ST金刚：北京通州算力项目获能耗批复规划超10 reply:1 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:今晚有没有通知休息一天啊 reply:0 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:金刚啊，你能回18块吗？ reply:1 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:第一波目标30个棒棒棒糖 reply:4 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:突破30元的节奏 reply:1 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:板块上去了，刚子冲啊 reply:0 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:能不能看一下圣阳 reply:0 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:又开始套人了 reply:0 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:明天早盘是最后一刻的上车机会 reply:3 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    6370ms] [LOG] post_title:*ST金刚:300093*ST金刚投资者关系管理 reply:1 @ https://gbfek.eastmoney.com/deploy/article_list/work/article_list.js:21
+[    9860ms] Object
+[   12496ms] [ERROR] Failed to load resource: the server responded with a status of 403 (Forbidden) @ https://anonflow2.eastmoney.com/ewtsdk/ewtsdk.prod.js?ver=20251128:0
+[   14420ms] Uncaught ReferenceError: jQuery351037786287748413083_1776444425513 is not defined
+    at <anonymous> (https://push2.eastmoney.com/api/qt/stock/get?ut=fa5fd1943c7b386f172d6893dbfba10b&invt=2&fltt=2&fields=f138,f139,f141,f142,f144,f145,f147,f148&secid=0.300093&cb=jQuery351037786287748413083_1776444425513&_=1776444425514:0:0)
+[   14824ms] Uncaught ReferenceError: jQuery351037786287748413083_1776444425515 is not defined
+    at <anonymous> (https://push2.eastmoney.com/api/qt/stock/fflow/kline/get?lmt=0&klt=1&secid=0.300093&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56&ut=fa5fd1943c7b386f172d6893dbfba10b&cb=jQuery351037786287748413083_1776444425515&_=1776444425516:0:0)

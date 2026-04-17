@@ -1,5 +1,5 @@
 import type { NativePermissionResult } from './types/agent-types';
-import { resolvePermissionRequest as dbResolvePermission } from './db';
+import { resolvePermissionRequest as dbResolvePermission, getPermissionRequest } from './db';
 
 // Use our own type. SDK path casts to this at the boundary.
 type PermissionResult = NativePermissionResult;
@@ -7,12 +7,13 @@ type PermissionResult = NativePermissionResult;
 interface PendingPermission {
   resolve: (result: PermissionResult) => void;
   createdAt: number;
-  abortSignal?: AbortSignal;
   toolInput: Record<string, unknown>;
   timer: ReturnType<typeof setTimeout>;
+  intervalId?: ReturnType<typeof setInterval>;
 }
 
 const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const POLL_INTERVAL_MS = 1000; // 1 second
 
 // Use globalThis to ensure the Map is shared across all module instances.
 // In Next.js dev mode (Turbopack), different API routes may load separate
@@ -27,44 +28,32 @@ function getMap(): Map<string, PendingPermission> {
 }
 
 /**
- * Helper to deny and remove a pending permission entry.
- * Also writes the denial to DB for persistence/audit.
- */
-function denyAndRemove(id: string, message: string, dbStatus: 'timeout' | 'aborted' = 'aborted') {
-  const map = getMap();
-  const entry = map.get(id);
-  if (!entry) return;
-  clearTimeout(entry.timer);
-  entry.resolve({ behavior: 'deny', message });
-  map.delete(id);
-  try {
-    dbResolvePermission(id, dbStatus, { message });
-  } catch {
-    // DB write failure should not affect in-memory path
-  }
-}
-
-/**
  * Register a pending permission request.
  * Returns a Promise that resolves when the user responds or after TIMEOUT_MS.
  */
 export function registerPendingPermission(
   id: string,
   toolInput: Record<string, unknown>,
-  abortSignal?: AbortSignal,
 ): Promise<PermissionResult> {
   const map = getMap();
 
   return new Promise<PermissionResult>((resolve) => {
+    // Clean up function to clear both timers
+    const cleanup = () => {
+      const entry = map.get(id);
+      if (entry) {
+        clearTimeout(entry.timer);
+        if (entry.intervalId) clearInterval(entry.intervalId);
+      }
+      map.delete(id);
+    };
+
     // Per-request independent timer: auto-deny after TIMEOUT_MS.
-    // `.unref()` so this timer doesn't prevent Node process from exiting
-    // during graceful shutdown — if the app is closing, we don't need to
-    // fire the timeout handler.
     const timer = setTimeout(() => {
       if (map.has(id)) {
         console.warn(`[permission-registry] Permission request ${id} timed out after ${TIMEOUT_MS / 1000}s`);
         resolve({ behavior: 'deny', message: 'Permission request timed out' });
-        map.delete(id);
+        cleanup();
         try {
           dbResolvePermission(id, 'timeout', { message: 'Permission request timed out' });
         } catch {
@@ -76,18 +65,46 @@ export function registerPendingPermission(
       (timer as NodeJS.Timeout).unref();
     }
 
+    // Poll the database to support cross-worker resolution
+    const intervalId = setInterval(() => {
+      try {
+        const record = getPermissionRequest(id);
+        if (record && record.status !== 'pending') {
+          console.log(`[permission-registry] Polled DB and found resolved status: ${record.status} for ${id}`);
+          let result: PermissionResult;
+          if (record.status === 'allow') {
+            result = {
+              behavior: 'allow',
+              updatedPermissions: record.updated_permissions ? JSON.parse(record.updated_permissions) : undefined,
+              ...(record.updated_input ? { updatedInput: JSON.parse(record.updated_input) } : {}),
+            };
+            if (!result.updatedInput) {
+              result.updatedInput = toolInput; // fallback
+            }
+          } else {
+            result = { behavior: 'deny', message: record.message || 'User denied permission' };
+          }
+          resolve(result);
+          cleanup();
+        }
+      } catch (e) {
+        // ignore DB polling errors
+      }
+    }, POLL_INTERVAL_MS);
+    if (typeof intervalId === 'object' && 'unref' in intervalId) {
+      (intervalId as NodeJS.Timeout).unref();
+    }
+
     map.set(id, {
-      resolve,
+      resolve: (res) => {
+        resolve(res);
+        cleanup();
+      },
       createdAt: Date.now(),
-      abortSignal,
       toolInput,
       timer,
+      intervalId,
     });
-
-    // Auto-deny if the abort signal fires (client disconnect / stop button)
-    if (abortSignal) {
-      abortSignal.addEventListener('abort', () => denyAndRemove(id, 'Request aborted'), { once: true });
-    }
   });
 }
 
@@ -101,13 +118,21 @@ export function resolvePendingPermission(
 ): boolean {
   const map = getMap();
   const entry = map.get(id);
-  if (!entry) return false;
-
-  clearTimeout(entry.timer);
+  if (!entry) {
+    console.warn('[permission-registry] resolvePendingPermission: entry not found for', id);
+    return false;
+  }
 
   if (result.behavior === 'allow' && !result.updatedInput) {
+    console.warn('[permission-registry] No updatedInput provided, falling back to original toolInput');
     result = { ...result, updatedInput: entry.toolInput };
   }
+
+  console.log('[permission-registry] resolving in-memory:', {
+    id,
+    behavior: result.behavior,
+    hasUpdatedInput: !!result.updatedInput,
+  });
 
   // Dual-write: persist to DB before resolving in-memory
   try {
@@ -122,6 +147,5 @@ export function resolvePendingPermission(
   }
 
   entry.resolve(result);
-  map.delete(id);
   return true;
 }

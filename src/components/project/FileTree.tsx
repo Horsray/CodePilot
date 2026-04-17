@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Virtuoso } from "react-virtuoso";
 import { ArrowsClockwise, MagnifyingGlass, FileCode, Code, File } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,9 +9,10 @@ import { cn } from "@/lib/utils";
 import type { FileTreeNode } from "@/types";
 import {
   FileTree as AIFileTree,
-  FileTreeFolder,
-  FileTreeFile,
+  FileTreeIcon,
+  FileTreeName,
 } from "@/components/ai-elements/file-tree";
+import { CaretRight, Folder, FolderOpen, Plus } from "@phosphor-icons/react";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { ReactNode } from "react";
 
@@ -58,55 +60,107 @@ function getFileIcon(extension?: string): ReactNode {
   }
 }
 
-function containsMatch(node: FileTreeNode, query: string): boolean {
-  const q = query.toLowerCase();
-  if (node.name.toLowerCase().includes(q)) return true;
-  if (node.children) {
-    return node.children.some((child) => containsMatch(child, query));
+interface FlatNode {
+  node: FileTreeNode;
+  level: number;
+  isExpanded: boolean;
+}
+
+function FlatTreeNodeItem({
+  flatNode,
+  togglePath,
+  selectedPath,
+  onSelect,
+  onAdd,
+}: {
+  flatNode: FlatNode;
+  togglePath: (path: string) => void;
+  selectedPath?: string;
+  onSelect?: (path: string) => void;
+  onAdd?: (path: string) => void;
+}) {
+  const { node, level, isExpanded } = flatNode;
+  const isDirectory = node.type === "directory";
+  const isSelected = selectedPath === node.path;
+  const paddingLeft = level * 16 + 8; // 16px per level
+
+  if (isDirectory) {
+    return (
+      <div
+        className="flex w-full cursor-pointer items-center gap-1 rounded py-1 pr-2 text-left transition-colors hover:bg-muted/50"
+        style={{ paddingLeft }}
+        role="button"
+        tabIndex={0}
+        onClick={() => togglePath(node.path)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            togglePath(node.path);
+          }
+        }}
+      >
+        <span className="shrink-0 rounded p-0.5">
+          <CaretRight
+            size={16}
+            className={cn(
+              "text-muted-foreground transition-transform",
+              isExpanded && "rotate-90"
+            )}
+          />
+        </span>
+        <FileTreeIcon>
+          {isExpanded ? (
+            <FolderOpen size={16} className="text-muted-foreground" />
+          ) : (
+            <Folder size={16} className="text-muted-foreground" />
+          )}
+        </FileTreeIcon>
+        <FileTreeName>{node.name}</FileTreeName>
+      </div>
+    );
   }
-  return false;
-}
-
-function filterTree(nodes: FileTreeNode[], query: string): FileTreeNode[] {
-  if (!query) return nodes;
-  return nodes
-    .filter((node) => containsMatch(node, query))
-    .map((node) => ({
-      ...node,
-      children: node.children ? filterTree(node.children, query) : undefined,
-    }));
-}
-
-function RenderTreeNodes({ nodes, searchQuery }: { nodes: FileTreeNode[]; searchQuery: string }) {
-  const filtered = searchQuery ? filterTree(nodes, searchQuery) : nodes;
 
   return (
-    <>
-      {filtered.map((node) => {
-        if (node.type === "directory") {
-          return (
-            <FileTreeFolder key={node.path} path={node.path} name={node.name}>
-              {node.children && (
-                <RenderTreeNodes nodes={node.children} searchQuery={searchQuery} />
-              )}
-            </FileTreeFolder>
-          );
+    <div
+      className={cn(
+        "group/file flex cursor-pointer items-center gap-1 rounded py-1 pr-2 transition-colors hover:bg-muted/50",
+        isSelected && "bg-muted"
+      )}
+      style={{ paddingLeft: paddingLeft + 24 }} // Align with folder text (CaretRight width)
+      onClick={() => onSelect?.(node.path)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect?.(node.path);
         }
-        return (
-          <FileTreeFile
-            key={node.path}
-            path={node.path}
-            name={node.name}
-            icon={getFileIcon(node.extension)}
-          />
-        );
-      })}
-    </>
+      }}
+      role="treeitem"
+      aria-selected={isSelected}
+      tabIndex={0}
+    >
+      <FileTreeIcon>
+        {getFileIcon(node.extension)}
+      </FileTreeIcon>
+      <FileTreeName>{node.name}</FileTreeName>
+      {onAdd && (
+        <button
+          type="button"
+          className="ml-auto flex size-5 shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted group-hover/file:opacity-100"
+          onClick={(e) => {
+            e.stopPropagation();
+            onAdd(node.path);
+          }}
+          title="Add to chat"
+        >
+          <Plus size={12} className="text-muted-foreground" />
+        </button>
+      )}
+    </div>
   );
 }
 
 // localStorage key for storing expanded paths
-const getExpandedPathsKey = (workingDirectory: string) => 
+const getExpandedPathsKey = (workingDirectory: string) =>
   `fileTree_expanded_${workingDirectory}`;
 
 export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTreeProps) {
@@ -219,6 +273,71 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
     }
   }, [workingDirectory]);
 
+  // Handle single path toggle
+  const togglePath = useCallback((path: string) => {
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      // Save to localStorage immediately
+      if (workingDirectory) {
+        try {
+          const key = getExpandedPathsKey(workingDirectory);
+          localStorage.setItem(key, JSON.stringify(Array.from(next)));
+        } catch {}
+      }
+      return next;
+    });
+  }, [workingDirectory]);
+
+  // Compute flat nodes
+  const flatNodes = useMemo(() => {
+    function containsMatch(node: FileTreeNode, query: string): boolean {
+      const q = query.toLowerCase();
+      if (node.name.toLowerCase().includes(q)) return true;
+      if (node.children) {
+        return node.children.some((child) => containsMatch(child, query));
+      }
+      return false;
+    }
+
+    function filterTree(nodes: FileTreeNode[], query: string): FileTreeNode[] {
+      if (!query) return nodes;
+      return nodes
+        .filter((node) => containsMatch(node, query))
+        .map((node) => ({
+          ...node,
+          children: node.children ? filterTree(node.children, query) : undefined,
+        }));
+    }
+
+    const filtered = searchQuery ? filterTree(tree, searchQuery) : tree;
+
+    function flatten(nodes: FileTreeNode[], level = 0): FlatNode[] {
+      const result: FlatNode[] = [];
+      for (const node of nodes) {
+        const isExpanded = searchQuery ? true : expandedPaths.has(node.path);
+        result.push({ node, level, isExpanded });
+        if (node.type === "directory" && isExpanded && node.children) {
+          result.push(...flatten(node.children, level + 1));
+        }
+      }
+      return result;
+    }
+
+    return flatten(filtered);
+  }, [tree, searchQuery, expandedPaths]);
+
+  // Track selected path for UI highlighting
+  const [selectedPath, setSelectedPath] = useState<string | undefined>();
+  const handleSelect = useCallback((path: string) => {
+    setSelectedPath(path);
+    onFileSelect(path);
+  }, [onFileSelect]);
+
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Search + Refresh */}
@@ -245,7 +364,7 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-hidden">
         {loading && tree.length === 0 ? (
           <div className="flex items-center justify-center py-8">
             <ArrowsClockwise size={16} className="animate-spin text-muted-foreground" />
@@ -254,16 +373,33 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
           <p className="py-4 text-center text-xs text-muted-foreground">
             {error ? error : workingDirectory ? t('fileTree.noFiles') : t('fileTree.selectFolder')}
           </p>
+        ) : flatNodes.length === 0 ? (
+          <p className="py-4 text-center text-xs text-muted-foreground">
+            没有找到匹配的文件
+          </p>
         ) : (
           <AIFileTree
             expanded={expandedPaths}
             onExpandedChange={handleExpandedChange}
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- AI Elements FileTree onSelect type conflicts with HTMLAttributes.onSelect
-            onSelect={onFileSelect as any}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            onSelect={handleSelect as any}
             onAdd={onFileAdd}
-            className="border-0 rounded-none"
+            className="border-0 rounded-none h-full"
           >
-            <RenderTreeNodes nodes={tree} searchQuery={searchQuery} />
+            <Virtuoso
+              style={{ height: '100%', width: '100%' }}
+              data={flatNodes}
+              itemContent={(_index, flatNode) => (
+                <FlatTreeNodeItem
+                  key={flatNode.node.path}
+                  flatNode={flatNode}
+                  togglePath={togglePath}
+                  selectedPath={selectedPath}
+                  onSelect={handleSelect}
+                  onAdd={onFileAdd}
+                />
+              )}
+            />
           </AIFileTree>
         )}
       </div>

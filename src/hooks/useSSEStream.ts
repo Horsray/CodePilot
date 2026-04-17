@@ -37,6 +37,8 @@ export interface SSECallbacks {
   onThinking?: (delta: string) => void;
   onKeepAlive: () => void;
   onError: (accumulated: string) => void;
+  /** 中文注释：功能名称「引用上下文回调」，用法是把本轮注入的规则/文件列表同步到流式 UI。 */
+  onReferencedContexts?: (files: string[]) => void;
   onSkillNudge?: (data: SkillNudgeData) => void;
   onContextCompressed?: (data: { message: string; messagesCompressed: number; tokensSaved: number }) => void;
   onInitMeta?: (meta: {
@@ -195,6 +197,19 @@ function handleSSEEvent(
         callbacks.onToolTimeout(timeoutData.tool_name, timeoutData.elapsed_seconds);
       } catch {
         // skip malformed timeout data
+      }
+      return accumulated;
+    }
+
+    case 'referenced_contexts': {
+      try {
+        const payload = JSON.parse(event.data) as { files?: unknown };
+        const files = Array.isArray(payload.files)
+          ? payload.files.filter((item): item is string => typeof item === 'string')
+          : [];
+        callbacks.onReferencedContexts?.(files);
+      } catch {
+        // skip malformed referenced_contexts data
       }
       return accumulated;
     }

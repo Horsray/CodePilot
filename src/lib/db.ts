@@ -2288,6 +2288,31 @@ export function getPermissionRequest(id: string): {
   return db.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id) as ReturnType<typeof getPermissionRequest>;
 }
 
+export function getLatestPendingPermissionRequestBySession(sessionId: string): {
+  id: string;
+  session_id: string;
+  sdk_session_id: string;
+  tool_name: string;
+  tool_input: string;
+  decision_reason: string;
+  status: string;
+  updated_permissions: string;
+  updated_input: string | null;
+  message: string;
+  created_at: string;
+  expires_at: string;
+  resolved_at: string | null;
+} | undefined {
+  const db = getDb();
+  return db.prepare(
+    `SELECT *
+     FROM permission_requests
+     WHERE session_id = ? AND status = 'pending'
+     ORDER BY created_at DESC
+     LIMIT 1`
+  ).get(sessionId) as ReturnType<typeof getLatestPendingPermissionRequestBySession>;
+}
+
 // ==========================================
 // Bridge: Channel Binding Operations
 // ==========================================

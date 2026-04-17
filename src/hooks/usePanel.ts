@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
+import { usePanelStore } from "@/stores/panelStore";
+import { useGitStatus } from "@/hooks/useGitStatus";
 
 export type PanelContent = "files" | "tasks";
 
@@ -19,13 +21,14 @@ export interface WorkspaceTab {
 }
 
 export interface PanelContextValue {
-  // --- New independent panel states ---
   fileTreeOpen: boolean;
   setFileTreeOpen: (open: boolean) => void;
   gitPanelOpen: boolean;
   setGitPanelOpen: (open: boolean) => void;
   previewOpen: boolean;
   setPreviewOpen: (open: boolean) => void;
+  terminalOpen: boolean;
+  setTerminalOpen: (open: boolean) => void;
   dashboardPanelOpen: boolean;
   setDashboardPanelOpen: (open: boolean) => void;
   assistantPanelOpen: boolean;
@@ -42,13 +45,11 @@ export interface PanelContextValue {
   openPreviewTab: (path: string) => void;
   closeWorkspaceTab: (id: string) => void;
 
-  // --- Git summary (for top bar, derived — no setters) ---
   currentBranch: string;
   gitDirtyCount: number;
   currentWorktreeLabel: string;
   setCurrentWorktreeLabel: (label: string) => void;
 
-  // --- Preserved from old API ---
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   sessionId: string;
@@ -59,9 +60,7 @@ export interface PanelContextValue {
   setStreamingSessionId: (id: string) => void;
   pendingApprovalSessionId: string;
   setPendingApprovalSessionId: (id: string) => void;
-  /** All sessions with active streams (supports multi-session streaming) */
   activeStreamingSessions: Set<string>;
-  /** All sessions with pending permission approval */
   pendingApprovalSessionIds: Set<string>;
   previewFile: string | null;
   setPreviewFile: (path: string | null) => void;
@@ -71,10 +70,26 @@ export interface PanelContextValue {
 
 export const PanelContext = createContext<PanelContextValue | null>(null);
 
+const RENDERED_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
+
+export function defaultViewMode(filePath: string): PreviewViewMode {
+  const dot = filePath.lastIndexOf(".");
+  const ext = dot >= 0 ? filePath.slice(dot).toLowerCase() : "";
+  return RENDERED_EXTENSIONS.has(ext) ? "rendered" : "source";
+}
+
 export function usePanel(): PanelContextValue {
-  const ctx = useContext(PanelContext);
-  if (!ctx) {
-    throw new Error("usePanel must be used within a PanelProvider");
-  }
-  return ctx;
+  const store = usePanelStore();
+  const { status: gitStatusFromHook } = useGitStatus(store.workingDirectory);
+  
+  const currentBranch = gitStatusFromHook?.branch ?? "";
+  const gitDirtyCount = gitStatusFromHook?.changedFiles.filter(f => f.status !== 'untracked').length ?? 0;
+
+  return useMemo(() => ({
+    ...store,
+    currentBranch,
+    gitDirtyCount,
+    openPreviewTab: (path: string) => store.openPreviewTab(path, defaultViewMode),
+    setPreviewFile: (path: string | null) => store.setPreviewFile(path, defaultViewMode),
+  }), [store, currentBranch, gitDirtyCount]);
 }
