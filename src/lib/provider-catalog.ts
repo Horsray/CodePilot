@@ -192,6 +192,7 @@ export const PresetSchema = z.object({
 
 // ── Default Anthropic models ────────────────────────────────────
 
+// First-party Anthropic API: opus alias resolves to claude-opus-4-7.
 const ANTHROPIC_DEFAULT_MODELS: CatalogModel[] = [
   {
     modelId: 'sonnet',
@@ -210,6 +211,43 @@ const ANTHROPIC_DEFAULT_MODELS: CatalogModel[] = [
     capabilities: {
       supportsEffort: true,
       supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'haiku',
+    displayName: 'Haiku 4.5',
+    role: 'haiku',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    },
+  },
+];
+
+// Bedrock / Vertex: per Claude Code docs, the `opus` alias still resolves
+// to Opus 4.6 on these platforms (unlike first-party Anthropic). Users who
+// want Opus 4.7 on Bedrock/Vertex must pass the full model name or set
+// ANTHROPIC_DEFAULT_OPUS_MODEL explicitly. We surface this in the label to
+// avoid promising 4.7 capabilities (xhigh) on an alias that actually runs 4.6.
+const BEDROCK_VERTEX_DEFAULT_MODELS: CatalogModel[] = [
+  {
+    modelId: 'sonnet',
+    displayName: 'Sonnet 4.6',
+    role: 'sonnet',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'opus',
+    displayName: 'Opus 4.6 (alias)',
+    role: 'opus',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
       supportsAdaptiveThinking: true,
     },
   },
@@ -572,7 +610,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       AWS_REGION: 'us-east-1',
       CLAUDE_CODE_SKIP_BEDROCK_AUTH: '1',
     },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: BEDROCK_VERTEX_DEFAULT_MODELS,
     fields: ['env_overrides'],
     iconKey: 'bedrock',
     meta: {
@@ -597,7 +635,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLOUD_ML_REGION: 'us-east5',
       CLAUDE_CODE_SKIP_VERTEX_AUTH: '1',
     },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: BEDROCK_VERTEX_DEFAULT_MODELS,
     fields: ['env_overrides'],
     iconKey: 'google',
     meta: {

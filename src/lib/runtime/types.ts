@@ -60,7 +60,7 @@ export interface RuntimeStreamOptions {
 
   // ── Model capabilities (universal concepts, each runtime maps internally) ──
   thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   context1m?: boolean;
 
   // ── MCP (universal protocol, all runtimes should support) ──

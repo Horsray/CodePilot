@@ -53,8 +53,8 @@ export interface AgentLoopOptions {
   mcpServers?: Record<string, import('@/types').MCPServerConfig>;
   /** Thinking configuration (Anthropic-specific) */
   thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
-  /** Effort level (Anthropic-specific) */
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  /** Effort level (Anthropic-specific). Opus 4.7 adds 'xhigh'. */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Enable 1M context beta */
   context1m?: boolean;
   /** Max agent loop steps (default 50) */
@@ -237,6 +237,16 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           // Build provider options (Anthropic-specific)
           // For third-party proxies: disable adaptive thinking (not widely supported).
           // Ref: comparative analysis showed proxies return 503 for adaptive/effort params.
+          //
+          // Opus 4.7 sanitization (per official migration guide):
+          //   - Opus 4.7 does NOT support extended thinking (type: 'enabled' with
+          //     manual budgetTokens). Passing it yields a 400.
+          //   - Opus 4.7 supports adaptive thinking ({ type: 'adaptive' }) and
+          //     the effort-based reasoning budget instead.
+          //   - 1M context is the default on 4.7 — no beta header needed.
+          // We gate by upstreamModelId containing 'opus-4-7'; 4.6 and older
+          // retain their existing extended-thinking / beta-header paths.
+          const isOpus47 = /opus-?4-?7/i.test(config.modelId || '');
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           let providerOptions: any;
           if (config.sdkType === 'anthropic') {
@@ -245,17 +255,26 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             if (isThirdPartyProxy) {
               // Proxies: only pass thinking if explicitly enabled (not adaptive),
               // skip effort (requires beta header proxies may not support)
-              if (thinking && thinking.type === 'enabled') {
+              if (thinking && thinking.type === 'enabled' && !isOpus47) {
                 anthropicOpts.thinking = thinking;
               }
               // Don't pass effort or adaptive thinking for proxies
             } else {
-              // Official API: pass everything
-              if (thinking) anthropicOpts.thinking = thinking;
+              // Official API: pass through, but sanitize for Opus 4.7.
+              if (thinking) {
+                if (isOpus47 && thinking.type === 'enabled') {
+                  // Drop manual extended thinking on 4.7 — convert to adaptive
+                  // to preserve the user's "thinking enabled" intent.
+                  anthropicOpts.thinking = { type: 'adaptive' };
+                } else {
+                  anthropicOpts.thinking = thinking;
+                }
+              }
               if (effort) anthropicOpts.effort = effort;
             }
 
-            if (context1m) {
+            // 1M beta header is only needed for Opus 4.6; 4.7 is 1M by default.
+            if (context1m && !isOpus47) {
               anthropicOpts.anthropicBeta = ['context-1m-2025-08-07'];
             }
             if (Object.keys(anthropicOpts).length > 0) {

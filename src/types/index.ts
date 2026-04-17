@@ -1024,8 +1024,8 @@ export interface ClaudeStreamOptions {
   bypassPermissions?: boolean;
   /** Thinking configuration for the query */
   thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
-  /** Effort level for the query */
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  /** Effort level for the query (Opus 4.7 adds 'xhigh') */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Output format for structured responses */
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
   /** Custom agent definitions */

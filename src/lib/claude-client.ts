@@ -816,10 +816,20 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         if (thinking) {
           queryOptions.thinking = thinking;
         }
-        // Always set effort explicitly to prevent user-level ~/.claude/settings.json
-        // from injecting 'high' effort via settingSources inheritance.
-        // UI-selected effort takes priority; otherwise default to 'medium'.
-        queryOptions.effort = effort || 'medium';
+        // SDK-runtime effort policy: when the UI doesn't explicitly pick a
+        // level, leave `effort` unset so Claude Code CLI applies its
+        // per-model default (e.g. Opus 4.7 defaults to xhigh, Sonnet to
+        // high). Writing 'medium' unconditionally would override that and
+        // regress the 4.7 out-of-box experience.
+        //
+        // The previous concern about settings.json injecting 'high' is
+        // mitigated by CLI defaults: they're applied with lower precedence
+        // than both queryOptions.effort and settingSources, so an explicit
+        // UI choice still wins and a missing one doesn't silently escalate
+        // to 'high'.
+        if (effort) {
+          queryOptions.effort = effort;
+        }
         if (outputFormat) {
           queryOptions.outputFormat = outputFormat;
         }
