@@ -744,8 +744,8 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           <FileAttachmentDisplay files={files} />
         )}
 
-        {/* Tool calls + thinking for assistant messages — single collapsible group */}
-        {!isUser && (pairedTools.length > 0 || thinking) && (
+        {/* Render the timeline (tools and thoughts interleaved) */}
+        {!isUser && (pairedTools.length > 0 || timelineSteps.length > 0) && (
           <ToolActionsGroup
             tools={pairedTools.map((tool, i) => ({
               id: `hist-${i}`,
@@ -755,7 +755,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
               isError: tool.isError,
               media: tool.media,
             }))}
-            thinkingContent={thinking}
+            steps={timelineSteps}
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
             referencedFiles={referencedFiles}

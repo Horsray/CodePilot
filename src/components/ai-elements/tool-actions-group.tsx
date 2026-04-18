@@ -32,7 +32,7 @@ import { math } from '@streamdown/math';
 import { mermaid } from '@streamdown/mermaid';
 
 const thinkingPlugins = { cjk, math, mermaid };
-import type { MediaBlock } from '@/types';
+import type { MediaBlock, TimelineStep } from '@/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +49,7 @@ export interface ToolAction {
 
 interface ToolActionsGroupProps {
   tools: ToolAction[];
+  steps?: TimelineStep[];
   isStreaming?: boolean;
   streamingToolOutput?: string;
   /** When true, skip the collapsible header and render the tool list directly */
@@ -307,31 +308,97 @@ function isContextTool(name: string): boolean {
   return CONTEXT_TOOLS.has(name.toLowerCase());
 }
 
+function isActionTool(name: string): boolean {
+  const n = name.toLowerCase();
+  return ['bash', 'execute', 'run', 'shell', 'execute_command', 'write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'notebookedit', 'notebook_edit'].includes(n) || n.startsWith('mcp__playwright');
+}
+
 type Segment =
-  | { kind: 'context'; tools: ToolAction[] }
-  | { kind: 'single'; tool: ToolAction };
+  | { kind: 'context_group'; tools: ToolAction[] }
+  | { kind: 'context_single'; tool: ToolAction }
+  | { kind: 'action'; tool: ToolAction }
+  | { kind: 'thinking'; content: string };
 
-function computeSegments(tools: ToolAction[]): Segment[] {
+function computeSegments(
+  tools: ToolAction[],
+  thinkingContent?: string,
+  steps?: TimelineStep[]
+): Segment[] {
+  if (steps && steps.length > 0) {
+    const linear: Array<{ kind: 'thinking'; content: string } | { kind: 'tool'; tool: ToolAction }> = [];
+    steps.forEach(step => {
+      if (step.reasoning?.trim()) {
+        linear.push({ kind: 'thinking', content: step.reasoning });
+      }
+      step.toolCalls.forEach(tc => {
+        linear.push({
+          kind: 'tool',
+          tool: {
+            id: tc.id,
+            name: tc.name,
+            input: tc.input,
+            result: tc.result,
+            isError: tc.isError,
+            media: (tc as any).media,
+          }
+        });
+      });
+    });
+
+    const segments: Segment[] = [];
+    let contextBuffer: ToolAction[] = [];
+
+    const flushContext = () => {
+      if (contextBuffer.length >= 3) {
+        segments.push({ kind: 'context_group', tools: contextBuffer });
+      } else {
+        for (const t of contextBuffer) {
+          segments.push({ kind: 'context_single', tool: t });
+        }
+      }
+      contextBuffer = [];
+    };
+
+    for (const item of linear) {
+      if (item.kind === 'thinking') {
+        flushContext();
+        segments.push({ kind: 'thinking', content: item.content });
+      } else {
+        if (isActionTool(item.tool.name)) {
+          flushContext();
+          segments.push({ kind: 'action', tool: item.tool });
+        } else {
+          contextBuffer.push(item.tool);
+        }
+      }
+    }
+    flushContext();
+    return segments;
+  }
+
   const segments: Segment[] = [];
-  let contextBuffer: ToolAction[] = [];
+  if (thinkingContent?.trim()) {
+    segments.push({ kind: 'thinking', content: thinkingContent });
+  }
 
+  let contextBuffer: ToolAction[] = [];
   const flushContext = () => {
     if (contextBuffer.length >= 3) {
-      segments.push({ kind: 'context', tools: contextBuffer });
+      segments.push({ kind: 'context_group', tools: contextBuffer });
     } else {
       for (const t of contextBuffer) {
-        segments.push({ kind: 'single', tool: t });
+        segments.push({ kind: 'context_single', tool: t });
       }
     }
     contextBuffer = [];
   };
 
   for (const tool of tools) {
-    if (isContextTool(tool.name)) {
-      contextBuffer.push(tool);
-    } else {
+    if (isActionTool(tool.name)) {
       flushContext();
-      segments.push({ kind: 'single', tool });
+      segments.push({ kind: 'action', tool });
+    } else {
+      contextBuffer.push(tool);
     }
   }
   flushContext();
@@ -458,24 +525,51 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
 // Compact row for a single tool action
 // ---------------------------------------------------------------------------
 
-function ToolActionRow({ tool, streamingToolOutput }: { tool: ToolAction; streamingToolOutput?: string }) {
+const MCP_TOOL_NAME_MAP: Record<string, string> = {
+  'mcp__memory__search_nodes': '搜索记忆节点',
+  'mcp__memory__read_graph': '读取记忆图谱',
+  'mcp__memory__create_entities': '创建记忆实体',
+  'mcp__fetch__fetch_markdown': '抓取网页(Markdown)',
+  'mcp__fetch__fetch_readable': '抓取网页(Readable)',
+  'mcp__fetch__fetch_json': '抓取网页(JSON)',
+};
+
+function getToolDisplayName(name: string): string {
+  return MCP_TOOL_NAME_MAP[name] || name;
+}
+
+function ContextSingleRow({ tool, streamingToolOutput }: { tool: ToolAction; streamingToolOutput?: string }) {
   const renderer = getRenderer(tool.name);
-  const summary = renderer.getSummary(tool.input, tool.name);
+  const baseSummary = renderer.getSummary(tool.input, tool.name);
+  const summary = MCP_TOOL_NAME_MAP[tool.name] ? baseSummary.replace(tool.name, MCP_TOOL_NAME_MAP[tool.name]) : baseSummary;
   const filePath = getFilePath(tool.input);
   const status = getStatus(tool);
   const hasDetail = renderer.icon === Terminal || renderer.icon === Lightning;
-  const showDetail = hasDetail && renderer.renderDetail && (status === 'running' || streamingToolOutput || tool.result);
+  const detailVisible = hasDetail && renderer.renderDetail && (status === 'running' || !!streamingToolOutput || !!tool.result);
+  const [expanded, setExpanded] = useState(status === 'running');
+  const [showRaw, setShowRaw] = useState(false);
+
+  React.useEffect(() => {
+    setExpanded(status === 'running');
+  }, [status]);
+
+  const hasRawContent = !hasDetail && (tool.result || (tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0));
 
   return (
     <div>
-      <div className="flex items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors">
+      <button
+        type="button"
+        onClick={() => {
+          if (detailVisible || hasRawContent) {
+            if (hasRawContent) setShowRaw(prev => !prev);
+            else setExpanded((prev) => !prev);
+          }
+        }}
+        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-[13px] hover:bg-muted/30 rounded-sm transition-colors text-left"
+      >
         {createElement(renderer.icon, { size: 14, className: "shrink-0 text-muted-foreground" })}
 
-        {renderer.label && (
-          <span className="font-medium text-muted-foreground shrink-0">{renderer.label}</span>
-        )}
-
-        <span className="font-mono text-muted-foreground/60 truncate flex-1">
+        <span className="font-mono text-muted-foreground/70 truncate flex-1">
           {summary}
         </span>
 
@@ -489,9 +583,101 @@ function ToolActionRow({ tool, streamingToolOutput }: { tool: ToolAction; stream
           <ImageIcon size={14} className="shrink-0 text-primary/60" />
         )}
 
+        {detailVisible && (
+          <CaretRight
+            size={10}
+            className={cn(
+              "shrink-0 text-muted-foreground/50 transition-transform duration-200",
+              expanded && "rotate-90",
+            )}
+          />
+        )}
+        {hasRawContent ? (
+          <CaretRight
+            size={10}
+            className={cn(
+              "shrink-0 text-muted-foreground/50 transition-transform duration-200",
+              showRaw && "rotate-90",
+            )}
+          />
+        ) : null}
         <StatusDot status={status} />
+      </button>
+      {detailVisible && expanded && renderer.renderDetail?.(tool, streamingToolOutput)}
+      {hasRawContent && showRaw ? (
+        <div className="mt-1 ml-[11px] space-y-1.5 border-l-[2px] border-border/40 pl-4">
+          {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
+            <div className="rounded bg-muted/40 px-2 py-1.5">
+              <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1">Input</h5>
+              <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[200px] overflow-auto">
+                {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
+              </pre>
+            </div>
+          ) : null}
+          {tool.result ? (
+            <div className={cn(
+              "rounded px-2 py-1.5",
+              tool.isError ? "bg-destructive/10" : "bg-muted/40",
+            )}>
+              <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1">
+                {tool.isError ? 'Error' : 'Result'}
+              </h5>
+              <pre className={cn(
+                "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
+                tool.isError ? "text-destructive/80" : "text-muted-foreground/80",
+              )}>
+                {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
+              </pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rewindId }: { tool: ToolAction; isStreaming?: boolean; streamingToolOutput?: string; sessionId?: string; rewindId?: string }) {
+  const k = toolKind2(tool.name);
+  if (k === 'write' || k === 'create') {
+    const diff = extractDiff(tool);
+    if (diff) {
+      return (
+        <div className="rounded-lg border border-border/40 shadow-sm overflow-hidden bg-muted/20">
+          <FileReviewRow diff={diff} sessionId={sessionId} rewindId={rewindId} />
+        </div>
+      );
+    }
+  }
+  
+  if (k === 'bash') {
+    const cmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
+    const status = getStatus(tool);
+    return (
+      <div className="rounded-lg border border-border/40 shadow-sm overflow-hidden bg-muted/20">
+        <div className="flex items-center gap-2 px-3 py-2 text-[12px] bg-muted/30">
+          <Terminal size={14} className="text-muted-foreground shrink-0" />
+          <span className="font-medium text-foreground/80 truncate flex items-center">
+            {status === 'running' ? '正在执行命令' : status === 'error' ? '命令执行失败' : '命令已执行'}
+            <span className="ml-2 font-mono text-muted-foreground/70 font-normal truncate max-w-[300px]">{cmd}</span>
+          </span>
+          <span className="ml-auto shrink-0">
+             <StatusDot status={status} />
+          </span>
+        </div>
+        {(tool.result || streamingToolOutput) && (
+          <div className="border-t border-border/20 bg-muted/10 px-3 py-2">
+            <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[300px] overflow-auto">
+              {status === 'running' ? streamingToolOutput : tool.result}
+            </pre>
+          </div>
+        )}
       </div>
-      {showDetail && renderer.renderDetail?.(tool, streamingToolOutput)}
+    );
+  }
+  
+  return (
+    <div className="rounded-lg border border-border/40 shadow-sm overflow-hidden bg-muted/20 p-1">
+      <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} />
     </div>
   );
 }
@@ -703,131 +889,144 @@ export function CompletionBar({
 
 export function ToolActionsGroup({
   tools,
-  isStreaming = false,
+  steps,
+  isStreaming,
   streamingToolOutput,
-  flat = false,
   thinkingContent,
   statusText,
+  flat,
   sessionId,
   rewindUserMessageId,
   referencedFiles,
-}: ToolActionsGroupProps) {
+}: ToolActionsGroupProps & { flat?: boolean; sessionId?: string; rewindUserMessageId?: string; referencedFiles?: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // If streaming and tools/thinking are present, default to expanded
+  React.useEffect(() => {
+    if (isStreaming && (tools.length > 0 || thinkingContent || (steps && steps.length > 0))) {
+      setExpanded(true);
+    }
+  }, [isStreaming, tools.length, thinkingContent, steps?.length]);
+
   const hasRunningTool = tools.some((t) => t.result === undefined);
+  const hasError = tools.some((t) => t.isError);
+  const groupStatus = hasRunningTool ? 'running' : hasError ? 'error' : 'success';
 
-  // Track whether user has manually toggled and their chosen state
-  const [userExpandedState, setUserExpandedState] = useState<boolean | null>(null);
+  const segments = computeSegments(tools, thinkingContent, steps);
 
-  // Derived: if user has toggled, use their choice; otherwise auto-expand based on streaming state
-  const expanded = userExpandedState !== null ? userExpandedState : (hasRunningTool || isStreaming);
+  const renderSegments = () => {
+    const blocks: React.ReactNode[] = [];
+    let currentLineGroup: React.ReactNode[] = [];
+    
+    const flushLineGroup = () => {
+      if (currentLineGroup.length > 0) {
+        blocks.push(
+          <div key={`line-${blocks.length}`} className="ml-[11px] border-l-[2px] border-border/40 pl-4 space-y-1 my-2.5">
+            {currentLineGroup}
+          </div>
+        );
+        currentLineGroup = [];
+      }
+    };
 
-  if (tools.length === 0 && !thinkingContent) return null;
+    segments.forEach((segment, idx) => {
+      if (segment.kind === 'action') {
+        flushLineGroup();
+        blocks.push(
+          <div key={`action-${idx}`} className="my-3 ml-2.5">
+            <ActionToolCard 
+              tool={segment.tool} 
+              isStreaming={isStreaming && segment.tool.result === undefined} 
+              streamingToolOutput={isStreaming && segment.tool.result === undefined ? streamingToolOutput : undefined}
+              sessionId={sessionId}
+              rewindId={rewindUserMessageId}
+            />
+          </div>
+        );
+      } else if (segment.kind === 'thinking') {
+        // Render thinking inline as plain text (no accordion)
+        currentLineGroup.push(
+          <div key={`think-${idx}`} className="my-2.5">
+            <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground/70 mb-1.5 font-medium">
+              <Brain size={14} />
+              <span>Thinking...</span>
+            </div>
+            <div className="text-[12.5px] leading-relaxed text-muted-foreground/80 prose prose-sm dark:prose-invert max-w-none">
+              <Streamdown plugins={thinkingPlugins}>{segment.content}</Streamdown>
+            </div>
+          </div>
+        );
+      } else if (segment.kind === 'context_group') {
+        currentLineGroup.push(<ContextGroup key={`ctx-group-${idx}`} tools={segment.tools} />);
+      } else if (segment.kind === 'context_single') {
+        currentLineGroup.push(<ContextSingleRow key={`ctx-single-${idx}`} tool={segment.tool} streamingToolOutput={isStreaming && segment.tool.result === undefined ? streamingToolOutput : undefined} />);
+      }
+    });
+    flushLineGroup();
+    
+    return <>{blocks}</>;
+  };
 
-  // Flat mode: skip header, render tool list directly
+  // Filter out raw JSON payloads from statusText
+  const displayStatusText = statusText && (!statusText.startsWith('{') && !statusText.includes('"subtype"')) ? statusText : undefined;
+
+  // If flat mode, just render the segments without the outer container
   if (flat) {
-    const lastRunningId = [...tools].reverse().find((t) => t.result === undefined)?.id;
     return (
-      <div className="w-[min(100%,48rem)]">
-        <div className="border-l-2 border-border/50 pl-2 ml-1.5">
-          {thinkingContent && <ThinkingRow content={thinkingContent} isStreaming={isStreaming} />}
-          {computeSegments(tools).map((seg, i) =>
-            seg.kind === 'context' ? (
-              <ContextGroup key={`ctx-group-${i}`} tools={seg.tools} />
-            ) : (
-              <ToolActionRow
-                key={seg.tool.id || `tool-${i}`}
-                tool={seg.tool}
-                streamingToolOutput={seg.tool.id === lastRunningId ? streamingToolOutput : undefined}
-              />
-            )
-          )}
-        </div>
+      <div className="my-2">
+        {renderSegments()}
       </div>
     );
   }
 
-  const runningCount = tools.filter((t) => t.result === undefined).length;
-  const doneCount = tools.length - runningCount;
-  const runningDesc = getRunningDescription(tools);
-
-  const handleToggle = () => {
-    setUserExpandedState((prev) => prev !== null ? !prev : !expanded);
-  };
-
-  // Build summary text parts
-  const summaryParts: string[] = [];
-  if (runningCount > 0) summaryParts.push(`${runningCount} running`);
-  if (doneCount > 0) summaryParts.push(`${doneCount} completed`);
-  if (runningCount === 0 && isStreaming) summaryParts.push('generating response');
-  if (summaryParts.length === 0) summaryParts.push(`${tools.length} actions`);
-
+  // Trae style collapsible accordion
   return (
-    <div className="w-[min(100%,48rem)]">
-      {/* Header — content left, caret right */}
-      <button
-        type="button"
-        onClick={handleToggle}
-        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
-      >
-        <span className="inline-flex items-center justify-center rounded bg-muted/80 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/70 tabular-nums">
-          {tools.length + (thinkingContent ? 1 : 0)}
-        </span>
+    <div className="my-2">
+      {tools.length > 0 || (steps && steps.length > 0) ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center justify-between py-1.5 text-[13px] text-muted-foreground hover:text-foreground transition-colors group"
+        >
+          <div className="flex items-center gap-2 truncate">
+            <div className="flex items-center justify-center bg-muted/60 dark:bg-muted/40 rounded px-1.5 min-w-[20px] h-[18px] text-[11px] font-medium text-foreground/80">
+              {tools.length > 0 ? tools.length : (steps?.length || 1)}
+            </div>
+            
+            <span className="truncate group-hover:text-foreground transition-colors">
+              {displayStatusText || 
+               (hasRunningTool ? '正在执行任务...' : 
+                groupStatus === 'error' ? '执行遇到错误' : `${tools.length > 0 ? tools.length : (steps?.length || 1)}个已完成 · 思考与执行完毕`)}
+              {referencedFiles && referencedFiles.length > 0 && ` · 引用 ${referencedFiles.length} 个上下文`}
+            </span>
+          </div>
+          <CaretDown
+            size={14}
+            className={cn("shrink-0 transition-transform duration-200 opacity-50 group-hover:opacity-100", expanded && "rotate-180")}
+          />
+        </button>
+      ) : (
+        displayStatusText && (
+          <div className="py-1.5 text-[13px] text-muted-foreground">
+            {displayStatusText}
+          </div>
+        )
+      )}
 
-        <span className="text-muted-foreground/60 truncate">
-          {summaryParts.join(' · ')}
-        </span>
-
-        {/* Show running task description */}
-        {runningDesc && (
-          <span className="text-muted-foreground/40 text-[11px] font-mono truncate max-w-[40%]">
-            {hasRunningTool ? <Shimmer duration={1.5}>{runningDesc}</Shimmer> : runningDesc}
-          </span>
-        )}
-
-        <CaretRight
-          size={12}
-          className={cn(
-            "shrink-0 text-muted-foreground/60 transition-transform duration-200 ml-auto",
-            expanded && "rotate-90"
-          )}
-        />
-      </button>
-
-      {/* Expanded list — left vertical line like blockquote */}
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div
-            initial={{ height: 0 }}
-            animate={{ height: 'auto' }}
-            exit={{ height: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{ overflow: 'hidden', transformOrigin: 'top' }}
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            style={{ overflow: 'hidden' }}
           >
-            <motion.div
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.12, ease: 'easeOut' }}
-            >
-              <div className="ml-1.5 mt-0.5 border-l-2 border-border/50 pl-2">
-                {thinkingContent && <ThinkingRow content={thinkingContent} isStreaming={isStreaming} />}
-                {(() => {
-                  const segments = computeSegments(tools);
-                  // Find the last running tool to attach streamingToolOutput
-                  const lastRunningId = [...tools].reverse().find((t) => t.result === undefined)?.id;
-                  return segments.map((seg, i) =>
-                    seg.kind === 'context' ? (
-                      <ContextGroup key={`ctx-group-${i}`} tools={seg.tools} />
-                    ) : (
-                      <ToolActionRow
-                        key={seg.tool.id || `tool-${i}`}
-                        tool={seg.tool}
-                        streamingToolOutput={seg.tool.id === lastRunningId ? streamingToolOutput : undefined}
-                      />
-                    )
-                  );
-                })()}
+            <div className="py-2">
+              <div className="ml-[9px] mt-0.5 border-l-[2px] border-border/40 pl-4 space-y-0.5">
+                {renderSegments()}
               </div>
-            </motion.div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

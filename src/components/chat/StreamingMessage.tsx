@@ -703,7 +703,8 @@ export function StreamingMessage({
           <ReferencedContexts files={referencedFiles} />
         )}
 
-        {(toolUses.length > 0 || thinkingContent) && (
+        {/* Render the timeline (tools and thoughts interleaved) */}
+        {(toolUses.length > 0 || liveTimelineSteps.length > 0) && (
           <ToolActionsGroup
             tools={toolUses.map((tool) => {
               const result = toolResults.find((r) => r.tool_use_id === tool.id);
@@ -716,10 +717,10 @@ export function StreamingMessage({
                 media: result?.media,
               };
             })}
+            steps={liveTimelineSteps}
             isStreaming={isStreaming}
             streamingToolOutput={streamingToolOutput}
-            thinkingContent={thinkingContent}
-            statusText={statusText}
+            statusText={finalStatusText}
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
             referencedFiles={referencedFiles}
