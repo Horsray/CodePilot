@@ -1141,7 +1141,8 @@ const en = {
   'rateLimit.bucket.seven_day_sonnet': '7-day Sonnet bucket',
   'rateLimit.bucket.overage': 'Overage bucket',
   'rateLimit.bucket.unknown': 'Subscription bucket',
-  'context.sourceSnapshot': 'Precise',
+  'context.sourceSnapshot': 'Precise (snapshot)',
+  'context.sourceResultUsage': 'Precise (from last turn API usage)',
 
   // ── SDK Capabilities: Rewind ──────────────────────────────
   'messageList.rewindToHere': 'Rewind to here',

@@ -1138,7 +1138,8 @@ const zh: Record<TranslationKey, string> = {
   'rateLimit.bucket.seven_day_sonnet': '7 天 Sonnet 窗口',
   'rateLimit.bucket.overage': '超额窗口',
   'rateLimit.bucket.unknown': '订阅额度',
-  'context.sourceSnapshot': '精确',
+  'context.sourceSnapshot': '精确（快照）',
+  'context.sourceResultUsage': '精确（来自上一轮 API 用量）',
 
   // ── SDK Capabilities: Rewind ──────────────────────────────
   'messageList.rewindToHere': '回滚到此处',

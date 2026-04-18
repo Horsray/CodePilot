@@ -310,11 +310,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         // Phase 1b: if the user asked for "compress and retry", kick off
         // the retry now that compression actually finished. Stored flag
         // + last user message are consumed once to avoid replaying on
-        // subsequent auto-compact events.
+        // subsequent auto-compact events. Token gate (a per-request id)
+        // guarantees we only replay for the compact we ourselves kicked
+        // off — stale tokens from a failed/cancelled earlier request
+        // won't fire when a later auto-compact runs.
         if (pendingRetryAfterCompactRef.current && pendingRetryMessageRef.current) {
           const msg = pendingRetryMessageRef.current;
-          pendingRetryAfterCompactRef.current = false;
-          pendingRetryMessageRef.current = null;
+          clearPendingRetry();
           // Small delay so compression SSE pipeline flushes before next send.
           setTimeout(() => {
             sendMessageRef.current?.(msg);
@@ -331,6 +333,24 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // latest value without re-subscribing.
   const pendingRetryAfterCompactRef = useRef(false);
   const pendingRetryMessageRef = useRef<string | null>(null);
+  /** Timeout handle so we don't leak a pending retry if /compact never
+   *  emits context-compressed (e.g. network error, user cancels). */
+  const pendingRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearPendingRetry = useCallback(() => {
+    pendingRetryAfterCompactRef.current = false;
+    pendingRetryMessageRef.current = null;
+    if (pendingRetryTimerRef.current) {
+      clearTimeout(pendingRetryTimerRef.current);
+      pendingRetryTimerRef.current = null;
+    }
+  }, []);
+
+  // Safety: drop any pending retry state on session switch — stale
+  // cross-session replay would be nonsense.
+  useEffect(() => {
+    clearPendingRetry();
+  }, [sessionId, clearPendingRetry]);
   const [pendingTerminalAction, setPendingTerminalAction] = useState<{
     actionId: import('./TerminalReasonChip').TerminalActionId;
     lastUserMessage: string;
@@ -352,12 +372,22 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // Execute an action after confirmation (or immediately for non-destructive ones).
   const runTerminalAction = useCallback((actionId: import('./TerminalReasonChip').TerminalActionId, lastUserMessage: string | null) => {
     switch (actionId) {
-      case 'compress_and_retry':
+      case 'compress_and_retry': {
         if (!lastUserMessage) return;
+        // Arm the retry. Three safety nets for stale-replay:
+        //   - 45s timeout (in case /compact never emits context-compressed)
+        //   - session switch clears it (useEffect with clearPendingRetry)
+        //   - user-initiated sendMessage clears it (wrapper below)
         pendingRetryAfterCompactRef.current = true;
         pendingRetryMessageRef.current = lastUserMessage;
+        if (pendingRetryTimerRef.current) clearTimeout(pendingRetryTimerRef.current);
+        pendingRetryTimerRef.current = setTimeout(() => {
+          console.warn('[chat] compress-and-retry timed out — pending retry cleared');
+          clearPendingRetry();
+        }, 45_000);
         sendMessageRef.current?.('/compact');
         break;
+      }
       case 'compress_only':
         sendMessageRef.current?.('/compact');
         break;
@@ -607,6 +637,14 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       if (files && files.length > 0) {
         const fileMeta = files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size }));
         displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
+      }
+
+      // Phase 1b safety: if the user sends a non-/compact message while a
+      // compress-and-retry is armed, treat that as the user moving on and
+      // drop the pending retry. Prevents a stale auto-compact from later
+      // replaying their previous message out of order.
+      if (pendingRetryAfterCompactRef.current && content.trim() !== '/compact') {
+        clearPendingRetry();
       }
 
       // Queue message if currently streaming — hold above input, send after completion

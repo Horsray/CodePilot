@@ -25,11 +25,16 @@ export interface ContextUsageData {
    * Data source the caller should render next to the number.
    * Phase 5 of agent-sdk-0-2-111:
    *   - 'snapshot': SDK.getContextUsage() capture <60s old (📌)
-   *   - 'estimated': char-based estimator fallback (~)
+   *     — extension point, currently has no producer in the codebase;
+   *     see claude-client.ts b65c6ac for why.
+   *   - 'result_usage': computed from SDKResultMessage.usage's real
+   *     input_tokens + cache_read + cache_creation fields (authoritative
+   *     API numbers, not char-based estimation). This is the primary
+   *     source on the chat page today (📌 accuracy, not ~ estimate).
    *   - 'none': no token data yet
    */
-  source: 'snapshot' | 'estimated' | 'none';
-  /** When the snapshot was taken (epoch ms). Undefined for estimator source. */
+  source: 'snapshot' | 'result_usage' | 'none';
+  /** When the snapshot was taken (epoch ms). Undefined for result_usage source. */
   snapshotCapturedAt?: number;
 }
 
@@ -107,7 +112,7 @@ export function useContextUsage(
       hasData: false,
       state: 'normal',
       hasSummary: options?.hasSummary || false,
-      source: 'none',
+      source: 'none' as const,
     };
 
     // Find the last assistant message with token_usage
@@ -150,7 +155,7 @@ export function useContextUsage(
           hasData: true,
           state,
           hasSummary: options?.hasSummary || false,
-          source: 'estimated',
+          source: 'result_usage',
         };
       } catch {
         continue;

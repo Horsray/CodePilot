@@ -160,12 +160,13 @@ export function ContextUsageIndicator({ messages, modelName, context1m, hasSumma
                 {usage.state === 'critical' ? t('context.criticalHint') : t('context.warningHint')}
               </p>
             )}
-            {/* Phase 5 — data source indicator. Users need to know whether
-                the number is SDK-authoritative or a char-based estimate. */}
+            {/* Phase 5 — data source indicator. Both 'snapshot' (unused
+                today) and 'result_usage' (active primary source) are
+                SDK-authoritative numbers — NOT char-based estimates. */}
             <p className="text-[10px] text-muted-foreground pt-1 border-t border-border">
               {usage.source === 'snapshot' && usage.snapshotCapturedAt
                 ? `📌 ${t('context.sourceSnapshot')} · ${formatSnapshotAge(usage.snapshotCapturedAt)}`
-                : `~ ${t('context.estimate')}`}
+                : `📌 ${t('context.sourceResultUsage')}`}
             </p>
           </div>
         )}
