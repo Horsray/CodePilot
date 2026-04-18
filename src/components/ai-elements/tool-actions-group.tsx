@@ -444,7 +444,7 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
           >
             <div className="ml-6 border-l-2 border-border/30 pl-2">
               {tools.map((tool, i) => (
-                <ToolActionRow key={tool.id || `ctx-${i}`} tool={tool} />
+                <ContextSingleRow key={tool.id || `ctx-${i}`} tool={tool} />
               ))}
             </div>
           </motion.div>

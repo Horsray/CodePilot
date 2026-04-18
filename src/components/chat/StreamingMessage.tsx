@@ -720,7 +720,7 @@ export function StreamingMessage({
             steps={liveTimelineSteps}
             isStreaming={isStreaming}
             streamingToolOutput={streamingToolOutput}
-            statusText={finalStatusText}
+            statusText={statusText}
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
             referencedFiles={referencedFiles}
