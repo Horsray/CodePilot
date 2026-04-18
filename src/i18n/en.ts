@@ -1111,6 +1111,23 @@ const en = {
   'terminal.tool_deferred': 'Tool awaiting response',
   'terminal.unknown': 'Turn ended',
 
+  // ── TerminalReason action buttons (Phase 1b) ──
+  'terminalAction.compressAndRetry': 'Compress & retry',
+  'terminalAction.enable1mAndRetry': 'Enable 1M & retry',
+  'terminalAction.compressOnly': 'Compress only',
+  'terminalAction.switchToSonnet': 'Switch to Sonnet',
+  'terminalAction.continue': 'Continue',
+  'terminalAction.openHookSettings': 'View Hook settings',
+  'terminalAction.retry': 'Retry',
+  'terminalAction.retryImageUpload': 'Retry upload',
+  'terminalAction.confirmTitle': 'Confirm action',
+  'terminalAction.confirmCompressAndRetry': 'This will compress conversation history and resend your last message. If the previous turn had tool side effects, they may be repeated.',
+  'terminalAction.confirmEnable1mAndRetry': 'This will enable 1M context and resend your last message. If the previous turn had tool side effects, they may be repeated.',
+  'terminalAction.confirmSwitchToSonnet': 'This will switch to Sonnet 4.6 and resend your last message. If the previous turn had tool side effects, they may be repeated.',
+  'terminalAction.confirmRetry': 'This will resend your last message. If the previous turn had tool side effects, they may be repeated.',
+  'terminalAction.confirmCta': 'Confirm',
+  'terminalAction.confirmCancel': 'Cancel',
+
   // ── SDK Capabilities: Rewind ──────────────────────────────
   'messageList.rewindToHere': 'Rewind to here',
   'messageList.rewindConfirm': 'Confirm rewind',

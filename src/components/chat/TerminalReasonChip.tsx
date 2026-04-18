@@ -13,11 +13,68 @@
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 
+/**
+ * Actions a user can take from the chip. Each maps to a handler in
+ * ChatView that wires it to the corresponding subsystem (compressor,
+ * context1m toggle, model switch, router, etc.). "requiresConfirm"
+ * actions pop a 2nd-step AlertDialog before the destructive step runs
+ * (per feedback_no_silent_auto_irreversible memory).
+ */
+export type TerminalActionId =
+  | 'compress_and_retry'
+  | 'enable_1m_and_retry'
+  | 'compress_only'
+  | 'switch_to_sonnet'
+  | 'continue_max_turns'
+  | 'open_hook_settings'
+  | 'retry_simple'
+  | 'retry_image_upload';
+
 interface Props {
   reason: string | undefined;
+  onAction?: (actionId: TerminalActionId) => void;
 }
 
 type Tone = 'warning' | 'error' | 'info' | 'muted';
+
+interface ActionDescriptor {
+  id: TerminalActionId;
+  /** i18n key under 'terminalAction.*' for the button label */
+  labelKey: TranslationKey;
+  /** Primary actions use a filled button; secondary use ghost */
+  variant: 'primary' | 'secondary';
+}
+
+// Per-reason action mapping. Order in the array = visual order.
+const ACTIONS_BY_REASON: Record<string, ActionDescriptor[]> = {
+  prompt_too_long: [
+    { id: 'compress_and_retry', labelKey: 'terminalAction.compressAndRetry' as TranslationKey, variant: 'primary' },
+    { id: 'enable_1m_and_retry', labelKey: 'terminalAction.enable1mAndRetry' as TranslationKey, variant: 'secondary' },
+    { id: 'compress_only', labelKey: 'terminalAction.compressOnly' as TranslationKey, variant: 'secondary' },
+  ],
+  blocking_limit: [
+    { id: 'switch_to_sonnet', labelKey: 'terminalAction.switchToSonnet' as TranslationKey, variant: 'primary' },
+  ],
+  rapid_refill_breaker: [
+    { id: 'switch_to_sonnet', labelKey: 'terminalAction.switchToSonnet' as TranslationKey, variant: 'primary' },
+  ],
+  max_turns: [
+    { id: 'continue_max_turns', labelKey: 'terminalAction.continue' as TranslationKey, variant: 'primary' },
+  ],
+  hook_stopped: [
+    { id: 'open_hook_settings', labelKey: 'terminalAction.openHookSettings' as TranslationKey, variant: 'secondary' },
+  ],
+  stop_hook_prevented: [
+    { id: 'open_hook_settings', labelKey: 'terminalAction.openHookSettings' as TranslationKey, variant: 'secondary' },
+  ],
+  image_error: [
+    { id: 'retry_image_upload', labelKey: 'terminalAction.retryImageUpload' as TranslationKey, variant: 'primary' },
+  ],
+  model_error: [
+    { id: 'retry_simple', labelKey: 'terminalAction.retry' as TranslationKey, variant: 'primary' },
+  ],
+  // tool_deferred handled by Phase 7b's deferred-tool card, no action here.
+};
 
 const TONE_BY_REASON: Record<string, Tone> = {
   max_turns: 'warning',
@@ -57,7 +114,7 @@ const TONE_CLASSES: Record<Tone, string> = {
   muted: 'bg-muted text-muted-foreground border-border',
 };
 
-export function TerminalReasonChip({ reason }: Props) {
+export function TerminalReasonChip({ reason, onAction }: Props) {
   const { t } = useTranslation();
 
   if (!reason || SILENT_REASONS.has(reason)) return null;
@@ -70,15 +127,31 @@ export function TerminalReasonChip({ reason }: Props) {
   const label = isKnown
     ? t(`terminal.${reason}` as TranslationKey)
     : t('terminal.unknown' as TranslationKey);
+  const actions = onAction ? (ACTIONS_BY_REASON[reason] || []) : [];
 
   return (
-    <div className="mx-auto mt-2 flex w-full max-w-3xl justify-start px-4">
+    <div className="mx-auto mt-2 flex w-full max-w-3xl flex-wrap items-center justify-start gap-2 px-4">
       <span
         className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${TONE_CLASSES[tone]}`}
         data-terminal-reason={reason}
       >
         {label}
       </span>
+      {actions.map((action) => (
+        <button
+          key={action.id}
+          type="button"
+          onClick={() => onAction?.(action.id)}
+          data-terminal-action={action.id}
+          className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+            action.variant === 'primary'
+              ? `${TONE_CLASSES[tone]} hover:opacity-90`
+              : 'border-border bg-background text-foreground hover:bg-muted'
+          }`}
+        >
+          {t(action.labelKey)}
+        </button>
+      ))}
     </div>
   );
 }

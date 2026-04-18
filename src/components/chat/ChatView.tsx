@@ -17,6 +17,16 @@ import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import { PermissionPrompt } from './PermissionPrompt';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { BatchExecutionDashboard, BatchContextSync } from './batch-image-gen';
 import { setLastGeneratedImages, loadLastGenerated } from '@/lib/image-ref-store';
 import { useChatCommands } from '@/hooks/useChatCommands';
@@ -296,11 +306,109 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
         setHasSummary(true);
+        // Phase 1b: if the user asked for "compress and retry", kick off
+        // the retry now that compression actually finished. Stored flag
+        // + last user message are consumed once to avoid replaying on
+        // subsequent auto-compact events.
+        if (pendingRetryAfterCompactRef.current && pendingRetryMessageRef.current) {
+          const msg = pendingRetryMessageRef.current;
+          pendingRetryAfterCompactRef.current = false;
+          pendingRetryMessageRef.current = null;
+          // Small delay so compression SSE pipeline flushes before next send.
+          setTimeout(() => {
+            sendMessageRef.current?.(msg);
+          }, 100);
+        }
       }
     };
     window.addEventListener('context-compressed', handler);
     return () => window.removeEventListener('context-compressed', handler);
   }, [sessionId]);
+
+  // Phase 1b — TerminalReason action state
+  // Refs (not state) so the context-compressed handler above can read the
+  // latest value without re-subscribing.
+  const pendingRetryAfterCompactRef = useRef(false);
+  const pendingRetryMessageRef = useRef<string | null>(null);
+  const [pendingTerminalAction, setPendingTerminalAction] = useState<{
+    actionId: import('./TerminalReasonChip').TerminalActionId;
+    lastUserMessage: string;
+  } | null>(null);
+
+  // Find the most recent user message — replay target for retry actions.
+  const findLastUserMessage = useCallback((): string | null => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messages[i].content;
+    }
+    return null;
+  }, [messages]);
+
+  // Execute an action after confirmation (or immediately for non-destructive ones).
+  const runTerminalAction = useCallback((actionId: import('./TerminalReasonChip').TerminalActionId, lastUserMessage: string | null) => {
+    switch (actionId) {
+      case 'compress_and_retry':
+        if (!lastUserMessage) return;
+        pendingRetryAfterCompactRef.current = true;
+        pendingRetryMessageRef.current = lastUserMessage;
+        sendMessageRef.current?.('/compact');
+        break;
+      case 'compress_only':
+        sendMessageRef.current?.('/compact');
+        break;
+      case 'enable_1m_and_retry':
+        if (!lastUserMessage) return;
+        setContext1m(true);
+        // Persist per-provider so future sessions keep 1M until user opts out.
+        fetch(`/api/providers/options?providerId=${encodeURIComponent(currentProviderId || 'env')}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ options: { context_1m: true } }),
+        }).catch(() => {});
+        setTimeout(() => sendMessageRef.current?.(lastUserMessage), 50);
+        break;
+      case 'switch_to_sonnet':
+        if (!lastUserMessage) return;
+        setCurrentModel('sonnet');
+        setTimeout(() => sendMessageRef.current?.(lastUserMessage), 50);
+        break;
+      case 'continue_max_turns':
+        sendMessageRef.current?.('continue');
+        break;
+      case 'retry_simple':
+        if (!lastUserMessage) return;
+        sendMessageRef.current?.(lastUserMessage);
+        break;
+      case 'open_hook_settings':
+        router.push('/settings');
+        break;
+      case 'retry_image_upload':
+        // No attachments API exposure here yet — surface a toast nudging
+        // the user to re-drag the image. Full wire lands with Phase 2's
+        // attachment UX work.
+        import('@/hooks/useToast').then(({ showToast }) => {
+          showToast({ type: 'info', message: t('terminalAction.retryImageUpload' as TranslationKey), duration: 4000 });
+        }).catch(() => {});
+        break;
+    }
+  }, [currentProviderId, router, t]);
+
+  // Entry point from the chip. Destructive actions route through confirm
+  // dialog; non-destructive ones run immediately.
+  const CONFIRM_REQUIRED = new Set<import('./TerminalReasonChip').TerminalActionId>([
+    'compress_and_retry',
+    'enable_1m_and_retry',
+    'switch_to_sonnet',
+    'retry_simple',
+  ]);
+
+  const handleTerminalAction = useCallback((actionId: import('./TerminalReasonChip').TerminalActionId) => {
+    const lastUserMessage = findLastUserMessage();
+    if (CONFIRM_REQUIRED.has(actionId) && lastUserMessage) {
+      setPendingTerminalAction({ actionId, lastUserMessage });
+    } else {
+      runTerminalAction(actionId, lastUserMessage);
+    }
+  }, [findLastUserMessage, runTerminalAction]);
 
   const buildThinkingConfig = useCallback((): { type: string } | undefined => {
     if (!thinkingMode || thinkingMode === 'adaptive') return { type: 'adaptive' };
@@ -679,7 +787,12 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         assistantName={assistantName}
       />
       {/* End-of-turn terminal reason chip (only shown when stream is not active) */}
-      {!isStreaming && <TerminalReasonChip reason={streamSnapshot?.terminalReason} />}
+      {!isStreaming && (
+        <TerminalReasonChip
+          reason={streamSnapshot?.terminalReason}
+          onAction={handleTerminalAction}
+        />
+      )}
       {/* Permission prompt */}
       <PermissionPrompt
         pendingPermission={pendingPermission}
@@ -688,6 +801,34 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         toolUses={toolUses}
         permissionProfile={permissionProfile}
       />
+      {/* Phase 1b — confirmation dialog for destructive chip actions */}
+      <AlertDialog
+        open={pendingTerminalAction !== null}
+        onOpenChange={(open) => { if (!open) setPendingTerminalAction(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('terminalAction.confirmTitle' as TranslationKey)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingTerminalAction?.actionId === 'compress_and_retry' && t('terminalAction.confirmCompressAndRetry' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'enable_1m_and_retry' && t('terminalAction.confirmEnable1mAndRetry' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'switch_to_sonnet' && t('terminalAction.confirmSwitchToSonnet' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'retry_simple' && t('terminalAction.confirmRetry' as TranslationKey)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('terminalAction.confirmCancel' as TranslationKey)}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => {
+              if (pendingTerminalAction) {
+                runTerminalAction(pendingTerminalAction.actionId, pendingTerminalAction.lastUserMessage);
+                setPendingTerminalAction(null);
+              }
+            }}>
+              {t('terminalAction.confirmCta' as TranslationKey)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {/* Skill nudge banner — shown after complex multi-step workflows */}
       {skillNudge && !isStreaming && (
         <div className="mx-auto w-full max-w-3xl border-t border-border bg-background px-4 py-3">

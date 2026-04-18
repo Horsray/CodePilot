@@ -1108,6 +1108,23 @@ const zh: Record<TranslationKey, string> = {
   'terminal.tool_deferred': '有工具等待响应',
   'terminal.unknown': '本轮已结束',
 
+  // ── TerminalReason action buttons (Phase 1b) ──
+  'terminalAction.compressAndRetry': '压缩并重试',
+  'terminalAction.enable1mAndRetry': '开启 1M 并重试',
+  'terminalAction.compressOnly': '仅压缩',
+  'terminalAction.switchToSonnet': '切换到 Sonnet',
+  'terminalAction.continue': '继续',
+  'terminalAction.openHookSettings': '查看 Hook 配置',
+  'terminalAction.retry': '重试',
+  'terminalAction.retryImageUpload': '重新上传',
+  'terminalAction.confirmTitle': '确认操作',
+  'terminalAction.confirmCompressAndRetry': '将压缩对话历史，然后重发上一条消息。如果上一轮已有工具副作用，重发可能会重复执行。',
+  'terminalAction.confirmEnable1mAndRetry': '将开启 1M 上下文，然后重发上一条消息。如果上一轮已有工具副作用，重发可能会重复执行。',
+  'terminalAction.confirmSwitchToSonnet': '将切换到 Sonnet 4.6 并重发上一条消息。如果上一轮已有工具副作用，重发可能会重复执行。',
+  'terminalAction.confirmRetry': '将重发上一条消息。如果上一轮已有工具副作用，重发可能会重复执行。',
+  'terminalAction.confirmCta': '确认',
+  'terminalAction.confirmCancel': '取消',
+
   // ── SDK Capabilities: Rewind ──────────────────────────────
   'messageList.rewindToHere': '回滚到此处',
   'messageList.rewindConfirm': '确认回滚',
