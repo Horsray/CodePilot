@@ -94,7 +94,7 @@ export function createModel(opts: CreateModelOptions = {}): CreateModelResult {
   if (!resolved.provider && isShortAlias(config.modelId)) {
     const CURRENT_DEFAULTS: Record<string, string> = {
       sonnet: 'claude-sonnet-4-5-20250929',
-      opus: 'claude-opus-4-6',
+      opus: 'claude-opus-4-7',
       haiku: 'claude-haiku-4-5-20251001',
     };
     config.modelId = CURRENT_DEFAULTS[config.modelId] || config.modelId;

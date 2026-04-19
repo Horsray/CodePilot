@@ -1,5 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
+const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000';
+const webServerCommand = process.env.PLAYWRIGHT_WEBSERVER_COMMAND || 'npm run dev';
+
 export default defineConfig({
   testDir: './src/__tests__/e2e',
   fullyParallel: true,
@@ -8,7 +11,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
   },
   expect: {
@@ -17,8 +20,8 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
+    command: webServerCommand,
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
   },
 });

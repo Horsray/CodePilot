@@ -15,6 +15,28 @@ interface ContextUsageIndicatorProps {
   modelName: string;
   context1m?: boolean;
   hasSummary?: boolean;
+  /** Resolved upstream model ID from /api/providers/models — needed to
+   *  disambiguate alias windows (first-party opus = 1M vs Bedrock/Vertex
+   *  opus = 200K). Omit for provider setups where the alias already
+   *  matches the catalog context-window table. */
+  upstreamModelId?: string;
+  /**
+   * Phase 5 — post-turn snapshot from SDK.getContextUsage(). When
+   * supplied and fresh (<60s), this replaces the char-based estimator
+   * as the source for used / total. Tooltip gets a "精确 · N 秒前" tag.
+   */
+  contextUsageSnapshot?: {
+    totalTokens: number;
+    maxTokens: number;
+    capturedAt: number;
+  };
+}
+
+function formatSnapshotAge(capturedAt: number): string {
+  const ageSec = Math.max(0, Math.floor((Date.now() - capturedAt) / 1000));
+  if (ageSec < 60) return `${ageSec}秒前`;
+  const ageMin = Math.floor(ageSec / 60);
+  return `${ageMin}分钟前`;
 }
 
 function formatTokens(n: number): string {
@@ -22,9 +44,14 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-export function ContextUsageIndicator({ messages, modelName, context1m, hasSummary }: ContextUsageIndicatorProps) {
+export function ContextUsageIndicator({ messages, modelName, context1m, hasSummary, upstreamModelId, contextUsageSnapshot }: ContextUsageIndicatorProps) {
   const { t } = useTranslation();
-  const usage = useContextUsage(messages, modelName, { context1m, hasSummary });
+  const usage = useContextUsage(messages, modelName, {
+    context1m,
+    hasSummary,
+    upstreamModelId,
+    snapshot: contextUsageSnapshot,
+  });
 
   const size = 16;
   const strokeWidth = 2.5;
@@ -133,8 +160,13 @@ export function ContextUsageIndicator({ messages, modelName, context1m, hasSumma
                 {usage.state === 'critical' ? t('context.criticalHint') : t('context.warningHint')}
               </p>
             )}
+            {/* Phase 5 — data source indicator. Both 'snapshot' (unused
+                today) and 'result_usage' (active primary source) are
+                SDK-authoritative numbers — NOT char-based estimates. */}
             <p className="text-[10px] text-muted-foreground pt-1 border-t border-border">
-              {t('context.estimate')}
+              {usage.source === 'snapshot' && usage.snapshotCapturedAt
+                ? `📌 ${t('context.sourceSnapshot')} · ${formatSnapshotAge(usage.snapshotCapturedAt)}`
+                : `📌 ${t('context.sourceResultUsage')}`}
             </p>
           </div>
         )}

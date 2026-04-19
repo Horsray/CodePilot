@@ -24,6 +24,7 @@ import {
 import {
   getDefaultModelsForProvider,
   inferProtocolFromLegacy,
+  getEffectiveProviderProtocol,
   findPresetForLegacy,
   type Protocol,
 } from '@/lib/provider-catalog';
@@ -358,25 +359,57 @@ async function runProviderProbe(): Promise<ProbeResult> {
 
   // Check each provider for common issues
   for (const p of providers) {
-    if (!p.base_url && p.protocol && !['anthropic'].includes(p.protocol)) {
+    // Compute effective protocol up-front — legacy Default rows have
+    // protocol='' and rely on inference; driving diagnostics off raw
+    // p.protocol would miss exactly those rows.
+    const protocol: Protocol = getEffectiveProviderProtocol(
+      p.provider_type,
+      p.protocol,
+      p.base_url,
+    );
+
+    // Protocols that legitimately have no base_url:
+    //   - anthropic: ambiguous (separate diagnostic below)
+    //   - bedrock / vertex: IAM / gcloud ADC auth, no HTTP endpoint
+    //     configured by the user (matches testProviderConnection's
+    //     SKIPPED branch for cloud providers)
+    const protocolsWithoutUrl = new Set(['anthropic', 'bedrock', 'vertex']);
+    if (!p.base_url && !protocolsWithoutUrl.has(protocol)) {
       findings.push({
         severity: 'warn',
         code: 'provider.missing-base-url',
-        message: `Provider "${p.name}" (${p.protocol}) has no base_url`,
+        message: `Provider "${p.name}" (${protocol}) has no base_url`,
         detail: `Provider ID: ${p.id}`,
       });
     }
 
-    // Check if the provider has any available models
-    const protocol: Protocol = (p.protocol as Protocol) ||
-      inferProtocolFromLegacy(p.provider_type, p.base_url);
+    // Empty base_url on an anthropic-protocol provider is genuinely
+    // ambiguous: it could be a legacy "Default" row migrated from older
+    // settings (which we route to first-party catalog so the user gets
+    // Opus 4.7 / xhigh / 1M), OR a third-party preset that forgot to
+    // fill the URL (which would silently proxy to api.anthropic.com).
+    // We can't tell them apart without a persisted preset_key, so we
+    // surface a warn + actionable suggestion either way. Write-path
+    // validation (/api/providers) blocks new occurrences of this state.
+    //
+    // Uses the *effective* protocol so legacy rows with raw protocol=''
+    // — i.e. exactly the migrations we most want to flag — still get
+    // the diagnostic.
+    if (!p.base_url && protocol === 'anthropic') {
+      findings.push({
+        severity: 'warn',
+        code: 'provider.anthropic-empty-base-url',
+        message: `Provider "${p.name}" uses Anthropic protocol but has no base_url`,
+        detail: `Provider ID: ${p.id}. If this is the official Anthropic API, set base_url to https://api.anthropic.com. If it's a third-party proxy, set its endpoint URL. Empty base_url silently proxies to the official Anthropic endpoint and inherits first-party capabilities, which is almost never what a third-party configuration intends.`,
+      });
+    }
     let hasModels = false;
     try {
       const dbModels = getModelsForProvider(p.id);
       if (dbModels.length > 0) hasModels = true;
     } catch { /* table may not exist */ }
     if (!hasModels) {
-      const catalogModels = getDefaultModelsForProvider(protocol, p.base_url);
+      const catalogModels = getDefaultModelsForProvider(protocol, p.base_url, p.provider_type);
       if (catalogModels.length > 0) hasModels = true;
     }
     // Also check role_models_json.default — it synthesizes a model entry at runtime

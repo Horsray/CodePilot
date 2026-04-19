@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { usePanel } from "@/hooks/usePanel";
 import { EnhancedFileTree } from "@/components/project/EnhancedFileTree";
 import { TaskList } from "@/components/project/TaskList";
@@ -8,6 +9,10 @@ import { showToast } from "@/hooks/useToast";
 
 export function FileTreePanel() {
   const { workingDirectory, sessionId, openPreviewTab } = usePanel();
+  const searchParams = useSearchParams();
+
+  const highlightPath = searchParams.get('file') || undefined;
+  const highlightSeek = searchParams.get('seek') || undefined;
 
   const handleFileSelect = useCallback((path: string) => {
     openPreviewTab(path);
@@ -26,6 +31,8 @@ export function FileTreePanel() {
       workingDirectory={workingDirectory}
       onFileSelect={handleFileSelect}
       onFileAdd={handleFileAdd}
+      highlightPath={highlightPath}
+      highlightSeek={highlightSeek}
       topSlot={sessionId ? <TaskList sessionId={sessionId} /> : null}
     />
   );

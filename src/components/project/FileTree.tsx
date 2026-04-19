@@ -20,6 +20,8 @@ interface FileTreeProps {
   workingDirectory: string;
   onFileSelect: (path: string) => void;
   onFileAdd?: (path: string) => void;
+  highlightPath?: string;
+  highlightSeek?: string;
 }
 
 function getFileIcon(extension?: string): ReactNode {
@@ -72,25 +74,32 @@ function FlatTreeNodeItem({
   selectedPath,
   onSelect,
   onAdd,
+  highlightPath,
 }: {
   flatNode: FlatNode;
   togglePath: (path: string) => void;
   selectedPath?: string;
   onSelect?: (path: string) => void;
   onAdd?: (path: string) => void;
+  highlightPath?: string;
 }) {
   const { node, level, isExpanded } = flatNode;
   const isDirectory = node.type === "directory";
   const isSelected = selectedPath === node.path;
+  const isHighlighted = highlightPath === node.path;
   const paddingLeft = level * 16 + 8; // 16px per level
 
   if (isDirectory) {
     return (
       <div
-        className="flex w-full cursor-pointer items-center gap-1 rounded py-1 pr-2 text-left transition-colors hover:bg-muted/50"
+        className={cn(
+          "flex w-full cursor-pointer items-center gap-1 rounded py-1 pr-2 text-left transition-colors hover:bg-muted/50",
+          isHighlighted && "file-tree-flash"
+        )}
         style={{ paddingLeft }}
         role="button"
         tabIndex={0}
+        id={isHighlighted ? "file-tree-highlight" : undefined}
         onClick={() => togglePath(node.path)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -124,9 +133,11 @@ function FlatTreeNodeItem({
     <div
       className={cn(
         "group/file flex cursor-pointer items-center gap-1 rounded py-1 pr-2 transition-colors hover:bg-muted/50",
-        isSelected && "bg-muted"
+        isSelected && "bg-muted",
+        isHighlighted && "file-tree-flash"
       )}
       style={{ paddingLeft: paddingLeft + 24 }} // Align with folder text (CaretRight width)
+      id={isHighlighted ? "file-tree-highlight" : undefined}
       onClick={() => onSelect?.(node.path)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -163,7 +174,19 @@ function FlatTreeNodeItem({
 const getExpandedPathsKey = (workingDirectory: string) =>
   `fileTree_expanded_${workingDirectory}`;
 
-export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTreeProps) {
+function getParentPaths(filePath: string): string[] {
+  const parents: string[] = [];
+  let current = filePath;
+  while (true) {
+    const parent = current.substring(0, current.lastIndexOf('/'));
+    if (!parent || parent === current) break;
+    parents.push(parent);
+    current = parent;
+  }
+  return parents;
+}
+
+export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightPath, highlightSeek }: FileTreeProps) {
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -171,6 +194,14 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const { t } = useTranslation();
+  const seekKeyRef = useRef<string | null>(null);
+
+  // Clear stale tree data when switching projects to avoid cross-session seek races.
+  useEffect(() => {
+    setTree([]);
+    setError(null);
+    seekKeyRef.current = null;
+  }, [workingDirectory]);
 
   // Load expanded paths from localStorage when workingDirectory changes
   useEffect(() => {
@@ -293,6 +324,17 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
     });
   }, [workingDirectory]);
 
+  useEffect(() => {
+    if (!highlightPath) return;
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      for (const parent of getParentPaths(highlightPath)) {
+        next.add(parent);
+      }
+      return next;
+    });
+  }, [highlightPath, highlightSeek]);
+
   // Compute flat nodes
   const flatNodes = useMemo(() => {
     function containsMatch(node: FileTreeNode, query: string): boolean {
@@ -337,6 +379,29 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
     setSelectedPath(path);
     onFileSelect(path);
   }, [onFileSelect]);
+
+  // Scroll to and flash highlighted file from search results.
+  // Guarded by seekKeyRef so tree auto-refreshes don't re-trigger the scroll.
+  useEffect(() => {
+    if (!workingDirectory || !highlightPath || tree.length === 0) return;
+    const seekTargetKey = `${workingDirectory}::${highlightPath}::${highlightSeek || ''}`;
+    if (seekKeyRef.current === seekTargetKey) return;
+
+    let attempts = 0;
+    const maxAttempts = 15;
+    const interval = setInterval(() => {
+      attempts++;
+      const el = document.getElementById('file-tree-highlight');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        seekKeyRef.current = seekTargetKey;
+        clearInterval(interval);
+      } else if (attempts >= maxAttempts) {
+        clearInterval(interval);
+      }
+    }, 100);
+    return () => clearInterval(interval);
+  }, [workingDirectory, highlightPath, highlightSeek, tree]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -397,6 +462,7 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd }: FileTree
                   selectedPath={selectedPath}
                   onSelect={handleSelect}
                   onAdd={onFileAdd}
+                  highlightPath={highlightPath}
                 />
               )}
             />

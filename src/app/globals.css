@@ -270,6 +270,43 @@
   }
 }
 
+/* Search result highlight flash animation for messages */
+@keyframes search-highlight-pulse {
+  0% {
+    background-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  }
+  50% {
+    background-color: color-mix(in oklch, var(--primary) 20%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@utility search-highlight-flash {
+  animation: search-highlight-pulse 2s ease-in-out 1;
+  border-radius: 2px;
+  padding: 0 2px;
+  margin: 0 -2px;
+}
+
+/* File tree item flash animation */
+@keyframes file-tree-pulse {
+  0% {
+    background-color: color-mix(in oklch, var(--primary) 35%, transparent);
+  }
+  50% {
+    background-color: color-mix(in oklch, var(--primary) 15%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@utility file-tree-flash {
+  animation: file-tree-pulse 2s ease-in-out 1;
+}
+
 /* Widget skeleton shimmer animation */
 @keyframes widget-shimmer {
   0% {

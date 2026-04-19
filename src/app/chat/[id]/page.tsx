@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, use } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import type { Message, MessagesResponse, ChatSession } from '@/types';
 import { ChatView } from '@/components/chat/ChatView';
 import { SpinnerGap } from "@/components/ui/icon";
@@ -14,6 +15,7 @@ interface ChatSessionPageProps {
 
 export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   const { id } = use(params);
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -25,6 +27,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   const [sessionMode, setSessionMode] = useState<'code' | 'plan'>('code');
   const [sessionHasSummary, setSessionHasSummary] = useState(false);
   const { setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
+  const targetFilePath = searchParams.get('file') || undefined;
   const { t } = useTranslation();
   const defaultPanelAppliedRef = useRef(false);
 
@@ -113,6 +116,13 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     return () => { cancelled = true; };
   }, [id]);
 
+  // Auto-open file tree when jumping from a file search result
+  useEffect(() => {
+    if (targetFilePath) {
+      setFileTreeOpen(true);
+    }
+  }, [targetFilePath, setFileTreeOpen]);
+
   // Auto-open default panel the first time a session is ever opened.
   // Uses sessionStorage to track which sessions have already been initialized,
   // so re-opening an untouched (zero-message) session won't override the layout.
@@ -129,6 +139,11 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
     (async () => {
       try {
+        if (targetFilePath) {
+          // Preserve explicit deep-link intent from global search.
+          setFileTreeOpen(true);
+          return;
+        }
         const res = await fetch('/api/settings/app');
         if (!res.ok) return;
         const data = await res.json();
@@ -146,7 +161,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
         setFileTreeOpen(true);
       }
     })();
-  }, [id, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen]);
+  }, [id, targetFilePath, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen]);
 
   if (loading || !sessionInfoLoaded) {
     return (

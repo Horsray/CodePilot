@@ -29,7 +29,14 @@ export interface SSECallbacks {
   onToolProgress: (toolName: string, elapsedSeconds: number) => void;
   onStatus: (text: string | undefined) => void;
   onStatusPayload?: (payload: Record<string, unknown>) => void;
-  onResult: (usage: TokenUsage | null) => void;
+  onResult: (usage: TokenUsage | null, meta?: { terminalReason?: string }) => void;
+  /** SDK 0.2.111 subscription rate-limit telemetry. Fires only on
+   *  claude.ai subscription paths; absent for API-key sessions. */
+  onRateLimit?: (info: RateLimitInfo) => void;
+  /** SDK 0.2.111 post-turn context-usage snapshot. Used by the chat
+   *  page's indicator to replace char:token estimation for ~60s after
+   *  capture. */
+  onContextUsage?: (snapshot: ContextUsageSnapshot) => void;
   onPermissionRequest: (data: PermissionRequestEvent) => void;
   onToolTimeout: (toolName: string, elapsedSeconds: number) => void;
   onModeChanged: (mode: string) => void;
@@ -50,6 +57,61 @@ export interface SSECallbacks {
     mcp_servers?: unknown;
     output_style?: string;
   }) => void;
+}
+
+/**
+ * Post-turn context-usage snapshot from Query.getContextUsage()
+ * (SDK 0.2.111 Phase 5). Captured on the server and forwarded verbatim.
+ */
+export interface ContextUsageSnapshot {
+  totalTokens: number;
+  maxTokens: number;
+  rawMaxTokens: number;
+  percentage: number;
+  model: string;
+  capturedAt: number;
+}
+
+/**
+ * Subscription rate-limit info payload mirroring SDKRateLimitInfo.
+ * Forwarded verbatim from the server for Phase 2 of agent-sdk-0-2-111.
+ */
+export interface RateLimitInfo {
+  status: 'allowed' | 'allowed_warning' | 'rejected';
+  resetsAt?: number;
+  rateLimitType?: 'five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet' | 'overage';
+  utilization?: number;
+  overageStatus?: 'allowed' | 'allowed_warning' | 'rejected';
+  overageResetsAt?: number;
+  overageDisabledReason?: string;
+  isUsingOverage?: boolean;
+}
+
+/**
+ * Notification codes that must persist past the next setStatusText() call.
+ * Scoped narrowly — only codes that represent one-shot decisions the user
+ * needs to see regardless of subsequent streaming progress belong here.
+ */
+export const TOAST_STATUS_CODES = new Set<string>([
+  'RUNTIME_EFFORT_IGNORED', // Opus 4.7 on native runtime — explicit effort dropped
+]);
+
+/**
+ * Inspect a parsed status event payload and fire a toast when it carries a
+ * whitelisted code. Exposed so both useSSEStream's helper and inline SSE
+ * parsers in page-level components can share toast routing without
+ * duplicating the whitelist. No-op when the code isn't on the whitelist
+ * or when the browser toast registry hasn't initialized (tests / SSR).
+ */
+export function maybeShowStatusToast(statusData: { code?: string; message?: string; title?: string }): void {
+  if (!statusData?.code || !TOAST_STATUS_CODES.has(statusData.code)) return;
+  void import('./useToast').then(({ showToast }) => {
+    showToast({
+      type: statusData.code === 'RUNTIME_EFFORT_IGNORED' ? 'warning' : 'info',
+      message: statusData.message || statusData.title || 'Status notification',
+      duration: 8000,
+    });
+  }).catch(() => { /* toast system unavailable — caller falls back to status text */ });
 }
 
 /**
@@ -162,6 +224,11 @@ function handleSSEEvent(
             output_style: statusData.output_style,
           });
         } else if (statusData.notification) {
+          // Code-driven toasts (e.g. Opus 4.7 native-runtime
+          // RUNTIME_EFFORT_IGNORED): route through the shared helper so
+          // the inline parser in app/chat/page.tsx can reuse the same
+          // whitelist without duplicating the toast import logic.
+          maybeShowStatusToast(statusData);
           callbacks.onStatus(statusData.message || statusData.title || undefined);
         } else if (typeof statusData.message === 'string' && !statusData.subtype) {
           callbacks.onStatus(statusData.message);
@@ -177,11 +244,35 @@ function handleSSEEvent(
     case 'result': {
       try {
         const resultData = JSON.parse(event.data);
-        callbacks.onResult(resultData.usage || null);
+        const meta = resultData.terminal_reason ? { terminalReason: resultData.terminal_reason as string } : undefined;
+        callbacks.onResult(resultData.usage || null, meta);
       } catch {
         callbacks.onResult(null);
       }
       callbacks.onStatus(undefined);
+      return accumulated;
+    }
+
+    case 'rate_limit': {
+      // SDK 0.2.111 subscription rate-limit event. Structured payload
+      // forwarded from claude-client.ts verbatim.
+      try {
+        const info = JSON.parse(event.data) as RateLimitInfo;
+        callbacks.onRateLimit?.(info);
+      } catch {
+        // skip malformed payload — better to miss a rate-limit update
+        // than to crash the stream
+      }
+      return accumulated;
+    }
+
+    case 'context_usage': {
+      // Phase 5 — post-turn context-usage snapshot. Swallow parse errors
+      // silently; estimator fallback already covers the no-snapshot case.
+      try {
+        const snap = JSON.parse(event.data) as ContextUsageSnapshot;
+        callbacks.onContextUsage?.(snap);
+      } catch { /* estimator still applies */ }
       return accumulated;
     }
 
@@ -317,9 +408,9 @@ export async function consumeSSEStream(
 
   const wrappedCallbacks: SSECallbacks = {
     ...callbacks,
-    onResult: (usage) => {
+    onResult: (usage, meta) => {
       tokenUsage = usage;
-      callbacks.onResult(usage);
+      callbacks.onResult(usage, meta);
     },
   };
 
@@ -369,7 +460,7 @@ export function useSSEStream() {
         onToolProgress: (n, s) => callbacksRef.current?.onToolProgress(n, s),
         onStatus: (t) => callbacksRef.current?.onStatus(t),
         onStatusPayload: (p) => callbacksRef.current?.onStatusPayload?.(p),
-        onResult: (u) => callbacksRef.current?.onResult(u),
+        onResult: (u, meta) => callbacksRef.current?.onResult(u, meta),
         onPermissionRequest: (d) => callbacksRef.current?.onPermissionRequest(d),
         onToolTimeout: (n, s) => callbacksRef.current?.onToolTimeout(n, s),
         onModeChanged: (m) => callbacksRef.current?.onModeChanged(m),
@@ -382,6 +473,8 @@ export function useSSEStream() {
         onSkillNudge: (d) => callbacksRef.current?.onSkillNudge?.(d),
         onContextCompressed: (d) => callbacksRef.current?.onContextCompressed?.(d),
         onInitMeta: (m) => callbacksRef.current?.onInitMeta?.(m),
+        onRateLimit: (info) => callbacksRef.current?.onRateLimit?.(info),
+        onContextUsage: (snap) => callbacksRef.current?.onContextUsage?.(snap),
       };
 
       return consumeSSEStream(reader, proxied);

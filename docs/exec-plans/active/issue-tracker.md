@@ -195,6 +195,40 @@
 - **状态:** 🔴 未修复
 - **描述:** 导入 Claude Code 会话需要一个个手动选择，无批量选择
 
+#### B-019 SDK runtime + 慢 provider 首包静默撞 330s Stream idle timeout
+- **Issue:** [#499](https://github.com/op7418/CodePilot/issues/499)
+- **状态:** 🔴 未修复（长期存在的架构盲点，v0.50.3 runtime auto 简化后暴露面扩大）
+- **现象:** Aliyun Bailian + `qwen3.6-plus`（及其他慢首包 provider）发消息后 330 秒固定报 `Stream idle timeout — no response for 330s`
+- **代码位置:**
+  - `src/lib/stream-session-manager.ts:88` 硬编码 `STREAM_IDLE_TIMEOUT_MS = 330_000`
+  - `src/lib/stream-session-manager.ts:242-248` 每 10s `setInterval` 检查 `Date.now() - lastEventTime >= 330s` → abort
+  - `markActive()` 覆盖 22+ 个 SSE 事件类型，包括 `onKeepAlive`（line 466-468）——**任何**事件都刷新 lastEventTime
+- **根因（架构层）:** **SDK runtime 路径缺 keepalive 兜底**
+  - Native runtime `src/lib/agent-loop.ts:76,119-121` 每 **15s** 主动发 `keep_alive` SSE，天然防止 330s 超时
+  - SDK runtime `src/lib/claude-client.ts:1451-1452` **只透传** Claude Code SDK 自己发的 `keep_alive`——SDK 与上游中间静默时，我们不补心跳，客户端就真的会 330s 后 abort
+  - v0.50.3 的 runtime auto 改成 binary check，**装了 CLI 的用户默认走 SDK runtime**——扩大了暴露面。Bailian Coding Plan 后端有排队机制，首包可能静默几分钟，正好撞上
+- **为什么 v0.50.3 才集中爆出:** `STREAM_IDLE_TIMEOUT_MS = 330_000` 常量早就存在，不是本版引入的；但 qwen3.6-plus 是 v0.50.3 新加模型（commit `2d06f50`）+ 百炼首包排队慢 + SDK runtime 成为装了 CLI 用户的默认 = 三者叠加
+- **修复方向（二选一或都做）:**
+  1. **快修**：把 `STREAM_IDLE_TIMEOUT_MS` 提到 600s 或做成 provider 级可配置（UI 或 `options_json` 字段）
+  2. **根治**：在 SDK runtime 的 SSE pipe 侧也加 15s keepalive 定时器，对齐 Native runtime 的兜底节奏
+- **推荐:** 先做根治（#2），成本不大、一劳永逸；#1 作为 provider-level override 留给有异常慢后端的场景（少数）
+- **下一步:** 下个 hotfix 窗口处理
+
+---
+
+#### B-018 macOS 启动 / 新对话时弹 "找不到用于储存 'apple' 的钥匙串" 对话框
+- **Issue:** [#501](https://github.com/op7418/CodePilot/issues/501)
+- **状态:** 🟡 非代码缺陷 + 有规避方案未落地（2026-04-16 诊断）
+- **现象:** v0.50.3 上部分 macOS 用户启动或点"新对话"时，系统弹 `Cannot find keychain to store 'apple'` 对话框；仅"取消/还原为默认"两选项，点取消后反复弹（3-5 次），不影响最终功能但体验阻塞
+- **维护者环境不复现**（两台机器均未触发）；报告者（vivi2886）使用第三方 API Key，CodePilot DB 无 OAuth token 记录也仍触发
+- **根因诊断:**
+  - 我们自己的代码**零处**调用 keychain / safeStorage / keytar（grep `'apple'` / `safeStorage` / `keytar` 于 `src/` 和 `electron/` 均无命中；仅 `claude-client.ts:1723` 的注释和 `main.ts:744` 的 CSS font-family 含 "apple"）
+  - "apple" 这个 service name 是 **Electron 底层 Chromium 在 macOS 访问 login keychain 的默认行为**（Chromium 用 keychain 加密 cookie / password manager 数据）
+  - 用户本机 login keychain 状态异常时（常见：系统重装后未迁移、第三方清理软件动过、登录密码重置过 keychain 未同步解锁）Chromium 初始化尝试访问 keychain 就会弹这个系统对话框
+- **规避方案（未实施）:** `electron/main.ts` 顶部加 `app.commandLine.appendSwitch('password-store', 'basic')`，让 Chromium 不碰系统 keychain，改用 profile 本地加密。副作用：Chromium 存的 cookie 不再经 keychain 加密——对我们这种本地 Electron 应用没敏感 cookie（所有凭据都在我们自己的 sqlite），影响可接受
+- **下一步:** 下个小版本（0.50.4 或独立 hotfix）加 `password-store=basic` 开关；issue 里可先回复用户说明"环境相关非代码 bug + 系统 Keychain Access 修复步骤 + 下版会加规避开关"
+- **Sentry 可见度:** 这个对话框是 macOS 系统级弹窗，不走 Electron renderer 的 JS 异常通道，Sentry 不会采到——所以只能靠 GitHub Issue 观测规模
+
 ---
 
 ### P3 — 低优先级
@@ -226,6 +260,28 @@
 | ~~B-F10~~ | #347 默认模型回退 | v0.38.4 | global default model |
 | ~~B-F11~~ | FeatureAnnouncement 重启后重现 | v0.49.0 | DB + localStorage 双写 |
 | ~~B-F12~~ | OpenAI OAuth 基础流程 | v0.48.2 | commit 38fe566 |
+| ~~B-F13~~ | 长对话中模型"幻觉调用工具"（假 tool_use，文件未动用户却被告知已改）| v0.50.2 | `context-pruner.ts` RECENT_TURNS 6→16 + `[Pruned <toolName> result: <摘录>]` marker |
+
+### B-F13 症状识别（便于未来快速判断类似现象）
+
+**用户可见症状:**
+- 长时间任务进行到后段，AI 回复里出现 "I used Bash / Edit / Write..." 等工具调用描述
+- 界面把这些文本渲染成了工具卡片样式，但实际**文件没变 / git 没提交 / 命令未执行**
+- 用户被迫反复提醒"你都没调用 git"、"文件没改"等；AI 回复一轮通常会"恢复"（真的去执行），但下次长任务又复现
+
+**根因链:**
+1. v0.49.0 Hermes 升级把 `context-pruner.ts` 的 `RECENT_TURNS_TO_KEEP` 从 **16 降到 6**
+2. 旧 `tool_result` 被替换为裸 `[truncated]` 占位（没有工具名、没有摘录）
+3. 长对话中一个工具密集轮次（多个 `tool_use` block）的 `tool_result` 很快被挤出 recent 窗口
+4. 模型看到"我曾经调用过什么但看不到结果"的残缺上下文，**开始生成文本形式的"假"工具调用描述**（不是真正的 `tool_use` block）
+5. 前端 Markdown/SSE 渲染层会把 `(used Bash: {...})` 这种格式**当成**工具调用卡片展示（尤其是从别的 Agent 回放来的历史），但实际上 `agent-loop` 并未向 Vercel AI SDK 发出 `tool_use` request
+
+**漏洞窗口:** v0.49.0 ~ v0.50.1（含），v0.50.2 恢复 16 轮 + 工具名+200 字摘录的 Pruned marker 后**不再复发**
+
+**未来类似现象的判断清单:**
+- 是否 v0.49.0 ~ v0.50.1 区间的用户？→ 引导升级到 0.50.2+
+- 仍在 v0.50.2+ 发生？→ 可能是**超长任务导致 recent 16 轮也覆盖不住**，需要考虑把 `tool_use`/`tool_result` 的保留优先级提到最高（永不 prune 配对的 block），或给 UI 加"context 已压缩"告警让用户主动续接
+- 相关代码位置: `src/lib/context-pruner.ts:28,52-77`
 
 ---
 

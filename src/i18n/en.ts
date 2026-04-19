@@ -42,11 +42,26 @@ const en = {
   'chatList.showMore': 'Show {count} more',
   'chatList.showLess': 'Show less',
 
+  // ── Global search ───────────────────────────────────────────
+  'globalSearch.placeholder': 'Search... (try session:, message:, file:)',
+  'globalSearch.hint': 'Type to search across sessions and messages',
+  'globalSearch.hintPrefix': 'Prefix with',
+  'globalSearch.toNarrowScope': 'to narrow scope',
+  'globalSearch.noResults': 'No results found',
+  'globalSearch.searching': 'Searching...',
+  'globalSearch.sessions': 'Sessions',
+  'globalSearch.messages': 'Messages',
+  'globalSearch.files': 'Files',
+  'globalSearch.activeScope': 'Searching in {scope}',
+  'globalSearch.toolLabel': 'Tool',
+
   // ── Message list ────────────────────────────────────────────
   'messageList.claudeChat': 'CodePilot Chat',
   'messageList.emptyDescription': 'Start a conversation with CodePilot. Ask questions, get help with code, or explore ideas.',
   'messageList.loadEarlier': 'Load earlier messages',
   'messageList.loading': 'Loading...',
+  'messageList.userLabel': 'User',
+  'messageList.assistantLabel': 'Assistant',
 
   // ── Message input ───────────────────────────────────────────
   'messageInput.attachFiles': 'Attach files',
@@ -1112,6 +1127,7 @@ const en = {
   'composer.slashCommandTooltip': 'Insert slash command',
   'composer.manageSkills': 'Manage skills',
   'composer.searchModels': 'Search models...',
+  'composer.searchFiles': 'Search files and folders...',
   'composer.manageProviders': 'Manage providers',
   'composer.designAgent': 'Design Agent',
   'composer.designAgentTooltip': 'Enable AI design & image generation',
@@ -1145,10 +1161,60 @@ const en = {
 
   // ── SDK Capabilities: Effort ──────────────────────────────
   'messageInput.effort.label': 'Effort Level',
+  'messageInput.effort.auto': 'Auto',
   'messageInput.effort.low': 'Low',
   'messageInput.effort.medium': 'Medium',
   'messageInput.effort.high': 'High',
+  'messageInput.effort.xhigh': 'XHigh',
   'messageInput.effort.max': 'Max',
+
+  // ── SDK Capabilities: Terminal Reason (Phase 1 of agent-sdk-0-2-111) ──
+  'terminal.completed': 'Completed',
+  'terminal.max_turns': 'Max turns reached',
+  'terminal.prompt_too_long': 'Context window full',
+  'terminal.blocking_limit': 'Quota exhausted',
+  'terminal.rapid_refill_breaker': 'Rate limit protection triggered',
+  'terminal.image_error': 'Image processing failed',
+  'terminal.model_error': 'Model returned error',
+  'terminal.aborted_streaming': 'Cancelled',
+  'terminal.aborted_tools': 'Tool execution cancelled',
+  'terminal.stop_hook_prevented': 'Stop hook prevented',
+  'terminal.hook_stopped': 'Hook stopped this turn',
+  'terminal.tool_deferred': 'Tool awaiting response',
+  'terminal.unknown': 'Turn ended',
+
+  // ── TerminalReason action buttons (Phase 1b) ──
+  'terminalAction.compressAndRetry': 'Compress & retry',
+  'terminalAction.enable1mAndRetry': 'Enable 1M & retry',
+  'terminalAction.compressOnly': 'Compress only',
+  'terminalAction.switchToSonnet': 'Switch to Sonnet',
+  'terminalAction.continue': 'Continue',
+  'terminalAction.openHookSettings': 'View Hook settings',
+  'terminalAction.retry': 'Retry',
+  'terminalAction.retryImageUpload': 'Retry upload',
+  'terminalAction.confirmTitle': 'Confirm action',
+  'terminalAction.confirmCompressAndRetry': 'This will compress conversation history and resend your last message. If the previous turn had tool side effects, they may be repeated.',
+  'terminalAction.confirmEnable1mAndRetry': 'This will enable 1M context and resend your last message. If the previous turn had tool side effects, they may be repeated.',
+  'terminalAction.confirmSwitchToSonnet': 'This will switch to Sonnet 4.6 and resend your last message. If the previous turn had tool side effects, they may be repeated.',
+  'terminalAction.confirmRetry': 'This will resend your last message. If the previous turn had tool side effects, they may be repeated.',
+  'terminalAction.confirmCta': 'Confirm',
+  'terminalAction.confirmCancel': 'Cancel',
+
+  // ── Subscription rate limit (Phase 2) ──
+  'rateLimit.warningTitle': 'Subscription quota warning',
+  'rateLimit.rejectedTitle': 'Subscription quota exhausted',
+  'rateLimit.utilization': 'Used',
+  'rateLimit.resetsIn': 'Resets in',
+  'rateLimit.switchToSonnet': 'Switch to Sonnet',
+  'rateLimit.dismiss': 'Dismiss',
+  'rateLimit.bucket.five_hour': '5-hour bucket',
+  'rateLimit.bucket.seven_day': '7-day bucket',
+  'rateLimit.bucket.seven_day_opus': '7-day Opus bucket',
+  'rateLimit.bucket.seven_day_sonnet': '7-day Sonnet bucket',
+  'rateLimit.bucket.overage': 'Overage bucket',
+  'rateLimit.bucket.unknown': 'Subscription bucket',
+  'context.sourceSnapshot': 'Precise (snapshot)',
+  'context.sourceResultUsage': 'Precise (from last turn API usage)',
 
   // ── SDK Capabilities: Rewind ──────────────────────────────
   'messageList.rewindToHere': 'Rewind to here',

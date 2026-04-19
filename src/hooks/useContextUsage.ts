@@ -21,15 +21,89 @@ export interface ContextUsageData {
   state: 'normal' | 'warning' | 'critical';
   /** Whether a session summary (compression) is active */
   hasSummary: boolean;
+  /**
+   * Data source the caller should render next to the number.
+   * Phase 5 of agent-sdk-0-2-111:
+   *   - 'snapshot': SDK.getContextUsage() capture <60s old (📌)
+   *     — extension point, currently has no producer in the codebase;
+   *     see claude-client.ts b65c6ac for why.
+   *   - 'result_usage': computed from SDKResultMessage.usage's real
+   *     input_tokens + cache_read + cache_creation fields (authoritative
+   *     API numbers, not char-based estimation). This is the primary
+   *     source on the chat page today (📌 accuracy, not ~ estimate).
+   *   - 'none': no token data yet
+   */
+  source: 'snapshot' | 'result_usage' | 'none';
+  /** When the snapshot was taken (epoch ms). Undefined for result_usage source. */
+  snapshotCapturedAt?: number;
 }
+
+const SNAPSHOT_FRESHNESS_MS = 60_000;
 
 export function useContextUsage(
   messages: Message[],
   modelName: string,
-  options?: { context1m?: boolean; hasSummary?: boolean },
+  options?: {
+    context1m?: boolean;
+    hasSummary?: boolean;
+    /** Resolved upstream model ID from the catalog (e.g. 'claude-opus-4-7').
+     *  Required for aliases whose window depends on provider (first-party
+     *  opus = 1M, Bedrock/Vertex opus = 200K). */
+    upstreamModelId?: string;
+    /**
+     * Phase 5: SDK-authoritative snapshot from Query.getContextUsage().
+     * When fresh (<60s), its totalTokens / maxTokens win over the
+     * char-based estimator.
+     */
+    snapshot?: {
+      totalTokens: number;
+      maxTokens: number;
+      capturedAt: number;
+    };
+  },
 ): ContextUsageData {
   return useMemo(() => {
-    const contextWindow = getContextWindow(modelName, { context1m: options?.context1m });
+    const contextWindow = getContextWindow(modelName, {
+      context1m: options?.context1m,
+      upstream: options?.upstreamModelId,
+    });
+
+    // Phase 5 — prefer a fresh SDK snapshot over the char:token estimator.
+    // Freshness window matches the plan (60s). Beyond that, the estimator
+    // takes over and the `source` flag flips so the UI can signal the
+    // change to the user.
+    const snap = options?.snapshot;
+    // Date.now() is technically impure inside useMemo, but the freshness
+    // check is a one-shot snapshot-vs-now comparison that naturally
+    // re-evaluates on the next render when `messages` / `modelName` /
+    // snapshot identity changes — which is exactly when staleness matters.
+    // eslint-disable-next-line react-hooks/purity
+    const snapFresh = snap && (Date.now() - snap.capturedAt) < SNAPSHOT_FRESHNESS_MS;
+    if (snap && snapFresh) {
+      const used = snap.totalTokens;
+      const max = snap.maxTokens || contextWindow || used;
+      const ratio = max ? used / max : 0;
+      // No estimated-next-turn from the snapshot — we assume next turn is
+      // similar to current (snapshot is authoritative on "used now" but
+      // can't project future output).
+      return {
+        modelName,
+        contextWindow: max,
+        used,
+        ratio,
+        estimatedNextTurn: used,
+        estimatedNextRatio: ratio,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 0,
+        hasData: true,
+        state: ratio >= 0.95 ? 'critical' : ratio >= 0.8 ? 'warning' : 'normal',
+        hasSummary: options?.hasSummary || false,
+        source: 'snapshot',
+        snapshotCapturedAt: snap.capturedAt,
+      };
+    }
+
     const noData: ContextUsageData = {
       modelName,
       contextWindow,
@@ -43,6 +117,7 @@ export function useContextUsage(
       hasData: false,
       state: 'normal',
       hasSummary: options?.hasSummary || false,
+      source: 'none' as const,
     };
 
     // Find the last assistant message with token_usage
@@ -86,6 +161,7 @@ export function useContextUsage(
           hasData: true,
           state,
           hasSummary: options?.hasSummary || false,
+          source: 'result_usage',
         };
       } catch {
         continue;
@@ -93,5 +169,5 @@ export function useContextUsage(
     }
 
     return noData;
-  }, [messages, modelName, options?.context1m, options?.hasSummary]);
+  }, [messages, modelName, options?.context1m, options?.hasSummary, options?.upstreamModelId, options?.snapshot]);
 }

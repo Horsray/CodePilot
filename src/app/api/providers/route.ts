@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllProviders, createProvider, getSetting } from '@/lib/db';
+import { getEffectiveProviderProtocol, isValidProtocol } from '@/lib/provider-catalog';
 import type { ProviderResponse, ErrorResponse, CreateProviderRequest, ApiProvider } from '@/types';
 import { readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 
@@ -35,6 +36,12 @@ function detectEnvVars(): Record<string, string> {
   return detected;
 }
 
+function allowsEmptyBaseUrl(body: Pick<CreateProviderRequest, 'provider_type' | 'name'>): boolean {
+  const providerType = (body.provider_type || '').trim().toLowerCase();
+  const name = (body.name || '').trim().toLowerCase();
+  return providerType === 'cc-switch' || name === 'cc switch' || name === 'cc-switch';
+}
+
 export async function GET() {
   try {
     const providers = getAllProviders().map(maskApiKey);
@@ -61,6 +68,50 @@ export async function POST(request: NextRequest) {
     if (!body.name) {
       return NextResponse.json<ErrorResponse>(
         { error: 'Missing required field: name' },
+        { status: 400 }
+      );
+    }
+
+    // Reject raw protocol strings we don't recognize — otherwise a stray
+    // 'random-garbage' protocol would survive in the DB, bypass the legacy
+    // inference path in resolver/models, and mis-route capability metadata.
+    // Undefined/empty is fine: getEffectiveProviderProtocol() will infer
+    // from provider_type below.
+    if (body.protocol !== undefined && body.protocol !== '' && !isValidProtocol(body.protocol)) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: `Unknown protocol '${body.protocol}'. Supported protocols: ${[...[...new Set([
+            'anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image',
+          ])]].join(', ')}.`,
+          code: 'INVALID_PROTOCOL',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Anthropic-protocol providers must declare a base URL. Empty base_url
+    // has an ambiguous meaning (legacy "Default" providers migrated from
+    // older settings vs third-party presets that forgot to fill the URL),
+    // and the latter would silently get promoted to first-party catalog +
+    // routed to api.anthropic.com by the native SDK. Require explicit URL
+    // on the write path so third-party configurations don't leak there.
+    // Users wanting official Anthropic must pass 'https://api.anthropic.com'.
+    //
+    // Use effective protocol (raw → inferred) because body.protocol is
+    // optional; older clients or raw-API callers can post
+    // { provider_type: 'anthropic', base_url: '' } without protocol and
+    // still land in the same ambiguous state.
+    const effectiveProtocol = getEffectiveProviderProtocol(
+      body.provider_type ?? '',
+      body.protocol,
+      body.base_url ?? '',
+    );
+    if (effectiveProtocol === 'anthropic' && !body.base_url?.trim() && !allowsEmptyBaseUrl(body)) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: 'Anthropic-protocol providers must specify a base URL (use https://api.anthropic.com for the official API, or your third-party endpoint)',
+          code: 'ANTHROPIC_BASE_URL_REQUIRED',
+        },
         { status: 400 }
       );
     }

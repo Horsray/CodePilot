@@ -2,10 +2,32 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import type { ProviderModelGroup } from '@/types';
 
 // Default Claude model options — used as fallback when API is unavailable
-export const DEFAULT_MODEL_OPTIONS = [
-  { value: 'sonnet', label: 'Sonnet 4.6' },
-  { value: 'opus', label: 'Opus 4.6' },
-  { value: 'haiku', label: 'Haiku 4.5' },
+export interface DefaultModelOption {
+  value: string;
+  label: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: string[];
+}
+
+export const DEFAULT_MODEL_OPTIONS: DefaultModelOption[] = [
+  {
+    value: 'sonnet',
+    label: 'Sonnet 4.6',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+  },
+  {
+    value: 'opus',
+    label: 'Opus 4.7',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
+    value: 'haiku',
+    label: 'Haiku 4.5',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high'],
+  },
 ];
 
 export interface UseProviderModelsReturn {

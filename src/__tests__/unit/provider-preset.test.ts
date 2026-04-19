@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { VENDOR_PRESETS, PresetSchema } from '../../lib/provider-catalog';
+import { VENDOR_PRESETS, PresetSchema, getDefaultModelsForProvider, getEffectiveProviderProtocol, isValidProtocol } from '../../lib/provider-catalog';
 
 describe('Preset Schema Validation', () => {
   for (const preset of VENDOR_PRESETS) {
@@ -142,5 +142,151 @@ describe('toClaudeCodeEnv: env shape after CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST 
     // Caller's env is preserved so SDK's settingSources:['user'] path can layer settings.json on top
     assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'cc-switch-token');
     assert.equal(env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
+  });
+});
+
+describe('getDefaultModelsForProvider — provider-catalog flow', () => {
+  it('bedrock with empty baseUrl resolves to BEDROCK_VERTEX_DEFAULT_MODELS (Opus 4.6 alias, no xhigh)', () => {
+    const models = getDefaultModelsForProvider('bedrock', '');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.ok(opus, 'bedrock catalog should include opus');
+    // Bedrock opus alias resolves to 4.6 upstream per official docs —
+    // label must not promise 4.7.
+    assert.ok(
+      !/4\.7/.test(opus.displayName),
+      `bedrock opus display should not claim 4.7 (got "${opus.displayName}")`,
+    );
+    assert.equal(
+      opus.upstreamModelId,
+      undefined,
+      'bedrock opus should stay alias-only (no first-party upstreamModelId leak)',
+    );
+    const levels = opus.capabilities?.supportedEffortLevels ?? [];
+    assert.ok(
+      !levels.includes('xhigh'),
+      `bedrock opus must not advertise xhigh effort (got [${levels.join(', ')}])`,
+    );
+  });
+
+  it('vertex with empty baseUrl resolves to BEDROCK_VERTEX_DEFAULT_MODELS (Opus 4.6 alias)', () => {
+    const models = getDefaultModelsForProvider('vertex', '');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.ok(opus, 'vertex catalog should include opus');
+    assert.ok(
+      !/4\.7/.test(opus.displayName),
+      `vertex opus display should not claim 4.7 (got "${opus.displayName}")`,
+    );
+    assert.equal(opus.upstreamModelId, undefined);
+  });
+
+  it('anthropic protocol (unmatched baseUrl) returns alias-only catalog — no claude-opus-4-7 pin', () => {
+    // Third-party proxies fall through to this branch. Pinning first-party
+    // upstream here would break OpenRouter/LiteLLM/Ollama compatibility.
+    const models = getDefaultModelsForProvider('anthropic', 'https://unknown-proxy.example/v1');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.ok(opus);
+    assert.equal(
+      opus.upstreamModelId,
+      undefined,
+      'generic anthropic-protocol catalog should not leak first-party upstream ID',
+    );
+  });
+
+  it('anthropic-official preset returns first-party catalog (opus pinned to claude-opus-4-7)', () => {
+    const official = VENDOR_PRESETS.find(p => p.key === 'anthropic-official');
+    assert.ok(official, 'anthropic-official preset must exist');
+    const opus = official.defaultModels.find(m => m.modelId === 'opus');
+    assert.equal(
+      opus?.upstreamModelId,
+      'claude-opus-4-7',
+      'first-party opus must pin upstream to claude-opus-4-7',
+    );
+    const levels = opus?.capabilities?.supportedEffortLevels ?? [];
+    assert.ok(levels.includes('xhigh'), 'first-party opus must advertise xhigh');
+  });
+
+  it('legacy anthropic provider (provider_type=anthropic, baseUrl="") resolves to first-party catalog', () => {
+    // Migrated Default providers from older settings end up with
+    // provider_type='anthropic' and empty base_url. The native runtime
+    // treats them as api.anthropic.com; without the providerType hint
+    // they'd fall through to the alias-only catalog and bypass Opus 4.7
+    // sanitizer / xhigh / 1M window.
+    const models = getDefaultModelsForProvider('anthropic', '', 'anthropic');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.equal(
+      opus?.upstreamModelId,
+      'claude-opus-4-7',
+      'legacy empty-baseUrl anthropic must pin opus to claude-opus-4-7',
+    );
+    const levels = opus?.capabilities?.supportedEffortLevels ?? [];
+    assert.ok(levels.includes('xhigh'), 'legacy first-party opus must advertise xhigh');
+  });
+
+  it('effective protocol: raw anthropic wins over inference', () => {
+    assert.equal(
+      getEffectiveProviderProtocol('custom', 'anthropic', ''),
+      'anthropic',
+      'non-empty valid raw protocol should be honored as-is',
+    );
+  });
+
+  it('effective protocol: empty raw protocol falls back to provider_type inference', () => {
+    // Legacy migrated rows have provider_type='anthropic' + protocol=''.
+    // They must resolve to 'anthropic' so write-path validation and doctor
+    // diagnostics treat them the same as an explicit 'anthropic' POST.
+    assert.equal(
+      getEffectiveProviderProtocol('anthropic', '', ''),
+      'anthropic',
+    );
+    assert.equal(
+      getEffectiveProviderProtocol('anthropic', undefined, ''),
+      'anthropic',
+    );
+  });
+
+  it('effective protocol: bedrock provider_type without raw protocol still classifies as bedrock', () => {
+    assert.equal(
+      getEffectiveProviderProtocol('bedrock', '', ''),
+      'bedrock',
+    );
+  });
+
+  it('effective protocol: unknown raw protocol falls back to inference', () => {
+    // A stray / legacy non-Protocol string in raw shouldn't pass through.
+    assert.equal(
+      getEffectiveProviderProtocol('anthropic', 'random-garbage', ''),
+      'anthropic',
+    );
+  });
+
+  it('isValidProtocol: accepts every Protocol union member and rejects garbage', () => {
+    // Used by POST/PUT to block invalid protocol strings from ever landing
+    // in the DB. If the Protocol union grows, this test will naturally
+    // pair with the VALID_PROTOCOLS set update in provider-catalog.ts.
+    const members: string[] = [
+      'anthropic', 'openai-compatible', 'openrouter',
+      'bedrock', 'vertex', 'google', 'gemini-image',
+    ];
+    for (const m of members) {
+      assert.equal(isValidProtocol(m), true, `'${m}' must be valid`);
+    }
+    assert.equal(isValidProtocol('random-garbage'), false);
+    assert.equal(isValidProtocol(''), false);
+    assert.equal(isValidProtocol(undefined), false);
+    assert.equal(isValidProtocol(null), false);
+    assert.equal(isValidProtocol(123), false);
+  });
+
+  it('missing providerType with empty baseUrl stays alias-only (no accidental first-party promotion)', () => {
+    // When provider_type is unknown or explicitly something else, the
+    // empty-baseUrl branch does NOT kick in — prevents, e.g., a third-
+    // party custom provider from being mis-labeled as first-party.
+    const models = getDefaultModelsForProvider('anthropic', '');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.equal(
+      opus?.upstreamModelId,
+      undefined,
+      'anthropic+empty baseUrl without providerType must remain alias-only',
+    );
   });
 });

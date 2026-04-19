@@ -56,9 +56,12 @@ export async function waitForStreamingStart(page: Page) {
   await page.locator('.animate-bounce, .animate-pulse').first().waitFor({ state: 'visible', timeout: 15_000 });
 }
 
-/** Wait for streaming to finish -- the stop button disappears and send button returns. */
+/**
+ * Wait for streaming to finish. The composer's submit button flips from
+ * aria-label="Stop" back to aria-label="Submit" when the stream ends.
+ */
 export async function waitForStreamingEnd(page: Page) {
-  await page.locator('button[title="Send message"]').waitFor({ state: 'visible', timeout: 120_000 });
+  await page.locator('button[aria-label="Submit"]').waitFor({ state: 'visible', timeout: 120_000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -82,24 +85,60 @@ export async function getMessageRoles(page: Page): Promise<string[]> {
 // Common locators
 // ---------------------------------------------------------------------------
 
-/** The main chat textarea. */
+/**
+ * The main chat textarea.
+ *
+ * The composer is the ai-elements `PromptInputTextarea`, which renders a
+ * `<textarea name="message">` regardless of badge/CLI state. Using the
+ * `name` attribute instead of placeholder text also insulates these helpers
+ * from i18n / copy tweaks — the placeholder now rotates between
+ * "Message Claude…", "Describe what you want to do…" and "Add details…"
+ * depending on composer state.
+ */
 export function chatInput(page: Page): Locator {
-  return page.locator('textarea[placeholder*="Send a message"]');
+  return page.locator('textarea[name="message"]').first();
 }
 
-/** The send button (paper plane icon). */
+/**
+ * The send / submit button. `PromptInputSubmit` sets
+ * `aria-label="Submit"` when idle and `aria-label="Stop"` when streaming,
+ * so both sendButton() and stopButton() key off aria-label.
+ */
 export function sendButton(page: Page): Locator {
-  return page.locator('button[title="Send message"]');
+  return page.locator('button[aria-label="Submit"]');
 }
 
-/** The stop button (square icon, destructive variant). */
+/** The stop button shown while the stream is active. */
 export function stopButton(page: Page): Locator {
-  return page.locator('button[title="Stop generating"]');
+  return page.locator('button[aria-label="Stop"]');
 }
 
-/** The "New Chat" link in the sidebar. */
+/**
+ * The "New Chat" link or button in the sidebar.
+ *
+ * Copy rotates between "New Chat" / "新对话" / "+ 新对话" depending on
+ * locale. The current sidebar renders it as a <button>, not an <a>, so
+ * the helper accepts either and matches both zh and en copy.
+ */
 export function newChatButton(page: Page): Locator {
-  return page.locator('aside a:has-text("New Chat")');
+  return page
+    .locator('aside button, aside a')
+    .filter({ hasText: /^(New Chat|新对话)$/ })
+    .first();
+}
+
+/**
+ * Assistant message container. Replaces the stale `[data-role="assistant"]`
+ * selector — the current ai-elements `<Message from="assistant">` renders
+ * with `.is-assistant` on the wrapper and no data-role attribute.
+ */
+export function assistantMessage(page: Page): Locator {
+  return page.locator('.is-assistant').first();
+}
+
+/** User message container (right-aligned bubble). */
+export function userMessage(page: Page): Locator {
+  return page.locator('.is-user').first();
 }
 
 /** The sidebar <aside> element. */

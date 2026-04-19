@@ -382,11 +382,49 @@ export type PromptInputProps = Omit<
     code: "max_files" | "max_file_size" | "accept";
     message: string;
   }) => void;
+  /**
+   * Called when directories are dragged onto the prompt input. Caller is
+   * responsible for turning each File into a usable path (e.g. via
+   * `window.electronAPI?.fs?.getPathForFile`). When unset, directories are
+   * silently dropped — this keeps the component generic while letting the
+   * @mention-aware composer route them to a "@path/" insertion.
+   */
+  onDirectoriesDropped?: (dirs: File[]) => void;
   onSubmit: (
     message: PromptInputMessage,
     event: FormEvent<HTMLFormElement>
   ) => void | Promise<void>;
 };
+
+/**
+ * Classify a DragEvent's items into files vs directories using
+ * `DataTransferItem.webkitGetAsEntry()`. Called before handing control to the
+ * default `add()` so directories don't get mis-ingested as 0-size blobs.
+ */
+export function classifyDroppedItems(e: DragEvent): { files: File[]; dirs: File[] } {
+  const files: File[] = [];
+  const dirs: File[] = [];
+  const items = e.dataTransfer?.items;
+  if (items && items.length > 0) {
+    for (const item of Array.from(items)) {
+      if (item.kind !== "file") continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      const entry = typeof item.webkitGetAsEntry === "function"
+        ? item.webkitGetAsEntry()
+        : null;
+      if (entry?.isDirectory) {
+        dirs.push(file);
+      } else {
+        files.push(file);
+      }
+    }
+  } else if (e.dataTransfer?.files) {
+    // Safari < 13 fallback: no items API. Best-effort treat all as files.
+    for (const f of Array.from(e.dataTransfer.files)) files.push(f);
+  }
+  return { files, dirs };
+}
 
 export const PromptInput = ({
   className,
@@ -397,6 +435,7 @@ export const PromptInput = ({
   maxFiles,
   maxFileSize,
   onError,
+  onDirectoriesDropped,
   onSubmit,
   children,
   ...props
@@ -630,9 +669,9 @@ export const PromptInput = ({
       if (e.dataTransfer?.types?.includes("Files")) {
         e.preventDefault();
       }
-      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-        add(e.dataTransfer.files);
-      }
+      const { files, dirs } = classifyDroppedItems(e);
+      if (dirs.length > 0) onDirectoriesDropped?.(dirs);
+      if (files.length > 0) add(files);
     };
     form.addEventListener("dragover", onDragOver);
     form.addEventListener("drop", onDrop);
@@ -640,7 +679,7 @@ export const PromptInput = ({
       form.removeEventListener("dragover", onDragOver);
       form.removeEventListener("drop", onDrop);
     };
-  }, [add, globalDrop]);
+  }, [add, globalDrop, onDirectoriesDropped]);
 
   useEffect(() => {
     if (!globalDrop) {
@@ -656,9 +695,9 @@ export const PromptInput = ({
       if (e.dataTransfer?.types?.includes("Files")) {
         e.preventDefault();
       }
-      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-        add(e.dataTransfer.files);
-      }
+      const { files, dirs } = classifyDroppedItems(e);
+      if (dirs.length > 0) onDirectoriesDropped?.(dirs);
+      if (files.length > 0) add(files);
     };
     document.addEventListener("dragover", onDragOver);
     document.addEventListener("drop", onDrop);
@@ -666,7 +705,7 @@ export const PromptInput = ({
       document.removeEventListener("dragover", onDragOver);
       document.removeEventListener("drop", onDrop);
     };
-  }, [add, globalDrop]);
+  }, [add, globalDrop, onDirectoriesDropped]);
 
   useEffect(
     () => () => {
@@ -678,7 +717,7 @@ export const PromptInput = ({
         }
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup only on unmount; filesRef always current
+
     [usingProvider]
   );
 
