@@ -168,6 +168,7 @@
         "src/lib/error-classifier.ts",
         "src/lib/file-checkpoint.ts",
         "src/lib/message-builder.ts",
+        "src/lib/message-normalizer.ts",
         "src/lib/permission-checker.ts",
         "src/lib/parallel-safety.ts",
         "src/lib/permission-registry.ts",
@@ -280,9 +281,10 @@
     {
       "id": "core-tests",
       "owner": "core",
-      "description": "单元测试默认跟随实现同步维护。",
+      "description": "测试默认跟随实现同步维护。",
       "patterns": [
-        "src/__tests__/unit/**"
+        "src/__tests__/unit/**",
+        "src/__tests__/integration/**"
       ]
     },
     {

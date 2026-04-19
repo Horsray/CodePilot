@@ -50,14 +50,14 @@ test('multi-defer POC — classify SDK behavior on concurrent defer attempts', {
       maxTurns: 2,
       hooks: {
         PreToolUse: [{
-          hooks: [async (_input) => ({
+          hooks: [async (_input: unknown) => ({
             hookSpecificOutput: {
               hookEventName: 'PreToolUse' as const,
               permissionDecision: 'defer' as const,
             },
-          })],
+          }) as any],
         }],
-      },
+      } as any,
     },
   });
 

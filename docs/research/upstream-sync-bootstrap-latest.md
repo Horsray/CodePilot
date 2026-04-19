@@ -2,8 +2,8 @@
 
 - upstream remote: `upstream`
 - upstream ref: `upstream/main`
-- current branch: `integration/v0.50.3-merge`
-- latest upstream tag: `v0.51.0`
+- current branch: `codex/main0510`
+- latest upstream tag: `v0.51.1`
 - sync branch: `未自动创建`
 - report: `docs/research/upstream-sync-report-latest.md`
 

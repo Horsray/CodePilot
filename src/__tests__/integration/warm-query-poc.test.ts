@@ -23,11 +23,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { query, startup } from '@anthropic-ai/claude-agent-sdk';
+import * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { recordPocResult } from './poc-record';
 
 const POC_ENABLED = process.env.CLAUDE_SDK_POC === '1';
 const HAS_CREDS = !!(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN);
+const { query } = ClaudeSdk;
+type WarmQuery = { query: (prompt: string) => AsyncIterable<unknown> };
+type StartupFn = (input: { options: Record<string, unknown> }) => Promise<WarmQuery>;
+const startup = (ClaudeSdk as unknown as { startup?: StartupFn }).startup;
 
 /**
  * Returns { firstEventMs, firstTextMs }:
@@ -74,6 +78,10 @@ test('warm-query POC — prewarm reduces first-token latency by ≥30% (p50)', {
   if (!POC_ENABLED || !HAS_CREDS) {
     console.log('[warm-query-poc] Skipped — see runbook in file header');
     return;
+  }
+  if (!startup) {
+    recordPocResult('warm_query', { supported: false, reason: 'startup_not_exported' });
+    assert.fail('Claude Agent SDK does not export startup(); warm-query POC is not supported by this SDK build.');
   }
 
   // includePartialMessages must be true for stream_event deltas to be
@@ -153,6 +161,10 @@ test('warm-query POC — prewarm reduces first-token latency by ≥30% (p50)', {
 
 test('warm-query POC — WarmQuery cannot be reused after option mutation', { skip: !POC_ENABLED || !HAS_CREDS }, async () => {
   if (!POC_ENABLED || !HAS_CREDS) return;
+  if (!startup) {
+    recordPocResult('warm_query_reuse', { supported: false, reason: 'startup_not_exported' });
+    assert.fail('Claude Agent SDK does not export startup(); warm-query POC is not supported by this SDK build.');
+  }
 
   // Falsify the "shared pool" hypothesis: options are baked at startup() time.
   // Changing cwd/model after startup should NOT affect the warm query's behavior.

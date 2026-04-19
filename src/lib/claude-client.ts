@@ -378,7 +378,7 @@ function buildFallbackContext(params: {
   }
 
   lines.push('<conversation_history>');
-  lines.push('(This is a summary of earlier conversation turns for context. Tool calls shown here were already executed — do not repeat them or output their markers as text.)');
+  lines.push('(This is a summary of earlier conversation turns for context. <prior-tool-call .../> and <prior-reasoning>...</prior-reasoning> are metadata markers describing what already happened — they are NOT assistant output format. Do not reproduce these tags. To call a tool, emit a real tool_use block; do not write tool calls as prose or as these markers.)');
   for (const msg of selected) {
     lines.push(`${msg.role === 'user' ? 'Human' : 'Assistant'}: ${msg.content}`);
   }
@@ -1832,8 +1832,8 @@ if (claudePath) {
             console.log('[claude-client] CONTEXT_TOO_LONG detected — attempting auto-compress + retry');
             controller.enqueue(formatSSE({ type: 'status', data: JSON.stringify({ notification: true, message: 'context_compressing_retry' }) }));
 
-            const { compressConversation } = await import('./context-compressor');
-            const { updateSessionSummary: updateSummary } = await import('@/lib/db');
+            const { compressConversation, resolveReactiveCompactBoundaryRowid } = await import('./context-compressor');
+            const { updateSessionSummary: updateSummary, getSessionSummary } = await import('@/lib/db');
             const compResult = await compressConversation({
               sessionId,
               messages: conversationHistory,
@@ -1841,7 +1841,29 @@ if (claudePath) {
               providerId: options.providerId || options.sessionProviderId,
               sessionModel: model,
             });
-            updateSummary(sessionId, compResult.summary);
+            // Derive boundary from rowids plumbed through conversationHistory.
+            // Invariant: reactive compact here hands the WHOLE
+            // conversationHistory to compressConversation — no keep/compress
+            // split — so the last row with a known _rowid is exactly the
+            // last DB row this summary covers.
+            //
+            // Fallback (no _rowid in history): use Math.max of the DB's
+            // CURRENT boundary and the caller's hint. Re-reading DB here
+            // matters because an auto pre-compression earlier in the same
+            // request may have already advanced the boundary past what
+            // options.sessionSummaryBoundaryRowid captured (that value was
+            // snapshotted in chat/route.ts before auto pre-compression ran).
+            // Without the re-read, a degraded reactive compact could
+            // silently roll the DB boundary back to a stale value.
+            const existingBoundary = Math.max(
+              getSessionSummary(sessionId).boundaryRowid,
+              options.sessionSummaryBoundaryRowid ?? 0,
+            );
+            const reactiveBoundaryRowid = resolveReactiveCompactBoundaryRowid({
+              history: conversationHistory,
+              existingBoundaryRowid: existingBoundary,
+            });
+            updateSummary(sessionId, compResult.summary, reactiveBoundaryRowid);
             options.sessionSummary = compResult.summary;
             // Recalculate fallback budget with new summary size
             const newSummaryTokens = roughTokenEstimate(compResult.summary);
@@ -1887,7 +1909,29 @@ if (claudePath) {
             for await (const msg of retryConversation) {
               if (abortController?.signal.aborted) break;
               switch (msg.type) {
+                case 'system': {
+                  // Forward init event so the chat route persists the NEW
+                  // sdk_session_id. Without this, the session row keeps an
+                  // empty sdk_session_id (cleared above at line ~1619) and the
+                  // next user message goes back through buildFallbackContext,
+                  // re-exposing prior-tool-call history to the model.
+                  const sysMsg = msg as SDKSystemMessage;
+                  if ('subtype' in sysMsg && sysMsg.subtype === 'init') {
+                    controller.enqueue(formatSSE({
+                      type: 'status',
+                      data: JSON.stringify({
+                        session_id: sysMsg.session_id,
+                        model: sysMsg.model,
+                        requested_model: model,
+                        tools: sysMsg.tools,
+                      }),
+                    }));
+                  }
+                  break;
+                }
                 case 'assistant': {
+                  // Text deltas are forwarded via stream_event below; here we
+                  // only emit tool_use blocks (matches main path at L1213).
                   const aMsg = msg as SDKAssistantMessage;
                   for (const block of aMsg.message.content) {
                     if (block.type === 'tool_use') {
@@ -1966,14 +2010,31 @@ if (claudePath) {
                 }
                 case 'result': {
                   const rMsg = msg as SDKResultMessage;
-                  if ('result' in rMsg) {
-                    const usage = extractTokenUsage(rMsg as SDKResultSuccess);
-                    if (usage) {
-                      controller.enqueue(formatSSE({ type: 'result', data: JSON.stringify(usage) }));
-                    }
-                  }
-                  // Emit compression notification so frontend updates hasSummary
-                  controller.enqueue(formatSSE({ type: 'status', data: JSON.stringify({ notification: true, message: 'context_compressed' }) }));
+                  const usage = 'result' in rMsg ? extractTokenUsage(rMsg as SDKResultSuccess) : undefined;
+                  // Match main-path result shape so the chat route can persist
+                  // the new sdk_session_id (route reads result.session_id as a
+                  // safety net when status init was missed).
+                  controller.enqueue(formatSSE({
+                    type: 'result',
+                    data: JSON.stringify({
+                      subtype: rMsg.subtype,
+                      is_error: rMsg.is_error,
+                      num_turns: rMsg.num_turns,
+                      duration_ms: rMsg.duration_ms,
+                      usage,
+                      session_id: rMsg.session_id,
+                    }),
+                  }));
+                  // Emit compression notification via the shared builder so
+                  // useSSEStream's subtype=context_compressed dispatch fires.
+                  const { buildContextCompressedStatus } = await import('./context-compressor');
+                  controller.enqueue(formatSSE({
+                    type: 'status',
+                    data: JSON.stringify(buildContextCompressedStatus({
+                      messagesCompressed: compResult.messagesCompressed,
+                      tokensSaved: compResult.estimatedTokensSaved,
+                    })),
+                  }));
                   break;
                 }
               }

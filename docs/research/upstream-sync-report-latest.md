@@ -2,16 +2,16 @@
 
 - 仓库根目录：`/Users/horsray/Documents/codepilot/CodePilot`
 - 上游引用：`upstream/main`
-- 当前分支：`integration/v0.50.3-merge`
+- 当前分支：`codex/main0510`
 
 ## Summary
 
 | 项目 | 值 |
 | --- | --- |
-| 共同基线 | ebd83ea07f4eddf1be46825df019d0c7bca5e99d |
-| fork 独有文件 | 236 |
-| 官方独有文件 | 57 |
-| 双边都改 | 34 |
+| 共同基线 | 420e93c597b11bfd8dac4e5a5c6bc7ec6e551f1e |
+| fork 独有文件 | 287 |
+| 官方独有文件 | 7 |
+| 双边都改 | 8 |
 
 > 中文注释：功能名称「upstream 差异报告」。
 > 用法：同步官方前先运行 `npm run sync:report`，把官方独有、fork 独有、双边都改按 ownership map 自动归类，减少人工逐个 diff 的成本。
@@ -56,9 +56,12 @@ MCP 连接、工具适配与记忆检索运行时默认跟随 upstream。
 | 文件 |
 | --- |
 | electron-builder.yml |
+| electron/preload.ts |
 | eslint.config.mjs |
+| next.config.ts |
 | src/app/api/knowledge-base/route.ts |
 | src/app/api/utils/open-path/route.ts |
+| src/app/globals.css |
 | src/app/knowledge-base/page.tsx |
 | src/components/ui/ImagePreview.tsx |
 | src/components/ui/ImageViewer.tsx |
@@ -83,9 +86,12 @@ MCP 连接、工具适配与记忆检索运行时默认跟随 upstream。
 | src/components/ui/tooltip.tsx |
 | src/hooks/useClientPlatform.ts |
 | src/hooks/useNotificationPoll.ts |
+| src/i18n/en.ts |
+| src/i18n/zh.ts |
 | src/lib/console-utils.ts |
 | src/lib/constants/image-agent-prompt.ts |
 | src/lib/knowledge-graph-provider.ts |
+| src/types/electron.d.ts |
 | tsconfig.json |
 
 ### core · core-settings-setup
@@ -120,6 +126,7 @@ MCP 连接、工具适配与记忆检索运行时默认跟随 upstream。
 | fork-patches.manifest.json |
 | fork-sync-playbook.md |
 | scripts/after-pack.js |
+| scripts/build-electron.mjs |
 | scripts/check-fork-ownership.mjs |
 | scripts/lib/fork-sync-utils.mjs |
 | scripts/upstream-sync-bootstrap.mjs |
@@ -134,13 +141,19 @@ MCP 连接、工具适配与记忆检索运行时默认跟随 upstream。
 | src/__tests__/unit/agent-loop-messages.test.ts |
 | src/__tests__/unit/agent-timeline.test.ts |
 | src/__tests__/unit/assistant-workspace.test.ts |
+| src/__tests__/unit/claude-settings-credentials.test.ts |
 | src/__tests__/unit/cli-tools-mcp.test.ts |
 | src/__tests__/unit/file-checkpoint.test.ts |
 | src/__tests__/unit/message-builder.test.ts |
+| src/__tests__/unit/model-context.test.ts |
 | src/__tests__/unit/native-runtime.test.ts |
 | src/__tests__/unit/permission-registry-polling.test.ts |
+| src/__tests__/unit/persistent-claude-session.test.ts |
+| src/__tests__/unit/project-mcp-injection.test.ts |
+| src/__tests__/unit/provider-preset.test.ts |
+| src/__tests__/unit/provider-resolver-fixes.test.ts |
+| src/__tests__/unit/provider-resolver.test.ts |
 | src/__tests__/unit/search-history-tool.test.ts |
-| src/__tests__/unit/sse-stream.test.ts |
 | src/__tests__/unit/timezone-boundaries.test.ts |
 
 ### core · core-tools
@@ -152,6 +165,7 @@ MCP 连接、工具适配与记忆检索运行时默认跟随 upstream。
 | src/lib/builtin-tools/ask-user-question.ts |
 | src/lib/builtin-tools/cli-tools.ts |
 | src/lib/builtin-tools/memory-search.ts |
+| src/lib/tools/agent.ts |
 | src/lib/tools/ask-user-question.ts |
 | src/lib/tools/background-job.ts |
 | src/lib/tools/bash.ts |
@@ -173,7 +187,9 @@ MCP 连接、工具适配与记忆检索运行时默认跟随 upstream。
 | src/app/api/files/rename/route.ts |
 | src/app/api/files/revert/route.ts |
 | src/app/api/files/write/route.ts |
+| src/components/layout/panels/FileTreePanel.tsx |
 | src/components/project/EnhancedFileTree.tsx |
+| src/components/project/FileTree.tsx |
 
 ### fork · fork-git-panel
 
@@ -214,6 +230,10 @@ CC Switch、OLMX 与 Provider 预设扩展。
 
 | 文件 |
 | --- |
+| src/app/api/providers/[id]/route.ts |
+| src/app/api/providers/models/route.ts |
+| src/app/api/providers/route.ts |
+| src/components/settings/PresetConnectDialog.tsx |
 | src/components/settings/ProviderForm.tsx |
 | src/components/settings/provider-presets.tsx |
 | src/lib/cc-switch.ts |
@@ -225,6 +245,7 @@ CC Switch、OLMX 与 Provider 预设扩展。
 | 文件 |
 | --- |
 | electron/main.ts |
+| src/components/layout/AppShell.tsx |
 | src/components/layout/UnifiedTopBar.tsx |
 | src/components/layout/panels/PreviewPanel.tsx |
 | src/hooks/usePanel.ts |
@@ -265,6 +286,8 @@ Assistant Workspace 增强、心跳、检索与模板。
 | .playwright-mcp/console-2026-04-17T16-46-50-275Z.log |
 | .playwright-mcp/console-2026-04-17T16-47-02-058Z.log |
 | .playwright-mcp/console-2026-04-17T16-47-35-967Z.log |
+| .playwright-mcp/console-2026-04-19T10-49-45-512Z.log |
+| .playwright-mcp/console-2026-04-19T10-49-51-060Z.log |
 | .playwright-mcp/page-2026-04-09T14-48-25-998Z.png |
 | .playwright-mcp/page-2026-04-10T16-28-53-225Z.png |
 | .playwright-mcp/page-2026-04-11T20-54-32-439Z.yml |
@@ -282,16 +305,19 @@ Assistant Workspace 增强、心跳、检索与模板。
 | .playwright-mcp/page-2026-04-17T16-47-39-212Z.yml |
 | .playwright-mcp/page-2026-04-17T16-47-44-524Z.yml |
 | .playwright-mcp/page-2026-04-17T16-47-53-632Z.yml |
+| .playwright-mcp/page-2026-04-19T10-49-46-666Z.yml |
+| .playwright-mcp/page-2026-04-19T10-49-51-456Z.yml |
 | .trae/rules/git-commit-message.md |
 | .trae/rules/rules.md |
 | build.md |
 | current-ui-settings.png |
+| docs/exec-plans/README.md |
+| docs/exec-plans/active/agent-sdk-0-2-111-adoption.md |
 | docs/exec-plans/active/agent-timeline-runtime-rebuild.md |
 | docs/exec-plans/active/chat-ui-performance-integration.md |
 | docs/exec-plans/active/commercial-agent-upgrade.md |
 | docs/exec-plans/active/trae-style-agent-activity.md |
 | docs/exec-plans/active/v0502-merge-plan.md |
-| docs/handover/README.md |
 | docs/handover/fork-sync-mechanism.md |
 | docs/insights/README.md |
 | docs/insights/fork-sync-mechanism.md |
@@ -306,6 +332,14 @@ Assistant Workspace 增强、心跳、检索与模板。
 | tmp/browser-shots/screenshot-1775799641550.png |
 | ui-upgrade-design.png |
 
+### shared · shared-bridge
+
+Bridge / 渠道插件默认跟官方一起演进，但要保留 fork 的接入配置与策略。
+
+| 文件 |
+| --- |
+| src/lib/bridge/conversation-engine.ts |
+
 ### shared · shared-chat-runtime
 
 聊天主链路、运行时与 Provider 解析接缝。默认先吸收官方，再以薄适配挂回 fork 能力。
@@ -319,15 +353,24 @@ Assistant Workspace 增强、心跳、检索与模板。
 | src/app/api/chat/search/route.ts |
 | src/app/api/chat/sessions/[id]/route.ts |
 | src/app/api/chat/sessions/route.ts |
+| src/hooks/useSSEStream.ts |
+| src/lib/agent-loop.ts |
+| src/lib/claude-settings.ts |
 | src/lib/context-assembler.ts |
 | src/lib/diff-utils.ts |
 | src/lib/file-checkpoint.ts |
+| src/lib/mcp-loader.ts |
 | src/lib/message-builder.ts |
 | src/lib/permission-checker.ts |
 | src/lib/permission-registry.ts |
+| src/lib/provider-catalog.ts |
+| src/lib/provider-doctor.ts |
+| src/lib/provider-resolver.ts |
 | src/lib/runtime/native-runtime.ts |
 | src/lib/runtime/sdk-runtime.ts |
+| src/lib/runtime/types.ts |
 | src/lib/sdk-subprocess-env.ts |
+| src/lib/stream-session-manager.ts |
 
 ### shared · shared-chat-ui
 
@@ -335,17 +378,22 @@ Assistant Workspace 增强、心跳、检索与模板。
 
 | 文件 |
 | --- |
+| src/app/chat/page.tsx |
 | src/components/ai-elements/conversation.tsx |
 | src/components/ai-elements/message.tsx |
 | src/components/ai-elements/tool-actions-group.tsx |
+| src/components/chat/ChatView.tsx |
 | src/components/chat/FileReviewBar.tsx |
+| src/components/chat/MessageInputParts.tsx |
 | src/components/chat/MessageItem.tsx |
 | src/components/chat/MessageList.tsx |
 | src/components/chat/PermissionPrompt.tsx |
 | src/components/chat/ReferencedContexts.tsx |
 | src/components/chat/StreamingMessage.tsx |
 | src/components/chat/TimelineFinalSummary.tsx |
+| src/components/layout/ChatListPanel.tsx |
 | src/components/settings/CliSettingsSection.tsx |
+| src/hooks/useProviderModels.ts |
 
 ### unknown · unmapped
 
@@ -371,12 +419,22 @@ Assistant Workspace 增强、心跳、检索与模板。
 | .diff_api_chat_route |
 | .diff_api_chat_route_staged |
 | .diff_tool_actions_group |
+| .mcp.json |
+| playwright.config.ts |
+| src/__tests__/e2e/mention-picker-style.spec.ts |
 | src/app/api/chat/permission/route.ts |
 | src/app/api/uploads/route.ts |
 | src/app/api/workspace/events/route.ts |
+| src/components/ai-elements/prompt-input.tsx |
 | src/components/chat/AgentTimeline.tsx |
 | src/components/chat/WidgetRenderer.tsx |
+| src/components/layout/ProjectGroupHeader.tsx |
+| src/components/layout/SessionListItem.tsx |
+| src/hooks/useContextUsage.ts |
 | src/hooks/useStreamSubscription.ts |
+| src/lib/mcp-tool-adapter.ts.patch |
+| src/lib/model-context.ts |
+| src/lib/persistent-claude-session.ts |
 | src/store/usePanelStore.ts |
 | src/stores/panelStore.ts |
 
@@ -389,7 +447,6 @@ Assistant Workspace 增强、心跳、检索与模板。
 | 文件 |
 | --- |
 | RELEASE_NOTES.md |
-| src/components/ui/command.tsx |
 
 ### core · core-tests
 
@@ -397,26 +454,8 @@ Assistant Workspace 增强、心跳、检索与模板。
 
 | 文件 |
 | --- |
-| src/__tests__/unit/files-suggest-route.test.ts |
-| src/__tests__/unit/folder-drop-classify.test.ts |
-| src/__tests__/unit/message-input-interactions.test.ts |
-
-### fork · fork-file-tree
-
-增强文件树、文件操作与对应面板。
-
-| 文件 |
-| --- |
-| src/app/api/files/suggest/route.ts |
-
-### fork · fork-provider-overlay
-
-CC Switch、OLMX 与 Provider 预设扩展。
-
-| 文件 |
-| --- |
-| src/app/api/providers/[id]/route.ts |
-| src/lib/ai-provider.ts |
+| src/__tests__/unit/context-compressor-handoff.test.ts |
+| src/__tests__/unit/message-normalizer.test.ts |
 
 ### ignore · ignore-docs-and-temp
 
@@ -424,18 +463,8 @@ CC Switch、OLMX 与 Provider 预设扩展。
 
 | 文件 |
 | --- |
-| docs/exec-plans/active/agent-sdk-0-2-111-adoption.md |
-| docs/exec-plans/active/issue-tracker.md |
-| docs/exec-plans/active/opus-4-7-upgrade.md |
-| docs/exec-plans/tech-debt-tracker.md |
-| docs/research/README.md |
-| docs/research/artifact-preview-ai-elements.md |
-| docs/research/craft-agents-docs-system-review.md |
-| docs/research/craft-agents-markdown-internals.md |
-| docs/research/markdown-editor-tiptap-evaluation.md |
-| docs/research/opus-4-7-verify-auto-effort.png |
-| docs/research/opus-4-7-verify-effort-dropdown.png |
-| docs/research/review-packet-opus-4-7-and-sdk-0-2-111.md |
+| docs/handover/compact-coverage-boundary.md |
+| docs/handover/context-management.md |
 
 ### shared · shared-chat-runtime
 
@@ -443,18 +472,7 @@ CC Switch、OLMX 与 Provider 预设扩展。
 
 | 文件 |
 | --- |
-| src/lib/provider-doctor.ts |
-| src/lib/provider-resolver.ts |
-
-### shared · shared-chat-ui
-
-聊天输入、权限弹窗和会话交互 UI 随官方演进，但允许少量 fork 交互增强。
-
-| 文件 |
-| --- |
-| src/components/chat/MessageInput.tsx |
-| src/hooks/useSlashCommands.ts |
-| src/lib/message-input-logic.ts |
+| src/lib/context-compressor.ts |
 
 ### unknown · unmapped
 
@@ -462,38 +480,7 @@ CC Switch、OLMX 与 Provider 预设扩展。
 
 | 文件 |
 | --- |
-| .gitignore |
-| src/__tests__/e2e/chat-enhanced.spec.ts |
-| src/__tests__/e2e/chat.spec.ts |
-| src/__tests__/e2e/global-search-file-seek.spec.ts |
-| src/__tests__/e2e/global-search-modes.spec.ts |
-| src/__tests__/e2e/layout.spec.ts |
-| src/__tests__/e2e/mention-picker-style.spec.ts |
-| src/__tests__/e2e/mention-ui.spec.ts |
-| src/__tests__/e2e/plugins.spec.ts |
-| src/__tests__/e2e/project-panel.spec.ts |
-| src/__tests__/e2e/settings.spec.ts |
-| src/__tests__/e2e/skills.spec.ts |
-| src/__tests__/e2e/visual-regression.spec.ts |
-| src/__tests__/fixtures/fixture-mcp-server.ts |
-| src/__tests__/helpers.ts |
-| src/__tests__/integration/hooks-poc.test.ts |
-| src/__tests__/integration/multi-defer-poc.test.ts |
-| src/__tests__/integration/poc-record.ts |
-| src/__tests__/integration/warm-query-poc.test.ts |
-| src/app/api/app/updates/route.ts |
-| src/app/api/search/route.ts |
-| src/app/chat/[id]/page.tsx |
-| src/components/ai-elements/prompt-input.tsx |
-| src/components/chat/ContextUsageIndicator.tsx |
-| src/components/chat/EffortSelectorDropdown.tsx |
-| src/components/chat/RateLimitBanner.tsx |
-| src/components/chat/SlashCommandPopover.tsx |
-| src/components/chat/TerminalReasonChip.tsx |
-| src/components/layout/GlobalSearchDialog.tsx |
-| src/hooks/useGlobalSearchShortcut.ts |
-| src/lib/claude-model-options.ts |
-| src/lib/files.ts |
+| src/lib/message-normalizer.ts |
 
 ## Both Changed
 
@@ -503,14 +490,8 @@ CC Switch、OLMX 与 Provider 预设扩展。
 
 | 文件 |
 | --- |
-| electron/preload.ts |
-| next.config.ts |
 | package-lock.json |
 | package.json |
-| src/app/globals.css |
-| src/i18n/en.ts |
-| src/i18n/zh.ts |
-| src/types/electron.d.ts |
 | src/types/index.ts |
 
 ### core · core-tests
@@ -519,36 +500,7 @@ CC Switch、OLMX 与 Provider 预设扩展。
 
 | 文件 |
 | --- |
-| src/__tests__/unit/model-context.test.ts |
-| src/__tests__/unit/provider-preset.test.ts |
-| src/__tests__/unit/provider-resolver.test.ts |
-
-### fork · fork-file-tree
-
-增强文件树、文件操作与对应面板。
-
-| 文件 |
-| --- |
-| src/components/layout/panels/FileTreePanel.tsx |
-| src/components/project/FileTree.tsx |
-
-### fork · fork-provider-overlay
-
-CC Switch、OLMX 与 Provider 预设扩展。
-
-| 文件 |
-| --- |
-| src/app/api/providers/models/route.ts |
-| src/app/api/providers/route.ts |
-| src/components/settings/PresetConnectDialog.tsx |
-
-### fork · fork-tabs-and-browser
-
-顶部标签、统一工作区、内置浏览器与相关 Hook。
-
-| 文件 |
-| --- |
-| src/components/layout/AppShell.tsx |
+| src/__tests__/unit/sse-stream.test.ts |
 
 ### ignore · ignore-docs-and-temp
 
@@ -556,7 +508,7 @@ CC Switch、OLMX 与 Provider 预设扩展。
 
 | 文件 |
 | --- |
-| docs/exec-plans/README.md |
+| docs/handover/README.md |
 
 ### shared · shared-chat-runtime
 
@@ -565,31 +517,5 @@ CC Switch、OLMX 与 Provider 预设扩展。
 | 文件 |
 | --- |
 | src/app/api/chat/route.ts |
-| src/hooks/useSSEStream.ts |
-| src/lib/agent-loop.ts |
 | src/lib/claude-client.ts |
 | src/lib/db.ts |
-| src/lib/provider-catalog.ts |
-| src/lib/runtime/types.ts |
-| src/lib/stream-session-manager.ts |
-
-### shared · shared-chat-ui
-
-聊天输入、权限弹窗和会话交互 UI 随官方演进，但允许少量 fork 交互增强。
-
-| 文件 |
-| --- |
-| src/app/chat/page.tsx |
-| src/components/chat/ChatView.tsx |
-| src/components/chat/MessageInputParts.tsx |
-| src/components/layout/ChatListPanel.tsx |
-| src/hooks/useProviderModels.ts |
-
-### unknown · unmapped
-
-未命中 ownership map，需要人工补规则。
-
-| 文件 |
-| --- |
-| src/hooks/useContextUsage.ts |
-| src/lib/model-context.ts |

@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { consumeSSEStream, type SSECallbacks } from '../../hooks/useSSEStream';
+import { buildContextCompressedStatus } from '../../lib/context-compressor';
 
 /**
  * Helper: create a mock ReadableStreamDefaultReader from SSE lines.
@@ -202,6 +203,53 @@ describe('SSE Stream — context_compressed events', () => {
     }));
 
     assert.equal(events.length, 0);
+  });
+
+  it('reactive-compact retry payload (via buildContextCompressedStatus) reaches onContextCompressed', async () => {
+    // Regression guard for the stale-shape bug: the reactive-compact retry
+    // path in claude-client.ts used to emit { message: 'context_compressed' }
+    // without a subtype. After useSSEStream switched to subtype-based dispatch
+    // (useSSEStream.ts:204) that payload was silently dropped. Both the
+    // pre-compression wrapper and the retry path now route through the shared
+    // builder — this test pins the builder's output to the consumer contract.
+    const events: Array<{ message: string; messagesCompressed: number; tokensSaved: number }> = [];
+    const statusCalls: string[] = [];
+
+    const payload = buildContextCompressedStatus({
+      messagesCompressed: 12,
+      tokensSaved: 8500,
+    });
+
+    // Builder shape assertions (locked-in contract for useSSEStream consumer)
+    assert.equal(payload.notification, true);
+    assert.equal(payload.subtype, 'context_compressed');
+    assert.equal(payload.stats.messagesCompressed, 12);
+    assert.equal(payload.stats.tokensSaved, 8500);
+    assert.ok(payload.message.includes('12 older messages'));
+    assert.ok(payload.message.includes('8,500'));
+
+    const reader = mockReader([
+      sseData({ type: 'status', data: JSON.stringify(payload) }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onContextCompressed: (d) => events.push(d),
+      onStatus: (t) => { if (t) statusCalls.push(t); },
+    }));
+
+    assert.equal(events.length, 1, 'retry-path payload must dispatch onContextCompressed');
+    assert.equal(events[0].messagesCompressed, 12);
+    assert.equal(events[0].tokensSaved, 8500);
+    assert.equal(statusCalls.length, 0, 'must not leak into generic onStatus');
+  });
+
+  it('buildContextCompressedStatus omits tokens-saved phrasing when tokensSaved=0', () => {
+    const payload = buildContextCompressedStatus({ messagesCompressed: 3, tokensSaved: 0 });
+    assert.equal(payload.subtype, 'context_compressed');
+    assert.ok(payload.message.includes('3 older messages'));
+    assert.ok(!payload.message.includes('tokens saved'));
+    assert.equal(payload.stats.tokensSaved, 0);
   });
 });
 

@@ -1,46 +1,31 @@
-## CodePilot v0.51.0
+## CodePilot v0.51.1
 
-> 支持 Claude Opus 4.7（1M 上下文 + xhigh 推理），升级 Agent SDK 至 0.2.111 并落地新能力；输入框加入结构化 @ 文件/文件夹引用和拖拽识别；新增全局搜索（会话 / 消息 / 文件三类）。
-
-### 新增功能
-
-- **Claude Opus 4.7** 作为默认 Opus 模型 — 首方 Anthropic 下默认 1M 上下文，新增 xhigh 推理档位。启用 extended thinking 时会自动切到 adaptive+summarized，让思考过程在 UI 上可见
-- **@ 文件 / 文件夹 结构化引用** — 输入框敲 `@` 唤起选择器（视觉上与 `/` 命令、CLI 工具、模型选择器统一），可选择文件或文件夹；选中后以 chip 展示，发送时作为结构化元数据一起送出，LLM 能直接读取被引用的目录内容摘要
-- **文件夹拖拽识别** — 从 Finder 拖文件夹到输入框，现在会被正确识别为 `@directory` mention 并插入 chip；之前会变成一个 0 字节的空附件
-- **全局搜索对话框** — 侧栏搜索按钮唤起，默认同时搜会话 / 消息 / 文件；支持 `session:` / `message:` / `file:` 前缀缩小范围；点击消息结果直达对应会话位置，点击文件结果直达文件
-- **对话结束原因 Chip** — 当一轮对话因 prompt_too_long / blocking_limit / max_turns 等特殊原因结束时，末尾显示状态 chip，并附可操作按钮（压缩后重试、启用 1M 上下文、切换到 Sonnet、打开 hook 设置等 8 个动作，按终止原因匹配）
-- **订阅配额 Banner** — 使用 claude.ai 订阅时遇到配额预警或拒绝，聊天页顶部显示倒计时 banner，按会话可关闭
-- **上下文指示器精确化** — 指示器现在用 SDK 返回的真实 usage 字段（input_tokens + cache_read + cache_creation），不再走 char-based 估算；tooltip 上新增数据来源标记
+> 修复长会话在上下文压缩之后 Claude Code 引擎下的严重行为异常：工具调用被模型以纯文本形式写入聊天、反复触发自动压缩、压缩状态不更新等问题。强烈建议所有使用 Claude Code 引擎且会话偏长的用户升级。
 
 ### 修复问题
 
-- 新聊天首轮的思考片段、结束原因 chip、订阅 banner 在页面从 `/chat` 跳到 `/chat/[id]` 后正确保留显示，之前首轮这些状态会被吃掉
-- 使用 `/compact` 或压缩失败后不小心在关闭窗口外重试的问题 — 现在 compress_and_retry 窗口会被后续的 /compact 或 compress_only 动作明确关闭
-- 空 base_url 的遗留 Anthropic 第三方 provider（GLM、Kimi、MiniMax 等）不会再因为协议校验错误被误判；第三方 Anthropic 代理选择推理强度时会弹出提示说明该参数在该运行时会被忽略
-- Bedrock / Vertex provider 的 base_url 缺省不会再被 provider-doctor 报错
-- @ 选择器的文件夹和文件图标统一为中性配色（之前是主题蓝，与其他 popover 不一致）；Files 头换成和技能选择器一致的分组标签
-- 新聊天中当工作目录在 `/tmp`、外部盘或挂载盘时，@ 选择器不会再被错误拒绝（之前只认 $HOME 下的路径）
+- **压缩后模型不再调用工具，而是把工具调用写成文本** — 这是最严重的一个问题。到会话中段（通常是第一次自动压缩或手动 `/compact` 之后），模型会开始输出类似 `(used Read: {"file_path":"..."})` 这样的纯文本，工具实际上没有执行，聊天气泡里只是在"叙述"它本该做的事情。本版从压缩时的历史重写机制入手彻底修复
+- **手动 `/compact` 之后反复被自动压缩** — 之前压缩只是把摘要写入数据库，但 Claude Code SDK 会继续用它自己的完整历史做 resume，摘要实际上没有被模型看到，下一轮又会命中上下文上限再次触发压缩。现在压缩成功后会强制切换到"摘要 + 最近消息 + 当前提问"的新会话，SDK 会从干净的状态继续
+- **`/compact` 的"上下文已压缩..."系统提示被错误写入对话历史** — 这条本意是给用户看的消息被保存成了 assistant 消息，之后模型每轮都会看到它，多次压缩后甚至会被下一次压缩连同正文一起总结进新摘要。现在这条提示只在当轮通过 SSE 推给前端，不再进数据库
+- **对话很短时使用 `/compact` 的"新消息不多"提示同样被错误持久化** — 同上处理，只推前端不入库
+- **压缩成功后前端"已压缩"指示器偶尔不翻转** — 之前反应式压缩（上下文超长时后台自动触发的压缩重试）走的状态事件格式与前端期待的不一致，导致 `hasSummary` 不更新。三条压缩路径的事件格式现在收敛到同一个 helper，前端一致识别
+- **反应式压缩成功后新 SDK 会话未持久化** — 超长上下文触发的自动压缩重试如果成功，下一轮应该走新的 SDK 会话继续；之前没有把新 session id 写回数据库，下一轮又会走 fallback 全量历史，等于压缩白做。现在反应式压缩也会持久化新 session id
+- **二次手动 `/compact` 重复总结已压缩内容** — 第二次 `/compact` 之前会把已经被上次压缩覆盖过的全部历史再喂给摘要器一次，不仅浪费 token，还可能让新摘要里重复或偏移原内容。现在只会压缩"上次 boundary 之后的新消息"
 
 ### 优化改进
 
-- **全局搜索性能** — 在历史会话较多（30+）的本地库上，默认 all-mode 每次键入不再扫描所有会话的工作目录，改为按 resolved 路径去重后只扫最近 5 个唯一 workspace；`file:` / `files:` 前缀放宽到 15 个。跨 10+ 项目找文件时需要显式用 `file:` 前缀才能覆盖更广
-- **Claude Agent SDK 升级** 至 0.2.111（从 0.2.62 跨越 49 个版本），带来 TerminalReason、RateLimitEvent、精确 context usage 等新能力；AI SDK Anthropic 同步升级到 3.0.70
-- Turbopack 构建期 NFT 警告从 16 条降到 1 条（通过 outputFileTracingExcludes + 静态 JSON import + 移除 db 层动态 require）；剩余 1 条是 instrumentation 和 /api/files/suggest 共享 chunk 的已知限制，不影响实际运行
-
-### 已知限制
-
-- `@文件` / `@文件夹` 暂不识别含空格的路径（如 `docs/Product Spec.md`），picker 插入和拖拽都会在第一个空格处截断；含空格的目录/文件只能作为普通文本提到，chip 不显示、不发送结构化元数据。下个小版本单独修
-- E2E 自动化覆盖本版收窄到核心路径（≈44 条通过 / ≈112 条 skipped）；layout / plugins / settings / skills 等 describe 块在新 UI 下 selectors 已全面失效，已明确 `test.describe.skip` 待重写。单元测试 1084 条、smoke 6 条全绿，核心主路径覆盖仍在，但上述区域的视觉/布局回归短期内靠手动 / CDP 抽查
-- 全局搜索 all-mode 只覆盖最近 5 个唯一 workspace，跨更多项目找文件需要显式使用 `file:` 前缀；未来计划引入文件索引替代每次递归扫盘
+- **压缩覆盖边界改用 SQLite rowid**，不再用秒级时间戳。之前在消息写入速度足够快时（比如自动压缩和当前用户消息同秒落库），基于时间戳的边界判断可能把一条未被摘要的用户消息当成"已覆盖"误丢；rowid 是单调递增的，彻底消除了这类歧义
+- **长会话再次压缩时覆盖边界只会前进、不会回退**。任何"降级路径"（比如拿不到消息元数据时）都会保留原有边界而非重置为 0，避免之前刚建立的边界被意外清除
+- **新增技术交接文档** `docs/handover/compact-coverage-boundary.md`，记录压缩覆盖边界的所有不变量、数据库 schema、三条压缩路径的写法，供后续维护
 
 ## 下载地址
 
 ### macOS
-- [Apple Silicon (M1/M2/M3/M4)](https://github.com/op7418/CodePilot/releases/download/v0.51.0/CodePilot-0.51.0-arm64.dmg)
-- [Intel](https://github.com/op7418/CodePilot/releases/download/v0.51.0/CodePilot-0.51.0-x64.dmg)
+- [Apple Silicon (M1/M2/M3/M4)](https://github.com/op7418/CodePilot/releases/download/v0.51.1/CodePilot-0.51.1-arm64.dmg)
+- [Intel](https://github.com/op7418/CodePilot/releases/download/v0.51.1/CodePilot-0.51.1-x64.dmg)
 
 ### Windows
-- [Windows 安装包](https://github.com/op7418/CodePilot/releases/download/v0.51.0/CodePilot.Setup.0.51.0.exe)
+- [Windows 安装包](https://github.com/op7418/CodePilot/releases/download/v0.51.1/CodePilot.Setup.0.51.1.exe)
 
 ## 安装说明
 
@@ -50,5 +35,5 @@
 ## 系统要求
 
 - macOS 12.0+ / Windows 10+ / Linux (glibc 2.31+)
-- 需要配置 API 服务商（Anthropic / OpenRouter / OpenAI 等）
+- 需要配置 API 服务商（Anthropic / OpenRouter 等）
 - 推荐安装 Claude Code CLI 以获得完整功能

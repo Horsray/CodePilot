@@ -55,27 +55,27 @@ test('hooks POC — real queryOptions combination does not trigger CLI control-f
       mcpServers: { 'fixture-poc': fixtureMcpServer },
       hooks: {
         PreToolUse: [{
-          hooks: [async (input) => {
+          hooks: [async (input: any) => {
             const toolName = 'tool_name' in input ? input.tool_name : undefined;
             hookInvocations.push({ event: 'PreToolUse', tool: toolName });
             return { continue: true };
           }],
         }],
         PostToolUse: [{
-          hooks: [async (input) => {
+          hooks: [async (input: any) => {
             const toolName = 'tool_name' in input ? input.tool_name : undefined;
             hookInvocations.push({ event: 'PostToolUse', tool: toolName });
             return { continue: true };
           }],
         }],
         PermissionDenied: [{
-          hooks: [async (input) => {
+          hooks: [async (input: any) => {
             const toolName = 'tool_name' in input ? input.tool_name : undefined;
             hookInvocations.push({ event: 'PermissionDenied', tool: toolName });
             return { continue: true };
           }],
         }],
-      },
+      } as any,
       canUseTool: async (toolName) => {
         hookInvocations.push({ event: 'canUseTool', tool: toolName });
         // Deny fail_always specifically so PermissionDenied hook fires.
