@@ -207,7 +207,7 @@ export async function POST(request: NextRequest) {
     // Request body mode takes priority to avoid race condition: user switches mode
     // then immediately sends — the PATCH may not have landed in DB yet.
     const effectiveMode = mode || session.mode || 'code';
-    const permissionMode = effectiveMode === 'plan' ? 'plan' : 'acceptEdits';
+    const permissionMode = effectiveMode === 'plan' ? 'explore' : 'trust';
 
     // Plan mode takes precedence over full_access: if the user explicitly chose
     // Plan, they expect no tool execution regardless of permission profile.
@@ -508,6 +508,7 @@ async function collectStreamResponse(
       thinkingText = '';
     }
   };
+  const startTime = Date.now();
   /** Tracks whether non-thinking content arrived since last thinking delta (for phase separation) */
   let thinkingPhaseEnded = false;
   let tokenUsage: TokenUsage | null = null;
@@ -695,11 +696,14 @@ async function collectStreamResponse(
             .trim();
 
       if (content) {
+        const durationSec = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+        const finalTokenUsage = tokenUsage ? { ...tokenUsage, duration_sec: durationSec } : { input_tokens: 0, output_tokens: 0, duration_sec: durationSec };
+
         const savedMsg = addMessage(
           sessionId,
           'assistant',
           content,
-          tokenUsage ? JSON.stringify(tokenUsage) : null,
+          JSON.stringify(finalTokenUsage),
           opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined
         );
         lastSavedAssistantMsgId = savedMsg.id;

@@ -52,7 +52,7 @@ export function createAgentTool(ctx: {
       const permissionContext = (ctx.parentSessionId && ctx.emitSSE && ctx.permissionMode)
         ? {
             sessionId: ctx.parentSessionId,
-            permissionMode: (ctx.permissionMode || 'normal') as import('../permission-checker').PermissionMode,
+            permissionMode: (ctx.permissionMode || 'trust') as import('../permission-checker').PermissionMode,
             emitSSE: ctx.emitSSE,
             abortSignal: ctx.abortSignal,
           }

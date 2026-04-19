@@ -77,7 +77,6 @@ export function useContextUsage(
     // check is a one-shot snapshot-vs-now comparison that naturally
     // re-evaluates on the next render when `messages` / `modelName` /
     // snapshot identity changes — which is exactly when staleness matters.
-    // eslint-disable-next-line react-hooks/purity
     const snapFresh = snap && (Date.now() - snap.capturedAt) < SNAPSHOT_FRESHNESS_MS;
     if (snap && snapFresh) {
       const used = snap.totalTokens;

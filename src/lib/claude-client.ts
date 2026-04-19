@@ -217,14 +217,16 @@ function extractTextFromMessage(msg: SDKAssistantMessage): string {
 /**
  * Extract token usage from an SDK result message
  */
-function extractTokenUsage(msg: SDKResultMessage): TokenUsage | null {
-  if (!msg.usage) return null;
+function extractTokenUsage(msg: SDKResultMessage, durationMs?: number): TokenUsage | null {
+  if (!msg.usage && !durationMs) return null;
+  const usage = msg.usage || {};
   return {
-    input_tokens: msg.usage.input_tokens,
-    output_tokens: msg.usage.output_tokens,
-    cache_read_input_tokens: msg.usage.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: msg.usage.cache_creation_input_tokens ?? 0,
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+    cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
     cost_usd: 'total_cost_usd' in msg ? msg.total_cost_usd : undefined,
+    ...(durationMs ? { duration_sec: Math.round(durationMs / 1000) } : {}),
   };
 }
 
@@ -605,9 +607,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           cwd: resolvedWorkingDirectory.path,
           abortController,
           includePartialMessages: true,
-          permissionMode: skipPermissions
-            ? 'bypassPermissions'
-            : ((permissionMode as Options['permissionMode']) || 'acceptEdits'),
+          permissionMode: 'bypassPermissions',
+          allowDangerouslySkipPermissions: true,
           env: sanitizeEnv(sdkEnv),
           // Load settings so the SDK behaves like the CLI (tool permissions,
           // CLAUDE.md, etc.). For DB providers settingSources is ['user'] only;
@@ -629,19 +630,58 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__codepilot-image-gen',
             'mcp__codepilot-cli-tools',
             'mcp__codepilot-dashboard',
+            'Read',
+            'Write',
+            'Edit',
+            'Bash',
+            'Glob',
+            'Grep',
+            'Skill',
+            'Agent',
+            'TodoWrite',
+            'webfetch__fetch_fetch_readable',
+            'webfetch__fetch_fetch_markdown',
+            'context7_resolve-library-id',
+            'context7_query-docs',
+            // MCP filesystem tools - commonly used
+            'mcp__filesystem__read_file',
+            'mcp__filesystem__read_text_file',
+            'mcp__filesystem__read_media_file',
+            'mcp__filesystem__read_multiple_files',
+            'mcp__filesystem__write_file',
+            'mcp__filesystem__edit_file',
+            'mcp__filesystem__get_file_info',
+            'mcp__filesystem__list_directory',
+            'mcp__filesystem__search_files',
+            'mcp__filesystem__directory_tree',
+            // MCP fetch tools
+            'mcp__fetch__fetch_html',
+            'mcp__fetch__fetch_markdown',
+            'mcp__fetch__fetch_txt',
+            'mcp__fetch__fetch_json',
+            'mcp__fetch__fetch_readable',
+            // MCP github tools
+            'mcp__github__get_file_contents',
+            'mcp__github__search_repositories',
           ],
         };
 
         if (skipPermissions) {
           queryOptions.allowDangerouslySkipPermissions = true;
+          console.log('[claude-client] Bypassing all permissions');
         }
 
-        // Find claude binary for packaged app where PATH is limited.
-        // On Windows, npm installs Claude CLI as a .cmd wrapper which cannot
-        // be spawned directly without shell:true. Parse the wrapper to
-        // extract the real .js script path and pass that to the SDK instead.
-        const claudePath = findClaudePath();
-        if (claudePath) {
+// Find claude binary for packaged app where PATH is limited.
+// On Windows, npm installs Claude Code CLI as a .cmd wrapper which cannot
+// be spawned directly without shell:true. Parse the wrapper to
+// extract the real .js script path and pass that to the SDK instead.
+const claudePath = findClaudePath();
+if (claudePath) {
+  console.log('[claude-client] Found Claude Code at:', claudePath);
+} else {
+  console.log('[claude-client] Claude Code not found, using SDK-only mode');
+}
+if (claudePath) {
           const ext = path.extname(claudePath).toLowerCase();
           if (ext === '.cmd' || ext === '.bat') {
             const scriptPath = resolveScriptFromCmd(claudePath);
@@ -1238,6 +1278,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
               // Check for tool use blocks
               for (const block of assistantMsg.message.content) {
                 if (block.type === 'tool_use') {
+                  console.log('[claude-client] tool_use:', { id: block.id, name: block.name, input: block.input });
                   controller.enqueue(formatSSE({
                     type: 'tool_use',
                     data: JSON.stringify({
@@ -1272,12 +1313,13 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
               if (Array.isArray(content)) {
                 for (const block of content) {
                   if (block.type === 'tool_result') {
+                    console.log('[claude-client] tool_result:', { id: block.tool_use_id, contentType: typeof block.content, isError: block.is_error });
                     let resultContent = typeof block.content === 'string'
                       ? block.content
                       : Array.isArray(block.content)
                         ? block.content
-                            .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
-                            .map((c) => c.text)
+                            .filter((c: any): c is { type: 'text'; text: string } => c.type === 'text')
+                            .map((c: any) => c.text)
                             .join('\n')
                         : String(block.content ?? '');
 
@@ -1326,6 +1368,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                       content: resultContent,
                       is_error: block.is_error || false,
                     };
+                    console.log('[claude-client] tool_result payload:', { tool_use_id: block.tool_use_id, contentLength: resultContent?.length });
                     if (mediaBlocks.length > 0) {
                       ssePayload.media = mediaBlocks;
                     }
@@ -1475,7 +1518,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
 
             case 'result': {
               const resultMsg = message as SDKResultMessage;
-              tokenUsage = extractTokenUsage(resultMsg);
+              tokenUsage = extractTokenUsage(resultMsg, resultMsg.duration_ms);
               // terminal_reason is an optional field added in SDK 0.2.111.
               // When present, it enriches the end-of-turn UI chip (Phase 1 of
               // agent-sdk-0-2-111-adoption) without replacing error-classifier.

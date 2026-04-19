@@ -48,33 +48,34 @@ function convertMcpTool(mcpTool: McpToolDefinition) {
         args as Record<string, unknown>,
       );
 
+      console.log(`[MCP Tool Result] ${mcpTool.qualifiedName}:`, JSON.stringify(result, null, 2).slice(0, 500));
+
       // MCP callTool returns { content: [...], isError?: boolean }
       if (result && typeof result === 'object' && 'content' in result) {
         const mcpResult = result as { content: Array<{ type: string; text?: string }>; isError?: boolean };
-        
-        // If there's an explicit error flag, wrap it so the agent loop knows
+        const textBlocks = mcpResult.content?.filter(c => c.type === 'text') || [];
+        const text = textBlocks.map(c => c.text || '').join('\n');
+
         if (mcpResult.isError) {
-          const errorText = mcpResult.content
-            ?.filter(c => c.type === 'text')
-            .map(c => c.text)
-            .join('\n');
-            
+          // Wrap in ToolFailurePayload format so the agent loop recognizes it as a soft error
           return {
             __codepilot_tool_error: true,
             toolName: mcpTool.qualifiedName,
             reason: 'error',
-            message: `Error: ${errorText || 'MCP tool returned an error'}`,
+            message: `Error: ${text || 'MCP tool returned an error'}`,
             attempts: 1,
           };
         }
 
-        // Normal success case
-        const textBlocks = mcpResult.content?.filter(c => c.type === 'text') || [];
-        
+        // If the MCP server returned actual text, return it.
+        // If text is empty (could be missing 'text' property or genuinely empty),
+        // we fallback to stringified JSON so the AI can parse other fields like 'data', 'value', etc.
         if (textBlocks.length > 0) {
-          const text = textBlocks.map(c => c.text).join('\n');
           return text;
         }
+
+        // Otherwise fallback to stringified JSON
+        return JSON.stringify(result);
       }
 
       return typeof result === 'string' ? result : JSON.stringify(result);

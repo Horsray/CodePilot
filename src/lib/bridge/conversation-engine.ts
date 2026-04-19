@@ -189,9 +189,9 @@ export async function processMessage(
     // Permission mode from binding mode
     let permissionMode: string;
     switch (binding.mode) {
-      case 'plan': permissionMode = 'plan'; break;
-      case 'ask': permissionMode = 'default'; break;
-      default: permissionMode = 'acceptEdits'; break;
+      case 'plan': permissionMode = 'explore'; break;
+      case 'ask': permissionMode = 'trust'; break;
+      default: permissionMode = 'trust'; break;
     }
 
     // Bypass permissions entirely when session has full_access profile

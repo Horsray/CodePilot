@@ -139,7 +139,7 @@ const ALWAYS_ASK_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 export function checkPermission(
   toolName: string,
   input: unknown,
-  mode: PermissionMode = 'normal',
+  mode: PermissionMode = 'trust',
   userRules: PermissionRule[] = [],
 ): PermissionCheckResult {
   // Interactive tools — always ask regardless of mode

@@ -813,7 +813,7 @@ async function runLiveProbe(): Promise<ProbeResult> {
   const queryOptions: Options = {
     cwd: os.tmpdir(),
     abortController,
-    permissionMode: 'default',
+    permissionMode: 'trust',
     env: sanitizeEnvForProbe(sdkEnv),
     maxTurns: 1,
     stderr: stderrCallback,

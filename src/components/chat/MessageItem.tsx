@@ -659,6 +659,16 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
   const taskCompletionInfo = useMemo(() => {
     if (isUser || timelineSteps.length === 0) return null;
     try {
+      // If the backend has recorded duration_sec in token_usage, use it
+      const usageStr = message.token_usage;
+      if (usageStr) {
+        const usageObj = JSON.parse(usageStr);
+        if (typeof usageObj.duration_sec === 'number' && usageObj.duration_sec >= 0) {
+          return { durationSec: usageObj.duration_sec };
+        }
+      }
+      
+      // Fallback for older messages
       const endStr = (message as any).updated_at || message.created_at;
       const start = parseDBDate(message.created_at).getTime();
       const end = parseDBDate(endStr).getTime();

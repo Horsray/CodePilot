@@ -154,7 +154,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             model: modelOverride || sessionModel,
             permissionContext: bypassPermissions ? undefined : {
               sessionId,
-              permissionMode: (permissionMode || 'normal') as PermissionMode,
+              permissionMode: (permissionMode || 'trust') as PermissionMode,
               emitSSE: (event) => {
                 controller.enqueue(formatSSE(event as SSEEvent));
               },
@@ -472,8 +472,19 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
                   type: 'tool_result',
                   data: JSON.stringify({
                     tool_use_id: event.toolCallId,
-                    content: typeof event.output === 'string' ? event.output : JSON.stringify(event.output),
+                    content: typeof (event as any).output === 'string' ? (event as any).output : typeof (event as any).result === 'string' ? (event as any).result : JSON.stringify((event as any).output ?? (event as any).result),
                     is_error: false,
+                  }),
+                }));
+                break;
+
+              case 'tool-error':
+                controller.enqueue(formatSSE({
+                  type: 'tool_result',
+                  data: JSON.stringify({
+                    tool_use_id: (event as any).toolCallId,
+                    content: `Error: ${String((event as any).error)}`,
+                    is_error: true,
                   }),
                 }));
                 break;

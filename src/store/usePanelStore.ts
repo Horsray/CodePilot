@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { PanelContent, PreviewViewMode, BottomPanelTab, WorkspaceTab, WorkspaceTabKind } from '@/hooks/usePanel';
+import type { PreviewViewMode, BottomPanelTab, WorkspaceTab } from '@/hooks/usePanel';
 
 interface PanelState {
   fileTreeOpen: boolean;
