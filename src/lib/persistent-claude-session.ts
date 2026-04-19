@@ -29,19 +29,28 @@ class AsyncUserMessageQueue implements AsyncIterable<SDKUserMessage> {
     }
   }
 
-  async *[Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
-    while (true) {
-      if (this.items.length > 0) {
-        yield this.items.shift()!;
-        continue;
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: async (): Promise<IteratorResult<SDKUserMessage>> => {
+        if (this.items.length > 0) {
+          return { value: this.items.shift()!, done: false };
+        }
+        if (this.closed) {
+          return { value: undefined as never, done: true };
+        }
+        return new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
+          this.waiters.push(resolve);
+        });
+      },
+      return: async (): Promise<IteratorResult<SDKUserMessage>> => {
+        this.close();
+        return { value: undefined as never, done: true };
+      },
+      throw: async (e?: any): Promise<IteratorResult<SDKUserMessage>> => {
+        this.close();
+        throw e;
       }
-      if (this.closed) return;
-      const next = await new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
-        this.waiters.push(resolve);
-      });
-      if (next.done) return;
-      yield next.value;
-    }
+    };
   }
 }
 
@@ -55,6 +64,7 @@ interface PersistentClaudeEntry {
   releaseTurn: (() => void) | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
   lastUsedAt: number;
+  shadowHandle?: { cleanup: () => void };
 }
 
 export interface PersistentClaudeTurn {
@@ -158,12 +168,16 @@ function closeEntry(entry: PersistentClaudeEntry): void {
     entry.releaseTurn();
     entry.releaseTurn = null;
   }
+  if (entry.shadowHandle) {
+    entry.shadowHandle.cleanup();
+  }
 }
 
 function createEntry(
   codepilotSessionId: string,
   signature: string,
   options: Options,
+  shadowHandle?: { cleanup: () => void }
 ): PersistentClaudeEntry {
   const input = new AsyncUserMessageQueue();
   const persistentQuery = query({ prompt: input, options });
@@ -177,6 +191,7 @@ function createEntry(
     releaseTurn: null,
     idleTimer: null,
     lastUsedAt: Date.now(),
+    shadowHandle,
   };
 }
 
@@ -200,6 +215,7 @@ export function getPersistentClaudeTurn(params: {
   signature: string;
   options: Options;
   messages: SDKUserMessage[];
+  shadowHandle?: { cleanup: () => void };
 }): PersistentClaudeTurn {
   const store = getStore();
   const existing = store.get(params.codepilotSessionId);
@@ -213,7 +229,7 @@ export function getPersistentClaudeTurn(params: {
   }
 
   if (!entry) {
-    entry = createEntry(params.codepilotSessionId, params.signature, params.options);
+    entry = createEntry(params.codepilotSessionId, params.signature, params.options, params.shadowHandle);
     store.set(params.codepilotSessionId, entry);
     reused = false;
   }

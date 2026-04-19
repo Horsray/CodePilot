@@ -548,6 +548,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
       conversationHistory: options.conversationHistory,
       sessionSummary: options.sessionSummary,
       fallbackTokenBudget: options.fallbackTokenBudget,
+      sessionSummaryBoundaryRowid: options.sessionSummaryBoundaryRowid,
       imageAgentMode: options.imageAgentMode,
       toolTimeoutSeconds: options.toolTimeoutSeconds,
       outputFormat: options.outputFormat,
@@ -617,6 +618,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       // in the outer finally block. See src/lib/claude-home-shadow.ts.
       let shadowHome: ShadowHome | null = null;
       let usingPersistentSession = false;
+      let shadowHandleOwnedByPersistentSession = false;
 
       // Resolve provider via the unified resolver. The caller may pass an explicit
       // provider (from resolveProvider().provider), or undefined when 'env' mode is
@@ -1298,10 +1300,14 @@ if (claudePath) {
               abortController: undefined,
             },
             messages: persistentMessages,
+            shadowHandle: shadowHome || undefined,
           });
           conversation = persistentTurn.conversation;
           controlQuery = persistentTurn.query;
           usingPersistentSession = true;
+          if (!persistentTurn.reused) {
+            shadowHandleOwnedByPersistentSession = true;
+          }
           console.log('[claude-client] Persistent Claude session:', persistentTurn.reused ? 'reused' : 'started');
         } catch (persistentStartError) {
           console.warn('[claude-client] Persistent Claude session failed to start, falling back to one-shot query:', persistentStartError);
@@ -1353,10 +1359,14 @@ if (claudePath) {
                 }),
                 options: { ...queryOptions, abortController: undefined },
                 messages: freshMessages,
+                shadowHandle: shadowHome || undefined,
               });
               conversation = freshPersistent.conversation;
               controlQuery = freshPersistent.query;
               usingPersistentSession = true;
+              if (!freshPersistent.reused) {
+                shadowHandleOwnedByPersistentSession = true;
+              }
             } catch (persistentFallbackError) {
               console.warn('[claude-client] Persistent resume fallback failed, using one-shot query:', persistentFallbackError);
               const freshQuery = query({
@@ -2086,7 +2096,7 @@ if (claudePath) {
         unregisterConversation(sessionId);
         // Tear down shadow ~/.claude/ if we built one. Best-effort — the OS
         // will eventually GC tmpdir even if this fails.
-        if (shadowHome) {
+        if (shadowHome && !shadowHandleOwnedByPersistentSession) {
           shadowHome.cleanup();
           shadowHome = null;
         }

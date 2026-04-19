@@ -58,6 +58,7 @@ export const sdkRuntime: AgentRuntime = {
       conversationHistory: ro.conversationHistory as ClaudeStreamOptions['conversationHistory'],
       sessionSummary: ro.sessionSummary as string | undefined,
       fallbackTokenBudget: ro.fallbackTokenBudget as number | undefined,
+      sessionSummaryBoundaryRowid: ro.sessionSummaryBoundaryRowid as number | undefined,
       imageAgentMode: ro.imageAgentMode as boolean | undefined,
       toolTimeoutSeconds: ro.toolTimeoutSeconds as number | undefined,
       outputFormat: ro.outputFormat as ClaudeStreamOptions['outputFormat'],
