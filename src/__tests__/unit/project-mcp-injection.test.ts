@@ -1,15 +1,15 @@
 /**
  * Regression test for the P1 review finding:
  *
- * After collapsing DB-provider settingSources to ['user'] (to prevent
- * project/local settings env from overriding the explicit provider's auth),
- * the SDK's auto-loading of `<cwd>/.mcp.json` ALSO got cut off — even
- * though `.mcp.json` is auth-neutral and is the standard place to share
- * project-level MCP servers across a team.
+ * After switching SDK requests to fast-start settingSources=[],
+ * auto-loading of `<cwd>/.mcp.json` is cut off. That is intentional for
+ * startup latency, but `.mcp.json` still needs a loader so CodePilot can
+ * inject selected project MCP servers on demand.
  *
  * The fix re-injects project `.mcp.json` MCP servers into the SDK's
- * `mcpServers` Options for DB-provider requests, via
- * `loadProjectMcpServers(cwd)` in mcp-loader.ts.
+ * `mcpServers` Options only when the request needs them. The underlying
+ * loader behavior lives in `loadProjectMcpServers(cwd)` and
+ * `loadOnDemandMcpServers(cwd, names)` in mcp-loader.ts.
  *
  * These tests pin the loader behavior. End-to-end wiring (the actual
  * injection in claude-client.ts streamClaudeSdk) is verified by reading
@@ -58,6 +58,10 @@ function writeUserSettings(content: object) {
   const dir = path.join(tempHome, '.claude');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(content, null, 2));
+}
+
+function writeUserRootClaudeJson(content: object) {
+  fs.writeFileSync(path.join(tempHome, '.claude.json'), JSON.stringify(content, null, 2));
 }
 
 describe('loadProjectMcpServers — explicit project .mcp.json injection', () => {
@@ -253,5 +257,55 @@ describe('loadProjectMcpServers — mcpServerOverrides parity with loadAndMerge'
     const servers = loadProjectMcpServers(tempProjectCwd);
     assert.ok(servers);
     assert.ok('foo' in servers!);
+  });
+});
+
+describe('loadOnDemandMcpServers — named subset for SDK fast-start', () => {
+  it('loads only requested servers across user settings and project .mcp.json', async () => {
+    writeUserRootClaudeJson({
+      mcpServers: {
+        github: { command: 'github-mcp' },
+        fetch: { command: 'fetch-mcp' },
+      },
+    });
+    writeProjectMcpJson({
+      mcpServers: {
+        'chrome-devtools': { command: 'devtools-mcp' },
+        rag: { command: 'slow-rag-mcp' },
+      },
+    });
+
+    const { loadOnDemandMcpServers } = await import('../../lib/mcp-loader');
+    const servers = loadOnDemandMcpServers(tempProjectCwd, ['github', 'chrome-devtools']);
+
+    assert.ok(servers);
+    assert.deepEqual(Object.keys(servers!).sort(), ['chrome-devtools', 'github']);
+    assert.equal(servers!.github.command, 'github-mcp');
+    assert.equal(servers!['chrome-devtools'].command, 'devtools-mcp');
+  });
+
+  it('honors mcpServerOverrides and resolves ${...} placeholders', async () => {
+    writeUserSettings({
+      mcpServerOverrides: {
+        disabled: { enabled: false },
+      },
+      mcpServers: {
+        github: {
+          command: 'github-mcp',
+          env: { GITHUB_TOKEN: '${github_token}' },
+        },
+        disabled: { command: 'disabled-mcp' },
+      },
+    });
+
+    const { setSetting } = await import('../../lib/db');
+    setSetting('github_token', 'ghp-test');
+
+    const { loadOnDemandMcpServers } = await import('../../lib/mcp-loader');
+    const servers = loadOnDemandMcpServers(tempProjectCwd, ['github', 'disabled', 'missing']);
+
+    assert.ok(servers);
+    assert.deepEqual(Object.keys(servers!), ['github']);
+    assert.deepEqual(servers!.github.env, { GITHUB_TOKEN: 'ghp-test' });
   });
 });

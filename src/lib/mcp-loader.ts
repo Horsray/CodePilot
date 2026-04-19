@@ -1,9 +1,9 @@
 /**
  * MCP Server Loader — shared module for loading MCP server configurations.
  *
- * The SDK auto-loads MCP servers from settingSources (['user', 'project', 'local']).
- * We only manually pass servers that need CodePilot-specific processing:
- * ${...} env placeholder resolution from the CodePilot DB.
+ * CodePilot does not let the SDK auto-load every MCP server during chat
+ * startup. We manually pass either CodePilot-processed servers or a small
+ * on-demand subset selected for the current request.
  *
  * This eliminates redundant config passing and reduces initialization overhead.
  */
@@ -98,6 +98,23 @@ function loadAndMerge(): CachedMcpConfig {
   return _cache;
 }
 
+function resolveServerConfig(server: MCPServerConfig): MCPServerConfig {
+  const out = { ...server };
+  if (out.env) {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(out.env)) {
+      if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
+        const settingKey = value.slice(2, -1);
+        env[key] = getSetting(settingKey) || '';
+      } else if (typeof value === 'string') {
+        env[key] = value;
+      }
+    }
+    out.env = env;
+  }
+  return out;
+}
+
 // ── Public API ───────────────────────────────────────────────────────
 
 /**
@@ -105,7 +122,7 @@ function loadAndMerge(): CachedMcpConfig {
  *
  * Returns only servers with ${...} env placeholders that were resolved
  * against the CodePilot DB. Returns undefined when no such servers exist
- * (the common case), letting the SDK load everything natively.
+ * (the common case), so chat startup can continue without external MCP.
  *
  * Used by: route.ts, conversation-engine.ts — passed to streamClaude().
  */
@@ -122,7 +139,8 @@ export function loadCodePilotMcpServers(): Record<string, MCPServerConfig> | und
  * Load ALL MCP servers (for UI display in MCP Manager).
  *
  * Returns the full merged config from all sources with overrides applied.
- * NOT intended for passing to the SDK — use loadCodePilotMcpServers() instead.
+ * NOT intended for passing wholesale to the SDK — use
+ * loadCodePilotMcpServers() or loadOnDemandMcpServers() instead.
  *
  * Used by: MCP Manager UI, diagnostics.
  */
@@ -136,14 +154,57 @@ export function loadAllMcpServers(): Record<string, MCPServerConfig> | undefined
 }
 
 /**
+ * Load a named subset of user/settings/project MCP servers for one request.
+ *
+ * This supports the SDK fast-start path: normal chat turns avoid spawning slow
+ * user MCPs, while explicit needs like GitHub, browser automation, or web fetch
+ * still receive the relevant server before the Claude Code process starts.
+ */
+export function loadOnDemandMcpServers(
+  projectCwd: string | undefined,
+  names: Iterable<string>,
+): Record<string, MCPServerConfig> | undefined {
+  const selectedNames = new Set(Array.from(names).filter(Boolean));
+  if (selectedNames.size === 0) return undefined;
+
+  try {
+    const userConfig = readJson(path.join(os.homedir(), '.claude.json'));
+    const settings = readJson(path.join(os.homedir(), '.claude', 'settings.json'));
+    const projectMcp = projectCwd
+      ? readJson(path.join(projectCwd, '.mcp.json'))
+      : {};
+
+    const merged: Record<string, MCPServerConfig> = {
+      ...((userConfig.mcpServers || {}) as Record<string, MCPServerConfig>),
+      ...((settings.mcpServers || {}) as Record<string, MCPServerConfig>),
+      ...((projectMcp.mcpServers || {}) as Record<string, MCPServerConfig>),
+    };
+
+    const overrides = (settings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
+    const resolved: Record<string, MCPServerConfig> = {};
+
+    for (const name of selectedNames) {
+      const server = merged[name];
+      if (!server) continue;
+      const override = overrides[name];
+      const effectiveEnabled = override?.enabled !== undefined ? override.enabled : server.enabled;
+      if (effectiveEnabled === false) continue;
+      resolved[name] = resolveServerConfig(server);
+    }
+
+    return Object.keys(resolved).length > 0 ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Load MCP servers from a SPECIFIC project's `.mcp.json` file.
  *
- * Used to compensate for `settingSources: ['user']` on DB-provider requests
- * (which drops 'project' to prevent project-level settings env from
- * overriding the explicit provider's auth — see provider-resolver.ts
- * around line 800). Without this, project `.mcp.json` MCP servers would
- * silently disappear for DB-provider users, even though the project's MCP
- * servers are auth-neutral and should keep working.
+ * Used when CodePilot decides a request needs project MCP access. Because the
+ * SDK fast-start path uses settingSources=[], project `.mcp.json` servers are
+ * never discovered automatically; callers must explicitly pass the subset
+ * they want to expose for that turn.
  *
  * Why this isn't covered by the cache-based `loadAndMerge` above:
  * `loadAndMerge` reads `<process.cwd()>/.mcp.json`, which on the desktop
@@ -188,20 +249,7 @@ export function loadProjectMcpServers(projectCwd: string | undefined): Record<st
       const effectiveEnabled = override?.enabled !== undefined ? override.enabled : server.enabled;
       if (effectiveEnabled === false) continue;
 
-      const out = { ...server };
-      if (out.env) {
-        const env: Record<string, string> = {};
-        for (const [key, value] of Object.entries(out.env)) {
-          if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
-            const settingKey = value.slice(2, -1);
-            env[key] = getSetting(settingKey) || '';
-          } else if (typeof value === 'string') {
-            env[key] = value;
-          }
-        }
-        out.env = env;
-      }
-      resolved[name] = out;
+      resolved[name] = resolveServerConfig(server);
     }
 
     return Object.keys(resolved).length > 0 ? resolved : undefined;

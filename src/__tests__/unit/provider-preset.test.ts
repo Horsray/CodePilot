@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { VENDOR_PRESETS, PresetSchema, getDefaultModelsForProvider, getEffectiveProviderProtocol, isValidProtocol } from '../../lib/provider-catalog';
 
 describe('Preset Schema Validation', () => {
@@ -115,33 +118,44 @@ describe('toClaudeCodeEnv: env shape after CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST 
   });
 
   it('without provider (env mode): preserves baseEnv ANTHROPIC_* for cc-switch compatibility', async () => {
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-provider-preset-'));
     const { toClaudeCodeEnv } = await import('../../lib/provider-resolver');
 
-    const resolvedWithoutProvider = {
-      provider: undefined,
-      protocol: 'anthropic' as const,
-      authStyle: 'api_key' as const,
-      model: undefined,
-      modelDisplayName: undefined,
-      upstreamModel: undefined,
-      headers: {},
-      envOverrides: {},
-      roleModels: {},
-      hasCredentials: false,
-      availableModels: [],
-      settingSources: ['user', 'project', 'local'],
-    };
-    const env = toClaudeCodeEnv({
-      PATH: '/usr/bin',
-      ANTHROPIC_AUTH_TOKEN: 'cc-switch-token',
-      ANTHROPIC_BASE_URL: 'https://proxy.example.com',
-    }, resolvedWithoutProvider);
+    try {
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      const resolvedWithoutProvider = {
+        provider: undefined,
+        protocol: 'anthropic' as const,
+        authStyle: 'api_key' as const,
+        model: undefined,
+        modelDisplayName: undefined,
+        upstreamModel: undefined,
+        headers: {},
+        envOverrides: {},
+        roleModels: {},
+        hasCredentials: false,
+        availableModels: [],
+        settingSources: [],
+      };
+      const env = toClaudeCodeEnv({
+        PATH: '/usr/bin',
+        ANTHROPIC_AUTH_TOKEN: 'cc-switch-token',
+        ANTHROPIC_BASE_URL: 'https://proxy.example.com',
+      }, resolvedWithoutProvider);
 
-    // Dead-code flag must NOT be set
-    assert.equal(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, undefined);
-    // Caller's env is preserved so SDK's settingSources:['user'] path can layer settings.json on top
-    assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'cc-switch-token');
-    assert.equal(env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
+      // Dead-code flag must NOT be set
+      assert.equal(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, undefined);
+      // Caller env is preserved when no ~/.claude/settings.json allowlist exists.
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'cc-switch-token');
+      assert.equal(env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
+    } finally {
+      if (previousHome !== undefined) process.env.HOME = previousHome; else delete process.env.HOME;
+      if (previousUserProfile !== undefined) process.env.USERPROFILE = previousUserProfile; else delete process.env.USERPROFILE;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 });
 

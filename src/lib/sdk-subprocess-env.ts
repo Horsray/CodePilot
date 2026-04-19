@@ -32,16 +32,15 @@ export interface SdkSubprocessSetup {
  * Build the env that goes to the SDK subprocess for a resolved provider.
  *
  * Behavior:
- * - When `resolved.provider` is set (explicit DB provider): builds a per-
- *   request shadow ~/.claude/ that strips ANTHROPIC_* keys from settings.json
- *   AND ~/.claude.json, while preserving every other user-level config
- *   (mcpServers, hooks, enabledPlugins, skills, agents, plugins, commands,
- *   CLAUDE.md, .credentials.json). HOME and USERPROFILE are pointed at the
- *   shadow root so the SDK's settings loader reads our stripped copies
- *   instead of the live ones.
+ * - When `resolved.provider` is set (explicit DB provider) and user
+ *   settingSources are enabled: builds a per-request shadow ~/.claude/ that
+ *   strips ANTHROPIC_* keys from settings.json and ~/.claude.json. Fast-start
+ *   SDK requests use settingSources=[] and therefore pass through the real
+ *   HOME without building this shadow.
  * - When `resolved.provider` is undefined (env mode / cc-switch path):
- *   returns a pass-through real-HOME setup. cc-switch settings.json supplies
- *   credentials normally.
+ *   returns a pass-through real-HOME setup. cc-switch settings.json credentials
+ *   are read by provider-resolver and injected through an explicit env
+ *   allowlist; the SDK does not need user settingSources for auth.
  *
  * In both cases, the returned env has CodePilot's PATH expansion, Git Bash
  * detection (Windows), and the provider's auth/baseUrl/model env applied via
@@ -51,9 +50,12 @@ export function prepareSdkSubprocessEnv(resolved: ResolvedProvider): SdkSubproce
   const sdkEnv: Record<string, string> = { ...process.env as Record<string, string> };
 
   // Provider-group ownership: only build a shadow when an explicit DB
-  // provider is selected. Env-mode (resolved.provider === undefined) is the
-  // Claude Code group and must continue to use the real ~/.claude/ + cc-switch.
-  const shadow = createShadowClaudeHome({ stripAuth: !!resolved.provider });
+  // provider is selected AND the SDK will load user settings. The fast-start
+  // default uses settingSources=[], so there is nothing for the shadow to
+  // sanitize and no reason to pay the per-request filesystem cost.
+  const shadow = createShadowClaudeHome({
+    stripAuth: !!resolved.provider && resolved.settingSources.includes('user'),
+  });
   sdkEnv.HOME = shadow.home;
   sdkEnv.USERPROFILE = shadow.home;
 

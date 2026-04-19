@@ -3,10 +3,10 @@
  *
  * External tools (notably cc-switch, but also any user who manually edits the
  * file) manage Claude Code CLI credentials by writing an `env` block in
- * ~/.claude/settings.json. The Agent SDK loads this file when
- * `settingSources` includes `'user'` and merges the env into the subprocess,
- * skipping keys in its internal blocklist (which does NOT cover
- * ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL).
+ * ~/.claude/settings.json. CodePilot reads a narrow allowlist from that env
+ * block and injects it into Claude Code subprocesses explicitly, so the fast
+ * SDK path does not need to enable user settingSources (which would also load
+ * every user MCP server, plugin, hook, and permission before first response).
  *
  * CodePilot's runtime resolver needs the same visibility so auto mode can
  * pick the SDK runtime (instead of falling back to native, which cannot read
@@ -25,6 +25,21 @@ export interface ClaudeSettingsCredentials {
   baseUrl?: string;
 }
 
+const CLAUDE_SETTINGS_ENV_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_REASONING_MODEL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
+] as const;
+
+export type ClaudeSettingsEnvKey = typeof CLAUDE_SETTINGS_ENV_KEYS[number];
+
 /**
  * Read ~/.claude/settings.json (or legacy ~/.claude/claude.json) and extract
  * the Anthropic credential fields from its `env` block.
@@ -33,6 +48,23 @@ export interface ClaudeSettingsCredentials {
  * related fields are present. Non-empty strings are preserved as-is.
  */
 export function readClaudeSettingsCredentials(): ClaudeSettingsCredentials | null {
+  const env = readClaudeSettingsEnv();
+  if (!env) return null;
+
+  const apiKey = env.ANTHROPIC_API_KEY;
+  const authToken = env.ANTHROPIC_AUTH_TOKEN;
+  const baseUrl = env.ANTHROPIC_BASE_URL;
+
+  if (!apiKey && !authToken && !baseUrl) return null;
+  return { apiKey, authToken, baseUrl };
+}
+
+/**
+ * Read the Claude Code settings env block, restricted to auth and model
+ * routing keys that CodePilot can safely pass to a subprocess without loading
+ * plugins/MCP/hooks through SDK settingSources.
+ */
+export function readClaudeSettingsEnv(): Partial<Record<ClaudeSettingsEnvKey, string>> | null {
   const home = os.homedir();
   const candidates = [
     path.join(home, '.claude', 'settings.json'),
@@ -47,18 +79,14 @@ export function readClaudeSettingsCredentials(): ClaudeSettingsCredentials | nul
       const env = parsed?.env;
       if (!env || typeof env !== 'object') continue;
 
-      const pick = (key: string): string | undefined => {
+      const picked: Partial<Record<ClaudeSettingsEnvKey, string>> = {};
+      for (const key of CLAUDE_SETTINGS_ENV_KEYS) {
         const v = env[key];
-        return typeof v === 'string' && v.length > 0 ? v : undefined;
-      };
+        if (typeof v === 'string' && v.length > 0) picked[key] = v;
+      }
 
-      const apiKey = pick('ANTHROPIC_API_KEY');
-      const authToken = pick('ANTHROPIC_AUTH_TOKEN');
-      const baseUrl = pick('ANTHROPIC_BASE_URL');
-
-      if (!apiKey && !authToken && !baseUrl) continue;
-
-      return { apiKey, authToken, baseUrl };
+      if (Object.keys(picked).length === 0) continue;
+      return picked;
     } catch {
       // Unreadable / malformed / permission-denied — treat as absent and try next file.
     }

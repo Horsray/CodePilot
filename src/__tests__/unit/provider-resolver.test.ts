@@ -315,7 +315,7 @@ describe('Provider Resolver', () => {
       const resolved = resolveProvider({ providerId: 'env' });
       assert.equal(resolved.provider, undefined);
       assert.equal(resolved.protocol, 'anthropic');
-      assert.deepEqual(resolved.settingSources, ['user', 'project', 'local']);
+      assert.deepEqual(resolved.settingSources, []);
     });
 
     it('returns env-based resolution when no provider configured', () => {

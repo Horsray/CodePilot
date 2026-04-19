@@ -3,17 +3,11 @@
  *
  * Pins two pieces of behavior so they don't silently regress:
  *
- * 1. settingSources for DB-backed providers is `['user']` only —
- *    'project' and 'local' are dropped to prevent cwd .claude/settings.json
- *    or .claude/settings.local.json from overriding the selected DB
- *    provider's auth via the SDK's qZq() env loader. The user layer is
- *    safe because per-request shadow HOME (claude-home-shadow.ts) writes
- *    a stripped settings.json; the project/local layers can't be shadowed
- *    the same way without breaking file-creation tools (Edit/Write
- *    relative paths), so we exclude them from settingSources entirely.
- *    Project CLAUDE.md and `.mcp.json` are still loaded — by CodePilot's
- *    context-assembler and mcp-loader respectively — independent of
- *    settingSources. Env mode keeps all 3 sources.
+ * 1. settingSources defaults to [] for both DB-backed and env-mode SDK
+ *    requests. This is the product fast-start contract: CodePilot injects
+ *    auth/model env, project instructions, and keyword-gated MCP explicitly
+ *    instead of letting Claude Code scan all user/project settings, MCP,
+ *    plugins, hooks, and permissions before first response.
  *
  * 2. Short-alias fallback (sonnet/opus/haiku → upstream model) only fires
  *    when the provider has EXACTLY ONE model in its catalog.
@@ -66,13 +60,12 @@ function writeUserSettingsJson(creds: Record<string, string>) {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Fix #1: settingSources is ['user'] for DB providers — drop 'project' and
-// 'local' to prevent cwd-level settings env from bleeding into the
-// explicitly selected provider's auth. Env mode keeps all 3.
+// Fix #1: settingSources stays empty by default so SDK startup is not blocked
+// by user/project MCP and plugin discovery.
 // ────────────────────────────────────────────────────────────────
 
 describe('settingSources by provider group', () => {
-  it('DB-backed provider gets settingSources=["user"] only — drops project/local', async () => {
+  it('DB-backed provider gets empty settingSources for fast startup', async () => {
     writeUserSettingsJson({
       ANTHROPIC_BASE_URL: 'https://leak-source.example.com',
       ANTHROPIC_AUTH_TOKEN: 'sk-cc-switch-present',
@@ -92,19 +85,12 @@ describe('settingSources by provider group', () => {
     assert.ok(resolved.provider, 'expected DB provider to resolve');
     assert.deepEqual(
       resolved.settingSources,
-      ['user'],
-      [
-        'DB-backed provider must include "user" — needed for user-level MCP/plugins/hooks discovery',
-        '(env-bleed at user layer is handled by per-request shadow HOME, see claude-home-shadow.ts).',
-        'But MUST drop "project" and "local" — the SDK qZq() env loader applies env from EVERY',
-        'enabled settingSource layer, and project/local layers cannot be shadowed without breaking',
-        'file-creation tools (relative paths). Project CLAUDE.md / .mcp.json are loaded',
-        "independently by CodePilot, so they don't need 'project' settingSource.",
-      ].join(' '),
+      [],
+      'DB-backed provider must not auto-load user/project settings; CodePilot injects required auth/model/MCP explicitly.',
     );
   });
 
-  it('env-mode (no DB provider) keeps all three sources so cc-switch + project Claude config work', async () => {
+  it('env-mode (no DB provider) also keeps settingSources empty while preserving cc-switch credentials', async () => {
     writeUserSettingsJson({ ANTHROPIC_AUTH_TOKEN: 'sk-cc-switch' });
 
     const { resolveProvider } = await import('../../lib/provider-resolver');
@@ -113,8 +99,8 @@ describe('settingSources by provider group', () => {
     assert.equal(resolved.provider, undefined, 'expected env mode (no DB provider)');
     assert.deepEqual(
       resolved.settingSources,
-      ['user', 'project', 'local'],
-      'env mode (Claude Code group) keeps all sources — full Claude Code config experience including project hooks/permissions',
+      [],
+      'env mode fast-starts without scanning user/project settings; cc-switch env is injected separately.',
     );
     assert.equal(resolved.hasCredentials, true);
   });

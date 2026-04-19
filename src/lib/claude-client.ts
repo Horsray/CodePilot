@@ -7,7 +7,9 @@ import type {
   SDKPartialAssistantMessage,
   SDKSystemMessage,
   SDKToolProgressMessage,
+  SDKMessage,
   Options,
+  Query,
   McpStdioServerConfig,
   McpSSEServerConfig,
   McpHttpServerConfig,
@@ -30,6 +32,11 @@ import { resolveWorkingDirectory } from './working-directory';
 import { wrapController } from './safe-stream';
 import { type ShadowHome } from './claude-home-shadow';
 import { prepareSdkSubprocessEnv } from './sdk-subprocess-env';
+import {
+  buildPersistentClaudeSignature,
+  closePersistentClaudeSession,
+  getPersistentClaudeTurn,
+} from './persistent-claude-session';
 // Static imports for resolveRuntime/detectTransport — used to be lazy
 // `require('./runtime')` / `require('./provider-transport')`, but Turbopack's
 // CJS↔ESM interop returns `{ default: ... }` shape that broke destructuring
@@ -76,6 +83,51 @@ function sanitizeEnv(env: Record<string, string>): Record<string, string> {
     }
   }
   return clean;
+}
+
+function selectOnDemandMcpServerNames(
+  prompt: string,
+  conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>,
+): Set<string> {
+  const recentHistory = conversationHistory
+    ?.slice(-6)
+    .map(m => m.content)
+    .join('\n') || '';
+  const text = `${recentHistory}\n${prompt}`;
+  const selected = new Set<string>();
+  const add = (...names: string[]) => {
+    for (const name of names) selected.add(name);
+  };
+
+  if (/\bhttps?:\/\/|\burl\b|fetch|web\s*fetch|读取.*网页|打开.*网页|网页内容|网址/i.test(text)) {
+    add('fetch');
+  }
+  if (/github|\bgh\b|pull\s*request|\bpr\b|issue|repository|repo\b|远程仓库/i.test(text)) {
+    add('github');
+  }
+  if (/playwright|browser\s*automation|e2e|端到端|浏览器自动化/i.test(text)) {
+    add('playwright');
+  }
+  if (/chrome[-\s]?devtools|devtools|console|控制台|页面截图|截图|inspect|调试页面|localhost:\d+|http:\/\/localhost/i.test(text)) {
+    add('chrome-devtools');
+  }
+  if (/web\s*search|websearch|联网搜索|网页搜索|搜索网页|查一下|查找.*网页|最新信息|latest/i.test(text)) {
+    add('WebSearch', 'bailian-web-search', 'fetch');
+  }
+  if (/memory|记忆|回忆/i.test(text)) {
+    add('memory');
+  }
+  if (/\brag\b|知识库|向量检索|语义检索/i.test(text)) {
+    add('rag');
+  }
+  if (/sequential[-\s]?thinking|逐步思考/i.test(text)) {
+    add('sequential-thinking');
+  }
+  if (/filesystem|文件系统.*mcp/i.test(text)) {
+    add('filesystem');
+  }
+
+  return selected;
 }
 
 /**
@@ -563,6 +615,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       // below once we know whether we have an explicit DB provider; cleaned up
       // in the outer finally block. See src/lib/claude-home-shadow.ts.
       let shadowHome: ShadowHome | null = null;
+      let usingPersistentSession = false;
 
       // Resolve provider via the unified resolver. The caller may pass an explicit
       // provider (from resolveProvider().provider), or undefined when 'env' mode is
@@ -610,9 +663,9 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
           env: sanitizeEnv(sdkEnv),
-          // Load settings so the SDK behaves like the CLI (tool permissions,
-          // CLAUDE.md, etc.). For DB providers settingSources is ['user'] only;
-          // for env mode it's ['user', 'project', 'local']. See provider-resolver.ts.
+          // Fast-start default: do not let Claude Code scan user/project
+          // filesystem settings on every chat turn. CodePilot injects auth,
+          // project instructions, and on-demand MCP explicitly.
           settingSources: resolved.settingSources as Options['settingSources'],
           // Auto-allow all CodePilot built-in MCPs. These are host-defined
           // in-process servers (createSdkMcpServer in claude-client.ts below)
@@ -718,51 +771,20 @@ if (claudePath) {
         }
 
         // MCP servers: pass explicitly provided config (e.g. from CodePilot UI).
-        // User-level MCP config from ~/.claude.json and ~/.claude/settings.json
-        // is automatically loaded by the SDK via settingSources: ['user'] (DB
-        // providers) or ['user', 'project', 'local'] (env mode).
+        // User/project MCP config is no longer auto-loaded through SDK
+        // settingSources; slow external servers are selected on demand below.
         if (mcpServers && Object.keys(mcpServers).length > 0) {
           queryOptions.mcpServers = toSdkMcpConfig(mcpServers);
         }
 
-        // For DB-provider requests, settingSources is ['user'] only (project
-        // and local layers are dropped to prevent <cwd>/.claude/settings.json
-        // env from overriding the explicit provider's auth — see
-        // provider-resolver.ts ~800). That also disables SDK auto-loading of
-        // Also load MCP servers from ~/.claude/settings.json
-        const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-        let settingsMcps: Record<string, MCPServerConfig> | undefined;
-        if (fs.existsSync(settingsPath)) {
-          try {
-            const settingsContent = fs.readFileSync(settingsPath, 'utf-8');
-            const settings = JSON.parse(settingsContent);
-            settingsMcps = settings.mcpServers as Record<string, MCPServerConfig> | undefined;
-            console.log('[claude-client] MCP from settings.json:', settingsMcps ? 'found' : 'not found');
-          } catch (e) {
-            console.warn('[claude-client] Failed to read settings.json:', e);
-          }
-        } else {
-          console.log('[claude-client] settings.json not found');
-        }
-        if (settingsMcps && Object.keys(settingsMcps).length > 0) {
-          const sdkSettingsMcps = toSdkMcpConfig(settingsMcps);
-          queryOptions.mcpServers = {
-            ...(queryOptions.mcpServers || {}),
-            ...sdkSettingsMcps,
-          };
-        }
-
-        // Project .mcp.json takes precedence team
-        // members commit to share project MCP servers. Re-inject it here so
-        // those servers don't silently disappear for DB-provider users.
-        if (resolved.provider) {
-          const { loadProjectMcpServers } = await import('@/lib/mcp-loader');
-          const projectMcps = loadProjectMcpServers(resolvedWorkingDirectory.path);
-          if (projectMcps) {
-            const sdkProjectMcps = toSdkMcpConfig(projectMcps);
-            // Settings MCP (from UI) takes precedence over project .mcp.json
+        const onDemandMcpNames = selectOnDemandMcpServerNames(prompt, conversationHistory);
+        if (onDemandMcpNames.size > 0) {
+          const { loadOnDemandMcpServers } = await import('@/lib/mcp-loader');
+          const onDemandMcps = loadOnDemandMcpServers(resolvedWorkingDirectory.path, onDemandMcpNames);
+          if (onDemandMcps) {
+            console.log('[claude-client] Loading on-demand MCP servers:', Object.keys(onDemandMcps).join(', '));
             queryOptions.mcpServers = {
-              ...sdkProjectMcps,
+              ...toSdkMcpConfig(onDemandMcps),
               ...(queryOptions.mcpServers || {}),
             };
           }
@@ -941,10 +963,9 @@ if (claudePath) {
           ];
         }
 
-        // Plugins: loaded by the SDK itself via enabledPlugins in ~/.claude/settings.json.
-        // CodePilot does NOT explicitly inject plugins — the SDK reads settingSources
-        // ['user', 'project', 'local'] and resolves enabledPlugins on its own,
-        // ensuring parity with Claude CLI.
+        // Plugins are intentionally not loaded by default. Loading the user
+        // plugin graph on every first turn is one of the main SDK-mode startup
+        // costs; fast chat keeps the default surface small.
 
         // Resume session if we have an SDK session ID from a previous conversation turn.
         // Pre-check: verify working_directory exists before attempting resume.
@@ -1212,25 +1233,131 @@ if (claudePath) {
           return textPrompt;
         }
 
+        async function promptToUserMessages(
+          value: string | AsyncIterable<SDKUserMessage>,
+          fallbackSdkSessionId: string | undefined,
+        ): Promise<SDKUserMessage[]> {
+          if (typeof value !== 'string') {
+            const messages: SDKUserMessage[] = [];
+            for await (const message of value) {
+              messages.push(message);
+            }
+            return messages;
+          }
+
+          return [{
+            type: 'user',
+            message: {
+              role: 'user',
+              content: [{ type: 'text', text: value }],
+            },
+            parent_tool_use_id: null,
+            session_id: fallbackSdkSessionId || '',
+          }];
+        }
+
         const finalPrompt = buildFinalPrompt(!shouldResume);
 
         // Try to start the conversation. If resuming a previous session fails
         // (e.g. stale/corrupt session file, CLI version mismatch), automatically
         // fall back to starting a fresh conversation without resume.
-        let conversation = query({
-          prompt: finalPrompt,
-          options: queryOptions,
-        });
+        let conversation: AsyncIterable<SDKMessage>;
         // Keep a handle to the underlying Query instance for control-API
         // calls (getContextUsage etc.). When we peek-and-rewrap below to
         // detect resume failures, `conversation` becomes a plain async
         // generator that loses the Query prototype's methods — we need
         // this original reference to call .getContextUsage() at result
         // time. Reassigned on resume-fallback to point at the fresh Query.
-        let controlQuery = conversation;
+        let controlQuery: Query;
+
+        const persistentSignature = buildPersistentClaudeSignature({
+          providerKey: resolved.provider?.id || options.providerId || options.sessionProviderId || 'env',
+          options: queryOptions,
+        });
+        const persistentMessages = await promptToUserMessages(finalPrompt, sdkSessionId);
+
+        try {
+          const persistentTurn = getPersistentClaudeTurn({
+            codepilotSessionId: sessionId,
+            signature: persistentSignature,
+            options: {
+              ...queryOptions,
+              // Persistent sessions use an internal lifecycle; per-request
+              // aborts close the pooled process explicitly below.
+              abortController: undefined,
+            },
+            messages: persistentMessages,
+          });
+          conversation = persistentTurn.conversation;
+          controlQuery = persistentTurn.query;
+          usingPersistentSession = true;
+          console.log('[claude-client] Persistent Claude session:', persistentTurn.reused ? 'reused' : 'started');
+        } catch (persistentStartError) {
+          console.warn('[claude-client] Persistent Claude session failed to start, falling back to one-shot query:', persistentStartError);
+          const oneShot = query({
+            prompt: finalPrompt,
+            options: queryOptions,
+          });
+          conversation = oneShot;
+          controlQuery = oneShot;
+        }
 
         // Wrap the iterator so we can detect resume failures on the first message
-        if (shouldResume) {
+        if (shouldResume && usingPersistentSession) {
+          try {
+            const iter = conversation[Symbol.asyncIterator]();
+            const first = await iter.next();
+            conversation = (async function* () {
+              if (!first.done) yield first.value;
+              while (true) {
+                const next = await iter.next();
+                if (next.done) break;
+                yield next.value;
+              }
+            })();
+          } catch (resumeError) {
+            const errMsg = resumeError instanceof Error ? resumeError.message : String(resumeError);
+            console.warn('[claude-client] Persistent resume failed, retrying without resume:', errMsg);
+            closePersistentClaudeSession(sessionId);
+            if (sessionId) {
+              try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
+            }
+            controller.enqueue(formatSSE({
+              type: 'status',
+              data: JSON.stringify({
+                _internal: true,
+                resumeFallback: true,
+                title: 'Session fallback',
+                message: 'Previous session could not be resumed. Starting fresh conversation.',
+              }),
+            }));
+            delete queryOptions.resume;
+            try {
+              const freshMessages = await promptToUserMessages(buildFinalPrompt(true), undefined);
+              const freshPersistent = getPersistentClaudeTurn({
+                codepilotSessionId: sessionId,
+                signature: buildPersistentClaudeSignature({
+                  providerKey: resolved.provider?.id || options.providerId || options.sessionProviderId || 'env',
+                  options: queryOptions,
+                }),
+                options: { ...queryOptions, abortController: undefined },
+                messages: freshMessages,
+              });
+              conversation = freshPersistent.conversation;
+              controlQuery = freshPersistent.query;
+              usingPersistentSession = true;
+            } catch (persistentFallbackError) {
+              console.warn('[claude-client] Persistent resume fallback failed, using one-shot query:', persistentFallbackError);
+              const freshQuery = query({
+                prompt: buildFinalPrompt(true),
+                options: queryOptions,
+              });
+              conversation = freshQuery;
+              controlQuery = freshQuery;
+              usingPersistentSession = false;
+            }
+          }
+        } else if (shouldResume && !usingPersistentSession) {
           try {
             // Peek at the first message to verify resume works
             const iter = conversation[Symbol.asyncIterator]();
@@ -1244,7 +1371,7 @@ if (claudePath) {
                 if (next.done) break;
                 yield next.value;
               }
-            })() as ReturnType<typeof query>;
+            })();
             // controlQuery still points at the original Query with
             // getContextUsage() available.
           } catch (resumeError) {
@@ -1266,17 +1393,18 @@ if (claudePath) {
             }));
             // Remove resume and try again as a fresh conversation with history context
             delete queryOptions.resume;
-            conversation = query({
+            const freshQuery = query({
               prompt: buildFinalPrompt(true),
               options: queryOptions,
             });
+            conversation = freshQuery;
             // Fresh Query replaces the old handle — control-API calls
             // now go through this one.
-            controlQuery = conversation;
+            controlQuery = freshQuery;
           }
         }
 
-        registerConversation(sessionId, conversation);
+        registerConversation(sessionId, controlQuery);
 
         // Defer capability capture until first assistant response to avoid
         // competing with first-token latency. Skip entirely if cache is fresh.
@@ -1288,6 +1416,9 @@ if (claudePath) {
         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
+            if (usingPersistentSession) {
+              closePersistentClaudeSession(sessionId);
+            }
             break;
           }
 
@@ -1296,7 +1427,7 @@ if (claudePath) {
               // Deferred capability capture: trigger after first assistant message
               if (capturePending) {
                 capturePending = false;
-                captureCapabilities(sessionId, conversation, capProviderId).catch((err) => {
+                captureCapabilities(sessionId, controlQuery, capProviderId).catch((err) => {
                   console.warn('[claude-client] Deferred capability capture failed:', err);
                 });
               }
@@ -1647,6 +1778,9 @@ if (claudePath) {
         controller.enqueue(formatSSE({ type: 'done', data: '' }));
         controller.close();
       } catch (error) {
+        if (usingPersistentSession) {
+          closePersistentClaudeSession(sessionId);
+        }
         const rawMessage = error instanceof Error ? error.message : 'Unknown error';
         // Log full error details for debugging (visible in terminal / dev tools)
         const stderrContent = error instanceof Error ? (error as { stderr?: string }).stderr : undefined;
@@ -1888,6 +2022,7 @@ if (claudePath) {
     },
 
     cancel() {
+      closePersistentClaudeSession(sessionId);
       abortController?.abort();
     },
   });

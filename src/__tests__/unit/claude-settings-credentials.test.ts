@@ -187,8 +187,9 @@ describe('cc-switch end-to-end (no CodePilot provider, settings.json only)', () 
     // Post-fix: settings.json is recognized as a credential source.
     assert.equal(resolved.hasCredentials, true, 'hasCredentials must be true so ai-provider does not abort');
     assert.equal(resolved.provider, undefined, 'still env mode — settings.json does not create a DB provider');
-    // settingSources includes 'user' so the SDK subprocess will load and apply the env
-    assert.deepEqual(resolved.settingSources, ['user', 'project', 'local']);
+    // Fast-start mode keeps settingSources empty; the subprocess receives
+    // cc-switch auth through an explicit env allowlist instead.
+    assert.deepEqual(resolved.settingSources, []);
   });
 
   it('resolveProvider reports hasCredentials=false when settings.json has no auth keys', async () => {

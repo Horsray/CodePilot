@@ -1,23 +1,15 @@
 /**
  * cli-session-pool.ts — CLI Session Lifecycle Manager.
  *
- * The Claude Code SDK spawns a fresh subprocess for each query() call
- * and kills it when the response stream ends. We cannot keep the
- * subprocess alive across queries, but we CAN:
- *
- * 1. Pre-warm: resolve Claude binary path + env early so the next spawn
- *    doesn't pay cold-start filesystem probes.
- * 2. Idle cleanup: clear stale sdk_session_id after 10 minutes of
- *    inactivity, avoiding pointless resume overhead on the next message.
- * 3. Close cleanup: immediately clear sdk_session_id when the user
- *    closes a conversation, so no resume attempt is wasted.
- *
- * This module tracks active SDK sessions and exposes lifecycle hooks
- * that the chat route and frontend can call to manage session state.
+ * The current Claude Code path keeps a persistent stream-json subprocess
+ * per CodePilot chat session when possible. This legacy pool still tracks
+ * SDK session IDs for resume cleanup and provides the shared close hook
+ * used by delete/interrupt routes.
  */
 
 import { updateSdkSessionId } from './db';
 import { findClaudeBinary } from './platform';
+import { closeAllPersistentClaudeSessions, closePersistentClaudeSession } from './persistent-claude-session';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -121,8 +113,17 @@ export function touchSession(sessionId: string): void {
  * Immediately clears the SDK session to avoid wasted resume attempts.
  */
 export function closeSession(sessionId: string): void {
+  closePersistentClaudeSession(sessionId);
+
   const entry = sessions.get(sessionId);
-  if (!entry) return;
+  if (!entry) {
+    try {
+      updateSdkSessionId(sessionId, '');
+    } catch {
+      // best effort
+    }
+    return;
+  }
 
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
@@ -202,6 +203,7 @@ export function disposeSessionPool(): void {
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
   }
   sessions.clear();
+  closeAllPersistentClaudeSessions();
 }
 
 // ── Idle check interval ────────────────────────────────────────────
