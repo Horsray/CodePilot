@@ -46,6 +46,11 @@ const en = {
   'chatList.selectAll': 'Select all',
   'chatList.clearSelection': 'Clear',
   'chatList.deleteSelected': 'Delete',
+  'chatList.cancelSelection': 'Cancel Selection',
+  'chatList.cancelModification': 'Cancel',
+  'chatList.confirmDelete': 'Delete this conversation?',
+  'chatList.confirmDeleteMultiple': 'Delete {count} selected conversation(s)?',
+  'chatList.confirmRemoveProject': 'Remove project "{projectName}" and all its conversations?',
 
   // ── Global search ───────────────────────────────────────────
   'globalSearch.placeholder': 'Search... (try session:, message:, file:)',

@@ -251,10 +251,15 @@ export function ProjectGroupHeader({
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => {
             setContextMenuOpen(false);
-            // 触发全选事件
             window.dispatchEvent(new CustomEvent('select-all-sessions'));
           }}>
             <span>全选会话</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            window.dispatchEvent(new CustomEvent('cancel-selection'));
+          }}>
+            <span>放弃修改</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onClick={() => {

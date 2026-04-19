@@ -265,10 +265,15 @@ export function SessionListItem({
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => {
             setContextMenuOpen(false);
-            // 触发全选事件
             window.dispatchEvent(new CustomEvent('select-all-sessions'));
           }}>
             <span>全选会话</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            window.dispatchEvent(new CustomEvent('cancel-selection'));
+          }}>
+            <span>放弃修改</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onClick={(e) => {
@@ -277,8 +282,16 @@ export function SessionListItem({
               onDelete(e as unknown as React.MouseEvent, session.id);
             }
           }}>
-            <span>删除会话</span>
+            <span>删除当前会话</span>
           </DropdownMenuItem>
+          {isSelectionMode && (
+            <DropdownMenuItem variant="destructive" onClick={() => {
+              setContextMenuOpen(false);
+              window.dispatchEvent(new CustomEvent('delete-selected-sessions'));
+            }}>
+              <span>删除所选会话</span>
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

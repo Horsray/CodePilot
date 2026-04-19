@@ -43,6 +43,11 @@ const zh: Record<TranslationKey, string> = {
   'chatList.selectAll': '全选',
   'chatList.clearSelection': '清除',
   'chatList.deleteSelected': '删除',
+  'chatList.cancelSelection': '取消选择',
+  'chatList.cancelModification': '放弃修改',
+  'chatList.confirmDelete': '确定要删除这个对话吗？',
+  'chatList.confirmDeleteMultiple': '确定要删除选中的 {count} 个对话吗？',
+  'chatList.confirmRemoveProject': '确定要移除项目 "{projectName}" 及其所有对话吗？',
 
   // ── Global search ───────────────────────────────────────────
   'globalSearch.placeholder': '搜索...（尝试 session: / message: / file:）',

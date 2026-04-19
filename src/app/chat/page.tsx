@@ -116,7 +116,9 @@ function createChatPerfTrace(metadata: Record<string, unknown>) {
   // 中文注释：记录前端阶段起点，并同步写入 Performance Timeline。
   const start = (name: string, detail?: Record<string, unknown>) => {
     startMarks.set(name, getPerfNow());
-    performance.mark(`${markPrefix}:${name}:start`);
+    if (typeof window !== 'undefined' && performance) {
+      performance.mark(`${markPrefix}:${name}:start`);
+    }
     record(`${name}:start`, 'frontend', detail);
   };
 
@@ -125,10 +127,12 @@ function createChatPerfTrace(metadata: Record<string, unknown>) {
     const startAt = startMarks.get(name);
     if (startAt === undefined) return;
     const durationMs = Number((getPerfNow() - startAt).toFixed(2));
-    performance.mark(`${markPrefix}:${name}:end`);
-    try {
-      performance.measure(`${markPrefix}:${name}`, `${markPrefix}:${name}:start`, `${markPrefix}:${name}:end`);
-    } catch { /* ignore duplicate measure errors */ }
+    if (typeof window !== 'undefined' && performance) {
+      performance.mark(`${markPrefix}:${name}:end`);
+      try {
+        performance.measure(`${markPrefix}:${name}`, `${markPrefix}:${name}:start`, `${markPrefix}:${name}:end`);
+      } catch { /* ignore duplicate measure errors */ }
+    }
     record(name, 'frontend', detail, durationMs);
     startMarks.delete(name);
   };

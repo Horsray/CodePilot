@@ -319,7 +319,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
   ) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!confirm("Delete this conversation?")) return;
+    if (!confirm(t('chatList.confirmDelete' as TranslationKey))) return;
     setDeletingSession(sessionId);
     try {
       const res = await fetch(`/api/chat/sessions/${sessionId}`, {
@@ -381,7 +381,8 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
   };
 
   const handleRemoveProject = async (workingDirectory: string) => {
-    if (!confirm(`Remove project "${workingDirectory.split('/').pop()}" and all its conversations?`)) return;
+    const projectName = workingDirectory.split('/').pop() || workingDirectory;
+    if (!confirm(t('chatList.confirmRemoveProject' as TranslationKey, { projectName }))) return;
     const projectSessions = sessions.filter((s) => s.working_directory === workingDirectory);
     const deletedIds = new Set<string>();
     let failedCount = 0;
@@ -497,7 +498,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
 
   const handleBulkDelete = async () => {
     if (selectedSessions.size === 0) return;
-    if (!confirm(`Delete ${selectedSessions.size} selected conversation(s)?`)) return;
+    if (!confirm(t('chatList.confirmDeleteMultiple' as TranslationKey, { count: selectedSessions.size }))) return;
     
     const deletedIds = new Set<string>();
     let failedCount = 0;
@@ -566,7 +567,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     setIsSelectionMode(true);
   };
 
-  // Listen for select all event from context menu
+  // Listen for context menu events
   useEffect(() => {
     const handleSelectAll = () => {
       const allSessionIds = new Set(filteredSessions.map((s) => s.id));
@@ -574,11 +575,23 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       setIsSelectionMode(true);
     };
     
+    const handleDeleteSelected = () => {
+      handleBulkDelete();
+    };
+    
+    const handleCancelSelection = () => {
+      handleClearSelection();
+    };
+    
     window.addEventListener('select-all-sessions', handleSelectAll);
+    window.addEventListener('delete-selected-sessions', handleDeleteSelected);
+    window.addEventListener('cancel-selection', handleCancelSelection);
     return () => {
       window.removeEventListener('select-all-sessions', handleSelectAll);
+      window.removeEventListener('delete-selected-sessions', handleDeleteSelected);
+      window.removeEventListener('cancel-selection', handleCancelSelection);
     };
-  }, [filteredSessions, setSelectedSessions, setIsSelectionMode]);
+  }, [filteredSessions, setSelectedSessions, setIsSelectionMode, handleBulkDelete, handleClearSelection]);
 
   const projectGroups = useMemo(() => {
     const groups = groupSessionsByProject(filteredSessions);
@@ -727,6 +740,16 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
             <span className="text-[11px] font-medium text-muted-foreground/60">
               {selectedSessions.size} {t('chatList.selected')}
             </span>
+          )}
+          {isSelectionMode && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground/60 hover:text-foreground"
+              onClick={handleClearSelection}
+            >
+              {t('chatList.cancelModification' as TranslationKey)}
+            </Button>
           )}
           <Button
             variant="ghost"
@@ -912,8 +935,14 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
           }}>
             <span>全选会话</span>
           </DropdownMenuItem>
-          {selectedSessions.size > 0 && (
+          {isSelectionMode && (
             <>
+              <DropdownMenuItem onClick={() => {
+                setGlobalContextMenuOpen(false);
+                handleClearSelection();
+              }}>
+                <span>放弃修改</span>
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onClick={() => {
                 setGlobalContextMenuOpen(false);
