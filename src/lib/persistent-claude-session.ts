@@ -113,6 +113,7 @@ export function buildPersistentClaudeSignature(params: {
     tools: params.options.tools,
     mcpServers: mcpSignature(params.options.mcpServers),
     outputFormat: params.options.outputFormat,
+    extraArgs: params.options.extraArgs,
     agents: params.options.agents,
     agent: params.options.agent,
     thinking: params.options.thinking,
@@ -269,6 +270,10 @@ export function closeAllPersistentClaudeSessions(): void {
 
 export function hasPersistentClaudeSession(sessionId: string): boolean {
   return getStore().has(sessionId);
+}
+
+export function canReusePersistentClaudeSession(sessionId: string, signature: string): boolean {
+  return getStore().get(sessionId)?.signature === signature;
 }
 
 export function getPersistentClaudeSessionCount(): number {

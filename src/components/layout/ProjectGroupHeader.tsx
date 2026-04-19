@@ -36,6 +36,7 @@ interface ProjectGroupHeaderProps {
   onMouseLeave: () => void;
   onCreateSession: (e: React.MouseEvent) => void;
   onRemoveProject?: (workingDirectory: string) => void;
+  onToggleProjectSelection?: (workingDirectory: string) => void;
   assistantName?: string;
   assistantMemoryCount?: number;
   lastHeartbeatDate?: string;
@@ -55,6 +56,7 @@ export function ProjectGroupHeader({
   onMouseLeave,
   onCreateSession,
   onRemoveProject,
+  onToggleProjectSelection,
   assistantName,
   assistantMemoryCount,
   lastHeartbeatDate,
@@ -64,7 +66,16 @@ export function ProjectGroupHeader({
 }: ProjectGroupHeaderProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
   const showActions = isFolderHovered || menuOpen;
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenuPosition({ x: e.clientX, y: e.clientY });
+    setContextMenuOpen(true);
+  };
 
   const actionButtons = workingDirectory !== "" && (
     <div className={cn(
@@ -160,6 +171,8 @@ export function ProjectGroupHeader({
         onClick={onToggle}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
+        onContextMenu={handleContextMenu}
+        
       >
         {buddySpecies ? (
           <img
@@ -191,29 +204,69 @@ export function ProjectGroupHeader({
   }
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-1 rounded-md px-2 py-1 cursor-pointer select-none transition-colors",
-        "hover:bg-accent/50"
-      )}
-      onClick={onToggle}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-    >
-      {isCollapsed ? (
-        <CaretRight size={14} className="shrink-0 text-muted-foreground" />
-      ) : (
-        <CaretDown size={14} className="shrink-0 text-muted-foreground" />
-      )}
-      {isCollapsed ? (
-        <Folder size={16} className="shrink-0 text-muted-foreground" />
-      ) : (
-        <FolderOpen size={16} className="shrink-0 text-muted-foreground" />
-      )}
-      <span className="flex-1 truncate text-[13px] font-medium text-sidebar-foreground">
-        {displayName}
-      </span>
-      {actionButtons}
+    <div className="relative">
+      <div
+        className={cn(
+          "flex items-center gap-1 rounded-md px-2 py-1 cursor-pointer select-none transition-colors",
+          "hover:bg-accent/50"
+        )}
+        onClick={onToggle}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+        onContextMenu={handleContextMenu}
+        
+      >
+        {isCollapsed ? (
+          <CaretRight size={14} className="shrink-0 text-muted-foreground" />
+        ) : (
+          <CaretDown size={14} className="shrink-0 text-muted-foreground" />
+        )}
+        {isCollapsed ? (
+          <Folder size={16} className="shrink-0 text-muted-foreground" />
+        ) : (
+          <FolderOpen size={16} className="shrink-0 text-muted-foreground" />
+        )}
+        <span className="flex-1 truncate text-[13px] font-medium text-sidebar-foreground">
+          {displayName}
+        </span>
+        {actionButtons}
+      </div>
+      
+      {/* Context Menu */}
+      <DropdownMenu open={contextMenuOpen} onOpenChange={setContextMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <div 
+            className="fixed top-0 left-0 w-1 h-1 opacity-0"
+            style={{ top: contextMenuPosition.y, left: contextMenuPosition.x }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-[160px]">
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            if (onToggleProjectSelection) {
+              onToggleProjectSelection(workingDirectory);
+            }
+          }}>
+            <span>选择项目会话</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            // 触发全选事件
+            window.dispatchEvent(new CustomEvent('select-all-sessions'));
+          }}>
+            <span>全选会话</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onClick={() => {
+            setContextMenuOpen(false);
+            if (onRemoveProject) {
+              onRemoveProject(workingDirectory);
+            }
+          }}>
+            <span>删除项目</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

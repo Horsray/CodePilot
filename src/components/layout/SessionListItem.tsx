@@ -34,6 +34,10 @@ interface SessionListItemProps {
   canSplit: boolean;
   /** Whether this session belongs to the assistant workspace */
   isWorkspace?: boolean;
+  /** Whether the session is selected in batch mode */
+  isSelected?: boolean;
+  /** Whether batch selection mode is active */
+  isSelectionMode?: boolean;
   formatRelativeTime: (dateStr: string, t: (key: TranslationKey, params?: Record<string, string | number>) => string) => string;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
   onMouseEnter: () => void;
@@ -41,6 +45,7 @@ interface SessionListItemProps {
   onDelete: (e: React.MouseEvent, sessionId: string) => void;
   onRename: (sessionId: string, newTitle: string) => void;
   onAddToSplit: (session: ChatSession) => void;
+  onToggleSelection?: (sessionId: string) => void;
 }
 
 export function SessionListItem({
@@ -52,6 +57,8 @@ export function SessionListItem({
   needsApproval,
   canSplit,
   isWorkspace,
+  isSelected = false,
+  isSelectionMode = false,
   formatRelativeTime,
   t,
   onMouseEnter,
@@ -59,19 +66,31 @@ export function SessionListItem({
   onDelete,
   onRename,
   onAddToSplit,
+  onToggleSelection,
 }: SessionListItemProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
   const showActions = isHovered || menuOpen || isDeleting;
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenuPosition({ x: e.clientX, y: e.clientY });
+    setContextMenuOpen(true);
+  };
+
+
 
   return (
     <div
       className="group relative"
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      onContextMenu={handleContextMenu}
     >
-      <Link
-        href={`/chat/${session.id}`}
+      <div
         className={cn(
           "flex items-center gap-1.5 rounded-md pl-2 pr-2 py-1.5 transition-all duration-150 min-w-0",
           isWorkspace
@@ -83,24 +102,68 @@ export function SessionListItem({
               : "text-sidebar-foreground hover:bg-accent/50"
         )}
       >
-        {/* Left icon area — streaming/approval indicators */}
-        <span className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-          {isSessionStreaming && (
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-success opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-status-success" />
-            </span>
-          )}
-          {needsApproval && !isSessionStreaming && (
-            <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-status-warning-muted">
-              <Bell size={10} className="text-status-warning-foreground" />
-            </span>
-          )}
-        </span>
+        {/* Checkbox for batch selection */}
+        {isSelectionMode && onToggleSelection && (
+          <button
+            className={cn(
+              "shrink-0 h-4 w-4 rounded border border-border flex items-center justify-center transition-colors",
+              isSelected
+                ? "bg-primary border-primary text-primary-foreground"
+                : "hover:bg-accent"
+            )}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleSelection(session.id);
+            }}
+          >
+            {isSelected && (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            )}
+          </button>
+        )}
+        {/* Link to chat */}
+        <Link
+          href={`/chat/${session.id}`}
+          className="flex-1 flex items-center gap-1.5 min-w-0"
+          onClick={(e) => {
+            if (isSelectionMode && onToggleSelection) {
+              e.preventDefault();
+              onToggleSelection(session.id);
+            }
+          }}
+        >
+          {/* Left icon area — streaming/approval indicators */}
+          <span className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+            {isSessionStreaming && (
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-success opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-status-success" />
+              </span>
+            )}
+            {needsApproval && !isSessionStreaming && (
+              <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-status-warning-muted">
+                <Bell size={10} className="text-status-warning-foreground" />
+              </span>
+            )}
+          </span>
         {/* Title — flex-1 + truncate ensures it shrinks */}
         <span className="flex-1 min-w-0 line-clamp-1 text-[13px] font-medium leading-tight break-all">
           {session.title}
         </span>
+      </Link>
         {/* Right area — fixed width, time or dots swap via opacity */}
         <span className="shrink-0 w-[38px] flex items-center justify-end">
           <span className={cn(
@@ -110,7 +173,7 @@ export function SessionListItem({
             {formatRelativeTime(session.updated_at, t)}
           </span>
         </span>
-      </Link>
+      </div>
       {/* Three-dot menu — absolute over the right area */}
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
@@ -182,6 +245,42 @@ export function SessionListItem({
           }
         }}
       />
+      
+      {/* Context Menu */}
+      <DropdownMenu open={contextMenuOpen} onOpenChange={setContextMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <div 
+            className="fixed top-0 left-0 w-1 h-1 opacity-0"
+            style={{ top: contextMenuPosition.y, left: contextMenuPosition.x }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-[160px]">
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            if (onToggleSelection) {
+              onToggleSelection(session.id);
+            }
+          }}>
+            <span>{isSelected ? '取消选择会话' : '选择会话'}</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            // 触发全选事件
+            window.dispatchEvent(new CustomEvent('select-all-sessions'));
+          }}>
+            <span>全选会话</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onClick={(e) => {
+            setContextMenuOpen(false);
+            if (onDelete) {
+              onDelete(e as unknown as React.MouseEvent, session.id);
+            }
+          }}>
+            <span>删除会话</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

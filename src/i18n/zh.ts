@@ -35,9 +35,14 @@ const zh: Record<TranslationKey, string> = {
   'chatList.noSessions': '暂无会话',
   'chatList.importFromCli': '从 Claude Code 导入',
   'chatList.addProjectFolder': '新建项目',
+  'chatList.select': '选择',
+  'chatList.selected': '已选择',
   'chatList.threads': '对话列表',
   'chatList.showMore': '展开更多（{count} 条）',
   'chatList.showLess': '收起',
+  'chatList.selectAll': '全选',
+  'chatList.clearSelection': '清除',
+  'chatList.deleteSelected': '删除',
 
   // ── Global search ───────────────────────────────────────────
   'globalSearch.placeholder': '搜索...（尝试 session: / message: / file:）',

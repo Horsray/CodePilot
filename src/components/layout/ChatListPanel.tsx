@@ -54,6 +54,14 @@ interface ChatListPanelProps {
   readyToInstall?: boolean;
 }
 
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+
 export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatListPanelProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -92,6 +100,11 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     buddy?: { emoji: string; buddyName?: string; species?: string };
   } | null>(null);
   const [promoDismissed, setPromoDismissed] = useState(false);
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [globalContextMenuOpen, setGlobalContextMenuOpen] = useState(false);
+  const [globalContextMenuPosition, setGlobalContextMenuPosition] = useState({ x: 0, y: 0 });
+
 
   // Reload assistant summary when sessions change (e.g. after onboarding/rename)
   useEffect(() => {
@@ -292,6 +305,14 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     return () => clearInterval(interval);
   }, [fetchSessions]);
 
+  // Global context menu for empty space
+  const handleGlobalContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setGlobalContextMenuPosition({ x: e.clientX, y: e.clientY });
+    setGlobalContextMenuOpen(true);
+  };
+
   const handleDeleteSession = async (
     e: React.MouseEvent,
     sessionId: string
@@ -429,6 +450,102 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     }
   };
 
+  const handleToggleSessionSelection = (sessionId: string) => {
+    setSelectedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+        if (next.size === 0) {
+          setIsSelectionMode(false);
+        }
+      } else {
+        next.add(sessionId);
+        setIsSelectionMode(true);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleProjectSelection = (workingDirectory: string) => {
+    const projectSessions = sessions.filter((s) => s.working_directory === workingDirectory);
+    setSelectedSessions((prev) => {
+      const next = new Set(prev);
+      const allSelected = projectSessions.every((s) => next.has(s.id));
+      
+      projectSessions.forEach((session) => {
+        if (allSelected) {
+          next.delete(session.id);
+        } else {
+          next.add(session.id);
+        }
+      });
+      
+      if (next.size === 0) {
+        setIsSelectionMode(false);
+      } else {
+        setIsSelectionMode(true);
+      }
+      
+      return next;
+    });
+  };
+
+  const handleClearSelection = () => {
+    setSelectedSessions(new Set());
+    setIsSelectionMode(false);
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedSessions.size === 0) return;
+    if (!confirm(`Delete ${selectedSessions.size} selected conversation(s)?`)) return;
+    
+    const deletedIds = new Set<string>();
+    let failedCount = 0;
+    
+    for (const sessionId of selectedSessions) {
+      try {
+        const res = await fetch(`/api/chat/sessions/${sessionId}`, { method: "DELETE" });
+        if (res.ok) {
+          deletedIds.add(sessionId);
+          if (isInSplit(sessionId)) {
+            removeFromSplit(sessionId);
+          }
+        } else {
+          failedCount++;
+        }
+      } catch {
+        failedCount++;
+      }
+    }
+    
+    if (failedCount > 0) {
+      showToast({
+        type: 'error',
+        message: t('error.deleteSessionFailed' as TranslationKey) || `Failed to delete ${failedCount} session(s)`,
+      });
+    }
+    
+    if (deletedIds.size > 0) {
+      setSessions((prev) => prev.filter((s) => !deletedIds.has(s.id)));
+      setSelectedSessions((prev) => {
+        const next = new Set(prev);
+        deletedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+      
+      if (selectedSessions.size === deletedIds.size) {
+        setIsSelectionMode(false);
+      }
+      
+      if (pathname?.startsWith('/chat/')) {
+        const currentSessionId = pathname.split('/chat/')[1];
+        if (deletedIds.has(currentSessionId)) {
+          router.push("/chat");
+        }
+      }
+    }
+  };
+
   const splitSessionIds = useMemo(
     () => new Set(splitSessions.map((s) => s.sessionId)),
     [splitSessions]
@@ -441,6 +558,27 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     }
     return sessions;
   }, [sessions, isSplitActive, splitSessionIds]);
+
+  // Handle select all sessions
+  const handleSelectAllSessions = () => {
+    const allSessionIds = new Set(filteredSessions.map((s) => s.id));
+    setSelectedSessions(allSessionIds);
+    setIsSelectionMode(true);
+  };
+
+  // Listen for select all event from context menu
+  useEffect(() => {
+    const handleSelectAll = () => {
+      const allSessionIds = new Set(filteredSessions.map((s) => s.id));
+      setSelectedSessions(allSessionIds);
+      setIsSelectionMode(true);
+    };
+    
+    window.addEventListener('select-all-sessions', handleSelectAll);
+    return () => {
+      window.removeEventListener('select-all-sessions', handleSelectAll);
+    };
+  }, [filteredSessions, setSelectedSessions, setIsSelectionMode]);
 
   const projectGroups = useMemo(() => {
     const groups = groupSessionsByProject(filteredSessions);
@@ -494,6 +632,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     <aside
       className="hidden h-full shrink-0 flex-col overflow-hidden bg-sidebar/80 backdrop-blur-xl lg:flex"
       style={{ width: width ?? 240 }}
+      onContextMenu={handleGlobalContextMenu}
     >
       <div className="h-4 shrink-0 mt-2" />
       <div className="flex shrink-0 items-center justify-center px-3 pb-2">
@@ -578,24 +717,34 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       {/* Separator */}
       <div className="mx-3 border-t border-border/40" />
 
-      {/* Section title + add folder button (fixed, not scrolling) */}
+      {/* Section title */}
       <div className="flex items-center justify-between px-5 pt-2 pb-1.5 shrink-0">
         <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">
           {t('chatList.threads')}
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground/60 hover:text-foreground"
-          onClick={() => openFolderPicker()}
-        >
-          <FolderPlus size={12} />
-          {t('chatList.addProjectFolder')}
-        </Button>
+        <div className="flex items-center gap-1">
+          {selectedSessions.size > 0 && (
+            <span className="text-[11px] font-medium text-muted-foreground/60">
+              {selectedSessions.size} {t('chatList.selected')}
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground/60 hover:text-foreground"
+            onClick={() => openFolderPicker()}
+          >
+            <FolderPlus size={12} />
+            {t('chatList.addProjectFolder')}
+          </Button>
+        </div>
       </div>
 
       {/* Session list grouped by project */}
-      <ScrollArea className="flex-1 min-h-0 px-3 [&>[data-slot=scroll-area-viewport]>div]:!block">
+      <ScrollArea 
+        className="flex-1 min-h-0 px-3 [&>[data-slot=scroll-area-viewport]>div]:!block"
+        onContextMenu={handleGlobalContextMenu}
+      >
         <div className="flex flex-col pb-3">
 
           {/* Split group section */}
@@ -662,6 +811,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
                     onMouseLeave={() => setHoveredFolder(null)}
                     onCreateSession={(e) => handleCreateSessionInProject(e, group.workingDirectory)}
                     onRemoveProject={handleRemoveProject}
+                    onToggleProjectSelection={handleToggleProjectSelection}
                     assistantName={assistantSummary?.name}
                     assistantMemoryCount={assistantSummary?.memoryCount}
                     lastHeartbeatDate={assistantSummary?.lastHeartbeatDate}
@@ -696,6 +846,8 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
                                 needsApproval={pendingApprovalSessionIds.has(session.id) || pendingApprovalSessionId === session.id}
                                 canSplit={canSplit}
                                 isWorkspace={groupIsWorkspace}
+                                isSelected={selectedSessions.has(session.id)}
+                                isSelectionMode={isSelectionMode}
                                 formatRelativeTime={formatRelativeTime}
                                 t={t}
                                 onMouseEnter={() => setHoveredSession(session.id)}
@@ -709,6 +861,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
                                   projectName: s.project_name || "",
                                   mode: s.mode,
                                 })}
+                                onToggleSelection={handleToggleSessionSelection}
                               />
                             );
                           })}
@@ -743,6 +896,35 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
           )}
         </div>
       </ScrollArea>
+      
+      {/* Global Context Menu */}
+      <DropdownMenu open={globalContextMenuOpen} onOpenChange={setGlobalContextMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <div 
+            className="fixed top-0 left-0 w-1 h-1 opacity-0"
+            style={{ top: globalContextMenuPosition.y, left: globalContextMenuPosition.x }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-[160px]">
+          <DropdownMenuItem onClick={() => {
+            setGlobalContextMenuOpen(false);
+            handleSelectAllSessions();
+          }}>
+            <span>全选会话</span>
+          </DropdownMenuItem>
+          {selectedSessions.size > 0 && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onClick={() => {
+                setGlobalContextMenuOpen(false);
+                handleBulkDelete();
+              }}>
+                <span>删除所选会话</span>
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* Bottom: Settings */}
       <div className="shrink-0 px-3 py-2">

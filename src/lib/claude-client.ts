@@ -34,6 +34,7 @@ import { type ShadowHome } from './claude-home-shadow';
 import { prepareSdkSubprocessEnv } from './sdk-subprocess-env';
 import {
   buildPersistentClaudeSignature,
+  canReusePersistentClaudeSession,
   closePersistentClaudeSession,
   getPersistentClaudeTurn,
 } from './persistent-claude-session';
@@ -663,6 +664,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
           env: sanitizeEnv(sdkEnv),
+          // CodePilot provides its own project context, permissions, and MCP
+          // wiring. `--bare` skips Claude Code's interactive CLI startup work
+          // (hooks, LSP/plugin sync, auto-memory, background prefetch, and
+          // filesystem instruction discovery) that would otherwise block
+          // first-token latency in embedded SDK mode.
+          extraArgs: { bare: null },
           // Fast-start default: do not let Claude Code scan user/project
           // filesystem settings on every chat turn. CodePilot injects auth,
           // project instructions, and on-demand MCP explicitly.
@@ -990,7 +997,15 @@ if (claudePath) {
             }),
           }));
         }
-        if (shouldResume) {
+        const providerKey = resolved.provider?.id || options.providerId || options.sessionProviderId || 'env';
+        const persistentSignature = buildPersistentClaudeSignature({
+          providerKey,
+          options: queryOptions,
+        });
+        const willReusePersistentSession = canReusePersistentClaudeSession(sessionId, persistentSignature);
+        const shouldPassResume = shouldResume && !willReusePersistentSession;
+
+        if (shouldPassResume) {
           // Emit visible status so the user sees feedback during resume initialization
           controller.enqueue(formatSSE({
             type: 'status',
@@ -1270,10 +1285,6 @@ if (claudePath) {
         // time. Reassigned on resume-fallback to point at the fresh Query.
         let controlQuery: Query;
 
-        const persistentSignature = buildPersistentClaudeSignature({
-          providerKey: resolved.provider?.id || options.providerId || options.sessionProviderId || 'env',
-          options: queryOptions,
-        });
         const persistentMessages = await promptToUserMessages(finalPrompt, sdkSessionId);
 
         try {
@@ -1303,7 +1314,7 @@ if (claudePath) {
         }
 
         // Wrap the iterator so we can detect resume failures on the first message
-        if (shouldResume && usingPersistentSession) {
+        if (shouldPassResume && usingPersistentSession) {
           try {
             const iter = conversation[Symbol.asyncIterator]();
             const first = await iter.next();
@@ -1357,7 +1368,7 @@ if (claudePath) {
               usingPersistentSession = false;
             }
           }
-        } else if (shouldResume && !usingPersistentSession) {
+        } else if (shouldPassResume && !usingPersistentSession) {
           try {
             // Peek at the first message to verify resume works
             const iter = conversation[Symbol.asyncIterator]();

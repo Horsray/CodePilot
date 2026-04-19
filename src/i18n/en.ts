@@ -38,9 +38,14 @@ const en = {
   'chatList.noSessions': 'No sessions yet',
   'chatList.importFromCli': 'Import from Claude Code',
   'chatList.addProjectFolder': 'New Project',
+  'chatList.select': 'Select',
+  'chatList.selected': 'selected',
   'chatList.threads': 'Threads',
   'chatList.showMore': 'Show {count} more',
   'chatList.showLess': 'Show less',
+  'chatList.selectAll': 'Select all',
+  'chatList.clearSelection': 'Clear',
+  'chatList.deleteSelected': 'Delete',
 
   // ── Global search ───────────────────────────────────────────
   'globalSearch.placeholder': 'Search... (try session:, message:, file:)',

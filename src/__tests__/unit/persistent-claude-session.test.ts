@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import {
   buildPersistentClaudeSignature,
+  canReusePersistentClaudeSession,
   closeAllPersistentClaudeSessions,
   getPersistentClaudeSessionCount,
 } from '@/lib/persistent-claude-session';
@@ -113,5 +114,6 @@ describe('persistent-claude-session', () => {
   it('can clear the persistent session store without an active subprocess', () => {
     closeAllPersistentClaudeSessions();
     assert.equal(getPersistentClaudeSessionCount(), 0);
+    assert.equal(canReusePersistentClaudeSession('missing-session', 'missing-signature'), false);
   });
 });
