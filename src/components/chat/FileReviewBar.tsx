@@ -283,7 +283,7 @@ function FileRow({ file, onClick }: { file: ModifiedFile, onClick: () => void })
 
 function DiffModal({ file, onClose }: { file: ModifiedFile, onClose: () => void }) {
   const filename = file.path.split('/').pop() || file.path;
-  const diffLines = file.diffLines || [];
+  const diffLines = useMemo(() => file.diffLines || [], [file.diffLines]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [currentChangeIndex, setCurrentChangeIndex] = useState(-1);
 
@@ -307,7 +307,7 @@ function DiffModal({ file, onClose }: { file: ModifiedFile, onClose: () => void 
     return indices;
   }, [diffLines]);
 
-  const scrollToChange = (index: number) => {
+  const scrollToChange = useCallback((index: number) => {
     if (index < 0 || index >= changeIndices.length || !scrollRef.current) return;
     
     const targetIdx = changeIndices[index];
@@ -316,7 +316,7 @@ function DiffModal({ file, onClose }: { file: ModifiedFile, onClose: () => void 
       row.scrollIntoView({ behavior: 'smooth', block: 'center' });
       setCurrentChangeIndex(index);
     }
-  };
+  }, [changeIndices]);
 
   // Scroll to first change on open
   useEffect(() => {
@@ -327,7 +327,7 @@ function DiffModal({ file, onClose }: { file: ModifiedFile, onClose: () => void 
       }, 100);
       return () => clearTimeout(timer);
     }
-  }, [changeIndices]);
+  }, [changeIndices, scrollToChange]);
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-background/40 backdrop-blur-sm animate-in fade-in duration-200">

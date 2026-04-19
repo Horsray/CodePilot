@@ -38,6 +38,8 @@ interface ActiveStream {
   pendingTimers: Set<ReturnType<typeof setTimeout>>;
   // Mutable accumulators (snapshot gets new object refs on each emit)
   accumulatedText: string;
+  /** Prefix of accumulatedText produced before/during tool execution, not final answer. */
+  activityTextLength: number;
   accumulatedThinking: string;
   /** All thinking blocks concatenated (preserved for finalMessageContent) */
   fullThinking: string;
@@ -117,6 +119,7 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     toolResults: [...stream.toolResultsArray],
     streamingToolOutput: stream.toolOutputAccumulated,
     statusText: stream.snapshot.statusText,
+    statusPayload: stream.snapshot.statusPayload,
     pendingPermission: stream.snapshot.pendingPermission,
     permissionResolved: stream.snapshot.permissionResolved,
     tokenUsage: stream.snapshot.tokenUsage,
@@ -204,6 +207,7 @@ export function startStream(params: StartStreamParams): void {
       toolResults: [],
       streamingToolOutput: '',
       statusText: undefined,
+      statusPayload: undefined,
       pendingPermission: null,
       permissionResolved: null,
       tokenUsage: null,
@@ -218,6 +222,7 @@ export function startStream(params: StartStreamParams): void {
     gcTimer: null,
     pendingTimers: new Set(),
     accumulatedText: '',
+    activityTextLength: 0,
     accumulatedThinking: '',
     fullThinking: '',
     thinkingPhaseEnded: false,
@@ -312,6 +317,16 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
   };
 
   try {
+    const allToolsCompleted = () => (
+      stream.toolUsesArray.length > 0
+      && stream.toolUsesArray.every((tool) => stream.toolResultsArray.some((result) => result.tool_use_id === tool.id))
+    );
+    const consumeActivityText = () => {
+      if (stream.toolUsesArray.length > 0 && !allToolsCompleted()) {
+        stream.activityTextLength = stream.accumulatedText.length;
+      }
+    };
+
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -349,6 +364,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       onText: (acc) => {
         markActive();
         stream.accumulatedText = acc;
+        consumeActivityText();
         stream.thinkingPhaseEnded = true;
         throttledTextEmit();
       },
@@ -374,6 +390,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.thinkingPhaseEnded = true;
         stream.toolOutputAccumulated = '';
         if (!stream.toolUsesArray.some(t => t.id === tool.id)) {
+          stream.activityTextLength = stream.accumulatedText.length;
           stream.toolUsesArray = [...stream.toolUsesArray, tool];
         }
         emit(stream, 'snapshot-updated');
@@ -440,6 +457,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       onReferencedContexts: (files) => {
         markActive();
         stream.snapshot = { ...stream.snapshot, referencedContexts: files };
+        emit(stream, 'snapshot-updated');
+      },
+      onStatusPayload: (payload) => {
+        markActive();
+        stream.snapshot = { ...stream.snapshot, statusPayload: payload };
         emit(stream, 'snapshot-updated');
       },
       onStatus: (text) => {
@@ -519,7 +541,10 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     const finalToolResults = stream.toolResultsArray;
     const hasTools = finalToolUses.length > 0 || finalToolResults.length > 0;
 
-    let messageContent = accumulated.trim();
+    const finalAnswerText = hasTools
+      ? accumulated.slice(stream.activityTextLength).trim()
+      : accumulated.trim();
+    let messageContent = finalAnswerText;
     // Combine all thinking phases for persistence
     const allThinking = [stream.fullThinking, stream.accumulatedThinking]
       .filter(s => s.trim()).join('\n\n---\n\n');
@@ -529,9 +554,6 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       // Include thinking block if present — rendered as collapsed Reasoning in MessageItem
       if (hasThinking) {
         contentBlocks.push({ type: 'thinking', thinking: allThinking });
-      }
-      if (accumulated.trim()) {
-        contentBlocks.push({ type: 'text', text: accumulated.trim() });
       }
       for (const tu of finalToolUses) {
         contentBlocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
@@ -546,6 +568,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           });
         }
       }
+      if (finalAnswerText) {
+        contentBlocks.push({ type: 'text', text: finalAnswerText });
+      }
       messageContent = JSON.stringify(contentBlocks);
     }
 
@@ -557,10 +582,12 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       tokenUsage: result.tokenUsage,
       finalMessageContent: messageContent || null,
       statusText: undefined,
+      statusPayload: undefined,
       pendingPermission: null,
       permissionResolved: null,
     };
     stream.accumulatedText = '';
+    stream.activityTextLength = 0;
     stream.accumulatedThinking = '';
     stream.fullThinking = '';
     stream.thinkingPhaseEnded = false;
@@ -608,10 +635,12 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           error: `Stream idle timeout (${idleSecs}s)`,
           finalMessageContent: buildFinalContent(textPart),
           statusText: undefined,
+          statusPayload: undefined,
           pendingPermission: null,
           permissionResolved: null,
         };
         stream.accumulatedText = '';
+        stream.activityTextLength = 0;
         stream.accumulatedThinking = '';
         stream.fullThinking = '';
         stream.toolUsesArray = [];
@@ -638,10 +667,12 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           completedAt: Date.now(),
           finalMessageContent: buildFinalContent(textPart),
           statusText: undefined,
+          statusPayload: undefined,
           pendingPermission: null,
           permissionResolved: null,
         };
         stream.accumulatedText = '';
+        stream.activityTextLength = 0;
         stream.accumulatedThinking = '';
         stream.fullThinking = '';
         stream.toolUsesArray = [];
@@ -672,10 +703,12 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           completedAt: Date.now(),
           finalMessageContent: buildFinalContent(textPart),
           statusText: undefined,
+          statusPayload: undefined,
           pendingPermission: null,
           permissionResolved: null,
         };
         stream.accumulatedText = '';
+        stream.activityTextLength = 0;
         stream.accumulatedThinking = '';
         stream.fullThinking = '';
         stream.toolUsesArray = [];
@@ -694,10 +727,12 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         error: errMsg,
         finalMessageContent: buildFinalContent(`**Error:** ${errMsg}`),
         statusText: undefined,
+        statusPayload: undefined,
         pendingPermission: null,
         permissionResolved: null,
       };
       stream.accumulatedText = '';
+      stream.activityTextLength = 0;
       stream.accumulatedThinking = '';
       stream.fullThinking = '';
       stream.toolUsesArray = [];

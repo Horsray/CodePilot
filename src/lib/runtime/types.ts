@@ -50,6 +50,7 @@ export interface RuntimeStreamOptions {
   sessionId: string;
   model?: string;
   systemPrompt?: string;
+  referencedContexts?: string[];
   workingDirectory?: string;
   abortController?: AbortController;
   autoTrigger?: boolean;

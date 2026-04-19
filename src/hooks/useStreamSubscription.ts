@@ -57,6 +57,7 @@ export function useStreamSubscription({
                 content: existing.finalMessageContent!,
                 created_at: new Date().toISOString(),
                 token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
+                referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
               };
               transferPendingToMessage(assistantMessage.id);
               setMessages((prev) => [...prev, assistantMessage]);
@@ -71,6 +72,7 @@ export function useStreamSubscription({
             content: existing.finalMessageContent!,
             created_at: new Date().toISOString(),
             token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
+            referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
           };
           transferPendingToMessage(assistantMessage.id);
           setMessages((prev) => [...prev, assistantMessage]);
@@ -110,6 +112,7 @@ export function useStreamSubscription({
             content: finalContent,
             created_at: new Date().toISOString(),
             token_usage: event.snapshot.tokenUsage ? JSON.stringify(event.snapshot.tokenUsage) : null,
+            referenced_contexts: event.snapshot.referencedContexts && event.snapshot.referencedContexts.length > 0 ? JSON.stringify(event.snapshot.referencedContexts) : undefined,
           };
           // Transfer pending reference images to this message ID
           transferPendingToMessage(assistantMessage.id);

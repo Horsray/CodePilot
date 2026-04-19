@@ -104,11 +104,15 @@ export function FileTreeAttachmentBridge() {
         window.dispatchEvent(new CustomEvent('insert-file-mention', { detail: { path: filePath } }));
         return;
       }
-      const blob = await res.blob();
+      const bytes = await res.arrayBuffer();
+      if (bytes.byteLength === 0) {
+        window.dispatchEvent(new CustomEvent('insert-file-mention', { detail: { path: filePath } }));
+        return;
+      }
       const fileName = filePath.split('/').pop() || 'file';
       // Use the content-type from the server response (it resolves from extension)
       const contentType = res.headers.get('content-type') || 'application/octet-stream';
-      const file = new File([blob], fileName, { type: contentType });
+      const file = new File([bytes], fileName, { type: contentType });
       attachments.add([file]);
     } catch {
       // Fallback: insert as @mention if fetch fails

@@ -59,6 +59,7 @@ export async function GET(request: NextRequest) {
   return new Response(buffer, {
     headers: {
       'Content-Type': contentType,
+      'Content-Length': String(buffer.length),
       'Cache-Control': 'public, max-age=31536000, immutable',
     },
   });

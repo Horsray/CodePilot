@@ -41,6 +41,8 @@ export interface AgentLoopOptions {
   sessionModel?: string;
   /** System prompt string */
   systemPrompt?: string;
+  /** Referenced contexts */
+  referencedContexts?: string[];
   /** Working directory for tool execution */
   workingDirectory?: string;
   /** AbortController for cancellation */
@@ -209,6 +211,14 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           }),
         }));
 
+        // Emit referenced contexts if available
+        if (options.referencedContexts && options.referencedContexts.length > 0) {
+          controller.enqueue(formatSSE({
+            type: 'referenced_contexts',
+            data: JSON.stringify({ files: options.referencedContexts }),
+          }));
+        }
+
         // 4. Emit rewind point for this user message (unless autoTrigger)
         // Use the actual DB message ID so the rewind route can find it
         if (!autoTrigger) {
@@ -306,8 +316,10 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             // onStepFinish: token tracking per step
             onStepFinish: ({ usage: stepUsage, finishReason, toolCalls }) => {
               if (stepUsage) {
-                totalUsage.input_tokens += stepUsage.inputTokens || 0;
+                const inputTokens = stepUsage.inputTokens || 0;
+                totalUsage.input_tokens += inputTokens;
                 totalUsage.output_tokens += stepUsage.outputTokens || 0;
+                totalUsage.context_input_tokens = inputTokens;
               }
               // Emit step progress for frontend token display
               controller.enqueue(formatSSE({

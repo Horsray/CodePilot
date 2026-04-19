@@ -17,7 +17,6 @@ import { WidgetRenderer } from './WidgetRenderer';
 import { ReferencedContexts } from './ReferencedContexts';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
-  appendTimelineOutput,
   appendTimelineReasoning,
   appendTimelineToolResult,
   appendTimelineToolUse,
@@ -159,7 +158,6 @@ function toVisibleSteps(steps: TimelineStep[]): TimelineStep[] {
     || step.toolCalls.length > 0
     || step.fileChanges.length > 0
     || step.error
-    || step.status !== 'pending'
   ));
 }
 
@@ -324,29 +322,26 @@ export function StreamingMessage({
 }: StreamingMessageProps) {
   const { t } = useTranslation();
   const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
+  const [finalContentStart, setFinalContentStart] = useState(0);
   const timelineStateRef = useRef<ReturnType<typeof createTimelineAccumulator> | null>(null);
   const prevSnapshotRef = useRef<{
     isStreaming: boolean;
     thinking: string;
     content: string;
+    activityContentLength: number;
     toolUseIds: string[];
     toolResults: Record<string, string>;
-    enteredSynthesis: boolean;
     lastStatusPayload: any;
   }>({
     isStreaming: false,
     thinking: '',
     content: '',
+    activityContentLength: 0,
     toolUseIds: [],
     toolResults: {},
-    enteredSynthesis: false,
     lastStatusPayload: null,
   });
   const bufferedContent = useBufferedContent(content, isStreaming);
-  const runningTools = useMemo(
-    () => toolUses.filter((tool) => !toolResults.some((r) => r.tool_use_id === tool.id)),
-    [toolUses, toolResults]
-  );
   const mediaPreview = useMemo(() => {
     const allMedia = toolResults.flatMap((result) => result.media || []);
     return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
@@ -389,18 +384,19 @@ export function StreamingMessage({
         isStreaming: true,
         thinking: '',
         content: '',
+        activityContentLength: 0,
         toolUseIds: [],
         toolResults: {},
-        enteredSynthesis: false,
         lastStatusPayload: null,
       };
+      setFinalContentStart(0);
     }
 
     const currentState = timelineStateRef.current!;
     const currentPrev = prevSnapshotRef.current;
 
     // status payload 增量：更新模型勋章和状态
-    if (statusPayload && statusPayload !== currentPrev.lastStatusPayload) {
+    if (statusPayload && statusPayload !== currentPrev.lastStatusPayload && statusPayload.subtype !== 'step_complete') {
       updateTimelineStatus(currentState, statusPayload as any, now);
     }
 
@@ -409,7 +405,9 @@ export function StreamingMessage({
     if (currentThinking && currentThinking !== currentPrev.thinking) {
       if (currentThinking.startsWith(currentPrev.thinking)) {
         const delta = currentThinking.slice(currentPrev.thinking.length);
-        if (delta.trim()) appendTimelineReasoning(currentState, delta, now);
+        if (delta.trim()) {
+          appendTimelineReasoning(currentState, delta, now);
+        }
       } else {
         const phases = splitThinkingPhases(currentThinking);
         const fallback = phases[phases.length - 1] || currentThinking;
@@ -417,13 +415,28 @@ export function StreamingMessage({
       }
     }
 
-    // tool_use 增量：每出现新工具，关闭上一步并开启新步骤。
+    const currentContent = content || '';
+    const completedToolIds = new Set(toolResults.map((result) => result.tool_use_id));
+    const allToolsCompleted = toolUses.length > 0 && toolUses.every((tool) => completedToolIds.has(tool.id));
+    const hasNewTool = toolUses.some((tool) => !currentPrev.toolUseIds.includes(tool.id));
+    let activityContentLength = currentPrev.activityContentLength;
+    const consumeActivityContent = (toLength: number, timestamp: number) => {
+      if (toLength <= activityContentLength) return;
+      const delta = currentContent.slice(activityContentLength, toLength);
+      activityContentLength = toLength;
+      if (delta.trim()) {
+        appendTimelineReasoning(currentState, delta, timestamp);
+      }
+    };
+
+    // 文本如果发生在工具阶段之前或期间，属于过程说明，不属于最终结论。
+    if (hasNewTool) {
+      consumeActivityContent(currentContent.length, now);
+    }
+
+    // tool_use 增量：新工具直接接在当前事件后，不强行把思考和工具拆成两坨。
     toolUses.forEach((tool, index) => {
       if (!currentPrev.toolUseIds.includes(tool.id)) {
-        const latest = cloneTimelineSteps(currentState).at(-1);
-        if (hasStepPayload(latest)) {
-          completeTimelineStep(currentState, undefined, now + index);
-        }
         appendTimelineToolUse(currentState, tool, now + index);
       }
     });
@@ -437,24 +450,8 @@ export function StreamingMessage({
       }
     });
 
-    // 输出阶段：所有工具结束后，进入单独的答案整理步骤。
-    const currentContent = content || '';
-    if (currentContent && currentContent !== currentPrev.content) {
-      const runningToolExists = toolUses.some((tool) => !toolResults.some((r) => r.tool_use_id === tool.id));
-      if (!runningToolExists && !currentPrev.enteredSynthesis) {
-        const latest = cloneTimelineSteps(currentState).at(-1);
-        if (hasStepPayload(latest)) {
-          completeTimelineStep(currentState, undefined, now + 1);
-        }
-        currentPrev.enteredSynthesis = true;
-      }
-
-      if (currentContent.startsWith(currentPrev.content)) {
-        const delta = currentContent.slice(currentPrev.content.length);
-        if (delta.trim()) appendTimelineOutput(currentState, delta, now + 2);
-      } else {
-        appendTimelineOutput(currentState, `\n${currentContent}`, now + 2);
-      }
+    if (toolUses.length > 0 && !allToolsCompleted) {
+      consumeActivityContent(currentContent.length, now + toolUses.length + toolResults.length + 1);
     }
 
     if (!isStreaming && currentPrev.isStreaming) {
@@ -466,68 +463,54 @@ export function StreamingMessage({
 
     const nextSteps = toVisibleSteps(cloneTimelineSteps(currentState));
     setLiveTimelineSteps(nextSteps);
+    setFinalContentStart(activityContentLength);
 
     prevSnapshotRef.current = {
       isStreaming,
       thinking: currentThinking,
       content: currentContent,
+      activityContentLength,
       toolUseIds: toolUses.map((t) => t.id),
       toolResults: Object.fromEntries(
         toolResults.map((r) => [r.tool_use_id, `${r.content}::${r.is_error ? '1' : '0'}`]),
       ),
-      enteredSynthesis: currentPrev.enteredSynthesis,
       lastStatusPayload: statusPayload,
     };
   }, [content, isStreaming, thinkingContent, toolResults, toolUses, statusPayload]);
 
-  // Extract a human-readable summary of the running command
-  const getRunningCommandSummary = (): string | undefined => {
-    if (runningTools.length === 0) {
-      // All tools completed but still streaming — AI is generating text
-      if (toolUses.length > 0) return 'Generating response...';
-      return undefined;
-    }
-    const tool = runningTools[runningTools.length - 1];
-    const input = tool.input as Record<string, unknown>;
-    if (tool.name === 'Bash' && input.command) {
-      const cmd = String(input.command);
-      return cmd.length > 80 ? cmd.slice(0, 80) + '...' : cmd;
-    }
-    if (input.file_path) return `${tool.name}: ${String(input.file_path)}`;
-    if (input.path) return `${tool.name}: ${String(input.path)}`;
-    return `Running ${tool.name}...`;
-  };
-
   // Filter out leaked SSE raw data that wasn't properly parsed
   const cleanContent = useMemo(() => {
     if (!content) return '';
-    // First pass: strip multi-line JSON blobs that look like SSE events
-    // e.g. {"type":"tool_result","tool_use_id":"...","content":"..."}
-    let cleaned = content.replace(/\{[^{}]*"type"\s*:\s*"[^"]*"[^{}]*\}/g, '');
-    // Second pass: line-by-line filter for remaining leaks
+    const finalContent = content.slice(finalContentStart);
+    const leakedEventType = /"type"\s*:\s*"(tool_result|tool_use|tool_output|status|text|thinking|result|done|error|keep_alive|referenced_contexts)"/;
+    // Line-by-line filter for leaked transport frames only. Do not strip
+    // arbitrary JSON from the actual final answer.
+    let cleaned = finalContent;
     cleaned = cleaned.split('\n').filter(line => {
       const trimmed = line.trim();
       if (!trimmed) return true;
       // Remove lines starting with $data or data: followed by JSON
       if (/^\$?data\s*:?\s*\{/.test(trimmed)) return false;
-      // Remove lines that are standalone JSON objects with a "type" key
-      if (/^\{.*"type"\s*:/.test(trimmed)) return false;
+      // Remove standalone SSE-style JSON objects with a known transport type
+      if (/^\{.*\}$/.test(trimmed) && leakedEventType.test(trimmed)) return false;
       return true;
     }).join('\n').trim();
     return cleaned;
-  }, [content]);
+  }, [content, finalContentStart]);
 
   const renderedContent = useMemo(() => {
     if (!cleanContent) return null;
 
-    const hasWidgetFence = /`{1,3}show-widget/.test(cleanContent);
+    const contentToRender = cleanContent;
+
+    const hasWidgetFence = /`{1,3}show-widget/.test(contentToRender);
 
     if (hasWidgetFence && isStreaming) {
-      const lastMarkerMatch = [...cleanContent.matchAll(/`{1,3}show-widget/g)].pop();
-      if (!lastMarkerMatch) return <MessageResponse>{cleanContent}</MessageResponse>;
+      const lastMarkerMatch = [...contentToRender.matchAll(/`{1,3}show-widget/g)].pop();
+      if (!lastMarkerMatch) return <MessageResponse>{contentToRender}</MessageResponse>;
 
       const lastFenceStart = lastMarkerMatch.index!;
-      const afterLastFence = cleanContent.slice(lastFenceStart);
+      const afterLastFence = contentToRender.slice(lastFenceStart);
       const jsonStart = afterLastFence.indexOf('{');
       let lastFenceClosed = false;
       if (jsonStart !== -1) {
@@ -623,7 +606,7 @@ export function StreamingMessage({
     }
 
     if (hasWidgetFence && !isStreaming) {
-      const widgetSegments = parseAllShowWidgets(cleanContent);
+      const widgetSegments = parseAllShowWidgets(contentToRender);
       if (widgetSegments.length > 0) {
         return (
           <>
@@ -637,7 +620,7 @@ export function StreamingMessage({
       }
     }
 
-    const batchPlanResult = parseBatchPlan(cleanContent);
+    const batchPlanResult = parseBatchPlan(contentToRender);
     if (batchPlanResult) {
       return (
         <>
@@ -648,7 +631,7 @@ export function StreamingMessage({
       );
     }
 
-    const parsed = parseImageGenRequest(cleanContent);
+    const parsed = parseImageGenRequest(contentToRender);
     if (parsed) {
       const refs = buildReferenceImages(
         PENDING_KEY,
@@ -675,26 +658,32 @@ export function StreamingMessage({
     }
 
     if (isStreaming) {
-      const hasImageGenBlock = /```image-gen-request/.test(cleanContent);
-      const hasBatchPlanBlock = /```batch-plan/.test(cleanContent);
+      const hasImageGenBlock = /```image-gen-request/.test(contentToRender);
+      const hasBatchPlanBlock = /```batch-plan/.test(contentToRender);
       const textToRender = bufferedContent || '';
       const stripped = textToRender
         .replace(/```image-gen-request[\s\S]*$/, '')
         .replace(/```batch-plan[\s\S]*$/, '')
         .replace(/```show-widget[\s\S]*$/, '')
+        .replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '')
         .trim();
+        
       if (stripped) return <MessageResponse key="pre-text">{stripped}</MessageResponse>;
-      if (hasImageGenBlock || hasBatchPlanBlock) return <Shimmer>{t('streaming.thinking')}</Shimmer>;
+      if ((hasImageGenBlock || hasBatchPlanBlock) && liveTimelineSteps.length === 0) {
+         return <Shimmer>{t('streaming.thinking')}</Shimmer>;
+      }
       return null;
     }
 
-    const stripped = cleanContent
+    const stripped = contentToRender
       .replace(/```image-gen-request[\s\S]*?```/g, '')
       .replace(/```batch-plan[\s\S]*?```/g, '')
       .replace(/```show-widget[\s\S]*?(```|$)/g, '')
+      .replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '')
       .trim();
+
     return stripped ? <MessageResponse>{stripped}</MessageResponse> : null;
-  }, [bufferedContent, cleanContent, isStreaming, sessionId, t]);
+  }, [bufferedContent, cleanContent, isStreaming, sessionId, t, liveTimelineSteps]);
 
   return (
     <AIMessage from="assistant">
@@ -723,7 +712,6 @@ export function StreamingMessage({
             statusText={statusText}
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
-            referencedFiles={referencedFiles}
           />
         )}
 
@@ -750,10 +738,9 @@ export function StreamingMessage({
           </div>
         )}
 
-        {/* Status bar during streaming — timeline 模式下由卡片内状态行承载，避免重复。 */}
-        {isStreaming && liveTimelineSteps.length === 0 && <StreamingStatusBar statusText={
+        {/* Status bar during streaming */}
+        {isStreaming && <StreamingStatusBar statusText={
           statusText
-          || getRunningCommandSummary()
           || (content && /```show-widget/.test(content) ? (() => {
             // Detect if scripts are being streamed (unclosed <script> in the last open fence)
             const lastFence = content.lastIndexOf('```show-widget');

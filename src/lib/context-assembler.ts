@@ -228,6 +228,11 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     sessionId: session.id,
     workingDirectory: session.working_directory || undefined,
     modelId: session.model,
+    includeAgentsMd,
+    includeClaudeMd,
+    enableAgentsSkills,
+    syncProjectRules,
+    knowledgeBaseEnabled,
   });
   staticParts.push(basePromptResult.prompt);
   if (basePromptResult.referencedFiles) {

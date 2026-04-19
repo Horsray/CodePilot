@@ -269,6 +269,7 @@ export async function POST(request: NextRequest) {
     const generativeUIEnabled = assembled.generativeUIEnabled;
     const assistantProjectInstructions = assembled.assistantProjectInstructions;
     const isAssistantProject = assembled.isAssistantProject;
+    const referencedContexts = assembled.referencedContexts;
 
     // Load MCP servers for the predicted runtime:
     // - SDK Runtime: only needs servers with ${...} env placeholders (SDK loads the rest via settingSources)
@@ -381,6 +382,7 @@ export async function POST(request: NextRequest) {
       sdkSessionId: session.sdk_session_id || undefined,
       model: resolved.upstreamModel || resolved.model || effectiveModel,
       systemPrompt: finalSystemPrompt,
+      referencedContexts,
       workingDirectory: session.sdk_cwd || session.working_directory || undefined,
       abortController,
       permissionMode,
@@ -420,7 +422,7 @@ export async function POST(request: NextRequest) {
       clearInterval(lockRenewalInterval);
       releaseSessionLock(session_id, lockId);
       setSessionRuntimeStatus(session_id, 'idle');
-    }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger });
+    }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts });
 
     // If auto-compression happened, prepend a notification event to the stream.
     // The message is human-readable so the browser status bar shows something
@@ -487,12 +489,19 @@ async function collectStreamResponse(
   sessionId: string,
   telegramOpts: { sessionId?: string; sessionTitle?: string; workingDirectory?: string },
   onComplete?: () => void,
-  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean },
+  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean; referencedContexts?: string[] },
 ) {
   const reader = stream.getReader();
   const contentBlocks: MessageContentBlock[] = [];
   let currentText = '';
   let thinkingText = '';
+
+  const flushThinking = () => {
+    if (thinkingText.trim()) {
+      contentBlocks.push({ type: 'thinking', thinking: thinkingText.trim() });
+      thinkingText = '';
+    }
+  };
   /** Tracks whether non-thinking content arrived since last thinking delta (for phase separation) */
   let thinkingPhaseEnded = false;
   let tokenUsage: TokenUsage | null = null;
@@ -522,10 +531,12 @@ async function collectStreamResponse(
               }
               thinkingText += event.data;
             } else if (event.type === 'text') {
-              currentText += event.data;
               if (thinkingText) thinkingPhaseEnded = true;
+              flushThinking();
+              currentText += event.data;
             } else if (event.type === 'tool_use') {
               if (thinkingText) thinkingPhaseEnded = true;
+              flushThinking();
               // Flush any accumulated text before the tool use block
               if (currentText.trim()) {
                 contentBlocks.push({ type: 'text', text: currentText });
@@ -653,11 +664,7 @@ async function collectStreamResponse(
     if (currentText.trim()) {
       contentBlocks.push({ type: 'text', text: currentText });
     }
-
-    // Prepend thinking block if accumulated during stream
-    if (thinkingText.trim()) {
-      contentBlocks.unshift({ type: 'thinking', thinking: thinkingText.trim() });
-    }
+    flushThinking();
 
     if (contentBlocks.length > 0) {
       // If the message is text-only (no tool calls), store as plain text
@@ -687,6 +694,7 @@ async function collectStreamResponse(
           'assistant',
           content,
           tokenUsage ? JSON.stringify(tokenUsage) : null,
+          opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined
         );
         lastSavedAssistantMsgId = savedMsg.id;
       }
@@ -698,9 +706,7 @@ async function collectStreamResponse(
     if (currentText.trim()) {
       contentBlocks.push({ type: 'text', text: currentText });
     }
-    if (thinkingText.trim()) {
-      contentBlocks.unshift({ type: 'thinking', thinking: thinkingText.trim() });
-    }
+    flushThinking();
     if (contentBlocks.length > 0) {
       const hbRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
       const errCleanedBlocks = contentBlocks.map(b =>
@@ -717,7 +723,13 @@ async function collectStreamResponse(
             .join('')
             .trim();
       if (content) {
-        addMessage(sessionId, 'assistant', content);
+        addMessage(
+          sessionId,
+          'assistant',
+          content,
+          tokenUsage ? JSON.stringify(tokenUsage) : null,
+          opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined
+        );
       }
     }
   } finally {

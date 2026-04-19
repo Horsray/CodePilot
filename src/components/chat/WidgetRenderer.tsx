@@ -20,6 +20,7 @@ interface WidgetRendererProps {
 /** Max iframe height to prevent runaway widgets. */
 const MAX_IFRAME_HEIGHT = 2000;
 
+
 /** Debounce delay for streaming updates (ms). */
 const STREAM_DEBOUNCE = 120;
 
@@ -169,7 +170,7 @@ function WidgetRendererInner({ widgetCode, isStreaming, title, showOverlay, extr
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [widgetCode]);
 
   // ── Streaming updates ──────────────────────────────────────────────────
   const sendUpdate = useCallback((html: string) => {

@@ -38,6 +38,7 @@ export const sdkRuntime: AgentRuntime = {
       sessionId: options.sessionId,
       model: options.model,
       systemPrompt: options.systemPrompt,
+      referencedContexts: options.referencedContexts,
       workingDirectory: options.workingDirectory,
       abortController: options.abortController,
       permissionMode: options.permissionMode,

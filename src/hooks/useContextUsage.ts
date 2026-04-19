@@ -59,7 +59,8 @@ export function useContextUsage(
         const cacheRead = usage.cache_read_input_tokens || 0;
         const cacheCreation = usage.cache_creation_input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
-        const used = inputTokens + cacheRead + cacheCreation;
+        const contextInputTokens = usage.context_input_tokens || inputTokens;
+        const used = contextInputTokens + cacheRead + cacheCreation;
         const ratio = contextWindow ? used / contextWindow : 0;
 
         // Estimate next turn: current input context + this turn's output + ~200 token overhead for a new user message

@@ -48,6 +48,7 @@ export const nativeRuntime: AgentRuntime = {
       sessionProviderId: options.sessionProviderId,
       model: options.model,
       systemPrompt,
+      referencedContexts: options.referencedContexts,
       workingDirectory: cwd,
       abortController,
       // tools assembled inside agent-loop with permission context

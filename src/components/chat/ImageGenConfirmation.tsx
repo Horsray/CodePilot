@@ -223,7 +223,7 @@ export function ImageGenConfirmation({
     } finally {
       abortRef.current = null;
     }
-  }, [prompt, aspectRatio, resolution, initialPrompt, sessionId, messageId, referenceImages, selectedModel]);
+  }, [prompt, aspectRatio, resolution, initialPrompt, sessionId, messageId, referenceImages, selectedModel, rawRequestBlock]);
 
   const handleRegenerate = useCallback(() => {
     setResult(null);

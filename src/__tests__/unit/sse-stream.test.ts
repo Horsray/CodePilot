@@ -205,6 +205,35 @@ describe('SSE Stream — context_compressed events', () => {
   });
 });
 
+describe('SSE Stream — structured status payloads', () => {
+  it('routes structured status payloads without leaking raw JSON into onStatus', async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const statusCalls: Array<string | undefined> = [];
+
+    const reader = mockReader([
+      sseData({
+        type: 'status',
+        data: JSON.stringify({
+          subtype: 'step_start',
+          message: 'Reading file',
+          tool: 'Read',
+          path: '/tmp/example.ts',
+        }),
+      }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onStatusPayload: (payload) => payloads.push(payload),
+      onStatus: (text) => statusCalls.push(text),
+    }));
+
+    assert.equal(payloads.length, 1);
+    assert.equal(payloads[0].subtype, 'step_start');
+    assert.deepEqual(statusCalls, [undefined]);
+  });
+});
+
 // ────────────────────────────────────────────────────────────────
 // skill_nudge SSE events
 // ────────────────────────────────────────────────────────────────

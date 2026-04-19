@@ -351,7 +351,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       }
     })();
     return () => { cancelled = true; };
-  }, [workingDirectory]);
+  }, [workingDirectory, setIsAssistantWorkspace]);
 
   // Listen for workspace-switched events
   useEffect(() => {

@@ -87,6 +87,7 @@ function createStep(index: number, now: number, dependency?: string | null): Tim
     dependencies: dependency ? [dependency] : [],
     toolCalls: [],
     fileChanges: [],
+    events: [],
     usage: null,
     error: null,
     retryCount: 0,
@@ -96,6 +97,10 @@ function createStep(index: number, now: number, dependency?: string | null): Tim
 function getStepById(state: TimelineAccumulatorState, stepId: string | null): TimelineStep | null {
   if (!stepId) return null;
   return state.steps.find((step) => step.id === stepId) || null;
+}
+
+function findStepByToolId(state: TimelineAccumulatorState, toolUseId: string): TimelineStep | null {
+  return state.steps.find((step) => step.toolCalls.some((tool) => tool.id === toolUseId)) || null;
 }
 
 function ensureActiveStep(state: TimelineAccumulatorState, now: number): TimelineStep {
@@ -221,6 +226,7 @@ export function cloneTimelineSteps(state: TimelineAccumulatorState): TimelineSte
     dependencies: [...step.dependencies],
     toolCalls: step.toolCalls.map((tool) => ({ ...tool })),
     fileChanges: step.fileChanges.map((file) => ({ ...file })),
+    events: step.events?.map((event) => ({ ...event })),
   }));
 }
 
@@ -228,6 +234,13 @@ export function appendTimelineReasoning(state: TimelineAccumulatorState, delta: 
   if (!delta) return;
   const step = ensureActiveStep(state, now);
   step.reasoning += delta;
+  const lastEvent = step.events?.[step.events.length - 1];
+  if (lastEvent?.type === 'reasoning') {
+    lastEvent.content += delta;
+    lastEvent.timestamp = now;
+  } else {
+    step.events = [...(step.events || []), { type: 'reasoning', content: delta, timestamp: now }];
+  }
   refreshStepMetadata(step);
 }
 
@@ -263,13 +276,14 @@ export function appendTimelineToolUse(state: TimelineAccumulatorState, tool: Too
       result: undefined,
       isError: false,
     });
+    step.events = [...(step.events || []), { type: 'tool', toolCallId: tool.id, timestamp: now }];
   }
   appendToolFileChange(step, tool);
   refreshStepMetadata(step);
 }
 
 export function appendTimelineToolResult(state: TimelineAccumulatorState, result: ToolResultInfo, now = Date.now()): void {
-  const step = ensureActiveStep(state, now);
+  const step = findStepByToolId(state, result.tool_use_id) || ensureActiveStep(state, now);
   let toolCall = step.toolCalls.find((item) => item.id === result.tool_use_id);
   if (!toolCall) {
     toolCall = {
@@ -283,6 +297,7 @@ export function appendTimelineToolResult(state: TimelineAccumulatorState, result
       isError: !!result.is_error,
     };
     step.toolCalls.push(toolCall);
+    step.events = [...(step.events || []), { type: 'tool', toolCallId: result.tool_use_id, timestamp: now }];
   } else {
     toolCall.result = result.content;
     toolCall.isError = !!result.is_error;
@@ -292,6 +307,10 @@ export function appendTimelineToolResult(state: TimelineAccumulatorState, result
   if (result.is_error) {
     step.status = 'failed';
     step.error = result.content;
+  }
+  if (state.activeStepId === step.id && step.toolCalls.every((tool) => tool.status !== 'running')) {
+    completeTimelineStep(state, undefined, now);
+    return;
   }
   refreshStepMetadata(step);
 }
@@ -313,10 +332,6 @@ export function updateTimelineStatus(
   if (payload.providerName) step.providerName = payload.providerName;
   if (payload.requestedAgent) step.requestedAgent = payload.requestedAgent;
   if (payload.orchestrationProfileName) step.orchestrationProfileName = payload.orchestrationProfileName;
-  // If the message contains specific status info, update the step activity
-  if (payload.message && payload.message.includes('Thinking')) {
-    step.reasoning = payload.message;
-  }
 }
 
 export function completeTimelineStep(
@@ -395,17 +410,20 @@ export function extractTimelineStepsFromBlocks(blocks: MessageContentBlock[]): T
   if (embedded && embedded.type === 'timeline') return embedded.steps;
 
   const state = createTimelineAccumulator(0);
+  const hasAgentActivity = blocks.some((block) => (
+    block.type === 'thinking' || block.type === 'tool_use' || block.type === 'tool_result'
+  ));
   for (const block of blocks) {
     switch (block.type) {
       case 'thinking':
-        updateTimelineStatus(state, { message: 'Thinking', model: block.model }, 0);
         appendTimelineReasoning(state, block.thinking, 0);
         break;
       case 'text':
-        appendTimelineOutput(state, block.text, 0);
+        if (!hasAgentActivity) {
+          appendTimelineOutput(state, block.text, 0);
+        }
         break;
       case 'tool_use':
-        updateTimelineStatus(state, { message: 'Tool Use', model: block.model }, 0);
         appendTimelineToolUse(state, { id: block.id, name: block.name, input: block.input }, 0);
         break;
       case 'tool_result':

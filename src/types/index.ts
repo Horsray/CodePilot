@@ -192,6 +192,10 @@ export interface TimelineFileChange {
   diffText: string;
 }
 
+export type TimelineEvent =
+  | { type: 'reasoning'; content: string; timestamp: number }
+  | { type: 'tool'; toolCallId: string; timestamp: number };
+
 export interface TimelineStep {
   id: string;
   index: number;
@@ -205,6 +209,7 @@ export interface TimelineStep {
   dependencies: string[];
   toolCalls: TimelineToolCall[];
   fileChanges: TimelineFileChange[];
+  events?: TimelineEvent[];
   usage: TokenUsage | null;
   error: string | null;
   retryCount: number;
@@ -364,6 +369,8 @@ export interface ProviderResponse {
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
+  /** Last request input size, used for active context percentage when input_tokens is cumulative across agent steps. */
+  context_input_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
   cost_usd?: number;
@@ -1090,6 +1097,7 @@ export interface ClaudeStreamOptions {
   sdkSessionId?: string; // SDK session ID for resuming conversations
   model?: string;
   systemPrompt?: string;
+  referencedContexts?: string[];
   workingDirectory?: string;
   mcpServers?: Record<string, MCPServerConfig>;
   abortController?: AbortController;

@@ -51,23 +51,30 @@ function convertMcpTool(mcpTool: McpToolDefinition) {
       // MCP callTool returns { content: [...], isError?: boolean }
       if (result && typeof result === 'object' && 'content' in result) {
         const mcpResult = result as { content: Array<{ type: string; text?: string }>; isError?: boolean };
-        const text = mcpResult.content
-          ?.filter(c => c.type === 'text')
-          .map(c => c.text)
-          .join('\n');
-
+        
+        // If there's an explicit error flag, wrap it so the agent loop knows
         if (mcpResult.isError) {
-          // Wrap in ToolFailurePayload format so the agent loop recognizes it as a soft error
+          const errorText = mcpResult.content
+            ?.filter(c => c.type === 'text')
+            .map(c => c.text)
+            .join('\n');
+            
           return {
             __codepilot_tool_error: true,
             toolName: mcpTool.qualifiedName,
             reason: 'error',
-            message: `Error: ${text || 'MCP tool returned an error'}`,
+            message: `Error: ${errorText || 'MCP tool returned an error'}`,
             attempts: 1,
           };
         }
 
-        return text || JSON.stringify(result);
+        // Normal success case
+        const textBlocks = mcpResult.content?.filter(c => c.type === 'text') || [];
+        
+        if (textBlocks.length > 0) {
+          const text = textBlocks.map(c => c.text).join('\n');
+          return text;
+        }
       }
 
       return typeof result === 'string' ? result : JSON.stringify(result);

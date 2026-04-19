@@ -28,6 +28,7 @@ export interface SSECallbacks {
   onToolOutput: (data: string) => void;
   onToolProgress: (toolName: string, elapsedSeconds: number) => void;
   onStatus: (text: string | undefined) => void;
+  onStatusPayload?: (payload: Record<string, unknown>) => void;
   onResult: (usage: TokenUsage | null) => void;
   onPermissionRequest: (data: PermissionRequestEvent) => void;
   onToolTimeout: (toolName: string, elapsedSeconds: number) => void;
@@ -124,6 +125,7 @@ function handleSSEEvent(
         if (statusData._internal) {
           return accumulated;
         }
+        callbacks.onStatusPayload?.(statusData);
         // Skill nudge — dedicated handler for persistent UI banner
         if (statusData.subtype === 'skill_nudge' && statusData.payload) {
           callbacks.onSkillNudge?.({
@@ -161,8 +163,10 @@ function handleSSEEvent(
           });
         } else if (statusData.notification) {
           callbacks.onStatus(statusData.message || statusData.title || undefined);
+        } else if (typeof statusData.message === 'string' && !statusData.subtype) {
+          callbacks.onStatus(statusData.message);
         } else {
-          callbacks.onStatus(typeof event.data === 'string' ? event.data : undefined);
+          callbacks.onStatus(undefined);
         }
       } catch {
         callbacks.onStatus(event.data || undefined);
@@ -364,6 +368,7 @@ export function useSSEStream() {
         onToolOutput: (d) => callbacksRef.current?.onToolOutput(d),
         onToolProgress: (n, s) => callbacksRef.current?.onToolProgress(n, s),
         onStatus: (t) => callbacksRef.current?.onStatus(t),
+        onStatusPayload: (p) => callbacksRef.current?.onStatusPayload?.(p),
         onResult: (u) => callbacksRef.current?.onResult(u),
         onPermissionRequest: (d) => callbacksRef.current?.onPermissionRequest(d),
         onToolTimeout: (n, s) => callbacksRef.current?.onToolTimeout(n, s),
@@ -373,6 +378,9 @@ export function useSSEStream() {
         onThinking: (d) => callbacksRef.current?.onThinking?.(d),
         onKeepAlive: () => callbacksRef.current?.onKeepAlive(),
         onError: (a) => callbacksRef.current?.onError(a),
+        onReferencedContexts: (f) => callbacksRef.current?.onReferencedContexts?.(f),
+        onSkillNudge: (d) => callbacksRef.current?.onSkillNudge?.(d),
+        onContextCompressed: (d) => callbacksRef.current?.onContextCompressed?.(d),
         onInitMeta: (m) => callbacksRef.current?.onInitMeta?.(m),
       };
 

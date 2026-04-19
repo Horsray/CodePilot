@@ -153,7 +153,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         message: t('error.createSessionFailed' as TranslationKey) || `Failed to create session: ${msg}`,
       });
     }
-  }, [router, getCurrentModelAndProvider]);
+  }, [router, getCurrentModelAndProvider, t]);
 
   const openFolderPicker = useCallback(async (defaultPath?: string) => {
     if (isElectron) {

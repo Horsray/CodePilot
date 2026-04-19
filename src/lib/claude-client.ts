@@ -471,6 +471,7 @@ export function streamClaude(options: ClaudeStreamOptions): ReadableStream<strin
     sessionId: options.sessionId,
     model: options.model,
     systemPrompt: options.systemPrompt,
+    referencedContexts: options.referencedContexts,
     workingDirectory: options.workingDirectory,
     abortController: options.abortController,
     autoTrigger: options.autoTrigger,
@@ -514,6 +515,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
     sdkSessionId,
     model,
     systemPrompt,
+    referencedContexts,
     workingDirectory,
     mcpServers,
     abortController,
@@ -543,6 +545,15 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       const controller = wrapController(controllerRaw, (kind) => {
         console.warn(`[claude-client] late ${kind} after stream close — silently dropped`);
       });
+
+      // Emit referenced contexts if available
+      if (referencedContexts && referencedContexts.length > 0) {
+        controller.enqueue(formatSSE({
+          type: 'referenced_contexts',
+          data: JSON.stringify({ files: referencedContexts }),
+        }));
+      }
+
       // Flag to prevent infinite PTL retry loops (at most one retry per request)
       let ptlRetryAttempted = false;
       // Per-request shadow ~/.claude/ for DB-provider isolation. Built lazily

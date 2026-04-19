@@ -13,7 +13,7 @@ import {
 import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
 import { Button } from "@/components/ui/button";
-import { Copy, Check, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise, Book } from "@/components/ui/icon";
+import { Copy, Check, CheckCircle, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise, Book } from "@/components/ui/icon";
 import { FileAttachmentDisplay } from './FileAttachmentDisplay';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { ImageGenCard } from './ImageGenCard';
@@ -577,6 +577,13 @@ function DiffSummary({ files }: { files: Array<{ path: string; name: string }> }
   );
 }
 
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}m ${secs}s`;
+}
+
 export const MessageItem = memo(function MessageItem({ message, sessionId, rewindUserMessageId, isAssistantProject, assistantName }: MessageItemProps) {
   const isUser = message.role === 'user';
 
@@ -649,6 +656,19 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     return changedFiles.length > 0 ? { errCount, changedFiles } : null;
   }, [isUser, timelineSteps]);
 
+  const taskCompletionInfo = useMemo(() => {
+    if (isUser || timelineSteps.length === 0) return null;
+    try {
+      const endStr = (message as any).updated_at || message.created_at;
+      const start = parseDBDate(message.created_at).getTime();
+      const end = parseDBDate(endStr).getTime();
+      const durationSec = Math.max(0, Math.floor((end - start) / 1000));
+      return { durationSec };
+    } catch {
+      return null;
+    }
+  }, [isUser, message, timelineSteps.length]);
+
   // Memoize expensive parsing: parseToolBlocks + pairTools
   const { pairedTools, thinking } = useMemo(() => {
     const { tools, thinking } = parseToolBlocks(message.content);
@@ -682,12 +702,14 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       const { files, text: textWithoutFiles } = parseMessageFiles(firstText);
       return { files, displayText: textWithoutFiles };
     }
-    const text = contentBlocks
-      .filter((block): block is Extract<MessageContentBlock, { type: 'text' }> => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-      .trim();
-    return { files: [] as FileAttachment[], displayText: text };
+    
+    const textBlocks = contentBlocks.filter((block): block is Extract<MessageContentBlock, { type: 'text' }> => block.type === 'text');
+    let finalOutputText = textBlocks.map(b => b.text).join('\n');
+    
+    // Always strip soft-heartbeat marker before rendering text blocks
+    finalOutputText = finalOutputText.replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '').trim();
+    
+    return { files: [] as FileAttachment[], displayText: finalOutputText };
   }, [contentBlocks, isUser]);
 
   useEffect(() => {
@@ -746,21 +768,22 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
 
         {/* Render the timeline (tools and thoughts interleaved) */}
         {!isUser && (pairedTools.length > 0 || timelineSteps.length > 0) && (
-          <ToolActionsGroup
-            tools={pairedTools.map((tool, i) => ({
-              id: `hist-${i}`,
-              name: tool.name,
-              input: tool.input,
-              result: tool.result,
-              isError: tool.isError,
-              media: tool.media,
-            }))}
-            steps={timelineSteps}
-            sessionId={sessionId}
-            rewindUserMessageId={rewindUserMessageId}
-            referencedFiles={referencedFiles}
-            flat={true}
-          />
+          <>
+            <ToolActionsGroup
+              tools={pairedTools.map((tool, i) => ({
+                id: `hist-${i}`,
+                name: tool.name,
+                input: tool.input,
+                result: tool.result,
+                isError: tool.isError,
+                media: tool.media,
+              }))}
+              steps={timelineSteps}
+              sessionId={sessionId}
+              rewindUserMessageId={rewindUserMessageId}
+              flat={true}
+            />
+          </>
         )}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
@@ -811,6 +834,17 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           ) : (
             <AssistantContent displayText={displayText} messageId={message.id} sessionId={sessionId} />
           )
+        )}
+
+        {!isUser && taskCompletionInfo && (
+          <div className="flex items-center gap-2 mt-3 mb-2 text-[12px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-emerald-500 font-medium">
+              <CheckCircle size={14} weight="fill" />
+              <span>任务完成</span>
+            </div>
+            <span className="text-border">|</span>
+            <span>任务耗时 {formatDuration(taskCompletionInfo.durationSec)}</span>
+          </div>
         )}
 
         {/* Completion Bar rendered only once at the end of the message */}
