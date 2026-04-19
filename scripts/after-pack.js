@@ -8,6 +8,7 @@
  * This hook:
  * 1. Explicitly rebuilds native modules for the target Electron ABI
  * 2. Copies the rebuilt .node into all locations within standalone resources
+ * 3. Restores the project node_modules build so local Node-based tests keep working
  */
 module.exports = async function afterPack(context) {
   const fs = await import('fs');
@@ -42,6 +43,11 @@ module.exports = async function afterPack(context) {
       name: 'node-pty',
       binaryName: 'pty.node',
       sourcePath: path.join(projectDir, 'node_modules', 'node-pty', 'build', 'Release', 'pty.node'),
+    },
+    {
+      name: 'zlib-sync',
+      binaryName: 'zlib_sync.node',
+      sourcePath: path.join(projectDir, 'node_modules', 'zlib-sync', 'build', 'Release', 'zlib_sync.node'),
     },
   ];
 

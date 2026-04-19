@@ -6,6 +6,7 @@ publish:
   repo: CodePilot
 directories:
   output: release
+npmRebuild: false
 files:
   - dist-electron/**/*
   - "!node_modules"

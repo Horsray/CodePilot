@@ -2,9 +2,38 @@ import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { spawn } from 'child_process';
 
 // Mark as dynamic to avoid build-time static analysis of electron imports
 export const dynamic = 'force-dynamic';
+
+function openPathWithSystemShell(targetPath: string): Promise<void> {
+  const command =
+    process.platform === 'darwin'
+      ? 'open'
+      : process.platform === 'win32'
+        ? 'cmd.exe'
+        : 'xdg-open';
+
+  const args =
+    process.platform === 'win32'
+      ? ['/c', 'start', '', targetPath]
+      : [targetPath];
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
 
 export async function POST(req: Request) {
   try {
@@ -24,9 +53,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // Use dynamic import for electron as it only works at runtime within Electron
-    const { shell } = await import('electron');
-    shell.openPath(targetPath);
+    await openPathWithSystemShell(targetPath);
     return NextResponse.json({ success: true });
   } catch (err) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
