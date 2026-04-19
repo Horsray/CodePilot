@@ -630,6 +630,14 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__codepilot-image-gen',
             'mcp__codepilot-cli-tools',
             'mcp__codepilot-dashboard',
+            // codepilot_cli_tools specific
+            'codepilot_cli_tools_list',
+            'codepilot_cli_tools_add',
+            'codepilot_cli_tools_remove',
+            'codepilot_cli_tools_check_updates',
+            'codepilot_cli_tools_update',
+            'codepilot_cli_tools_install',
+            // Builtin tools
             'Read',
             'Write',
             'Edit',
@@ -721,7 +729,30 @@ if (claudePath) {
         // and local layers are dropped to prevent <cwd>/.claude/settings.json
         // env from overriding the explicit provider's auth — see
         // provider-resolver.ts ~800). That also disables SDK auto-loading of
-        // `<cwd>/.mcp.json`, which is normally an auth-neutral file team
+        // Also load MCP servers from ~/.claude/settings.json
+        const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+        let settingsMcps: Record<string, MCPServerConfig> | undefined;
+        if (fs.existsSync(settingsPath)) {
+          try {
+            const settingsContent = fs.readFileSync(settingsPath, 'utf-8');
+            const settings = JSON.parse(settingsContent);
+            settingsMcps = settings.mcpServers as Record<string, MCPServerConfig> | undefined;
+            console.log('[claude-client] MCP from settings.json:', settingsMcps ? 'found' : 'not found');
+          } catch (e) {
+            console.warn('[claude-client] Failed to read settings.json:', e);
+          }
+        } else {
+          console.log('[claude-client] settings.json not found');
+        }
+        if (settingsMcps && Object.keys(settingsMcps).length > 0) {
+          const sdkSettingsMcps = toSdkMcpConfig(settingsMcps);
+          queryOptions.mcpServers = {
+            ...(queryOptions.mcpServers || {}),
+            ...sdkSettingsMcps,
+          };
+        }
+
+        // Project .mcp.json takes precedence team
         // members commit to share project MCP servers. Re-inject it here so
         // those servers don't silently disappear for DB-provider users.
         if (resolved.provider) {
@@ -729,9 +760,7 @@ if (claudePath) {
           const projectMcps = loadProjectMcpServers(resolvedWorkingDirectory.path);
           if (projectMcps) {
             const sdkProjectMcps = toSdkMcpConfig(projectMcps);
-            // Existing entries (CodePilot UI / placeholder-managed) take
-            // precedence on name collision — they're the user's currently-
-            // chosen config layer, project file is the team default.
+            // Settings MCP (from UI) takes precedence over project .mcp.json
             queryOptions.mcpServers = {
               ...sdkProjectMcps,
               ...(queryOptions.mcpServers || {}),

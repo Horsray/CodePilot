@@ -477,8 +477,8 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
 // ---------------------------------------------------------------------------
 
 function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
-  // Default open during streaming, collapsed in history
-  const [expanded, setExpanded] = useState(!!isStreaming);
+  // Expanded when there's content OR during streaming - never collapse during streaming
+  const [expanded, setExpanded] = useState(true);
   const [hovered, setHovered] = useState(false);
   const { stopScroll } = useStickToBottomContext();
 

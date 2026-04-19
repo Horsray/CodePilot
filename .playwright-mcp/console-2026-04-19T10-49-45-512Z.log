@@ -1,0 +1,14 @@
+[     713ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[     878ms] [WARNING] The provided value '*/*' is not a valid enum value of type XMLHttpRequestResponseType. @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/vendor.js:7
+[     891ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[     892ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1043ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1051ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1070ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1170ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1415ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1427ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1475ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1777ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    1879ms] [WARNING] [AES] 未监测到Aplus SDK @ https://g.alicdn.com/aliyun-help/help-portal-fe/0.12.40/js/index.js:0
+[    3011ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://wgo.mmstat.com/aliyun_com.homon.homon-module?name=AliyunTracker&_g_encode=utf-8&spm=a2c4g.null&qs=visit_time:20260419184947;pm_spm:a2c4g.null;pm_terminal:PC;pm_url:https%253A%252F%252Fhelp.aliyun.com%252Fzh%252Fmodel-studio%252Fweb-search-tool;pm_tag:undefined;pm_code:undefined;mcm_type:undefined;mcm_id:undefined;mcm_code:undefined;mcm_tag:undefined;mcm_ab:undefined;acm_type:visit;acm_params:%5Bobject%20Object%5D;acm_xpath:undefined;acm_content:undefined;acm_container:undefined;uuid:9aC6bRkgq;acm_module_id:;pm_channel:&sdkVersion=2.16.7&enableHistory=true&enableHash=false&referrer=&t=1776595788521:0
