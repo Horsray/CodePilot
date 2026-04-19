@@ -28,35 +28,49 @@ export function normalizeMessageContent(role: string, raw: string): string {
 
   // For assistant messages with structured content (JSON arrays),
   // extract text + brief tool summaries instead of dropping tools entirely.
+  //
+  // IMPORTANT: markers for thinking/tool_use use XML-style self-closing tags
+  // rather than prose like "(used Read: {...})". Prose-style markers caused
+  // few-shot mimicry: after a compaction-driven fallback, the model would
+  // start writing pseudo tool calls as plain text ("(used Edit: {...})")
+  // instead of emitting real tool_use blocks. XML tags read as structured
+  // metadata that Claude is trained not to reproduce in its own output.
   if (role === 'assistant' && content.startsWith('[')) {
     try {
       const blocks = JSON.parse(content);
       const parts: string[] = [];
       for (const b of blocks) {
         if (b.type === 'thinking' && b.thinking) {
-          // Summarize thinking — extract first bold/heading or truncate
           const thinkingText = String(b.thinking);
           const boldMatch = thinkingText.match(/\*\*(.+?)\*\*/);
           const headingMatch = thinkingText.match(/^#{1,4}\s+(.+)$/m);
           const summary = boldMatch?.[1] || headingMatch?.[1] || thinkingText.slice(0, 80);
-          parts.push(`(reasoning: ${summary})`);
+          parts.push(`<prior-reasoning>${escapeXmlAttr(summary)}</prior-reasoning>`);
         } else if (b.type === 'text' && b.text) {
           parts.push(b.text);
         } else if (b.type === 'tool_use') {
-          // Keep a brief summary of tool usage (name + truncated input)
           const name = b.name || 'unknown_tool';
           const inputStr = typeof b.input === 'object' ? JSON.stringify(b.input) : String(b.input || '');
           const truncated = inputStr.length > 80 ? inputStr.slice(0, 80) + '...' : inputStr;
-          parts.push(`(used ${name}: ${truncated})`);
+          parts.push(`<prior-tool-call name="${escapeXmlAttr(name)}" input="${escapeXmlAttr(truncated)}"/>`);
         }
         // tool_result blocks are skipped — the summary above captures intent
       }
-      content = parts.length > 0 ? parts.join('\n') : '(assistant used tools)';
+      content = parts.length > 0 ? parts.join('\n') : '<prior-assistant-turn tools-only="true"/>';
     } catch {
       // Not JSON, use as-is
     }
   }
   return content;
+}
+
+function escapeXmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\n/g, ' ');
 }
 
 // ── Microcompaction ─────────────────────────────────────────────────

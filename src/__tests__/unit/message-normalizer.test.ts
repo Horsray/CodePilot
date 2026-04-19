@@ -10,22 +10,28 @@ describe('normalizeMessageContent', () => {
     assert.ok(!result.includes('files:'));
   });
 
-  it('extracts text + tool summaries from assistant JSON', () => {
+  it('extracts text + tool summaries from assistant JSON using XML markers', () => {
     const raw = JSON.stringify([
       { type: 'text', text: 'Here is the result:' },
       { type: 'tool_use', name: 'Read', input: { file_path: '/src/lib/db.ts' } },
     ]);
     const result = normalizeMessageContent('assistant', raw);
     assert.ok(result.includes('Here is the result:'));
-    assert.ok(result.includes('(used Read:'));
+    assert.ok(result.includes('<prior-tool-call name="Read"'));
+    // Regression: prose-style "(used Read: ...)" caused few-shot mimicry
+    // where the model would write pseudo tool calls as plain text after
+    // compaction. Never reintroduce that format.
+    assert.ok(!result.includes('(used Read'), 'must not use prose marker (used X: ...)');
+    assert.ok(!/\(used \w+/.test(result), 'must not use any (used Tool:) prose marker');
   });
 
-  it('returns "(assistant used tools)" when no text blocks', () => {
+  it('returns tools-only marker when no text blocks', () => {
     const raw = JSON.stringify([
       { type: 'tool_use', name: 'Bash', input: { command: 'ls' } },
     ]);
     const result = normalizeMessageContent('assistant', raw);
-    assert.ok(result.includes('used Bash'));
+    assert.ok(result.includes('<prior-tool-call name="Bash"'));
+    assert.ok(!result.includes('(used '));
   });
 
   it('extracts reasoning summary from thinking-only messages', () => {
@@ -33,9 +39,9 @@ describe('normalizeMessageContent', () => {
       { type: 'thinking', thinking: '**Analyzing the codebase**\nLooking at the structure...' },
     ]);
     const result = normalizeMessageContent('assistant', raw);
-    assert.ok(result.includes('reasoning:'));
+    assert.ok(result.includes('<prior-reasoning>'));
     assert.ok(result.includes('Analyzing the codebase'));
-    assert.ok(!result.includes('used tools'));
+    assert.ok(!result.includes('(reasoning:'), 'must not use prose marker');
   });
 
   it('extracts heading-based summary from thinking blocks', () => {
@@ -53,9 +59,10 @@ describe('normalizeMessageContent', () => {
       { type: 'tool_use', name: 'Read', input: { file_path: '/src/index.ts' } },
     ]);
     const result = normalizeMessageContent('assistant', raw);
-    assert.ok(result.includes('reasoning:'));
+    assert.ok(result.includes('<prior-reasoning>'));
     assert.ok(result.includes('Let me check the code.'));
-    assert.ok(result.includes('used Read'));
+    assert.ok(result.includes('<prior-tool-call name="Read"'));
+    assert.ok(!/\(used \w+/.test(result));
   });
 
   it('truncates long thinking content in summary', () => {
@@ -64,7 +71,18 @@ describe('normalizeMessageContent', () => {
     ]);
     const result = normalizeMessageContent('assistant', raw);
     assert.ok(result.length < 200);
-    assert.ok(result.includes('reasoning:'));
+    assert.ok(result.includes('<prior-reasoning>'));
+  });
+
+  it('escapes XML-unsafe chars in tool input so markers stay well-formed', () => {
+    const raw = JSON.stringify([
+      { type: 'tool_use', name: 'Edit', input: { old_string: 'a < b & "c"', new_string: '<tag>' } },
+    ]);
+    const result = normalizeMessageContent('assistant', raw);
+    assert.ok(result.includes('<prior-tool-call name="Edit"'));
+    // Raw unescaped quote/angle inside the input would break the attribute
+    assert.ok(!result.includes('"<tag>"'));
+    assert.ok(result.includes('&quot;') || result.includes('&lt;'));
   });
 });
 

@@ -6,6 +6,7 @@ import { notifySessionStart, notifySessionComplete, notifySessionError } from '@
 import { extractCompletion } from '@/lib/onboarding-completion';
 import { loadCodePilotMcpServers, loadAllMcpServers } from '@/lib/mcp-loader';
 import { assembleContext } from '@/lib/context-assembler';
+import { buildContextCompressedStatus } from '@/lib/context-compressor';
 import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, FileAttachment, ClaudeStreamOptions, MediaBlock } from '@/types';
 import { saveMediaToLibrary } from '@/lib/media-saver';
 import { wrapController } from '@/lib/safe-stream';
@@ -435,19 +436,12 @@ export async function POST(request: NextRequest) {
       ? new ReadableStream<string>({
           async start(controllerRaw) {
             const controller = wrapController(controllerRaw);
-            const msgCount = compressionStats?.messagesCompressed ?? 0;
-            const tokensSaved = compressionStats?.tokensSaved ?? 0;
-            const displayMessage = tokensSaved > 0
-              ? `Context compressed: ${msgCount} older messages summarized, ~${tokensSaved.toLocaleString()} tokens saved`
-              : `Context compressed: ${msgCount} older messages summarized`;
             controller.enqueue(`data: ${JSON.stringify({
               type: 'status',
-              data: JSON.stringify({
-                notification: true,
-                subtype: 'context_compressed',
-                message: displayMessage,
-                stats: compressionStats,
-              }),
+              data: JSON.stringify(buildContextCompressedStatus({
+                messagesCompressed: compressionStats?.messagesCompressed ?? 0,
+                tokensSaved: compressionStats?.tokensSaved ?? 0,
+              })),
             })}\n\n`);
             const reader = streamForClient.getReader();
             try {

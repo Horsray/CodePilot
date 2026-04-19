@@ -30,6 +30,37 @@ export interface CompressionResult {
   estimatedTokensSaved: number;
 }
 
+/**
+ * Payload shape for the `context_compressed` SSE status event. Both the
+ * pre-compression wrapper (app/api/chat/route.ts) and the reactive-compact
+ * retry path (claude-client.ts) MUST emit this exact shape — the SSE consumer
+ * at useSSEStream.ts dispatches onContextCompressed only when
+ * `subtype === 'context_compressed'`. An earlier shape
+ * `{ message: 'context_compressed' }` was silently ignored after the consumer
+ * was upgraded; see sse-stream.test.ts for the locked-in contract.
+ */
+export function buildContextCompressedStatus(stats: {
+  messagesCompressed: number;
+  tokensSaved?: number;
+}): {
+  notification: true;
+  subtype: 'context_compressed';
+  message: string;
+  stats: { messagesCompressed: number; tokensSaved: number };
+} {
+  const messagesCompressed = stats.messagesCompressed;
+  const tokensSaved = stats.tokensSaved ?? 0;
+  const message = tokensSaved > 0
+    ? `Context compressed: ${messagesCompressed} older messages summarized, ~${tokensSaved.toLocaleString()} tokens saved`
+    : `Context compressed: ${messagesCompressed} older messages summarized`;
+  return {
+    notification: true,
+    subtype: 'context_compressed',
+    message,
+    stats: { messagesCompressed, tokensSaved },
+  };
+}
+
 export interface CompressParams {
   sessionId: string;
   messages: Array<{ role: string; content: string }>;

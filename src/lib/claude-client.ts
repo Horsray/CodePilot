@@ -323,7 +323,7 @@ function buildFallbackContext(params: {
   }
 
   lines.push('<conversation_history>');
-  lines.push('(This is a summary of earlier conversation turns for context. Tool calls shown here were already executed — do not repeat them or output their markers as text.)');
+  lines.push('(This is a summary of earlier conversation turns for context. <prior-tool-call .../> and <prior-reasoning>...</prior-reasoning> are metadata markers describing what already happened — they are NOT assistant output format. Do not reproduce these tags. To call a tool, emit a real tool_use block; do not write tool calls as prose or as these markers.)');
   for (const msg of selected) {
     lines.push(`${msg.role === 'user' ? 'Human' : 'Assistant'}: ${msg.content}`);
   }
@@ -1648,7 +1648,29 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             for await (const msg of retryConversation) {
               if (abortController?.signal.aborted) break;
               switch (msg.type) {
+                case 'system': {
+                  // Forward init event so the chat route persists the NEW
+                  // sdk_session_id. Without this, the session row keeps an
+                  // empty sdk_session_id (cleared above at line ~1619) and the
+                  // next user message goes back through buildFallbackContext,
+                  // re-exposing prior-tool-call history to the model.
+                  const sysMsg = msg as SDKSystemMessage;
+                  if ('subtype' in sysMsg && sysMsg.subtype === 'init') {
+                    controller.enqueue(formatSSE({
+                      type: 'status',
+                      data: JSON.stringify({
+                        session_id: sysMsg.session_id,
+                        model: sysMsg.model,
+                        requested_model: model,
+                        tools: sysMsg.tools,
+                      }),
+                    }));
+                  }
+                  break;
+                }
                 case 'assistant': {
+                  // Text deltas are forwarded via stream_event below; here we
+                  // only emit tool_use blocks (matches main path at L1213).
                   const aMsg = msg as SDKAssistantMessage;
                   for (const block of aMsg.message.content) {
                     if (block.type === 'tool_use') {
@@ -1727,14 +1749,31 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                 }
                 case 'result': {
                   const rMsg = msg as SDKResultMessage;
-                  if ('result' in rMsg) {
-                    const usage = extractTokenUsage(rMsg as SDKResultSuccess);
-                    if (usage) {
-                      controller.enqueue(formatSSE({ type: 'result', data: JSON.stringify(usage) }));
-                    }
-                  }
-                  // Emit compression notification so frontend updates hasSummary
-                  controller.enqueue(formatSSE({ type: 'status', data: JSON.stringify({ notification: true, message: 'context_compressed' }) }));
+                  const usage = 'result' in rMsg ? extractTokenUsage(rMsg as SDKResultSuccess) : undefined;
+                  // Match main-path result shape so the chat route can persist
+                  // the new sdk_session_id (route reads result.session_id as a
+                  // safety net when status init was missed).
+                  controller.enqueue(formatSSE({
+                    type: 'result',
+                    data: JSON.stringify({
+                      subtype: rMsg.subtype,
+                      is_error: rMsg.is_error,
+                      num_turns: rMsg.num_turns,
+                      duration_ms: rMsg.duration_ms,
+                      usage,
+                      session_id: rMsg.session_id,
+                    }),
+                  }));
+                  // Emit compression notification via the shared builder so
+                  // useSSEStream's subtype=context_compressed dispatch fires.
+                  const { buildContextCompressedStatus } = await import('./context-compressor');
+                  controller.enqueue(formatSSE({
+                    type: 'status',
+                    data: JSON.stringify(buildContextCompressedStatus({
+                      messagesCompressed: compResult.messagesCompressed,
+                      tokensSaved: compResult.estimatedTokensSaved,
+                    })),
+                  }));
                   break;
                 }
               }
