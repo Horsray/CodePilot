@@ -91,10 +91,13 @@ export type IconComponent = ComponentType<
   SVGAttributes<SVGSVGElement> & RefAttributes<SVGSVGElement> & { size?: number | string; className?: string }
 >;
 
+export type MentionNodeType = 'file' | 'directory';
+
 /** Shared model for popover items (slash commands, file mentions, skills). */
 export interface PopoverItem {
   label: string;
   value: string;
+  display?: string;
   description?: string;
   descriptionKey?: TranslationKey;
   builtIn?: boolean;
@@ -103,6 +106,7 @@ export interface PopoverItem {
   source?: 'global' | 'project' | 'plugin' | 'installed' | 'sdk';
   kind?: SkillKind;
   icon?: IconComponent;
+  nodeType?: MentionNodeType;
 }
 
 /** Which popover is currently active in the command input. */
@@ -401,6 +405,7 @@ export interface SendMessageRequest {
   mode?: string;
   provider_id?: string;
   orchestration_profile_id?: string;
+  mentions?: MentionRef[];
 }
 
 export interface UpdateMCPConfigRequest {
@@ -513,6 +518,10 @@ export interface SuccessResponse {
 
 export interface ErrorResponse {
   error: string;
+  /** Machine-readable error code for client-side branching */
+  code?: string;
+  /** Extra recovery hints surfaced in UI */
+  initialCard?: string;
 }
 
 export interface SettingsResponse {
@@ -578,6 +587,8 @@ export type SSEEventType =
   | 'keep_alive'         // SDK keep-alive heartbeat (resets idle timer)
   | 'rewind_point'       // SDK user message with rewind checkpoint
   | 'referenced_contexts' // List of files referenced in system prompt
+  | 'rate_limit'         // SDK 0.2.111 subscription rate-limit telemetry
+  | 'context_usage'      // SDK 0.2.111 post-turn context usage snapshot
   | 'done';              // stream complete
 
 export interface SSEEvent {
@@ -857,6 +868,16 @@ export interface ReferenceImage {
   localPath?: string;  // file path (generated result)
 }
 
+export interface MentionRef {
+  path: string;
+  nodeType: MentionNodeType;
+  display: string;
+  sourceRange: {
+    start: number;
+    end: number;
+  };
+}
+
 // ==========================================
 // File Attachment Types
 // ==========================================
@@ -1080,6 +1101,43 @@ export interface SessionStreamSnapshot {
   referencedContexts?: string[];
   /** Final message content built at stream completion for ChatView to consume */
   finalMessageContent: string | null;
+  /**
+   * Optional terminal reason emitted by SDK 0.2.111 on SDKResultMessage.
+   * Used by ChatView to render a contextual end-of-turn chip (Phase 1 of
+   * agent-sdk-0-2-111-adoption). Absent for error paths without a result
+   * message — those continue to flow through error-classifier.ts.
+   */
+  terminalReason?: string;
+  /**
+   * SDK 0.2.111 subscription rate-limit telemetry (Phase 2 of
+   * agent-sdk-0-2-111-adoption). Populated from rate_limit_event
+   * stream messages; only present on claude.ai subscription paths.
+   * ChatView consumes this to render warning / rejected UIs.
+   */
+  rateLimitInfo?: {
+    status: 'allowed' | 'allowed_warning' | 'rejected';
+    resetsAt?: number;
+    rateLimitType?: 'five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet' | 'overage';
+    utilization?: number;
+    overageStatus?: 'allowed' | 'allowed_warning' | 'rejected';
+    overageResetsAt?: number;
+    overageDisabledReason?: string;
+    isUsingOverage?: boolean;
+  };
+  /**
+   * Post-turn context-usage snapshot captured via Query.getContextUsage()
+   * (SDK 0.2.111 Phase 5). Consumers should treat this as authoritative
+   * for ~60s after capturedAt, then fall back to the char-based estimator.
+   */
+  contextUsageSnapshot?: {
+    totalTokens: number;
+    maxTokens: number;
+    rawMaxTokens: number;
+    percentage: number;
+    model: string;
+    /** Epoch ms at which the snapshot was taken */
+    capturedAt: number;
+  };
 }
 
 export interface StreamEvent {
@@ -1121,8 +1179,8 @@ export interface ClaudeStreamOptions {
   bypassPermissions?: boolean;
   /** Thinking configuration for the query */
   thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
-  /** Effort level for the query */
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  /** Effort level for the query (Opus 4.7 adds 'xhigh') */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Output format for structured responses */
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
   /** Custom agent definitions */

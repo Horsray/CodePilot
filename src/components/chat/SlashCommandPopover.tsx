@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { At, Terminal, NotePencil, Brain, GlobeSimple, Lightning } from '@/components/ui/icon';
+import { Terminal, NotePencil, Brain, GlobeSimple, Lightning, Folder, File } from '@/components/ui/icon';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import type { PopoverItem, PopoverMode } from '@/types';
@@ -101,7 +101,9 @@ export function SlashCommandPopover({
       onMouseEnter={() => onSetSelectedIndex(idx)}
     >
       {popoverMode === 'file' ? (
-        <At size={16} className="shrink-0 text-muted-foreground" />
+        item.nodeType === 'directory'
+          ? <Folder size={16} className="shrink-0 text-muted-foreground" />
+          : <File size={16} className="shrink-0 text-muted-foreground" />
       ) : item.builtIn && item.icon ? (
         (() => { const ItemIcon = item.icon; return <ItemIcon size={16} className="shrink-0 text-muted-foreground" />; })()
       ) : item.kind === 'agent_skill' ? (
@@ -113,7 +115,7 @@ export function SlashCommandPopover({
       ) : (
         <Terminal size={16} className="shrink-0 text-muted-foreground" />
       )}
-      <span className="font-mono text-xs truncate">{item.label}</span>
+      <span className="font-mono text-xs truncate">{item.display || item.label}</span>
       {(item.descriptionKey || item.description) && (
         <span className="text-xs text-muted-foreground truncate max-w-[200px]">
           {item.descriptionKey ? t(item.descriptionKey) : item.description}
@@ -133,21 +135,20 @@ export function SlashCommandPopover({
   return (
     <div ref={popoverRef}>
       <CommandList className="w-full max-w-2xl">
-        {popoverMode === 'skill' ? (
-          <CommandListSearch
-            inputRef={searchInputRef}
-            value={popoverFilter}
-            onChange={handleFilterChange}
-            onKeyDown={handleSearchKeyDown}
-          />
-        ) : (
-          <div className="px-3 py-2 text-xs font-medium text-muted-foreground border-b">
-            Files
-          </div>
-        )}
+        <CommandListSearch
+          inputRef={searchInputRef}
+          placeholder={popoverMode === 'file'
+            ? t('composer.searchFiles' as TranslationKey)
+            : undefined}
+          value={popoverFilter}
+          onChange={handleFilterChange}
+          onKeyDown={handleSearchKeyDown}
+        />
         <CommandListItems className="max-h-48">
           {popoverMode === 'file' ? (
-            filteredItems.map((item, i) => renderItem(item, i))
+            <CommandListGroup label={t('globalSearch.files' as TranslationKey)}>
+              {filteredItems.map((item, i) => renderItem(item, i))}
+            </CommandListGroup>
           ) : (
             <>
               {builtInItems.length > 0 && (

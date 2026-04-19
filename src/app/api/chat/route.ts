@@ -295,7 +295,13 @@ export async function POST(request: NextRequest) {
       const { updateSessionSummary } = await import('@/lib/db');
 
       const modelForWindow = resolved.upstreamModel || resolved.model || effectiveModel || 'sonnet';
-      const contextWindow = getContextWindow(modelForWindow, { context1m: context_1m }) || 200000;
+      // Pass upstream explicitly so alias lookups (e.g. 'opus') resolve to
+      // the correct per-provider window — first-party opus → 4.7 (1M) vs
+      // Bedrock/Vertex opus → 4.6 (200K).
+      const contextWindow = getContextWindow(modelForWindow, {
+        context1m: context_1m,
+        upstream: resolved.upstreamModel,
+      }) || 200000;
 
       // Estimate using normalized content (matches what buildFallbackContext actually sends).
       // Raw transcript overestimates tool-heavy conversations because normalize + microcompact

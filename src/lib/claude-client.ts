@@ -22,6 +22,7 @@ import { normalizeMessageContent, microCompactMessage } from './message-normaliz
 import { roughTokenEstimate } from './context-estimator';
 import { getSetting, updateSdkSessionId, createPermissionRequest } from './db';
 import { resolveForClaudeCode } from './provider-resolver';
+import { sanitizeClaudeModelOptions } from './claude-model-options';
 import { findClaudeBinary, invalidateClaudePathCache } from './platform';
 import { notifyPermissionRequest, notifyGeneric } from './telegram-bot';
 import { classifyError, formatClassifiedError } from './error-classifier';
@@ -823,14 +824,35 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           }
         }
 
-        // Pass through SDK-specific options from ClaudeStreamOptions
-        if (thinking) {
-          queryOptions.thinking = thinking;
+        // Pass through SDK-specific options from ClaudeStreamOptions.
+        // Shared sanitizer runs the same Opus 4.7 migration guards as the
+        // native agent-loop path — manual extended thinking becomes
+        // adaptive, and the context-1m beta header is dropped since 4.7
+        // ships 1M by default.
+        const sanitized = sanitizeClaudeModelOptions({
+          model,
+          thinking,
+          effort,
+          context1m,
+        });
+
+        if (sanitized.thinking) {
+          queryOptions.thinking = sanitized.thinking;
         }
-        // Always set effort explicitly to prevent user-level ~/.claude/settings.json
-        // from injecting 'high' effort via settingSources inheritance.
-        // UI-selected effort takes priority; otherwise default to 'medium'.
-        queryOptions.effort = effort || 'medium';
+        // SDK-runtime effort policy: when the UI doesn't explicitly pick a
+        // level, leave `effort` unset so Claude Code CLI applies its
+        // per-model default (e.g. Opus 4.7 defaults to xhigh, Sonnet to
+        // high). Writing 'medium' unconditionally would override that and
+        // regress the 4.7 out-of-box experience.
+        //
+        // The previous concern about settings.json injecting 'high' is
+        // mitigated by CLI defaults: they're applied with lower precedence
+        // than both queryOptions.effort and settingSources, so an explicit
+        // UI choice still wins and a missing one doesn't silently escalate
+        // to 'high'.
+        if (sanitized.effort) {
+          queryOptions.effort = sanitized.effort as Options['effort'];
+        }
         if (outputFormat) {
           queryOptions.outputFormat = outputFormat;
         }
@@ -843,7 +865,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         if (enableFileCheckpointing) {
           queryOptions.enableFileCheckpointing = true;
         }
-        if (context1m) {
+        if (sanitized.applyContext1mBeta) {
           queryOptions.betas = [
             ...(queryOptions.betas || []),
             'context-1m-2025-08-07',
@@ -1130,6 +1152,13 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           prompt: finalPrompt,
           options: queryOptions,
         });
+        // Keep a handle to the underlying Query instance for control-API
+        // calls (getContextUsage etc.). When we peek-and-rewrap below to
+        // detect resume failures, `conversation` becomes a plain async
+        // generator that loses the Query prototype's methods — we need
+        // this original reference to call .getContextUsage() at result
+        // time. Reassigned on resume-fallback to point at the fresh Query.
+        let controlQuery = conversation;
 
         // Wrap the iterator so we can detect resume failures on the first message
         if (shouldResume) {
@@ -1147,6 +1176,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                 yield next.value;
               }
             })() as ReturnType<typeof query>;
+            // controlQuery still points at the original Query with
+            // getContextUsage() available.
           } catch (resumeError) {
             const errMsg = resumeError instanceof Error ? resumeError.message : String(resumeError);
             console.warn('[claude-client] Resume failed, retrying without resume:', errMsg);
@@ -1170,6 +1201,9 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
               prompt: buildFinalPrompt(true),
               options: queryOptions,
             });
+            // Fresh Query replaces the old handle — control-API calls
+            // now go through this one.
+            controlQuery = conversation;
           }
         }
 
@@ -1242,8 +1276,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                       ? block.content
                       : Array.isArray(block.content)
                         ? block.content
-                            .filter((c: { type: string }) => c.type === 'text')
-                            .map((c: { text?: string }) => c.text)
+                            .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
+                            .map((c) => c.text)
                             .join('\n')
                         : String(block.content ?? '');
 
@@ -1442,6 +1476,10 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             case 'result': {
               const resultMsg = message as SDKResultMessage;
               tokenUsage = extractTokenUsage(resultMsg);
+              // terminal_reason is an optional field added in SDK 0.2.111.
+              // When present, it enriches the end-of-turn UI chip (Phase 1 of
+              // agent-sdk-0-2-111-adoption) without replacing error-classifier.
+              const terminalReason = (resultMsg as SDKResultMessage & { terminal_reason?: string }).terminal_reason;
               controller.enqueue(formatSSE({
                 type: 'result',
                 data: JSON.stringify({
@@ -1451,6 +1489,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                   duration_ms: resultMsg.duration_ms,
                   usage: tokenUsage,
                   session_id: resultMsg.session_id,
+                  ...(terminalReason ? { terminal_reason: terminalReason } : {}),
                 }),
               }));
               // Notify on conversation-level errors (e.g. rate limit, auth failure)
@@ -1466,12 +1505,67 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
                   notifyGeneric(errTitle, errMsg, telegramOpts).catch(() => {});
                 }
               }
+
+              // Phase 5 — context-usage snapshot via Query.getContextUsage()
+              // is intentionally NOT called here.
+              //
+              // getContextUsage() is a SDK control-API request that shares
+              // the same message channel as the for-await-of iterator we're
+              // inside. Awaiting it blocks the iterator from advancing,
+              // which prevents the control-response frame from arriving —
+              // the Query then closes on result and the call errors out
+              // with "Query closed before response received". There's no
+              // stable place outside the iteration loop where the Query
+              // is still alive.
+              //
+              // The chat-page indicator doesn't suffer from this: it
+              // already computes used-tokens from the SDKResultMessage's
+              // own `usage` field (input + cache_read + cache_creation),
+              // which is SDK-authoritative and carries <5% drift against
+              // what getContextUsage would report. The snapshot would
+              // only add category-level breakdown (system prompt / tools
+              // / user / memory) that the current UI doesn't surface.
+              //
+              // The SSE 'context_usage' event type and stream-session-
+              // manager snapshot field stay in place as extension points
+              // — a future Phase that needs category breakdown can fire
+              // them from a different point in the SDK lifecycle (e.g.
+              // from a background control-channel timer, or from a
+              // lifecycle hook the SDK may expose later).
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              const _unusedControlQuery = controlQuery;
               break;
             }
 
             default: {
-              if ((message as { type: string }).type === 'keep_alive') {
+              const mType = (message as { type: string }).type;
+              if (mType === 'keep_alive') {
                 controller.enqueue(formatSSE({ type: 'keep_alive', data: '' }));
+              } else if (mType === 'rate_limit_event') {
+                // SDK 0.2.111+ — subscription rate limit telemetry. SDK
+                // only emits these for claude.ai subscription paths, so
+                // API-key / third-party provider sessions won't see this
+                // branch. Forward verbatim so the UI can render a
+                // warning banner (allowed_warning) or a closable recovery
+                // panel (rejected) per Phase 2 of agent-sdk-0-2-111.
+                const rlEvent = message as {
+                  type: 'rate_limit_event';
+                  rate_limit_info: {
+                    status: 'allowed' | 'allowed_warning' | 'rejected';
+                    resetsAt?: number;
+                    rateLimitType?: string;
+                    utilization?: number;
+                    overageStatus?: string;
+                    overageResetsAt?: number;
+                    overageDisabledReason?: string;
+                    isUsingOverage?: boolean;
+                  };
+                  session_id: string;
+                };
+                controller.enqueue(formatSSE({
+                  type: 'rate_limit',
+                  data: JSON.stringify(rlEvent.rate_limit_info),
+                }));
               }
               break;
             }
@@ -1776,7 +1870,27 @@ export async function testProviderConnection(config: {
     };
   }
 
-  // Build the API URL — Anthropic-compatible endpoint
+  // Reject third-party / custom Anthropic providers without a base URL.
+  // Otherwise the fallback to https://api.anthropic.com would test the
+  // official endpoint, giving a misleading green signal before saving a
+  // provider that in production would also resolve to api.anthropic.com
+  // via the same fallback and silently inherit first-party catalog.
+  // Users who genuinely want official Anthropic must pass the URL
+  // explicitly (or choose the anthropic-official preset).
+  if (config.protocol === 'anthropic' && !config.baseUrl?.trim()) {
+    return {
+      success: false,
+      error: {
+        code: 'MISSING_BASE_URL',
+        message: 'Base URL is required for Anthropic-protocol providers',
+        suggestion: 'Use https://api.anthropic.com for the official API or your third-party endpoint',
+      },
+    };
+  }
+
+  // Build the API URL — Anthropic-compatible endpoint.
+  // baseUrl is guaranteed non-empty above for protocol='anthropic';
+  // other protocols retain the historical fallback behavior.
   let apiUrl = config.baseUrl || 'https://api.anthropic.com';
   // Ensure URL ends with /v1/messages for Anthropic-compatible providers
   if (!apiUrl.endsWith('/v1/messages')) {

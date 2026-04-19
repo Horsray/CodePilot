@@ -2,8 +2,10 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot } from '@/types';
+import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef } from '@/types';
 import { MessageList } from './MessageList';
+import { TerminalReasonChip } from './TerminalReasonChip';
+import { RateLimitBanner } from './RateLimitBanner';
 import { MessageInput } from './MessageInput';
 import { ChatComposerActionBar } from './ChatComposerActionBar';
 import { ModeIndicator } from './ModeIndicator';
@@ -17,6 +19,16 @@ import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import { PermissionPrompt } from './PermissionPrompt';
 import { FileReviewBar } from './FileReviewBar';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { BatchExecutionDashboard, BatchContextSync } from './batch-image-gen';
 import { setLastGeneratedImages, loadLastGenerated } from '@/lib/image-ref-store';
 import { useChatCommands } from '@/hooks/useChatCommands';
@@ -35,6 +47,7 @@ interface QueuedMessage {
   files?: FileAttachment[];
   systemPromptAppend?: string;
   displayOverride?: string;
+  mentions?: MentionRef[];
 }
 
 interface ChatViewProps {
@@ -140,6 +153,26 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       .catch(() => {});
     return () => controller.abort();
   }, [currentProviderId]);
+
+  // Resolve upstream model ID for the current model/provider so the context
+  // indicator can disambiguate alias windows (first-party opus = 1M vs
+  // Bedrock/Vertex opus = 200K). /api/providers/models already returns
+  // upstreamModelId per model on the returned groups.
+  const [currentModelUpstream, setCurrentModelUpstream] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const pid = currentProviderId || 'env';
+    const controller = new AbortController();
+    fetch('/api/providers/models', { signal: controller.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (controller.signal.aborted) return;
+        const group = data?.groups?.find((g: { provider_id: string }) => g.provider_id === pid);
+        const model = group?.models?.find((m: { value: string }) => m.value === currentModel);
+        setCurrentModelUpstream(model?.upstreamModelId);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [currentProviderId, currentModel]);
   useEffect(() => { if (initialPermissionProfile) setPermissionProfile(initialPermissionProfile); }, [initialPermissionProfile]);
 
   // Restore session-scoped last-generated images from sessionStorage
@@ -195,7 +228,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
   // Pending image generation notices
   const pendingImageNoticesRef = useRef<string[]>([]);
-  const sendMessageRef = useRef<(content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => Promise<void>>(undefined);
+  const sendMessageRef = useRef<(content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => Promise<void>>(undefined);
   const initMetaRef = useRef<{ tools?: unknown; slash_commands?: unknown; skills?: unknown } | null>(null);
 
   const handleModeChange = useCallback((newMode: string) => {
@@ -273,11 +306,171 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
         setHasSummary(true);
+        // Phase 1b: if the user asked for "compress and retry", kick off
+        // the retry now that compression actually finished. Stored flag
+        // + last user message are consumed once so we can't replay
+        // twice. Staleness protection uses (a) the arming-flag gate in
+        // the sendMessage wrapper to clear pending state on any
+        // subsequent user action, (b) the 45s timeout on the arm, and
+        // (c) the session-switch clear — no per-request / compact run
+        // id is wired through the SSE contract, so we rely on those
+        // three clears rather than a correlation token.
+        if (pendingRetryAfterCompactRef.current && pendingRetryMessageRef.current) {
+          const msg = pendingRetryMessageRef.current;
+          clearPendingRetry();
+          // Small delay so compression SSE pipeline flushes before next send.
+          setTimeout(() => {
+            sendMessageRef.current?.(msg);
+          }, 100);
+        }
       }
     };
     window.addEventListener('context-compressed', handler);
     return () => window.removeEventListener('context-compressed', handler);
   }, [sessionId]);
+
+  // Phase 1b — TerminalReason action state
+  // Refs (not state) so the context-compressed handler above can read the
+  // latest value without re-subscribing.
+  const pendingRetryAfterCompactRef = useRef(false);
+  const pendingRetryMessageRef = useRef<string | null>(null);
+  /** Timeout handle so we don't leak a pending retry if /compact never
+   *  emits context-compressed (e.g. network error, user cancels). */
+  const pendingRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True for the synchronous window where compress_and_retry is arming
+   *  its own /compact call. Used by the sendMessage wrapper to avoid
+   *  clearing the pending state we just set. Resets to false right after
+   *  the sendMessageRef call returns (sendMessage runs its synchronous
+   *  prefix — including the wrapper's stale-retry check — before the
+   *  control returns here). */
+  const retryArmingInProgressRef = useRef(false);
+
+  const clearPendingRetry = useCallback(() => {
+    pendingRetryAfterCompactRef.current = false;
+    pendingRetryMessageRef.current = null;
+    if (pendingRetryTimerRef.current) {
+      clearTimeout(pendingRetryTimerRef.current);
+      pendingRetryTimerRef.current = null;
+    }
+  }, []);
+
+  // Safety: drop any pending retry state on session switch — stale
+  // cross-session replay would be nonsense.
+  useEffect(() => {
+    clearPendingRetry();
+  }, [sessionId, clearPendingRetry]);
+  const [pendingTerminalAction, setPendingTerminalAction] = useState<{
+    actionId: import('./TerminalReasonChip').TerminalActionId;
+    lastUserMessage: string;
+  } | null>(null);
+  // Phase 2 — user can dismiss the rate-limit banner; keeps it from
+  // re-rendering on snapshot updates within the same session. Resets on
+  // session switch because the snapshot state itself resets.
+  const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
+  useEffect(() => { setRateLimitDismissed(false); }, [sessionId]);
+
+  // Find the most recent user message — replay target for retry actions.
+  const findLastUserMessage = useCallback((): string | null => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messages[i].content;
+    }
+    return null;
+  }, [messages]);
+
+  // Execute an action after confirmation (or immediately for non-destructive ones).
+  const runTerminalAction = useCallback((actionId: import('./TerminalReasonChip').TerminalActionId, lastUserMessage: string | null) => {
+    switch (actionId) {
+      case 'compress_and_retry': {
+        if (!lastUserMessage) return;
+        // Arm the retry. Safety nets for stale-replay:
+        //   - 45s timeout (in case /compact never emits context-compressed)
+        //   - session switch clears it (useEffect with clearPendingRetry)
+        //   - any subsequent user-initiated sendMessage clears it
+        //     (including manual /compact or compress_only — per round-13
+        //     Codex review: we can't rely on content equality to
+        //     distinguish internal vs manual /compact since a user can
+        //     type /compact themselves)
+        pendingRetryAfterCompactRef.current = true;
+        pendingRetryMessageRef.current = lastUserMessage;
+        if (pendingRetryTimerRef.current) clearTimeout(pendingRetryTimerRef.current);
+        pendingRetryTimerRef.current = setTimeout(() => {
+          console.warn('[chat] compress-and-retry timed out — pending retry cleared');
+          clearPendingRetry();
+        }, 45_000);
+        // Mark the synchronous arming window so the sendMessage wrapper
+        // below skips its stale-retry clear on THIS call. The wrapper's
+        // check is synchronous (runs before the first await in
+        // sendMessage), so resetting the flag right after the call is
+        // sufficient — no microtask deferral needed.
+        retryArmingInProgressRef.current = true;
+        try {
+          sendMessageRef.current?.('/compact');
+        } finally {
+          retryArmingInProgressRef.current = false;
+        }
+        break;
+      }
+      case 'compress_only':
+        // User chose "just compress, don't replay" — drop any previously
+        // armed compress_and_retry so its pendingRetryMessage can't ride
+        // on THIS compact's context-compressed event.
+        clearPendingRetry();
+        sendMessageRef.current?.('/compact');
+        break;
+      case 'enable_1m_and_retry':
+        if (!lastUserMessage) return;
+        setContext1m(true);
+        // Persist per-provider so future sessions keep 1M until user opts out.
+        fetch(`/api/providers/options?providerId=${encodeURIComponent(currentProviderId || 'env')}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ options: { context_1m: true } }),
+        }).catch(() => {});
+        setTimeout(() => sendMessageRef.current?.(lastUserMessage), 50);
+        break;
+      case 'switch_to_sonnet':
+        if (!lastUserMessage) return;
+        setCurrentModel('sonnet');
+        setTimeout(() => sendMessageRef.current?.(lastUserMessage), 50);
+        break;
+      case 'continue_max_turns':
+        sendMessageRef.current?.('continue');
+        break;
+      case 'retry_simple':
+        if (!lastUserMessage) return;
+        sendMessageRef.current?.(lastUserMessage);
+        break;
+      case 'open_hook_settings':
+        router.push('/settings');
+        break;
+      case 'retry_image_upload':
+        // No attachments API exposure here yet — surface a toast nudging
+        // the user to re-drag the image. Full wire lands with Phase 2's
+        // attachment UX work.
+        import('@/hooks/useToast').then(({ showToast }) => {
+          showToast({ type: 'info', message: t('terminalAction.retryImageUpload' as TranslationKey), duration: 4000 });
+        }).catch(() => {});
+        break;
+    }
+  }, [currentProviderId, router, t]);
+
+  // Entry point from the chip. Destructive actions route through confirm
+  // dialog; non-destructive ones run immediately.
+  const CONFIRM_REQUIRED = new Set<import('./TerminalReasonChip').TerminalActionId>([
+    'compress_and_retry',
+    'enable_1m_and_retry',
+    'switch_to_sonnet',
+    'retry_simple',
+  ]);
+
+  const handleTerminalAction = useCallback((actionId: import('./TerminalReasonChip').TerminalActionId) => {
+    const lastUserMessage = findLastUserMessage();
+    if (CONFIRM_REQUIRED.has(actionId) && lastUserMessage) {
+      setPendingTerminalAction({ actionId, lastUserMessage });
+    } else {
+      runTerminalAction(actionId, lastUserMessage);
+    }
+  }, [findLastUserMessage, runTerminalAction]);
 
   const buildThinkingConfig = useCallback((): { type: string } | undefined => {
     if (!thinkingMode || thinkingMode === 'adaptive') return { type: 'adaptive' };
@@ -426,7 +619,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
   /** Start an API stream for the given content. Does NOT add a user message to the list. */
   const doStartStream = useCallback(
-    (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => {
+    (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => {
       const notices = pendingImageNoticesRef.current.length > 0
         ? [...pendingImageNoticesRef.current]
         : undefined;
@@ -441,10 +634,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         files,
         systemPromptAppend,
         pendingImageNotices: notices,
-        effort: selectedEffort,
+        // 'auto' sentinel means "no explicit effort" — filter it here so
+        // the CLI applies its per-model default (Opus 4.7 → xhigh, etc.)
+        effort: selectedEffort && selectedEffort !== 'auto' ? selectedEffort : undefined,
         thinking: buildThinkingConfig(),
         context1m,
         displayOverride,
+        mentions,
         onModeChanged: (sdkMode) => {
           const uiMode = sdkMode === 'plan' ? 'plan' : 'code';
           handleModeChange(uiMode);
@@ -462,7 +658,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   );
 
   const sendMessage = useCallback(
-    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => {
+    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => {
       const displayUserContent = displayOverride || content;
       let displayContent = displayUserContent;
       if (files && files.length > 0) {
@@ -470,9 +666,25 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
       }
 
+      // Phase 1b safety: if a compress_and_retry is armed, drop it
+      // whenever the user sends ANY new content — including a manual
+      // /compact typed themselves or a "仅压缩" click. Without this, a
+      // retry queued by Action Chip would piggyback on a later
+      // user-initiated /compact's context-compressed event and replay
+      // the old lastUserMessage out of order.
+      //
+      // The retryArmingInProgressRef flag excludes the one
+      // synchronous call the compress_and_retry action itself makes
+      // through this wrapper — that call must NOT clear the state it
+      // just set. runTerminalAction flips the flag on before calling
+      // sendMessageRef and off again right after.
+      if (pendingRetryAfterCompactRef.current && !retryArmingInProgressRef.current) {
+        clearPendingRetry();
+      }
+
       // Queue message if currently streaming — hold above input, send after completion
       if (isStreaming) {
-        setMessageQueue((prev) => [...prev, { content, files, systemPromptAppend, displayOverride }]);
+        setMessageQueue((prev) => [...prev, { content, files, systemPromptAppend, displayOverride, mentions }]);
         return;
       }
 
@@ -485,7 +697,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         token_usage: null,
       };
       cappedSetMessages((prev) => [...prev, userMessage]);
-      doStartStream(content, files, systemPromptAppend, displayOverride);
+      doStartStream(content, files, systemPromptAppend, displayOverride, mentions);
     },
     [sessionId, isStreaming, doStartStream, cappedSetMessages]
   );
@@ -514,7 +726,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         token_usage: null,
       };
       cappedSetMessages((prev) => [...prev, userMessage]);
-      doStartStream(next.content, next.files, next.systemPromptAppend, next.displayOverride);
+      doStartStream(next.content, next.files, next.systemPromptAppend, next.displayOverride, next.mentions);
     }
     if (isStreaming) {
       dequeuingRef.current = false;
@@ -669,6 +881,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         isAssistantProject={isAssistantProject}
         assistantName={assistantName}
       />
+      {/* End-of-turn terminal reason chip (only shown when stream is not active) */}
+      {!isStreaming && (
+        <TerminalReasonChip
+          reason={streamSnapshot?.terminalReason}
+          onAction={handleTerminalAction}
+        />
+      )}
       {/* Permission prompt */}
       <PermissionPrompt
         pendingPermission={pendingPermission}
@@ -677,6 +896,34 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         toolUses={toolUses}
         permissionProfile={permissionProfile}
       />
+      {/* Phase 1b — confirmation dialog for destructive chip actions */}
+      <AlertDialog
+        open={pendingTerminalAction !== null}
+        onOpenChange={(open) => { if (!open) setPendingTerminalAction(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('terminalAction.confirmTitle' as TranslationKey)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingTerminalAction?.actionId === 'compress_and_retry' && t('terminalAction.confirmCompressAndRetry' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'enable_1m_and_retry' && t('terminalAction.confirmEnable1mAndRetry' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'switch_to_sonnet' && t('terminalAction.confirmSwitchToSonnet' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'retry_simple' && t('terminalAction.confirmRetry' as TranslationKey)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('terminalAction.confirmCancel' as TranslationKey)}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => {
+              if (pendingTerminalAction) {
+                runTerminalAction(pendingTerminalAction.actionId, pendingTerminalAction.lastUserMessage);
+                setPendingTerminalAction(null);
+              }
+            }}>
+              {t('terminalAction.confirmCta' as TranslationKey)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {/* Skill nudge banner — shown after complex multi-step workflows */}
       {skillNudge && !isStreaming && (
         <div className="mx-auto w-full max-w-3xl border-t border-border bg-background px-4 py-3">
@@ -741,6 +988,21 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         </div>
       )}
 
+      {/* Phase 2 — subscription rate-limit banner (allowed_warning / rejected) */}
+      {!rateLimitDismissed && streamSnapshot?.rateLimitInfo && streamSnapshot.rateLimitInfo.status !== 'allowed' && (
+        <RateLimitBanner
+          info={streamSnapshot.rateLimitInfo}
+          onRequestSwitchToSonnet={() => {
+            const lastUserMessage = findLastUserMessage();
+            if (lastUserMessage) {
+              setPendingTerminalAction({ actionId: 'switch_to_sonnet', lastUserMessage });
+            } else {
+              setCurrentModel('sonnet');
+            }
+          }}
+          onDismiss={() => setRateLimitDismissed(true)}
+        />
+      )}
       <MessageInput
         key={sessionId}
         onSend={sendMessage}
@@ -778,6 +1040,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
               modelName={currentModel}
               context1m={context1m}
               hasSummary={hasSummary}
+              upstreamModelId={currentModelUpstream}
+              contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
             />
           </div>
         }

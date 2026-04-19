@@ -39,11 +39,26 @@ const zh: Record<TranslationKey, string> = {
   'chatList.showMore': '展开更多（{count} 条）',
   'chatList.showLess': '收起',
 
+  // ── Global search ───────────────────────────────────────────
+  'globalSearch.placeholder': '搜索...（尝试 session: / message: / file:）',
+  'globalSearch.hint': '输入关键词搜索会话和消息',
+  'globalSearch.hintPrefix': '使用前缀',
+  'globalSearch.toNarrowScope': '限定搜索范围',
+  'globalSearch.noResults': '未找到结果',
+  'globalSearch.searching': '搜索中...',
+  'globalSearch.sessions': '会话',
+  'globalSearch.messages': '消息',
+  'globalSearch.files': '文件',
+  'globalSearch.activeScope': '当前搜索范围：{scope}',
+  'globalSearch.toolLabel': '工具',
+
   // ── Message list ────────────────────────────────────────────
   'messageList.claudeChat': 'CodePilot 对话',
   'messageList.emptyDescription': '开始与 CodePilot 对话。提问、获取代码帮助或探索想法。',
   'messageList.loadEarlier': '加载更早的消息',
   'messageList.loading': '加载中...',
+  'messageList.userLabel': '用户',
+  'messageList.assistantLabel': '助手',
 
   // ── Message input ───────────────────────────────────────────
   'messageInput.attachFiles': '附加文件',
@@ -1109,6 +1124,7 @@ const zh: Record<TranslationKey, string> = {
   'composer.slashCommandTooltip': '插入斜杠命令',
   'composer.manageSkills': '管理技能',
   'composer.searchModels': '搜索模型...',
+  'composer.searchFiles': '搜索文件和文件夹...',
   'composer.manageProviders': '管理服务商',
   'composer.designAgent': '设计 Agent',
   'composer.designAgentTooltip': '启用 AI 设计与图片生成',
@@ -1142,10 +1158,60 @@ const zh: Record<TranslationKey, string> = {
 
   // ── SDK Capabilities: Effort ──────────────────────────────
   'messageInput.effort.label': '推理力度',
+  'messageInput.effort.auto': '默认',
   'messageInput.effort.low': '低',
   'messageInput.effort.medium': '中',
   'messageInput.effort.high': '高',
+  'messageInput.effort.xhigh': '极高',
   'messageInput.effort.max': '最大',
+
+  // ── SDK Capabilities: Terminal Reason (Phase 1 of agent-sdk-0-2-111) ──
+  'terminal.completed': '已完成',
+  'terminal.max_turns': '已达到轮数上限',
+  'terminal.prompt_too_long': '上下文已满',
+  'terminal.blocking_limit': '额度已用尽',
+  'terminal.rapid_refill_breaker': '触发频率保护',
+  'terminal.image_error': '图片识别失败',
+  'terminal.model_error': '模型返回错误',
+  'terminal.aborted_streaming': '已取消',
+  'terminal.aborted_tools': '工具执行已取消',
+  'terminal.stop_hook_prevented': 'Stop Hook 阻止了结束',
+  'terminal.hook_stopped': 'Hook 中断本轮',
+  'terminal.tool_deferred': '有工具等待响应',
+  'terminal.unknown': '本轮已结束',
+
+  // ── TerminalReason action buttons (Phase 1b) ──
+  'terminalAction.compressAndRetry': '压缩并重试',
+  'terminalAction.enable1mAndRetry': '开启 1M 并重试',
+  'terminalAction.compressOnly': '仅压缩',
+  'terminalAction.switchToSonnet': '切换到 Sonnet',
+  'terminalAction.continue': '继续',
+  'terminalAction.openHookSettings': '查看 Hook 配置',
+  'terminalAction.retry': '重试',
+  'terminalAction.retryImageUpload': '重新上传',
+  'terminalAction.confirmTitle': '确认操作',
+  'terminalAction.confirmCompressAndRetry': '将压缩对话历史，然后重发上一条消息。如果上一轮已有工具副作用，重发可能会重复执行。',
+  'terminalAction.confirmEnable1mAndRetry': '将开启 1M 上下文，然后重发上一条消息。如果上一轮已有工具副作用，重发可能会重复执行。',
+  'terminalAction.confirmSwitchToSonnet': '将切换到 Sonnet 4.6 并重发上一条消息。如果上一轮已有工具副作用，重发可能会重复执行。',
+  'terminalAction.confirmRetry': '将重发上一条消息。如果上一轮已有工具副作用，重发可能会重复执行。',
+  'terminalAction.confirmCta': '确认',
+  'terminalAction.confirmCancel': '取消',
+
+  // ── Subscription rate limit (Phase 2) ──
+  'rateLimit.warningTitle': '订阅额度预警',
+  'rateLimit.rejectedTitle': '订阅额度已用尽',
+  'rateLimit.utilization': '已用',
+  'rateLimit.resetsIn': '还剩',
+  'rateLimit.switchToSonnet': '切换到 Sonnet',
+  'rateLimit.dismiss': '关闭',
+  'rateLimit.bucket.five_hour': '5 小时窗口',
+  'rateLimit.bucket.seven_day': '7 天窗口',
+  'rateLimit.bucket.seven_day_opus': '7 天 Opus 窗口',
+  'rateLimit.bucket.seven_day_sonnet': '7 天 Sonnet 窗口',
+  'rateLimit.bucket.overage': '超额窗口',
+  'rateLimit.bucket.unknown': '订阅额度',
+  'context.sourceSnapshot': '精确（快照）',
+  'context.sourceResultUsage': '精确（来自上一轮 API 用量）',
 
   // ── SDK Capabilities: Rewind ──────────────────────────────
   'messageList.rewindToHere': '回滚到此处',

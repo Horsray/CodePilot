@@ -63,6 +63,10 @@ interface ElectronAPI {
   shell: {
     openPath: (path: string) => Promise<string>;
   };
+  fs: {
+    /** Resolve a File's absolute filesystem path (via Electron webUtils). Empty string if unavailable. */
+    getPathForFile: (file: File) => string;
+  };
   dialog: {
     openFolder: (options?: {
       defaultPath?: string;

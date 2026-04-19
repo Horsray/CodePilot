@@ -21,6 +21,7 @@ import { emit as emitEvent } from './runtime/event-bus';
 import { createCheckpoint } from './file-checkpoint';
 import type { PermissionMode } from './permission-checker';
 import { buildCoreMessages } from './message-builder';
+import { sanitizeClaudeModelOptions } from './claude-model-options';
 import { getMessages } from './db';
 import { wrapController } from './safe-stream';
 
@@ -55,8 +56,8 @@ export interface AgentLoopOptions {
   mcpServers?: Record<string, import('@/types').MCPServerConfig>;
   /** Thinking configuration (Anthropic-specific) */
   thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
-  /** Effort level (Anthropic-specific) */
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  /** Effort level (Anthropic-specific). Opus 4.7 adds 'xhigh'. */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Enable 1M context beta */
   context1m?: boolean;
   /** Max agent loop steps (default 50) */
@@ -245,9 +246,32 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         while (step < maxSteps) {
           step++;
 
-          // Build provider options (Anthropic-specific)
-          // For third-party proxies: disable adaptive thinking (not widely supported).
-          // Ref: comparative analysis showed proxies return 503 for adaptive/effort params.
+          // Build provider options (Anthropic-specific).
+          // Shared sanitizer applies Opus 4.7 migration guards (manual
+          // thinking → adaptive, skip context-1m beta). Same function is
+          // also called from the Claude Code SDK path in claude-client.ts
+          // so the two runtimes can't drift on 4.7 semantics.
+          //
+          // Third-party proxies still get additional filtering (no adaptive
+          // thinking or effort) — those are proxy compatibility concerns,
+          // not Opus 4.7 migration concerns, so they stay inline here.
+          //
+          // Opus 4.7 effort on the native path (@ai-sdk/anthropic 3.0.70):
+          //   The installed package still attaches `effort-2025-11-24` beta
+          //   header whenever anthropicOpts.effort is set, while Opus 4.7's
+          //   migration checklist says to remove that beta (effort is GA).
+          //   To avoid sending a stale beta header, effort is dropped for
+          //   Opus 4.7 on the native path until the provider emits a clean
+          //   request. SDK/CLI path is unaffected — that codepath handles
+          //   effort natively. Tracked as tech-debt on the adoption plan's
+          //   risk table.
+          const sanitized = sanitizeClaudeModelOptions({
+            model: config.modelId,
+            thinking,
+            effort,
+            context1m,
+          });
+          const isOpus47 = sanitized.isOpus47;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           let providerOptions: any;
           if (config.sdkType === 'anthropic') {
@@ -255,18 +279,62 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
 
             if (isThirdPartyProxy) {
               // Proxies: only pass thinking if explicitly enabled (not adaptive),
-              // skip effort (requires beta header proxies may not support)
-              if (thinking && thinking.type === 'enabled') {
-                anthropicOpts.thinking = thinking;
+              // skip effort (requires beta header proxies may not support).
+              // UI currently still shows Effort selector for these providers
+              // (supportsEffort is a model-level catalog flag, not per
+              // provider-runtime), so an explicit pick silently evaporates.
+              // Surface a one-shot toast on the first step so users know
+              // their Low/High/XHigh/Max choice didn't reach the wire.
+              if (sanitized.thinking && sanitized.thinking.type === 'enabled') {
+                anthropicOpts.thinking = sanitized.thinking;
+              }
+              if (sanitized.effort && step === 1) {
+                console.warn(
+                  `[agent-loop] Third-party Anthropic proxy: dropping explicit effort='${sanitized.effort}' — effort GA beta header may not be supported by proxies. Switch to SDK runtime or the official Anthropic endpoint to control effort.`,
+                );
+                controller.enqueue(formatSSE({
+                  type: 'status',
+                  data: JSON.stringify({
+                    notification: true,
+                    code: 'RUNTIME_EFFORT_IGNORED',
+                    title: 'Effort ignored on this runtime',
+                    message: `Third-party Anthropic proxies may not support the effort parameter — your "${sanitized.effort}" choice wasn't sent. Switch to SDK runtime or an official Anthropic provider to control effort explicitly.`,
+                  }),
+                }));
               }
               // Don't pass effort or adaptive thinking for proxies
             } else {
-              // Official API: pass everything
-              if (thinking) anthropicOpts.thinking = thinking;
-              if (effort) anthropicOpts.effort = effort;
+              // Official API: pass through sanitized thinking.
+              if (sanitized.thinking) {
+                anthropicOpts.thinking = sanitized.thinking;
+              }
+              // Gate effort on Opus 4.7 to avoid the stale effort-2025-11-24
+              // beta header the installed @ai-sdk/anthropic still attaches.
+              // Other models keep the existing effort plumbing.
+              if (sanitized.effort && !isOpus47) {
+                anthropicOpts.effort = sanitized.effort;
+              } else if (sanitized.effort && isOpus47 && step === 1) {
+                // Tell the user the explicit effort they picked is being
+                // dropped for this session. Only emit on the first step so
+                // we don't spam multi-turn conversations. The UI surfaces
+                // this via the status event pipeline; ChatView can treat
+                // code=RUNTIME_EFFORT_IGNORED as a one-shot toast.
+                console.warn(
+                  `[agent-loop] Opus 4.7 on native runtime: dropping explicit effort='${sanitized.effort}' — @ai-sdk/anthropic still attaches deprecated effort-2025-11-24 beta. Switch to SDK runtime for explicit effort control on 4.7.`,
+                );
+                controller.enqueue(formatSSE({
+                  type: 'status',
+                  data: JSON.stringify({
+                    notification: true,
+                    code: 'RUNTIME_EFFORT_IGNORED',
+                    title: 'Effort ignored on this runtime',
+                    message: `Opus 4.7 on the native runtime can't send explicit effort yet (would ship a deprecated beta header). Using API default — switch to SDK runtime to control effort.`,
+                  }),
+                }));
+              }
             }
 
-            if (context1m) {
+            if (sanitized.applyContext1mBeta) {
               anthropicOpts.anthropicBeta = ['context-1m-2025-08-07'];
             }
             if (Object.keys(anthropicOpts).length > 0) {

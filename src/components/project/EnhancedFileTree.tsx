@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
-import { Virtuoso } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   Folder,
   FolderOpen,
@@ -46,6 +46,8 @@ interface EnhancedFileTreeProps {
   workingDirectory: string;
   onFileSelect: (path: string) => void;
   onFileAdd?: (path: string) => void;
+  highlightPath?: string;
+  highlightSeek?: string;
   topSlot?: ReactNode;
 }
 
@@ -172,6 +174,7 @@ interface TreeNodeProps {
   onCopyPath: (path: string) => void;
   onOpenInFinder: (path: string) => void;
   onAddToChat: (path: string) => void;
+  isHighlighted?: boolean;
 }
 
 function TreeNode({
@@ -186,6 +189,7 @@ function TreeNode({
   onCopyPath,
   onOpenInFinder,
   onAddToChat,
+  isHighlighted,
 }: TreeNodeProps) {
   const { node, level, isExpanded } = flatNode;
   const isSelected = selectedPath === node.path;
@@ -210,8 +214,10 @@ function TreeNode({
             className={cn(
               "flex items-center gap-1.5 py-1 pr-2 text-[13px] cursor-pointer select-none",
               "hover:bg-accent/50 transition-colors",
-              isSelected && "bg-accent text-accent-foreground"
+              isSelected && "bg-accent text-accent-foreground",
+              isHighlighted && "file-tree-flash"
             )}
+            id={isHighlighted ? "file-tree-highlight" : undefined}
           >
             {/* 展开/折叠指示器 */}
             {isDirectory && (
@@ -294,7 +300,19 @@ function TreeNode({
   );
 }
 
-export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, topSlot }: EnhancedFileTreeProps) {
+function getParentPaths(filePath: string): string[] {
+  const parents: string[] = [];
+  let current = filePath;
+  while (true) {
+    const parent = current.substring(0, current.lastIndexOf('/'));
+    if (!parent || parent === current) break;
+    parents.push(parent);
+    current = parent;
+  }
+  return parents;
+}
+
+export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, highlightPath, highlightSeek, topSlot }: EnhancedFileTreeProps) {
   const { t } = useTranslation();
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
@@ -303,6 +321,8 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  const seekKeyRef = useRef<string | null>(null);
 
   // 新建文件/文件夹对话框状态
   const [newItemDialog, setNewItemDialog] = useState<{
@@ -384,7 +404,15 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
         setTree(data.tree || []);
         // 加载保存的展开状态，默认所有文件夹都是折叠的
         const savedExpanded = loadExpandedState();
-        setExpanded(savedExpanded);
+        if (highlightPath) {
+          const next = new Set(savedExpanded);
+          for (const parent of getParentPaths(highlightPath)) {
+            next.add(parent);
+          }
+          setExpanded(next);
+        } else {
+          setExpanded(savedExpanded);
+        }
       } else {
         const errData = await res.json().catch(() => ({ error: res.statusText }));
         setTree([]);
@@ -399,7 +427,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
         setLoading(false);
       }
     }
-  }, [workingDirectory, loadExpandedState]);
+  }, [workingDirectory, loadExpandedState, highlightPath]);
 
   useEffect(() => {
     fetchTree();
@@ -472,6 +500,18 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
       return next;
     });
   }, [saveExpandedState]);
+
+  useEffect(() => {
+    if (!highlightPath) return;
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const parent of getParentPaths(highlightPath)) {
+        next.add(parent);
+      }
+      return next;
+    });
+    setSelectedPath(highlightPath);
+  }, [highlightPath, highlightSeek]);
 
   // 选择文件
   const handleSelect = useCallback(
@@ -714,6 +754,22 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
     return flattenNodes(filteredTree);
   }, [tree, searchQuery, expanded]);
 
+  useEffect(() => {
+    if (!workingDirectory || !highlightPath || flatNodes.length === 0) return;
+    const seekTargetKey = `${workingDirectory}::${highlightPath}::${highlightSeek || ''}`;
+    if (seekKeyRef.current === seekTargetKey) return;
+
+    const index = flatNodes.findIndex((item) => item.node.path === highlightPath);
+    if (index < 0) return;
+
+    virtuosoRef.current?.scrollToIndex({
+      index,
+      align: 'center',
+      behavior: 'smooth',
+    });
+    seekKeyRef.current = seekTargetKey;
+  }, [workingDirectory, highlightPath, highlightSeek, flatNodes]);
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
       {/* Header - 标题和工具栏 */}
@@ -791,6 +847,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
           </p>
         ) : (
           <Virtuoso
+            ref={virtuosoRef}
             style={{ height: '100%', width: '100%' }}
             data={flatNodes}
             itemContent={(_index, flatNode) => (
@@ -807,6 +864,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, to
                 onCopyPath={handleCopyPath}
                 onOpenInFinder={handleOpenInFinder}
                 onAddToChat={handleAddToChat}
+                isHighlighted={flatNode.node.path === highlightPath}
               />
             )}
           />

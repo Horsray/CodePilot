@@ -15,6 +15,7 @@ import {
   inferProtocolFromLegacy,
   inferAuthStyleFromLegacy,
   getDefaultModelsForProvider,
+  getEffectiveProviderProtocol,
   findPresetForLegacy,
 } from './provider-catalog';
 import {
@@ -670,9 +671,35 @@ function buildResolution(
     // Env mode uses short aliases (sonnet/opus/haiku) in the UI.
     // Map them to full Anthropic model IDs so toAiSdkConfig can resolve correctly.
     const envModels: CatalogModel[] = [
-      { modelId: 'sonnet', upstreamModelId: 'claude-sonnet-4-20250514', displayName: 'Sonnet 4.6' },
-      { modelId: 'opus', upstreamModelId: 'claude-opus-4-20250514', displayName: 'Opus 4.6' },
-      { modelId: 'haiku', upstreamModelId: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5' },
+      {
+        modelId: 'sonnet',
+        upstreamModelId: 'claude-sonnet-4-20250514',
+        displayName: 'Sonnet 4.6',
+        capabilities: {
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+          supportsAdaptiveThinking: true,
+        },
+      },
+      {
+        modelId: 'opus',
+        upstreamModelId: 'claude-opus-4-7',
+        displayName: 'Opus 4.7',
+        capabilities: {
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          supportsAdaptiveThinking: true,
+        },
+      },
+      {
+        modelId: 'haiku',
+        upstreamModelId: 'claude-haiku-4-5-20251001',
+        displayName: 'Haiku 4.5',
+        capabilities: {
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'medium', 'high'],
+        },
+      },
     ];
 
     // Resolve upstream model from the alias table
@@ -715,7 +742,7 @@ function buildResolution(
   }
 
   // Get available models: DB provider_models take priority, then catalog defaults
-  let availableModels = getDefaultModelsForProvider(protocol, provider.base_url);
+  let availableModels = getDefaultModelsForProvider(protocol, provider.base_url, provider.provider_type);
   try {
     const dbModels = getModelsForProvider(provider.id);
     if (dbModels.length > 0) {
@@ -843,15 +870,17 @@ function buildResolution(
 
 /**
  * Determine protocol from a provider record.
- * Uses the new `protocol` field if present, otherwise infers from legacy fields.
+ * Delegates to the shared getEffectiveProviderProtocol() so raw values that
+ * aren't valid Protocol union members (legacy garbage, future unknown
+ * strings) fall back to legacy inference instead of silently poisoning
+ * downstream capability lookups.
  */
 function inferProtocolFromProvider(provider: ApiProvider): Protocol {
-  // New field takes precedence
-  if (provider.protocol) {
-    return provider.protocol as Protocol;
-  }
-  // Legacy inference
-  return inferProtocolFromLegacy(provider.provider_type, provider.base_url);
+  return getEffectiveProviderProtocol(
+    provider.provider_type,
+    provider.protocol,
+    provider.base_url,
+  );
 }
 
 function inferAuthStyleFromProvider(provider: ApiProvider): AuthStyle {
@@ -1063,7 +1092,11 @@ export function resolveAuxiliaryModel(
       const allProviders = getAllProviders();
       for (const p of allProviders) {
         if (p.id === main.provider.id) continue;
-        const protocol = (p.protocol as Protocol) || inferProtocolFromLegacy(p.provider_type, p.base_url);
+        // Match the main-path resolver: fall back through legacy inference
+        // whenever raw protocol isn't a valid Protocol union member, so a
+        // stray 'random-garbage' row can't silently drive preset / role-model
+        // lookup into a different code path than the main provider got.
+        const protocol = getEffectiveProviderProtocol(p.provider_type, p.protocol, p.base_url);
         const preset = findPresetForLegacy(p.base_url, p.provider_type, protocol);
         others.push({
           id: p.id,

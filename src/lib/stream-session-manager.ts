@@ -21,6 +21,7 @@ import type {
   TokenUsage,
   PermissionRequestEvent,
   FileAttachment,
+  MentionRef,
 } from '@/types';
 
 // ==========================================
@@ -61,6 +62,7 @@ export interface StartStreamParams {
   model: string;
   providerId: string;
   files?: FileAttachment[];
+  mentions?: MentionRef[];
   systemPromptAppend?: string;
   pendingImageNotices?: string[];
   /** When true, backend skips saving user message and title update (assistant auto-trigger) */
@@ -128,6 +130,9 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     error: stream.snapshot.error,
     referencedContexts: stream.snapshot.referencedContexts,
     finalMessageContent: stream.snapshot.finalMessageContent,
+    terminalReason: stream.snapshot.terminalReason,
+    rateLimitInfo: stream.snapshot.rateLimitInfo,
+    contextUsageSnapshot: stream.snapshot.contextUsageSnapshot,
   };
 }
 
@@ -337,6 +342,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         model: params.model,
         provider_id: params.providerId,
         ...(params.files && params.files.length > 0 ? { files: params.files } : {}),
+        ...(params.mentions && params.mentions.length > 0 ? { mentions: params.mentions } : {}),
         ...(params.systemPromptAppend ? { systemPromptAppend: params.systemPromptAppend } : {}),
         ...(params.autoTrigger ? { autoTrigger: true } : {}),
         ...(params.effort ? { effort: params.effort } : {}),
@@ -487,9 +493,23 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           emit(stream, 'snapshot-updated');
         }
       },
-      onResult: (usage) => {
+      onResult: (usage, meta) => {
         markActive();
-        stream.snapshot = { ...stream.snapshot, tokenUsage: usage };
+        stream.snapshot = {
+          ...stream.snapshot,
+          tokenUsage: usage,
+          ...(meta?.terminalReason ? { terminalReason: meta.terminalReason } : {}),
+        };
+      },
+      onRateLimit: (info) => {
+        markActive();
+        stream.snapshot = { ...stream.snapshot, rateLimitInfo: info };
+        emit(stream, 'snapshot-updated');
+      },
+      onContextUsage: (snap) => {
+        markActive();
+        stream.snapshot = { ...stream.snapshot, contextUsageSnapshot: snap };
+        emit(stream, 'snapshot-updated');
       },
       onPermissionRequest: (permData) => {
         markActive();
@@ -912,4 +932,71 @@ export function clearSnapshot(sessionId: string): void {
       finalMessageContent: null,
     };
   }
+}
+
+/**
+ * Seed a snapshot with initial patch for paths that don't go through
+ * startStream() — currently only the first-message flow in
+ * `app/chat/page.tsx`, which hand-parses SSE, creates a session row, and
+ * redirects to /chat/[id]. Without this seed, the snapshot the redirected
+ * ChatView reads is null and first-turn signals (terminal_reason,
+ * rate_limit_info) never reach the chip/banner UI.
+ *
+ * Registers a minimal ActiveStream with phase='completed' if none exists.
+ * If a full stream is already registered (shouldn't normally happen on
+ * first turn), just merges the patch into the existing snapshot.
+ */
+export function seedSnapshotPatch(
+  sessionId: string,
+  patch: Partial<SessionStreamSnapshot>,
+): void {
+  const map = getStreamsMap();
+  const existing = map.get(sessionId);
+  if (existing) {
+    existing.snapshot = { ...existing.snapshot, ...patch };
+    emit(existing, 'snapshot-updated');
+    return;
+  }
+  // Register a placeholder stream. It's not 'active' so the ChatView will
+  // treat it as post-stream state; no subscription wiring needed because
+  // the ChatView that reads it will re-subscribe on mount (its own useEffect).
+  const placeholder: ActiveStream = {
+    sessionId,
+    abortController: new AbortController(),
+    idleCheckTimer: null,
+    lastEventTime: Date.now(),
+    gcTimer: null,
+    pendingTimers: new Set(),
+    accumulatedText: '',
+    activityTextLength: 0,
+    accumulatedThinking: '',
+    fullThinking: '',
+    thinkingPhaseEnded: false,
+    toolUsesArray: [],
+    toolResultsArray: [],
+    toolOutputAccumulated: '',
+    toolTimeoutInfo: null,
+    isIdleTimeout: false,
+    sendMessageFn: null,
+    rewindPoints: [],
+    snapshot: {
+      sessionId,
+      phase: 'completed',
+      streamingContent: '',
+      streamingThinkingContent: '',
+      toolUses: [],
+      toolResults: [],
+      streamingToolOutput: '',
+      statusText: undefined,
+      pendingPermission: null,
+      permissionResolved: null,
+      tokenUsage: null,
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      error: null,
+      finalMessageContent: null,
+      ...patch,
+    },
+  };
+  map.set(sessionId, placeholder);
 }

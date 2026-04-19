@@ -361,6 +361,20 @@ export function PresetConnectDialog({
     e.preventDefault();
     setError(null);
 
+    // Anthropic-protocol presets (any preset that isn't pinned to a vendor
+    // URL) must require an explicit base URL. Empty URL on an anthropic
+    // provider is indistinguishable at resolver time from a legacy Default
+    // migration and would silently proxy to api.anthropic.com with the
+    // first-party catalog (xhigh / Opus 4.7 upstream / 1M window). Mirrored
+    // by server-side validation in /api/providers route; this pre-check is
+    // just for a clearer UX.
+    if (preset.protocol === 'anthropic' && !preset.base_url && !baseUrl.trim()) {
+      setError(isZh
+        ? '请填写 Base URL（官方 API 使用 https://api.anthropic.com）'
+        : 'Please specify a base URL (use https://api.anthropic.com for the official API)');
+      return;
+    }
+
     // If auth style changed in edit mode, require a new key.
     // hasStoredKey is cleared when the user switches away from the stored
     // style (see auth style onValueChange), so checking !apiKey alone is
@@ -823,7 +837,7 @@ export function PresetConnectDialog({
                         <Input
                           value={mapOpus}
                           onChange={(e) => setMapOpus(e.target.value)}
-                          placeholder={preset.key.startsWith("minimax") ? "MiniMax-M2.7" : "claude-opus-4-6"}
+                          placeholder={preset.key.startsWith("minimax") ? "MiniMax-M2.7" : "claude-opus-4-7"}
                           className="text-sm font-mono h-8"
                         />
                         <span className="text-xs text-muted-foreground text-right">{preset.key.startsWith("minimax") ? 'Researcher' : 'Haiku'}</span>

@@ -59,6 +59,12 @@ export interface CatalogModel {
     vision?: boolean;
     pdf?: boolean;
     contextWindow?: number;
+    /** Whether this model supports effort levels (reasoning effort) */
+    supportsEffort?: boolean;
+    /** Allowed effort levels for this model (Opus 4.7 adds 'xhigh') */
+    supportedEffortLevels?: ('low' | 'medium' | 'high' | 'xhigh' | 'max')[];
+    /** Whether this model supports adaptive thinking */
+    supportsAdaptiveThinking?: boolean;
   };
 }
 
@@ -186,10 +192,119 @@ export const PresetSchema = z.object({
 
 // ── Default Anthropic models ────────────────────────────────────
 
+// Shared Anthropic catalog used by non-first-party providers
+// (anthropic-thirdparty, openrouter, ollama, litellm) and the generic
+// protocol fallback. Intentionally alias-only: third-party providers
+// often require their own upstream model names (OpenRouter goes through
+// the OpenAI SDK, LiteLLM expects user-configured names, etc.), and
+// forcing claude-opus-4-7 here would break those pass-through paths.
+// First-party Anthropic has its own catalog below.
 const ANTHROPIC_DEFAULT_MODELS: CatalogModel[] = [
-  { modelId: 'sonnet', displayName: 'Sonnet 4.6', role: 'sonnet' },
-  { modelId: 'opus', displayName: 'Opus 4.6', role: 'opus' },
-  { modelId: 'haiku', displayName: 'Haiku 4.5', role: 'haiku' },
+  {
+    modelId: 'sonnet',
+    displayName: 'Sonnet 4.6',
+    role: 'sonnet',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'opus',
+    displayName: 'Opus',
+    role: 'opus',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'haiku',
+    displayName: 'Haiku 4.5',
+    role: 'haiku',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    },
+  },
+];
+
+// First-party Anthropic API (anthropic-official preset) — pins opus to
+// the explicit upstream ID so resolved.upstreamModel carries a concrete
+// model name downstream. This unblocks the Opus 4.7 sanitizer regex
+// in claude-model-options.ts (which matches upstream IDs, not aliases)
+// and guarantees the native path doesn't forward the bare "opus"
+// alias to @ai-sdk/anthropic.
+const ANTHROPIC_FIRST_PARTY_MODELS: CatalogModel[] = [
+  {
+    modelId: 'sonnet',
+    displayName: 'Sonnet 4.6',
+    role: 'sonnet',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'opus',
+    upstreamModelId: 'claude-opus-4-7',
+    displayName: 'Opus 4.7',
+    role: 'opus',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'haiku',
+    displayName: 'Haiku 4.5',
+    role: 'haiku',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    },
+  },
+];
+
+// Bedrock / Vertex: per Claude Code docs, the `opus` alias still resolves
+// to Opus 4.6 on these platforms (unlike first-party Anthropic). Users who
+// want Opus 4.7 on Bedrock/Vertex must pass the full model name or set
+// ANTHROPIC_DEFAULT_OPUS_MODEL explicitly. We surface this in the label to
+// avoid promising 4.7 capabilities (xhigh) on an alias that actually runs 4.6.
+const BEDROCK_VERTEX_DEFAULT_MODELS: CatalogModel[] = [
+  {
+    modelId: 'sonnet',
+    displayName: 'Sonnet 4.6',
+    role: 'sonnet',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'opus',
+    displayName: 'Opus 4.6 (alias)',
+    role: 'opus',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'haiku',
+    displayName: 'Haiku 4.5',
+    role: 'haiku',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    },
+  },
 ];
 
 // ── Vendor presets ──────────────────────────────────────────────
@@ -205,7 +320,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     authStyle: 'api_key',
     baseUrl: 'https://api.anthropic.com',
     defaultEnvOverrides: {},
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: ANTHROPIC_FIRST_PARTY_MODELS,
     fields: ['api_key'],
     iconKey: 'anthropic',
     meta: {
@@ -586,7 +701,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       AWS_REGION: 'us-east-1',
       CLAUDE_CODE_SKIP_BEDROCK_AUTH: '1',
     },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: BEDROCK_VERTEX_DEFAULT_MODELS,
     fields: ['env_overrides'],
     iconKey: 'bedrock',
     meta: {
@@ -611,7 +726,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLOUD_ML_REGION: 'us-east5',
       CLAUDE_CODE_SKIP_VERTEX_AUTH: '1',
     },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: BEDROCK_VERTEX_DEFAULT_MODELS,
     fields: ['env_overrides'],
     iconKey: 'google',
     meta: {
@@ -767,6 +882,41 @@ export function getPresetsByCategory(category: 'chat' | 'media' = 'chat'): Vendo
   return VENDOR_PRESETS.filter(p => (p.category || 'chat') === category);
 }
 
+/** All valid Protocol union values — used for raw-field validation. */
+export const VALID_PROTOCOLS = new Set<Protocol>([
+  'anthropic',
+  'openai-compatible',
+  'openrouter',
+  'bedrock',
+  'vertex',
+  'google',
+  'gemini-image',
+]);
+
+/** Type guard for raw protocol strings coming from API bodies or legacy DB. */
+export function isValidProtocol(value: unknown): value is Protocol {
+  return typeof value === 'string' && VALID_PROTOCOLS.has(value as Protocol);
+}
+
+/**
+ * Compute the effective protocol for a provider — prefer the raw protocol
+ * field if it's a known Protocol value, otherwise fall back to
+ * inferProtocolFromLegacy(provider_type, base_url). Use this everywhere
+ * a write path, resolver, or diagnostic needs the "real" protocol: raw
+ * provider.protocol can legitimately be '' on legacy rows, and the POST
+ * API can see body.protocol === undefined from older clients.
+ */
+export function getEffectiveProviderProtocol(
+  providerType: string,
+  protocol: string | undefined,
+  baseUrl: string,
+): Protocol {
+  if (protocol && VALID_PROTOCOLS.has(protocol as Protocol)) {
+    return protocol as Protocol;
+  }
+  return inferProtocolFromLegacy(providerType, baseUrl);
+}
+
 /**
  * Infer the protocol from a legacy provider_type.
  * Used during migration from the old system.
@@ -876,11 +1026,18 @@ export function findPresetForLegacy(baseUrl: string, providerType: string, proto
 /**
  * Get the default models for a provider based on its catalog preset.
  * If the provider has a matching preset, returns the preset's defaultModels.
- * Otherwise returns the Anthropic default models.
+ * Otherwise returns a protocol-appropriate fallback catalog.
+ *
+ * @param providerType — legacy provider_type string from DB (e.g. 'anthropic',
+ *   'bedrock'). Used to disambiguate baseUrl='' cases: a legacy
+ *   anthropic-typed provider with an empty baseUrl migrated from older
+ *   settings is treated as the official Anthropic endpoint (first-party
+ *   catalog), not a generic third-party proxy.
  */
 export function getDefaultModelsForProvider(
   protocol: Protocol,
   baseUrl: string,
+  providerType?: string,
 ): CatalogModel[] {
   // Try to find a preset by exact base_url
   const normalizeBaseUrl = (value: string) => value.replace(/\/v1\/?$/i, '').replace(/\/+$/g, '').toLowerCase();
@@ -907,8 +1064,26 @@ export function getDefaultModelsForProvider(
     if (fuzzy) return fuzzy.defaultModels;
   }
 
-  // Protocol-based defaults (only when no preset matched)
-  if (protocol === 'anthropic' || protocol === 'openrouter' || protocol === 'bedrock' || protocol === 'vertex') {
+  // Legacy first-party Anthropic: migrated Default providers have
+  // provider_type='anthropic' with base_url=''. The native runtime
+  // treats them as the official @ai-sdk/anthropic endpoint, so they
+  // must resolve opus to the concrete claude-opus-4-7 upstream (same
+  // as the anthropic-official preset). Without this branch they'd
+  // fall through to the alias-only catalog and bypass the 4.7
+  // sanitizer, 1M context, and xhigh metadata.
+  if (protocol === 'anthropic' && !baseUrl && providerType === 'anthropic') {
+    return ANTHROPIC_FIRST_PARTY_MODELS;
+  }
+
+  // Protocol-based defaults (only when no preset matched).
+  // Bedrock/Vertex get the alias-only catalog with Opus 4.6 labels because
+  // their DB-backed provider has baseUrl='' and the preset match above
+  // never fires. Without this branch, they'd fall through to the shared
+  // Anthropic catalog and mis-resolve opus as first-party Opus 4.7.
+  if (protocol === 'bedrock' || protocol === 'vertex') {
+    return BEDROCK_VERTEX_DEFAULT_MODELS;
+  }
+  if (protocol === 'anthropic' || protocol === 'openrouter') {
     return ANTHROPIC_DEFAULT_MODELS;
   }
 

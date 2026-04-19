@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProvider, updateProvider, deleteProvider, getDefaultProviderId, setDefaultProviderId, getAllProviders } from '@/lib/db';
+import { getEffectiveProviderProtocol, isValidProtocol } from '@/lib/provider-catalog';
 import type { ProviderResponse, ErrorResponse, UpdateProviderRequest, ApiProvider } from '@/types';
 
 interface RouteContext {
@@ -12,6 +13,12 @@ function maskApiKey(provider: ApiProvider): ApiProvider {
     maskedKey = '***' + maskedKey.slice(-8);
   }
   return { ...provider, api_key: maskedKey };
+}
+
+function allowsEmptyBaseUrl(provider: Pick<ApiProvider | UpdateProviderRequest, 'provider_type' | 'name'>): boolean {
+  const providerType = (provider.provider_type || '').trim().toLowerCase();
+  const name = (provider.name || '').trim().toLowerCase();
+  return providerType === 'cc-switch' || name === 'cc switch' || name === 'cc-switch';
 }
 
 export async function GET(_request: NextRequest, context: RouteContext) {
@@ -52,6 +59,50 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     // If api_key starts with ***, the client sent back a masked value — don't update it
     if (body.api_key && body.api_key.startsWith('***')) {
       delete body.api_key;
+    }
+
+    // Reject unknown raw protocol updates (mirrors POST validation).
+    if (body.protocol !== undefined && body.protocol !== '' && !isValidProtocol(body.protocol)) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: `Unknown protocol '${body.protocol}'`,
+          code: 'INVALID_PROTOCOL',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Anthropic-protocol providers must declare a base URL on update.
+    // A PUT that clears base_url on an anthropic provider would regress
+    // to the same ambiguous state as a blank third-party provider
+    // (silently proxies to api.anthropic.com and gets first-party
+    // catalog). The effective protocol after merge is what counts, and
+    // existing.protocol can be '' on legacy rows — inferring from
+    // provider_type + base_url covers that case.
+    const mergedProtocol = body.protocol !== undefined ? body.protocol : existing.protocol;
+    const mergedProviderType = body.provider_type !== undefined ? body.provider_type : existing.provider_type;
+    const mergedBaseUrl = body.base_url !== undefined ? body.base_url : existing.base_url;
+    const effectiveProtocol = getEffectiveProviderProtocol(
+      mergedProviderType ?? '',
+      mergedProtocol,
+      mergedBaseUrl ?? '',
+    );
+    const mergedProviderForValidation = {
+      provider_type: mergedProviderType ?? '',
+      name: body.name !== undefined ? body.name : existing.name,
+    };
+    if (
+      effectiveProtocol === 'anthropic' &&
+      !mergedBaseUrl?.trim() &&
+      !allowsEmptyBaseUrl(mergedProviderForValidation)
+    ) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: 'Anthropic-protocol providers must specify a base URL (use https://api.anthropic.com for the official API, or your third-party endpoint)',
+          code: 'ANTHROPIC_BASE_URL_REQUIRED',
+        },
+        { status: 400 }
+      );
     }
 
     const updated = updateProvider(id, body);

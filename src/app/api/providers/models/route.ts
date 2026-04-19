@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAllProviders, getDefaultProviderId, setDefaultProviderId, getProvider, getModelsForProvider, getSetting } from '@/lib/db';
 import { getContextWindow } from '@/lib/model-context';
-import { getDefaultModelsForProvider, inferProtocolFromLegacy, findPresetForLegacy } from '@/lib/provider-catalog';
+import { getDefaultModelsForProvider, getEffectiveProviderProtocol, findPresetForLegacy } from '@/lib/provider-catalog';
 import type { Protocol } from '@/lib/provider-catalog';
 import type { ErrorResponse, ProviderModelGroup } from '@/types';
 import { getOAuthStatus } from '@/lib/openai-oauth-manager';
@@ -16,12 +16,46 @@ const OPENAI_OAUTH_MODELS = [
   { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark' },
 ];
 
-// Default Claude model options (for the built-in 'env' provider)
+// Default Claude model options (for the built-in 'env' provider).
+// Capability metadata ensures `xhigh` appears in the effort dropdown even
+// before SDK capability discovery populates getCachedModels('env').
+// upstreamModelId mirrors provider-resolver.ts's envModels table so the
+// chat-page context indicator can resolve alias-specific windows
+// (env Opus alias = claude-opus-4-7 = 1M, vs Bedrock/Vertex opus = 200K).
 const DEFAULT_MODELS = [
-  { value: 'sonnet', label: 'Sonnet 4.6' },
-  { value: 'opus', label: 'Opus 4.6' },
-  { value: 'haiku', label: 'Haiku 4.5' },
+  {
+    value: 'sonnet',
+    label: 'Sonnet 4.6',
+    upstreamModelId: 'claude-sonnet-4-20250514',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+    supportsAdaptiveThinking: true,
+  },
+  {
+    value: 'opus',
+    label: 'Opus 4.7',
+    upstreamModelId: 'claude-opus-4-7',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsAdaptiveThinking: true,
+  },
+  {
+    value: 'haiku',
+    label: 'Haiku 4.5',
+    upstreamModelId: 'claude-haiku-4-5-20251001',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high'],
+  },
 ];
+
+// Short alias → upstream ID map for cached SDK models that may only
+// return bare aliases (sonnet/opus/haiku). Mirrors the env provider's
+// alias table in provider-resolver.ts.
+const ENV_ALIAS_TO_UPSTREAM: Record<string, string> = {
+  sonnet: 'claude-sonnet-4-20250514',
+  opus: 'claude-opus-4-7',
+  haiku: 'claude-haiku-4-5-20251001',
+};
 
 interface ModelEntry {
   value: string;
@@ -136,8 +170,10 @@ export async function GET(req: Request) {
         provider_name: 'Claude Code',
         provider_type: 'anthropic',
         ...(!envHasDirectCredentials ? { sdkProxyOnly: true } : {}),
+        // Use upstreamModelId for context-window lookup so the bare `opus`
+        // alias doesn't get clamped to the 200K Bedrock/Vertex value.
         models: DEFAULT_MODELS.map(m => {
-          const cw = getContextWindow(m.value);
+          const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
           return cw != null ? { ...m, contextWindow: cw } : m;
         }),
       });
@@ -151,7 +187,11 @@ export async function GET(req: Request) {
         const sdkModels = getCachedModels('env');
         if (sdkModels.length > 0) {
           envGroup.models = sdkModels.map(m => {
-            const cw = getContextWindow(m.value);
+            // SDK sometimes returns short aliases (e.g. 'opus') — map to
+            // the concrete upstream so context window and downstream
+            // sanitizer checks agree with the env provider's resolver.
+            const upstream = ENV_ALIAS_TO_UPSTREAM[m.value];
+            const cw = getContextWindow(m.value, { upstream });
             return {
               value: m.value,
               label: m.displayName,
@@ -159,6 +199,7 @@ export async function GET(req: Request) {
               supportsEffort: m.supportsEffort,
               supportedEffortLevels: m.supportedEffortLevels,
               supportsAdaptiveThinking: m.supportsAdaptiveThinking,
+              ...(upstream ? { upstreamModelId: upstream } : {}),
               ...(cw != null ? { contextWindow: cw } : {}),
             };
           });
@@ -172,8 +213,11 @@ export async function GET(req: Request) {
     for (const providerRaw of providers) {
       const provider = hydrateCCSwitchProviderForModels(providerRaw);
       // Determine protocol — use new field if present, otherwise infer from legacy
-      const protocol: Protocol = (provider.protocol as Protocol) ||
-        inferProtocolFromLegacy(provider.provider_type, provider.base_url);
+      const protocol: Protocol = getEffectiveProviderProtocol(
+        provider.provider_type,
+        provider.protocol,
+        provider.base_url,
+      );
 
       // Skip media-only providers in chat model selector unless explicitly requested
       if (!includeMedia && (MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type))) continue;
@@ -210,7 +254,7 @@ export async function GET(req: Request) {
       const matchedPreset = findPresetForLegacy(provider.base_url, provider.provider_type, protocol);
       const catalogModels = matchedPreset
         ? matchedPreset.defaultModels
-        : getDefaultModelsForProvider(protocol, provider.base_url);
+        : getDefaultModelsForProvider(protocol, provider.base_url, provider.provider_type);
       const catalogRaw = catalogModels.map(m => ({
         value: m.modelId,
         label: m.displayName,
@@ -253,9 +297,22 @@ export async function GET(req: Request) {
       } catch { /* ignore */ }
 
       const models = deduplicateModels(rawModels).map(m => {
-        const cw = getContextWindow(m.value);
+        // Pass upstream so alias windows resolve per provider:
+        // first-party opus → 1M (Opus 4.7) vs Bedrock/Vertex opus → 200K
+        // (Opus 4.6). The model API is per-provider, so the correct
+        // upstream is whatever catalog declared for this provider group.
+        const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
+        // Lift effort/thinking capability flags from nested `capabilities` to top-level
+        // so MessageInput / EffortSelectorDropdown can read them without unwrapping.
+        const caps = (m.capabilities || {}) as Record<string, unknown>;
+        const effortLift = {
+          ...(caps.supportsEffort != null ? { supportsEffort: caps.supportsEffort as boolean } : {}),
+          ...(caps.supportedEffortLevels != null ? { supportedEffortLevels: caps.supportedEffortLevels as string[] } : {}),
+          ...(caps.supportsAdaptiveThinking != null ? { supportsAdaptiveThinking: caps.supportsAdaptiveThinking as boolean } : {}),
+        };
         return {
           ...m,
+          ...effortLift,
           ...(cw != null ? { contextWindow: cw } : {}),
         };
       });

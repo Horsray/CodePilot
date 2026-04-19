@@ -23,6 +23,20 @@ function resolveStandaloneSymlinks() {
   }
 }
 
+function pruneStandaloneDevArtifacts() {
+  const artifacts = [
+    '.next/standalone/node_modules/electron',
+    '.next/standalone/electron',
+  ];
+
+  for (const artifact of artifacts) {
+    if (fs.existsSync(artifact)) {
+      fs.rmSync(artifact, { recursive: true, force: true });
+      console.log(`Pruned standalone dev artifact: ${artifact}`);
+    }
+  }
+}
+
 async function buildElectron() {
   // Clean dist-electron/ before every build to prevent stale artifacts
   // from leaking into app.asar (caused v0.34 crash on upgrade).
@@ -57,6 +71,7 @@ async function buildElectron() {
 
   // Fix standalone symlinks after next build
   resolveStandaloneSymlinks();
+  pruneStandaloneDevArtifacts();
 }
 
 buildElectron().catch((err) => {

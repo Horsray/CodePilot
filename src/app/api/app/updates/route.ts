@@ -4,6 +4,24 @@ import { selectRecommendedReleaseAsset, type ReleaseAsset } from "@/lib/update-r
 
 const GITHUB_REPO = "op7418/CodePilot";
 
+function noUpdatePayload(currentVersion: string, runtimeInfo: ReturnType<typeof getRuntimeArchitectureInfo>) {
+  return {
+    latestVersion: currentVersion,
+    currentVersion,
+    updateAvailable: false,
+    releaseName: "",
+    releaseNotes: "",
+    publishedAt: "",
+    releaseUrl: "",
+    downloadUrl: "",
+    downloadAssetName: "",
+    detectedPlatform: runtimeInfo.platform,
+    detectedArch: runtimeInfo.processArch,
+    hostArch: runtimeInfo.hostArch,
+    runningUnderRosetta: runtimeInfo.runningUnderRosetta,
+  };
+}
+
 function compareSemver(a: string, b: string): number {
   const pa = a.replace(/^v/, "").split(".").map(Number);
   const pb = b.replace(/^v/, "").split(".").map(Number);
@@ -28,10 +46,7 @@ export async function GET() {
     );
 
     if (!res.ok) {
-      return NextResponse.json(
-        { error: "Failed to fetch release info" },
-        { status: 502 }
-      );
+      return NextResponse.json(noUpdatePayload(currentVersion, runtimeInfo));
     }
 
     const release = await res.json();
@@ -58,9 +73,8 @@ export async function GET() {
       runningUnderRosetta: runtimeInfo.runningUnderRosetta,
     });
   } catch {
-    return NextResponse.json(
-      { error: "Failed to check for updates" },
-      { status: 500 }
-    );
+    const currentVersion = process.env.NEXT_PUBLIC_APP_VERSION || "0.0.0";
+    const runtimeInfo = getRuntimeArchitectureInfo();
+    return NextResponse.json(noUpdatePayload(currentVersion, runtimeInfo));
   }
 }

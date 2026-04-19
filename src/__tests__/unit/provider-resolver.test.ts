@@ -1693,6 +1693,57 @@ describe('resolveAuxiliaryModel (live wrapper)', () => {
     }
   });
 
+  it('[regression] stale invalid protocol in another provider does not crash tier-4 fallback scan', () => {
+    // A DB row with an invalid raw protocol string (e.g. migrated from an
+    // older schema, imported from a broken export, or created before the
+    // write-path validation landed) must not poison the "other providers"
+    // enumeration in resolveAuxiliaryModel. Before the effective-protocol
+    // fix the enum would pass 'random-garbage' straight to
+    // findPresetForLegacy and computeEffectiveRoleModels, producing
+    // inconsistent downstream routing between main and auxiliary paths.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createProvider, deleteProvider } = require('../../lib/db');
+
+    // Main provider — intentionally no small/haiku slots so the resolver
+    // must walk past tier-2/3 and into the tier-4 scan where the broken
+    // provider would be evaluated.
+    const main = createProvider({
+      name: '__test_aux_main_no_small__',
+      provider_type: 'anthropic',
+      base_url: 'https://api.anthropic.com',
+      api_key: 'sk-main',
+      role_models_json: JSON.stringify({ default: 'opus' }),
+    });
+
+    // Broken provider with an unknown protocol string. provider_type is
+    // anthropic so the effective-protocol helper can still infer something
+    // sensible; the broken value just shouldn't propagate.
+    const broken = createProvider({
+      name: '__test_aux_invalid_protocol__',
+      provider_type: 'anthropic',
+      protocol: 'random-garbage',
+      base_url: 'https://api.anthropic.com',
+      api_key: 'sk-broken',
+      role_models_json: JSON.stringify({ default: 'opus', small: 'broken-small' }),
+    });
+
+    try {
+      // Must not throw. We don't pin the exact source because it depends
+      // on DB state from parallel tests — but the call has to survive and
+      // yield a valid routing.
+      const result = resolveAuxiliaryModel('compact', { providerId: main.id });
+      assert.ok(result);
+      assert.ok(
+        ['env_override', 'main_small', 'main_haiku', 'fallback_provider_small',
+         'fallback_provider_haiku', 'main_floor'].includes(result.source),
+        `unexpected source: ${result.source}`,
+      );
+    } finally {
+      deleteProvider(main.id);
+      deleteProvider(broken.id);
+    }
+  });
+
   it('[fix 1 P1] explicit providerId with small slot IS returned as main_small (positive case)', () => {
     // Positive-case companion: the explicit providerId has a small slot,
     // so the result MUST be main_small + that provider's slot. This
