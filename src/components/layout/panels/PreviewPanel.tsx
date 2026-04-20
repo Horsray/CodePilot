@@ -151,8 +151,22 @@ export function PreviewPanel() {
     }
     let cancelled = false;
 
+    // Clear the previous file's preview and flip to loading *synchronously*
+    // before any fetch. Without this, the first render after filePath
+    // changes still carries the old preview.content, and SandpackPreview
+    // (whose React key is filePath) gets mounted for the *new* file using
+    // the *old* content. Even though we remount seconds later with the
+    // correct content, Sandpack's bundler worker / service worker cache
+    // can key the compiled result by the new mount path + old content,
+    // which is exactly the "Counter.tsx shows Hello One" symptom.
+    // Blanking preview forces the <preview ?> branch to fall through to
+    // the loading spinner, so SandpackPreview isn't mounted until we
+    // have the right content for the new filePath.
+    setLoading(true);
+    setPreview(null);
+    setError(null);
+
     async function loadPreview() {
-      setLoading(true);
       setError(null);
       try {
         // maxLines is omitted so the API picks a per-extension cap
