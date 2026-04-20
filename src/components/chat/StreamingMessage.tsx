@@ -665,6 +665,7 @@ export function StreamingMessage({
         .replace(/```image-gen-request[\s\S]*$/, '')
         .replace(/```batch-plan[\s\S]*$/, '')
         .replace(/```show-widget[\s\S]*$/, '')
+        .replace(/```chat-error[\s\S]*$/, '')
         .replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '')
         .trim();
         
@@ -679,6 +680,7 @@ export function StreamingMessage({
       .replace(/```image-gen-request[\s\S]*?```/g, '')
       .replace(/```batch-plan[\s\S]*?```/g, '')
       .replace(/```show-widget[\s\S]*?(```|$)/g, '')
+      .replace(/```chat-error[\s\S]*?(```|$)/g, '')
       .replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '')
       .trim();
 

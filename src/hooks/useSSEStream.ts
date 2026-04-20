@@ -342,44 +342,28 @@ function handleSSEEvent(
     }
 
     case 'error': {
-      // Try to parse structured error JSON from error-classifier
-      let errorDisplay: string;
+      let rawErrorStr = '';
       try {
         const parsed = JSON.parse(event.data);
         if (parsed.category && parsed.userMessage) {
-          // Structured error from classifier
-          errorDisplay = parsed.userMessage;
-          if (parsed.actionHint) {
-            errorDisplay += `\n\n**What to do:** ${parsed.actionHint}`;
-          }
-          if (parsed.details) {
-            errorDisplay += `\n\nDetails: ${parsed.details}`;
-          }
-          // Render recovery actions as markdown links
-          if (parsed.recoveryActions && parsed.recoveryActions.length > 0) {
-            const links: string[] = [];
-            for (const a of parsed.recoveryActions as Array<{ label: string; url?: string; action?: string }>) {
-              if (a.url) {
-                links.push(`[${a.label}](${a.url})`);
-              } else if (a.action === 'open_settings') {
-                links.push(`[${a.label}](/settings#providers)`);
-              } else if (a.action === 'new_conversation') {
-                links.push(`[${a.label}](/chat)`);
-              }
-              // 'retry' is handled by the retryable flag, not as a link
-            }
-            if (links.length > 0) {
-              errorDisplay += '\n\n' + links.join(' · ');
-            }
-          }
+          rawErrorStr = parsed.userMessage;
+          if (parsed.details) rawErrorStr += `\n\nDetails: ${parsed.details}`;
         } else {
-          errorDisplay = event.data;
+          rawErrorStr = event.data;
         }
       } catch {
-        // Plain text error (backward compatible)
-        errorDisplay = event.data;
+        rawErrorStr = event.data;
       }
-      const next = accumulated + '\n\n**Error:** ' + errorDisplay;
+      
+      let explain = '模型服务连接中断或遇到错误';
+      const lowerErr = rawErrorStr.toLowerCase();
+      if (lowerErr.includes('rate') && lowerErr.includes('limit')) explain = '触发了模型提供商的速率限制 (Rate Limit) 或限流，请稍后重试';
+      else if (lowerErr.includes('overloaded') || lowerErr.includes('503') || lowerErr.includes('502') || lowerErr.includes('timeout')) explain = '模型提供商的服务器当前拥堵或响应超时';
+      else if (lowerErr.includes('api_key') || lowerErr.includes('unauthorized') || lowerErr.includes('401')) explain = 'API 密钥无效或未授权';
+      else if (lowerErr.includes('fetch') || lowerErr.includes('network') || lowerErr.includes('econnrefused')) explain = '网络连接失败，请检查网络或系统代理设置';
+      
+      const errPayload = JSON.stringify({ explain, raw: rawErrorStr });
+      const next = accumulated + `\n\n\`\`\`chat-error\n${errPayload}\n\`\`\``;
       callbacks.onError(next);
       return next;
     }

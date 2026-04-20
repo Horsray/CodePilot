@@ -944,6 +944,20 @@ function PinnableWidget({ widgetCode, title }: {
   );
 }
 
+function parseChatError(text: string): { beforeText: string; error: { explain: string; raw: string }; afterText: string } | null {
+  const regex = /```chat-error\s*\n?([\s\S]*?)\n?\s*```/;
+  const match = text.match(regex);
+  if (!match) return null;
+  try {
+    const json = JSON.parse(match[1]);
+    const beforeText = text.slice(0, match.index).trim();
+    const afterText = text.slice((match.index || 0) + match[0].length).trim();
+    return { beforeText, error: json, afterText };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Memoized assistant message content — avoids re-running parseBatchPlan / parseImageGenResult /
  * parseImageGenRequest on every render when only unrelated props change.
@@ -972,6 +986,36 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
           {batchPlanResult.beforeText && <MessageResponse>{batchPlanResult.beforeText}</MessageResponse>}
           <BatchPlanInlinePreview plan={batchPlanResult.plan} messageId={messageId} />
           {batchPlanResult.afterText && <MessageResponse>{batchPlanResult.afterText}</MessageResponse>}
+        </>
+      );
+    }
+
+    const chatErrorResult = parseChatError(displayText);
+    if (chatErrorResult) {
+      const handleRetry = () => {
+        window.dispatchEvent(new CustomEvent('chat-retry', { detail: { messageId } }));
+      };
+      return (
+        <>
+          {chatErrorResult.beforeText && <MessageResponse>{chatErrorResult.beforeText}</MessageResponse>}
+          <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/30 p-3 mt-2 mb-2">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-medium text-status-error-foreground">{chatErrorResult.error.explain}</p>
+                <button
+                  onClick={handleRetry}
+                  className="shrink-0 text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 hover:underline flex items-center gap-1"
+                >
+                  <ArrowsCounterClockwise size={12} />
+                  重新发起请求
+                </button>
+              </div>
+              <div className="text-xs text-muted-foreground bg-black/5 dark:bg-white/5 p-2 rounded max-h-32 overflow-y-auto whitespace-pre-wrap font-mono">
+                {chatErrorResult.error.raw}
+              </div>
+            </div>
+          </div>
+          {chatErrorResult.afterText && <MessageResponse>{chatErrorResult.afterText}</MessageResponse>}
         </>
       );
     }
@@ -1068,6 +1112,7 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
       .replace(/```image-gen-result[\s\S]*?```/g, '')
       .replace(/```batch-plan[\s\S]*?```/g, '')
       .replace(/```show-widget[\s\S]*?(```|$)/g, '')
+      .replace(/```chat-error[\s\S]*?(```|$)/g, '')
       .trim();
     return stripped ? <MessageResponse>{stripped}</MessageResponse> : null;
   }, [displayText, messageId, sessionId]);
