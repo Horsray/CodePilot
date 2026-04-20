@@ -47,6 +47,7 @@
     "@ai-sdk/google-vertex": "^4.0.80",
     "@ai-sdk/openai": "^3.0.34",
     "@anthropic-ai/claude-agent-sdk": "^0.2.111",
+    "@codesandbox/sandpack-react": "^2.20.0",
     "@google/genai": "^1.43.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@lobehub/icons": "^4.6.0",

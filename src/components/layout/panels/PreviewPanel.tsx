@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { useTheme } from "next-themes";
 import { X, Copy, Check, SpinnerGap } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,14 @@ import { usePanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import type { FilePreview as FilePreviewType } from "@/types";
+
+// Sandpack is pulled in lazily via next/dynamic so its ~MB runtime (React
+// bundler + iframe bootstrap) doesn't ship with the first-paint chunk. Only
+// loaded when a .jsx/.tsx file is previewed (or inline-jsx source is set).
+const SandpackPreview = dynamic(
+  () => import("@/components/editor/SandpackPreview").then((m) => m.SandpackPreview),
+  { ssr: false, loading: () => <div className="flex h-full items-center justify-center py-12"><SpinnerGap size={20} className="animate-spin text-muted-foreground" /></div> },
+);
 
 // Lazy-load Streamdown and plugins — only loaded when rendered markdown is needed
 let _StreamdownComponent: typeof import("streamdown").Streamdown | null = null;
@@ -44,7 +53,14 @@ function loadStreamdown(): Promise<void> {
 type ViewMode = "source" | "rendered";
 
 /** Extensions that support a rendered preview */
-const RENDERABLE_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
+const RENDERABLE_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm", ".jsx", ".tsx"]);
+
+/** Extensions rendered through Sandpack (React-in-iframe) */
+const SANDPACK_EXTENSIONS = new Set([".jsx", ".tsx"]);
+
+function isSandpack(filePath: string): boolean {
+  return SANDPACK_EXTENSIONS.has(getExtension(filePath));
+}
 
 /** Media file extensions that get direct preview (no API fetch needed) */
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".avif", ".ico"]);
@@ -246,7 +262,7 @@ export function PreviewPanel() {
         {previewSource?.kind === "inline-html" ? (
           <InlineHtmlView html={previewSource.html} />
         ) : previewSource?.kind === "inline-jsx" ? (
-          <InlinePlaceholder phase="Phase 2.1 (Sandpack)" kind="inline-jsx" />
+          <SandpackPreview content={previewSource.jsx} filePath={previewSource.virtualName} />
         ) : previewSource?.kind === "inline-datatable" ? (
           <InlinePlaceholder phase="Phase 5.4 (DataTable)" kind="inline-datatable" />
         ) : isMedia ? (
@@ -475,6 +491,13 @@ function RenderedView({
         title={t('docPreview.htmlPreview')}
       />
     );
+  }
+
+  // .jsx / .tsx → Sandpack (React in iframe). See POC 0.5 for the s4
+  // default-sandbox security posture and the upgrade path to s2 if
+  // Phase 2.5 demands stricter iframe isolation.
+  if (isSandpack(filePath)) {
+    return <SandpackPreview filePath={filePath} content={content} />;
   }
 
   // Markdown / MDX — wait for Streamdown to load
