@@ -1441,6 +1441,8 @@ export interface ScheduledTask {
   permanent: number;
   group_id?: string;      // 同组任务的唯一标识，用于折叠显示
   group_name?: string;    // 同组任务的统一显示名称
+  active_hours_start?: string;  // 活跃时段开始时间，格式 HH:mm
+  active_hours_end?: string;    // 活跃时段结束时间，格式 HH:mm
   created_at: string;
   updated_at: string;
 }

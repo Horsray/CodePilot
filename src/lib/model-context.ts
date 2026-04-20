@@ -1,15 +1,13 @@
-// Opus 4.7 ships a default 1M context window (no beta header required);
-// Opus 4.6 (claude-opus-4-20250514) still needs context-1m-2025-08-07 to
-// reach 1M. Other 4.x models default to 200K.
+// Opus 4.7 默认提供 1M 上下文窗口（无需 beta 标头）；
+// Opus 4.6（claude-opus-4-20250514）仍需 context-1m-2025-08-07 才能
+// 达到 1M。其他 4.x 模型默认为 200K。
 //
-// The `opus` alias is intentionally left at 200K (Opus 4.6 semantics).
-// Callers that know the resolved upstream model must pass it to
-// getContextWindow via the `upstream` option so first-party sessions
-// (which resolve to claude-opus-4-7) get their 1M window while
-// Bedrock/Vertex sessions (where opus still resolves to 4.6) stay at
-// 200K. This avoids the previous bug where all `opus` lookups were
-// budgeted as 1M, over-estimating Bedrock/Vertex by ~5×.
-export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+// `opus` 别名故意保持为 200K（Opus 4.6 语义）。
+// 知道已解析上游模型的调用者必须通过 `upstream` 选项将其传递给
+// getContextWindow，这样第一方会话（解析为 claude-opus-4-7）获得 1M 窗口，
+// 而 Bedrock/Vertex 会话（其中 opus 仍解析为 4.6）保持为 200K。
+// 这避免了之前所有 `opus` 查找都被预算为 1M 的错误，该错误高估了 Bedrock/Vertex 约 5 倍。
+  export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'sonnet': 200000,
   'opus': 200000,
   'haiku': 200000,
@@ -31,21 +29,21 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'glm-4.7': 169984,
   'minimax-m2.7': 204800,
   'minimax-m2.5': 196608,
+  'qwen3.6-35B-A3B-8bit': 262144,
+  'Step3.5-Flash-mixed-2-8bit': 262144,
+
 };
 
-// Substring fallback keys ordered by length (longest first) so a vendor-
-// prefixed or date-suffixed upstream name (e.g.
-// 'us.anthropic.claude-opus-4-7-v1:0') hits 'claude-opus-4-7' before
-// 'opus'. Without this, insertion order would make the short 'opus' alias
-// (200K) win and strip the real 1M window.
+// 按长度降序排列的子字符串回退键，使带供应商前缀或日期后缀的上游名称
+//（例如 'us.anthropic.claude-opus-4-7-v1:0'）优先匹配 'claude-opus-4-7' 而非 'opus'。
+// 若不如此，插入顺序会让短别名 'opus'（200K）胜出，从而丢失真正的 1M 窗口。
 const CONTEXT_LOOKUP_KEYS_BY_LENGTH = Object.keys(MODEL_CONTEXT_WINDOWS)
   .slice()
   .sort((a, b) => b.length - a.length);
 
 /**
- * Try to resolve a single key via exact match first, then longest-suffix
- * substring. Returns null when neither strategy finds anything so callers
- * can chain with ?? to a different key.
+ * 先尝试精确匹配单个键，然后尝试最长后缀子字符串匹配。
+ * 当两种策略都找不到时返回 null，以便调用者可以用 ?? 链接到不同的键。
  */
 function resolveWindow(key: string): number | null {
   if (!key) return null;

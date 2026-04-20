@@ -6,20 +6,17 @@ export const createMcpActivateTool = (workspacePath: string) => tool({
   parameters: z.object({
     serverName: z.string().describe('The exact name of the MCP server to activate (e.g., "minimax_vision", "github")'),
   }),
-  // @ts-ignore
-  execute: async ({ serverName }) => {
+  execute: async ({ serverName }: { serverName: string }) => {
     try {
-      // @ts-ignore
-      const { loadOnDemandMcpServers } = await import('../mcp-loader');
-      // @ts-ignore
-      const { syncMcpConnections } = await import('../mcp-connection-manager');
+      const mcpLoader = await import('@/lib/mcp-loader');
+      const mcpConnectionManager = await import('@/lib/mcp-connection-manager');
 
-      const newMcps = loadOnDemandMcpServers(workspacePath, new Set([serverName]));
+      const newMcps = mcpLoader.loadOnDemandMcpServers(workspacePath, new Set([serverName]));
       if (!newMcps || Object.keys(newMcps).length === 0) {
         return `Failed to find MCP server configuration for "${serverName}". Please check the exact name from the <available_mcp_servers> list.`;
       }
       
-      await syncMcpConnections(newMcps);
+      await mcpConnectionManager.syncMcpConnections(newMcps);
       return `Successfully activated MCP server "${serverName}". Its tools are now loaded and available in this conversation. You MUST now proceed to use the newly available tools to complete the user's request in the next step.`;
     } catch (e) {
       return `Failed to activate MCP server: ${e instanceof Error ? e.message : String(e)}`;

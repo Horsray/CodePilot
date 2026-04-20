@@ -6,6 +6,24 @@ import { CheckCircle, Circle, ListBullets, SpinnerGap } from "@/components/ui/ic
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TaskItem, TaskStatus } from "@/types";
 
+// 格式化任务完成时间（相对时间）
+function formatCompletedTime(dateStr: string | undefined): string {
+  if (!dateStr) return "未知时间";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "未知时间";
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHr = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHr / 24);
+
+  if (diffMin < 1) return "刚刚";
+  if (diffMin < 60) return `${diffMin} 分钟前`;
+  if (diffHr < 24) return `${diffHr} 小时前`;
+  if (diffDay < 7) return `${diffDay} 天前`;
+  return date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
+}
+
 interface TaskListProps {
   sessionId: string;
 }
@@ -132,15 +150,22 @@ export function TaskList({ sessionId }: TaskListProps) {
             ) : (
               <Circle size={14} className="shrink-0 text-muted-foreground/45" />
             )}
-            <span
-              className={cn(
-                "flex-1 truncate text-xs",
-                isRunning && "font-medium text-foreground/90",
-                isDone && "text-muted-foreground/55 line-through"
+            <div className="flex flex-col min-w-0 flex-1">
+              <span
+                className={cn(
+                  "truncate text-xs",
+                  isRunning && "font-medium text-foreground/90",
+                  isDone && "text-muted-foreground/75 line-through"
+                )}
+              >
+                {task.title}
+              </span>
+              {isDone && (
+                <span className="text-[10px] text-muted-foreground/60">
+                  已完成 {formatCompletedTime(task.updated_at)}
+                </span>
               )}
-            >
-              {task.title}
-            </span>
+            </div>
           </button>
         );
       })}
