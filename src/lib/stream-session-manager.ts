@@ -12,6 +12,7 @@
 
 import { consumeSSEStream } from '@/hooks/useSSEStream';
 import { transferPendingToMessage } from '@/lib/image-ref-store';
+import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
 import type {
   ToolUseInfo,
   ToolResultInfo,
@@ -561,9 +562,10 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     const finalToolResults = stream.toolResultsArray;
     const hasTools = finalToolUses.length > 0 || finalToolResults.length > 0;
 
-    const finalAnswerText = hasTools
+    const rawFinalAnswerText = hasTools
       ? accumulated.slice(stream.activityTextLength).trim()
       : accumulated.trim();
+    const finalAnswerText = stripLeakedTransportContent(rawFinalAnswerText);
     let messageContent = finalAnswerText;
     // Combine all thinking phases for persistence
     const allThinking = [stream.fullThinking, stream.accumulatedThinking]

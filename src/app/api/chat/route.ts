@@ -13,6 +13,7 @@ import { wrapController } from '@/lib/safe-stream';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
 import { predictNativeRuntime } from '@/lib/runtime';
 import { hasCodePilotProvider } from '@/lib/provider-presence';
+import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
@@ -369,9 +370,10 @@ export async function POST(request: NextRequest) {
     // Note: was a lazy `require()` previously; converted to static import after
     // Turbopack's CJS↔ESM interop started returning `{ default: ... }` shape
     // and broke "predictNativeRuntime is not a function" at runtime.
+    const projectCwd = session.sdk_cwd || session.working_directory || process.cwd();
     const mcpServers = predictNativeRuntime(effectiveProviderId)
-      ? loadAllMcpServers()
-      : loadCodePilotMcpServers();
+      ? loadAllMcpServers(projectCwd)
+      : loadCodePilotMcpServers(projectCwd);
 
     // ── Context compression check ───────────────────────────────────
     // Estimate next-turn context size and compress if over threshold.
@@ -844,9 +846,13 @@ async function collectStreamResponse(
       // for backward compatibility with existing message rendering.
       // Strip soft-heartbeat marker from text blocks before persisting (both paths)
       const heartbeatMarkerRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
-      const cleanedBlocks = contentBlocks.map(b =>
-        b.type === 'text' && 'text' in b ? { ...b, text: (b.text as string).replace(heartbeatMarkerRe, '') } : b
-      );
+      const cleanedBlocks = contentBlocks
+        .map(b =>
+          b.type === 'text' && 'text' in b
+            ? { ...b, text: stripLeakedTransportContent((b.text as string).replace(heartbeatMarkerRe, '')) }
+            : b
+        )
+        .filter((b) => b.type !== 'text' || b.text.trim());
 
       // If it contains tool calls or thinking blocks, store as structured JSON.
       const hasStructuredBlocks = cleanedBlocks.some(
@@ -873,6 +879,13 @@ async function collectStreamResponse(
           opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined
         );
         lastSavedAssistantMsgId = savedMsg.id;
+
+        // Restore task completion notification
+        if (!opts?.suppressNotifications && !hasError) {
+          import('@/lib/notification-manager').then(({ enqueueNotification }) => {
+            enqueueNotification('任务完成', '模型回复已就绪', 'normal', true);
+          }).catch(e => console.warn('[chat API] Failed to enqueue completion notification:', e));
+        }
       }
     }
   } catch (e) {
@@ -911,9 +924,13 @@ async function collectStreamResponse(
 
     if (contentBlocks.length > 0) {
       const hbRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
-      const errCleanedBlocks = contentBlocks.map(b =>
-        b.type === 'text' && 'text' in b ? { ...b, text: (b.text as string).replace(hbRe, '') } : b
-      );
+      const errCleanedBlocks = contentBlocks
+        .map(b =>
+          b.type === 'text' && 'text' in b
+            ? { ...b, text: stripLeakedTransportContent((b.text as string).replace(hbRe, '')) }
+            : b
+        )
+        .filter((b) => b.type !== 'text' || b.text.trim());
       const hasStructuredBlocks = errCleanedBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
       );

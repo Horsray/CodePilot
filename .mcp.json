@@ -1,18 +1,6 @@
 {
   "mcpServers": {
-        "WebSearch": {
-            "command": "npx",
-            "args": [
-                "-y",
-                "@modelcontextprotocol/client",
-                "http",
-                "https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/mcp"
-            ],
-            "env": {
-                "AUTHORIZATION": "Bearer sk-7d0135c446e541bb84004b5d50ecc2d6"
-            }
-        },
-        "chrome-devtools": {
+    "chrome-devtools": {
       "type": "stdio",
       "command": "npx",
       "args": [

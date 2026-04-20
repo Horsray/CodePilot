@@ -810,7 +810,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
       </div>
 
       {topSlot ? (
-        <div className="border-b border-border/40 px-3 py-2 shrink-0">
+        <div className="border-b border-border/40 px-2.5 py-2.5 shrink-0">
           {topSlot}
         </div>
       ) : null}

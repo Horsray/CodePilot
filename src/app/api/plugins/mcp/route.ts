@@ -48,11 +48,25 @@ export async function GET(): Promise<NextResponse<MCPConfigResponse | ErrorRespo
     const settingsServers = (settings.mcpServers || {}) as Record<string, MCPServerConfig>;
     const userConfigServers = (userConfig.mcpServers || {}) as Record<string, MCPServerConfig>;
 
-    // Also read project-level .mcp.json so the UI can display and toggle project servers
-    const projectMcp = readJsonFile(path.join(process.cwd(), '.mcp.json'));
-    const projectServers = (projectMcp.mcpServers || {}) as Record<string, MCPServerConfig>;
+    // Also read project-level .mcp.json and claude.json so the UI can display and toggle project servers
+    const cwd = process.cwd(); // Assuming UI operates in global scope or defaults to process.cwd
+    const projectMcp = readJsonFile(path.join(cwd, '.mcp.json'));
+    const projectClaudeMcp = readJsonFile(path.join(cwd, 'claude.json'));
+    
+    const projectServers = {
+      ...((projectMcp.mcpServers || {}) as Record<string, MCPServerConfig>),
+      ...((projectClaudeMcp.mcpServers || {}) as Record<string, MCPServerConfig>),
+    };
 
-    // Merge: settings.json > claude.json > project .mcp.json
+    // Extract Claude CLI's per-project mcpServers from ~/.claude.json's "projects" block
+    if (userConfig.projects && typeof userConfig.projects === 'object') {
+      const projConfig = (userConfig.projects as Record<string, any>)[cwd];
+      if (projConfig && projConfig.mcpServers) {
+        Object.assign(projectServers, projConfig.mcpServers);
+      }
+    }
+
+    // Merge: settings.json > claude.json > project files
     // Tag each server with _source so UI knows where it came from
     const mcpServers: Record<string, MCPServerConfig & { _source?: string }> = {};
     for (const [name, server] of Object.entries(projectServers)) {

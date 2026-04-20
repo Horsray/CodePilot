@@ -231,7 +231,7 @@ describe('System prompt builder', () => {
   it('includes base prompt', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
     const result = buildSystemPrompt();
-    assert.ok(result.prompt.includes('CodePilot'));
+    assert.ok(result.prompt.includes('HueyingAgent'));
   });
 
   it('includes working directory', async () => {

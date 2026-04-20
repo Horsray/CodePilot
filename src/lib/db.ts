@@ -3014,6 +3014,23 @@ export function insertTaskRunLog(log: { task_id: string; status: string; result?
   );
 }
 
+export interface TaskRunLog {
+  id: string;
+  task_id: string;
+  status: string;
+  result?: string;
+  error?: string;
+  duration_ms?: number;
+  created_at: string;
+}
+
+export function getTaskRunLogs(taskId: string, limit = 20): TaskRunLog[] {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM task_run_logs WHERE task_id = ? ORDER BY created_at DESC LIMIT ?'
+  ).all(taskId, limit) as TaskRunLog[];
+}
+
 export function deleteScheduledTask(id: string): boolean {
   const db = getDb();
   const result = db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);

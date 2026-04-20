@@ -826,6 +826,18 @@ export function PresetConnectDialog({
                               : 'Map model names if the provider uses different IDs (e.g. claude-sonnet-4-6). Leave empty to use defaults (sonnet / opus / haiku).')}
                       </p>
                       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 items-center">
+                        {/* oLMX: 默认模型 ANTHROPIC_MODEL */}
+                        {preset.key === 'olmx' && (
+                          <>
+                            <span className="text-xs text-muted-foreground text-right">默认模型</span>
+                            <Input
+                              value={modelName}
+                              onChange={(e) => setModelName(e.target.value)}
+                              placeholder="Qwen3.6-35B-A3B-8bit"
+                              className="text-sm font-mono h-8"
+                            />
+                          </>
+                        )}
                         <span className="text-xs text-muted-foreground text-right">{preset.key.startsWith("minimax") ? 'Executor' : 'Sonnet'}</span>
                         <Input
                           value={mapSonnet}

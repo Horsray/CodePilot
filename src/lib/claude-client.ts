@@ -28,6 +28,7 @@ import { sanitizeClaudeModelOptions } from './claude-model-options';
 import { findClaudeBinary, invalidateClaudePathCache } from './platform';
 import { notifyPermissionRequest, notifyGeneric } from './telegram-bot';
 import { classifyError, formatClassifiedError } from './error-classifier';
+import { recordFileModification } from './file-checkpoint';
 import { resolveWorkingDirectory } from './working-directory';
 import { wrapController } from './safe-stream';
 import { type ShadowHome } from './claude-home-shadow';
@@ -89,6 +90,7 @@ function sanitizeEnv(env: Record<string, string>): Record<string, string> {
 function selectOnDemandMcpServerNames(
   prompt: string,
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>,
+  projectCwd?: string,
 ): Set<string> {
   const recentHistory = conversationHistory
     ?.slice(-6)
@@ -99,6 +101,23 @@ function selectOnDemandMcpServerNames(
   const add = (...names: string[]) => {
     for (const name of names) selected.add(name);
   };
+
+  // Auto-detect any configured custom MCP server mentioned in the text
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { loadAllMcpServers } = require('@/lib/mcp-loader');
+    const allServers = loadAllMcpServers(projectCwd);
+    if (allServers) {
+      const lowerText = text.toLowerCase();
+      for (const name of Object.keys(allServers)) {
+        if (lowerText.includes(name.toLowerCase())) {
+          add(name);
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore dynamic load errors
+  }
 
   if (/\bhttps?:\/\/|\burl\b|fetch|web\s*fetch|读取.*网页|打开.*网页|网页内容|网址/i.test(text)) {
     add('fetch');
@@ -786,7 +805,7 @@ if (claudePath) {
           queryOptions.mcpServers = toSdkMcpConfig(mcpServers);
         }
 
-        const onDemandMcpNames = selectOnDemandMcpServerNames(prompt, conversationHistory);
+        const onDemandMcpNames = selectOnDemandMcpServerNames(prompt, conversationHistory, resolvedWorkingDirectory.path);
         if (onDemandMcpNames.size > 0) {
           const { loadOnDemandMcpServers } = await import('@/lib/mcp-loader');
           const onDemandMcps = loadOnDemandMcpServers(resolvedWorkingDirectory.path, onDemandMcpNames);
@@ -1004,6 +1023,16 @@ if (claudePath) {
           providerKey,
           options: queryOptions,
         });
+
+        // If we are starting a fresh session (!shouldResume) but a persistent session
+        // exists for this ID, we MUST close the old one to avoid exponential history
+        // explosion (sending the full history as a single prompt to a session that
+        // already has the history).
+        if (!shouldResume && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+          console.log(`[claude-client] Closing stale persistent session ${sessionId} before starting fresh`);
+          closePersistentClaudeSession(sessionId);
+        }
+
         const willReusePersistentSession = canReusePersistentClaudeSession(sessionId, persistentSignature);
         const shouldPassResume = shouldResume && !willReusePersistentSession;
 
@@ -1435,6 +1464,8 @@ if (claudePath) {
         let tokenUsage: TokenUsage | null = null;
         // Track pending TodoWrite tool_use_ids so we can sync after successful execution
         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
+        // Track pending file modifications so we can record checkpoints
+        const pendingFileModifications = new Map<string, string>();
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
             if (usingPersistentSession) {
@@ -1480,6 +1511,31 @@ if (claudePath) {
                       }
                     } catch (e) {
                       console.warn('[claude-client] Failed to parse TodoWrite input:', e);
+                    }
+                  }
+
+                  // Track file modifications for checkpointing (review feature)
+                  const fileToolNames = ['EditFile', 'WriteFile', 'Edit', 'Write', 'Replace', 'str_replace_editor'];
+                  if (fileToolNames.includes(block.name)) {
+                    try {
+                      const toolInput = block.input as { file_path?: string; path?: string };
+                      const filePath = toolInput?.file_path || toolInput?.path;
+                      if (filePath) {
+                        pendingFileModifications.set(block.id, filePath);
+                        // Record original file state IMMEDIATELY before the CLI executes the tool
+                        if (enableFileCheckpointing && resolvedWorkingDirectory.path) {
+                          try {
+                            const relativePath = filePath.startsWith(resolvedWorkingDirectory.path)
+                              ? filePath.slice(resolvedWorkingDirectory.path.length).replace(/^[/\\]/, '')
+                              : filePath;
+                            recordFileModification(sessionId, relativePath, resolvedWorkingDirectory.path);
+                          } catch (e) {
+                            console.warn('[claude-client] Failed to record file modification:', e);
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      console.warn('[claude-client] Failed to parse file modification input:', e);
                     }
                   }
                 }
@@ -1574,6 +1630,11 @@ if (claudePath) {
                           })),
                         }),
                       }));
+                    }
+
+                    // Clear pending modification since it completed
+                    if (!block.is_error && pendingFileModifications.has(block.tool_use_id)) {
+                      pendingFileModifications.delete(block.tool_use_id);
                     }
                   }
                 }

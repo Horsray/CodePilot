@@ -57,10 +57,11 @@ export {
   Layout,
   Lightning,
   List,
-  ListMagnifyingGlass,
+  ListBullets,
   Lock,
   LockOpen,
   MagnifyingGlass,
+  ListMagnifyingGlass,
   Minus,
   Moon,
   NotePencil,
@@ -84,6 +85,7 @@ export {
   TelegramLogo,
   Terminal,
   Trash,
+  Timer,
   TreeStructure,
   UploadSimple,
   UserCircle,
@@ -103,9 +105,11 @@ export {
   // FileDiff not available in this version of phosphor-icons
   Robot,
   DeviceMobile,
-  ListBullets,
   Database,
-  ChartLineUp
+  ChartLineUp,
+  BellSimple,
+  Calendar,
+  Pause
 } from "@phosphor-icons/react";
 
 export type { Icon, IconProps } from "@phosphor-icons/react";

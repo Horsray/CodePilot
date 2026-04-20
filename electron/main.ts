@@ -679,7 +679,11 @@ function startServer(port: number): Electron.UtilityProcess {
     // Ensure user shell env vars override (especially API keys)
     ...userShellEnv,
     // Inject system proxy (only if not already set in shell env)
-    ...(!userShellEnv.HTTP_PROXY && !userShellEnv.HTTPS_PROXY ? resolvedProxyEnv : {}),
+  ...(!userShellEnv.HTTP_PROXY && !userShellEnv.HTTPS_PROXY ? {
+    ...resolvedProxyEnv,
+    // Add common domestic AI API domains to NO_PROXY to prevent bun/proxy hangs
+    NO_PROXY: userShellEnv.NO_PROXY || process.env.NO_PROXY || 'localhost,127.0.0.1,::1,.aliyuncs.com,.aliyun.com,.deepseek.com,.bigmodel.cn,.volces.com,.baidubce.com,.tencentcloudapi.com,.moonshot.cn,.siliconflow.cn',
+  } : {}),
     PORT: String(port),
     HOSTNAME: '127.0.0.1',
     CLAUDE_GUI_DATA_DIR: path.join(home, '.codepilot'),

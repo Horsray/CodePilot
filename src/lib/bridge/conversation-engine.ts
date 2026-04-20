@@ -75,10 +75,25 @@ export interface ConversationResult {
  * Returns the first existing directory, or HOME as last resort.
  */
 function resolveWorkingDirectory(...candidates: (string | undefined | null)[]): string {
+  const safeFallback = path.join(os.homedir(), '.codepilot', 'bridge-workspace');
+
   for (const dir of candidates) {
-    if (dir && fs.existsSync(dir)) return dir;
+    if (dir && fs.existsSync(dir)) {
+      // DANGER: Never allow the bare home directory to be used as a workspace
+      // for bridge sessions, as it triggers massive filesystem scans and freezes.
+      if (dir === os.homedir()) {
+        console.warn(`[conversation-engine] Refusing to bind to raw home directory: ${dir}. Using safe fallback.`);
+        continue;
+      }
+      return dir;
+    }
   }
-  return os.homedir();
+
+  // Fallback to a safe empty directory to prevent native runtime from scanning massive home dirs
+  if (!fs.existsSync(safeFallback)) {
+    fs.mkdirSync(safeFallback, { recursive: true });
+  }
+  return safeFallback;
 }
 
 /**
@@ -213,12 +228,19 @@ export async function processMessage(
       }
     }
 
+    // Resolve a valid working directory from multiple candidates
+    const effectiveCwd = resolveWorkingDirectory(
+      binding.workingDirectory,
+      session?.working_directory,
+      getSetting('bridge_default_work_dir'),
+    );
+
     // Load MCP servers using shared runtime prediction (same logic as chat route).
     // Was lazy `require('../runtime')`; converted to static import — Turbopack's
     // CJS↔ESM interop returns `{ default: ... }` shape that broke destructuring.
     const mcpServers = predictNativeRuntime(effectiveProviderId)
-      ? loadAllMcpServers()
-      : loadCodePilotMcpServers();
+      ? loadAllMcpServers(effectiveCwd)
+      : loadCodePilotMcpServers(effectiveCwd);
 
     // Unified context assembly — adds CLI tools context (and workspace prompt if applicable)
     const assembled = await assembleContext({
@@ -227,13 +249,6 @@ export async function processMessage(
       userPrompt: text,
       conversationHistory: historyMsgs,
     });
-
-    // Resolve a valid working directory from multiple candidates
-    const effectiveCwd = resolveWorkingDirectory(
-      binding.workingDirectory,
-      session?.working_directory,
-      getSetting('bridge_default_work_dir'),
-    );
 
     // If the effective cwd differs from what the binding/session had, the
     // original directory is gone — clear sdkSessionId to prevent stale resume.

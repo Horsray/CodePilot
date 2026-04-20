@@ -46,6 +46,10 @@ export function useContextUsage(
   options?: {
     context1m?: boolean;
     hasSummary?: boolean;
+    /** Explicit provider/catalog context window. Prefer this over the
+     *  hardcoded alias table when the selected model already carries
+     *  authoritative metadata. */
+    contextWindow?: number;
     /** Resolved upstream model ID from the catalog (e.g. 'claude-opus-4-7').
      *  Required for aliases whose window depends on provider (first-party
      *  opus = 1M, Bedrock/Vertex opus = 200K). */
@@ -63,10 +67,18 @@ export function useContextUsage(
   },
 ): ContextUsageData {
   return useMemo(() => {
-    const contextWindow = getContextWindow(modelName, {
-      context1m: options?.context1m,
+    const explicitContextWindow =
+      typeof options?.contextWindow === 'number' &&
+      Number.isFinite(options.contextWindow) &&
+      options.contextWindow > 0
+        ? options.contextWindow
+        : undefined;
+    const baseContextWindow = explicitContextWindow ?? getContextWindow(modelName, {
       upstream: options?.upstreamModelId,
     });
+    const contextWindow = baseContextWindow != null && options?.context1m
+      ? 1_000_000
+      : baseContextWindow;
 
     // Phase 5 — prefer a fresh SDK snapshot over the char:token estimator.
     // Freshness window matches the plan (60s). Beyond that, the estimator
@@ -168,5 +180,5 @@ export function useContextUsage(
     }
 
     return noData;
-  }, [messages, modelName, options?.context1m, options?.hasSummary, options?.upstreamModelId, options?.snapshot]);
+  }, [messages, modelName, options?.context1m, options?.hasSummary, options?.contextWindow, options?.upstreamModelId, options?.snapshot]);
 }

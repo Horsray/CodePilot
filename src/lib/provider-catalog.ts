@@ -81,6 +81,16 @@ export interface RoleModels {
   opus?: string;
 }
 
+const MODEL_CONTEXT = {
+  QWEN_1M: 1_000_000,
+  QWEN_CODER_NEXT: 262_144,
+  KIMI_K2_5: 262_144,
+  GLM_5: 202_752,
+  GLM_4_7: 169_984,
+  MINIMAX_M2_7: 204_800,
+  MINIMAX_M2_5: 196_608,
+} as const;
+
 // ── Vendor preset definition ────────────────────────────────────
 
 export interface VendorPreset {
@@ -428,7 +438,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://api.kimi.com/coding/',
     defaultEnvOverrides: { ENABLE_TOOL_SEARCH: 'false' },
     defaultModels: [
-      { modelId: 'sonnet', displayName: 'Kimi K2.5', role: 'default' },
+      { modelId: 'sonnet', displayName: 'Kimi K2.5', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.KIMI_K2_5 } },
     ],
     fields: ['api_key'],
     iconKey: 'kimi',
@@ -452,7 +462,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://api.moonshot.cn/anthropic',
     defaultEnvOverrides: { ENABLE_TOOL_SEARCH: 'false' },
     defaultModels: [
-      { modelId: 'sonnet', displayName: 'Kimi K2.5', role: 'default' },
+      { modelId: 'sonnet', displayName: 'Kimi K2.5', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.KIMI_K2_5 } },
     ],
     fields: ['api_key'],
     iconKey: 'moonshot',
@@ -479,7 +489,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      { modelId: 'MiniMax-M2.7', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      { modelId: 'MiniMax-M2.7', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.MINIMAX_M2_7 } },
     ],
     defaultRoleModels: {
       default: 'MiniMax-M2.7',
@@ -511,7 +521,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      { modelId: 'MiniMax-M2.7', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      { modelId: 'MiniMax-M2.7', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.MINIMAX_M2_7 } },
     ],
     defaultRoleModels: {
       default: 'MiniMax-M2.7',
@@ -785,13 +795,29 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     description: 'oLMX — run local Anthropic-compatible models',
     descriptionZh: 'oLMX — 本地运行 Anthropic 兼容模型',
     protocol: 'anthropic',
-    authStyle: 'api_key',
+    authStyle: 'auth_token',
     baseUrl: 'http://127.0.0.1:8000',
-    defaultEnvOverrides: {},
-    defaultModels: [
-      { modelId: 'Qwen3.5-35B-A3B-8bit', displayName: 'Qwen 3.5 35B' },
-    ],
-    fields: ['name', 'api_key', 'base_url', 'model_names'],
+    defaultEnvOverrides: {
+      API_TIMEOUT_MS: '3000000',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:8000',
+      ANTHROPIC_AUTH_TOKEN: '',        // 用户填入
+      ANTHROPIC_MODEL: '',             // 默认模型（非角色映射）
+      ANTHROPIC_DEFAULT_OPUS_MODEL: '',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: '',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: '',
+      ANTHROPIC_REASONING_MODEL: '',
+      ENABLE_TOOL_SEARCH: 'true',
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+    },
+    defaultModels: [],
+    defaultRoleModels: {
+      default: '',
+      sonnet: '',
+      opus: '',
+      haiku: '',
+    },
+    fields: ['api_key', 'base_url', 'model_mapping', 'env_overrides'],
     iconKey: 'server',
     meta: {
       billingModel: 'self_hosted',

@@ -25,6 +25,12 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'qwen3-coder-plus-2025-09-23': 1000000,
   'qwen3-coder-plus-2025-07-22': 1000000,
   'qwen3-coder-next': 262144,
+  'qwen3.5-flash': 1000000,
+  'kimi-k2.5': 262144,
+  'glm-5': 202752,
+  'glm-4.7': 169984,
+  'minimax-m2.7': 204800,
+  'minimax-m2.5': 196608,
 };
 
 // Substring fallback keys ordered by length (longest first) so a vendor-

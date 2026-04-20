@@ -15,8 +15,8 @@ describe('Preset Schema Validation', () => {
         }
       });
 
-      it('has at least one default model (or is volcengine/ollama/cc-switch)', () => {
-        if (preset.key === 'volcengine' || preset.key === 'ollama' || preset.key === 'cc-switch') return;
+      it('has at least one default model (or is volcengine/ollama/cc-switch/olmx)', () => {
+        if (preset.key === 'volcengine' || preset.key === 'ollama' || preset.key === 'cc-switch' || preset.key === 'olmx') return;
         assert.ok(preset.defaultModels.length > 0, `Preset ${preset.key} expected at least one default model`);
       });
 

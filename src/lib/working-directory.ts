@@ -1,5 +1,6 @@
 import fs from 'fs';
 import os from 'os';
+import path from 'path';
 
 export type WorkingDirectorySource =
   | 'requested'
@@ -46,6 +47,14 @@ export function resolveWorkingDirectory(
     if (!value) continue;
 
     if (isExistingDirectory(value)) {
+      // DANGER: Never allow the bare home directory to be used as a workspace
+      // for bridge/mobile sessions or any fallback, as it triggers massive filesystem scans and freezes.
+      if (value === os.homedir()) {
+        console.warn(`[working-directory] Refusing to use bare home directory from source '${candidate.source}' to prevent lockups. Skipping.`);
+        invalidCandidates.push({ source: candidate.source, path: value });
+        continue;
+      }
+
       return {
         path: value,
         source: candidate.source,
@@ -56,10 +65,15 @@ export function resolveWorkingDirectory(
     invalidCandidates.push({ source: candidate.source, path: value });
   }
 
-  const homeDir = os.homedir();
-  if (isExistingDirectory(homeDir)) {
+  // Fallback to a safe empty directory to prevent native runtime from scanning massive home dirs
+  const safeFallback = path.join(os.homedir(), '.codepilot', 'bridge-workspace');
+  if (!fs.existsSync(safeFallback)) {
+    fs.mkdirSync(safeFallback, { recursive: true });
+  }
+
+  if (isExistingDirectory(safeFallback)) {
     return {
-      path: homeDir,
+      path: safeFallback,
       source: 'home',
       invalidCandidates,
     };

@@ -47,10 +47,10 @@ interface FeishuRawMessage {
 interface FeishuRawEvent {
   event?: {
     message?: FeishuRawMessage;
-    sender?: { sender_id?: { open_id?: string } };
+    sender?: { sender_id?: { open_id?: string }, sender_type?: string };
   };
   message?: FeishuRawMessage;
-  sender?: { sender_id?: { open_id?: string } };
+  sender?: { sender_id?: { open_id?: string }, sender_type?: string };
 }
 
 /** Find the bot's mention entry in the mentions array, if any. */
@@ -77,7 +77,13 @@ export function parseInboundMessage(
     const chatId = message.chat_id || '';
     const messageId = message.message_id || '';
     const sender = event.sender?.sender_id?.open_id || '';
+    const senderType = event.sender?.sender_type || '';
     const msgType = message.message_type;
+
+    // Prevent infinite loops by ignoring messages sent by apps (including ourselves or other bots)
+    if (senderType === 'app') {
+      return null;
+    }
 
     // Group chats start with "oc_"; DMs use a different prefix.
     const isGroupChat = chatId.startsWith('oc_');

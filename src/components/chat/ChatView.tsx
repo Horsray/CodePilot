@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef } from '@/types';
+import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup } from '@/types';
 import { MessageList } from './MessageList';
 import { TerminalReasonChip } from './TerminalReasonChip';
 import { RateLimitBanner } from './RateLimitBanner';
@@ -106,7 +106,36 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         const dbMessages: Message[] = data.messages;
         setMessages(current => {
           const localCommands = current.filter(m => m.id.startsWith('cmd-'));
-          if (localCommands.length === 0) return dbMessages;
+          const realMessages = current.filter(m => !m.id.startsWith('cmd-'));
+          
+          if (realMessages.length === 0) {
+            return localCommands.length === 0 ? dbMessages : [...dbMessages, ...localCommands];
+          }
+
+          // Check if we can safely merge by finding where dbMessages starts within current
+          const firstDbMessage = dbMessages[0];
+          if (firstDbMessage) {
+            const overlapIdx = current.findIndex(m => m.id === firstDbMessage.id);
+            if (overlapIdx !== -1) {
+              // Replace everything from overlapIdx onwards with the fresh dbMessages, 
+              // preserving local commands at the very end
+              const base = current.slice(0, overlapIdx);
+              const merged = [...base, ...dbMessages, ...localCommands];
+              
+              // Optimization: Check if the merged array is actually different from current
+              // to avoid unnecessary React re-renders
+              const isDifferent = merged.length !== current.length || 
+                merged.some((m, i) => m.id !== current[i]?.id || m.content !== current[i]?.content);
+                
+              if (!isDifferent) return current;
+
+              return merged.length > MAX_MESSAGES_IN_MEMORY
+                ? merged.slice(-MAX_MESSAGES_IN_MEMORY)
+                : merged;
+            }
+          }
+
+          // If there's a huge gap or no overlap (e.g. tail was trimmed), replace entirely
           const merged = [...dbMessages, ...localCommands];
           return merged.length > MAX_MESSAGES_IN_MEMORY
             ? merged.slice(-MAX_MESSAGES_IN_MEMORY)
@@ -154,11 +183,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     return () => controller.abort();
   }, [currentProviderId]);
 
-  // Resolve upstream model ID for the current model/provider so the context
-  // indicator can disambiguate alias windows (first-party opus = 1M vs
-  // Bedrock/Vertex opus = 200K). /api/providers/models already returns
-  // upstreamModelId per model on the returned groups.
-  const [currentModelUpstream, setCurrentModelUpstream] = useState<string | undefined>(undefined);
+  // Resolve model metadata for the current model/provider. The context
+  // indicator uses contextWindow when the provider declares it, and falls
+  // back to upstreamModelId for alias disambiguation.
+  const [currentModelMeta, setCurrentModelMeta] = useState<{
+    upstreamModelId?: string;
+    contextWindow?: number;
+  }>({});
   useEffect(() => {
     const pid = currentProviderId || 'env';
     const controller = new AbortController();
@@ -166,9 +197,12 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (controller.signal.aborted) return;
-        const group = data?.groups?.find((g: { provider_id: string }) => g.provider_id === pid);
-        const model = group?.models?.find((m: { value: string }) => m.value === currentModel);
-        setCurrentModelUpstream(model?.upstreamModelId);
+        const group = (data?.groups as ProviderModelGroup[] | undefined)?.find(g => g.provider_id === pid);
+        const model = group?.models?.find(m => m.value === currentModel);
+        setCurrentModelMeta({
+          upstreamModelId: model?.upstreamModelId,
+          contextWindow: model?.contextWindow,
+        });
       })
       .catch(() => {});
     return () => controller.abort();
@@ -844,6 +878,19 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     return () => window.removeEventListener('image-gen-completed', handler);
   }, [sessionId]);
 
+  // ── Mobile Bridge Real-time Polling ──
+  // Periodically polls the DB when local streaming is inactive.
+  // reconcileWithDb handles smart merging/truncating of new messages.
+  useEffect(() => {
+    if (isStreaming) return;
+    
+    const interval = setInterval(() => {
+      reconcileWithDb();
+    }, 3000);
+    
+    return () => clearInterval(interval);
+  }, [sessionId, isStreaming, reconcileWithDb]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Workspace mismatch banner */}
@@ -1040,7 +1087,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
               modelName={currentModel}
               context1m={context1m}
               hasSummary={hasSummary}
-              upstreamModelId={currentModelUpstream}
+              contextWindow={currentModelMeta.contextWindow}
+              upstreamModelId={currentModelMeta.upstreamModelId}
               contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
             />
           </div>

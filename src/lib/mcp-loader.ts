@@ -20,6 +20,7 @@ interface CachedMcpConfig {
   allServers: Record<string, MCPServerConfig>;
   codepilotServers: Record<string, MCPServerConfig>; // Only servers with resolved ${...} placeholders
   timestamp: number;
+  projectCwd: string;
 }
 
 const CACHE_TTL_MS = 30_000; // 30 seconds
@@ -37,21 +38,35 @@ function readJson(p: string): Record<string, unknown> {
   try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return {}; }
 }
 
-function loadAndMerge(): CachedMcpConfig {
+function loadAndMerge(projectCwd?: string): CachedMcpConfig {
+  const cwd = projectCwd || process.cwd();
+  
   // Check cache
-  if (_cache && Date.now() - _cache.timestamp < CACHE_TTL_MS) {
+  if (_cache && _cache.projectCwd === cwd && Date.now() - _cache.timestamp < CACHE_TTL_MS) {
     return _cache;
   }
 
   const userConfig = readJson(path.join(os.homedir(), '.claude.json'));
   const settings = readJson(path.join(os.homedir(), '.claude', 'settings.json'));
-  const projectMcp = readJson(path.join(process.cwd(), '.mcp.json'));
+  
+  // Use provided projectCwd, fallback to process.cwd()
+  const projectMcpJson = readJson(path.join(cwd, '.mcp.json'));
+  const projectClaudeJson = readJson(path.join(cwd, 'claude.json'));
 
   const merged: Record<string, MCPServerConfig> = {
     ...((userConfig.mcpServers || {}) as Record<string, MCPServerConfig>),
     ...((settings.mcpServers || {}) as Record<string, MCPServerConfig>),
-    ...((projectMcp.mcpServers || {}) as Record<string, MCPServerConfig>),
+    ...((projectMcpJson.mcpServers || {}) as Record<string, MCPServerConfig>),
+    ...((projectClaudeJson.mcpServers || {}) as Record<string, MCPServerConfig>),
   };
+
+  // Support Claude CLI's per-project mcpServers inside ~/.claude.json's "projects" block
+  if (userConfig.projects && typeof userConfig.projects === 'object') {
+    const projConfig = (userConfig.projects as Record<string, any>)[cwd];
+    if (projConfig && projConfig.mcpServers) {
+      Object.assign(merged, projConfig.mcpServers);
+    }
+  }
 
   // Apply persistent enabled overrides for project-level servers
   const settingsOverrides = (settings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
@@ -93,6 +108,7 @@ function loadAndMerge(): CachedMcpConfig {
     allServers: merged,
     codepilotServers,
     timestamp: Date.now(),
+    projectCwd: cwd,
   };
 
   return _cache;
@@ -126,9 +142,9 @@ function resolveServerConfig(server: MCPServerConfig): MCPServerConfig {
  *
  * Used by: route.ts, conversation-engine.ts — passed to streamClaude().
  */
-export function loadCodePilotMcpServers(): Record<string, MCPServerConfig> | undefined {
+export function loadCodePilotMcpServers(projectCwd?: string): Record<string, MCPServerConfig> | undefined {
   try {
-    const { codepilotServers } = loadAndMerge();
+    const { codepilotServers } = loadAndMerge(projectCwd);
     return Object.keys(codepilotServers).length > 0 ? codepilotServers : undefined;
   } catch {
     return undefined;
@@ -144,9 +160,9 @@ export function loadCodePilotMcpServers(): Record<string, MCPServerConfig> | und
  *
  * Used by: MCP Manager UI, diagnostics.
  */
-export function loadAllMcpServers(): Record<string, MCPServerConfig> | undefined {
+export function loadAllMcpServers(projectCwd?: string): Record<string, MCPServerConfig> | undefined {
   try {
-    const { allServers } = loadAndMerge();
+    const { allServers } = loadAndMerge(projectCwd);
     return Object.keys(allServers).length > 0 ? allServers : undefined;
   } catch {
     return undefined;
@@ -168,28 +184,13 @@ export function loadOnDemandMcpServers(
   if (selectedNames.size === 0) return undefined;
 
   try {
-    const userConfig = readJson(path.join(os.homedir(), '.claude.json'));
-    const settings = readJson(path.join(os.homedir(), '.claude', 'settings.json'));
-    const projectMcp = projectCwd
-      ? readJson(path.join(projectCwd, '.mcp.json'))
-      : {};
-
-    const merged: Record<string, MCPServerConfig> = {
-      ...((userConfig.mcpServers || {}) as Record<string, MCPServerConfig>),
-      ...((settings.mcpServers || {}) as Record<string, MCPServerConfig>),
-      ...((projectMcp.mcpServers || {}) as Record<string, MCPServerConfig>),
-    };
-
-    const overrides = (settings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
+    const { allServers } = loadAndMerge(projectCwd);
     const resolved: Record<string, MCPServerConfig> = {};
 
     for (const name of selectedNames) {
-      const server = merged[name];
-      if (!server) continue;
-      const override = overrides[name];
-      const effectiveEnabled = override?.enabled !== undefined ? override.enabled : server.enabled;
-      if (effectiveEnabled === false) continue;
-      resolved[name] = resolveServerConfig(server);
+      if (allServers[name]) {
+        resolved[name] = allServers[name];
+      }
     }
 
     return Object.keys(resolved).length > 0 ? resolved : undefined;

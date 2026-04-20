@@ -49,13 +49,14 @@ describe('working-directory helpers', () => {
     ]);
   });
 
-  it('falls back to HOME when no candidates are valid', () => {
+  it('falls back to safe bridge-workspace when no candidates are valid', () => {
     const resolved = helpers.resolveWorkingDirectory([
       { path: path.join(TEST_ROOT, 'missing-a'), source: 'requested' },
       { path: path.join(TEST_ROOT, 'missing-b'), source: 'setting' },
     ]);
 
-    assert.equal(resolved.path, HOME_DIR);
+    const expectedSafeFallback = path.join(HOME_DIR, '.codepilot', 'bridge-workspace');
+    assert.equal(resolved.path, expectedSafeFallback);
     assert.equal(resolved.source, 'home');
     assert.deepEqual(resolved.invalidCandidates, [
       { path: path.join(TEST_ROOT, 'missing-a'), source: 'requested' },

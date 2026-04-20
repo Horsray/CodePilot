@@ -17,6 +17,7 @@ import {
   Gear,
   ListBullets,
   BookOpen,
+  Timer,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -638,6 +639,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     { href: "/cli-tools", label: t('nav.cliTools' as TranslationKey), icon: Terminal },
     { href: "/gallery", label: t('nav.gallery' as TranslationKey), icon: Image },
     { href: "/knowledge-base", label: t('nav.knowledgeBase' as TranslationKey), icon: BookOpen },
+    { href: "/scheduled-tasks", label: t('nav.scheduledTasks' as TranslationKey), icon: Timer },
     { href: "/bridge", label: t('nav.bridge' as TranslationKey), icon: WifiHigh },
   ];
 

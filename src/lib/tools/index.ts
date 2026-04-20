@@ -14,6 +14,7 @@ import { createBashTool } from './bash';
 import { createEditTool } from './edit';
 import { createSkillTool } from './skill';
 import { createAgentTool } from './agent';
+import { createTodoWriteTool } from './todo-write';
 
 export interface ToolContext {
   /** Working directory for file operations */
@@ -46,6 +47,7 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
     Glob: createGlobTool(ctx),
     Grep: createGrepTool(ctx),
     Skill: createSkillTool(ctx.workingDirectory),
+    TodoWrite: createTodoWriteTool(ctx),
     Agent: createAgentTool({
       workingDirectory: ctx.workingDirectory,
       providerId: ctx.providerId,

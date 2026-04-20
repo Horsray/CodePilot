@@ -15,6 +15,8 @@ interface ContextUsageIndicatorProps {
   modelName: string;
   context1m?: boolean;
   hasSummary?: boolean;
+  /** Explicit context window returned by /api/providers/models. */
+  contextWindow?: number;
   /** Resolved upstream model ID from /api/providers/models — needed to
    *  disambiguate alias windows (first-party opus = 1M vs Bedrock/Vertex
    *  opus = 200K). Omit for provider setups where the alias already
@@ -44,11 +46,12 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-export function ContextUsageIndicator({ messages, modelName, context1m, hasSummary, upstreamModelId, contextUsageSnapshot }: ContextUsageIndicatorProps) {
+export function ContextUsageIndicator({ messages, modelName, context1m, hasSummary, contextWindow, upstreamModelId, contextUsageSnapshot }: ContextUsageIndicatorProps) {
   const { t } = useTranslation();
   const usage = useContextUsage(messages, modelName, {
     context1m,
     hasSummary,
+    contextWindow,
     upstreamModelId,
     snapshot: contextUsageSnapshot,
   });

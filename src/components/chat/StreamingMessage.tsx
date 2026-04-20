@@ -15,6 +15,7 @@ import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview';
 import { WidgetRenderer } from './WidgetRenderer';
 import { ReferencedContexts } from './ReferencedContexts';
+import { AgentTimeline } from './AgentTimeline';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
   appendTimelineReasoning,
@@ -25,6 +26,7 @@ import {
   updateTimelineStatus,
   createTimelineAccumulator,
 } from '@/lib/agent-timeline';
+import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
 import { PENDING_KEY, buildReferenceImages } from '@/lib/image-ref-store';
 import type { PlannerOutput, MediaBlock, TimelineStep } from '@/types';
 
@@ -482,20 +484,7 @@ export function StreamingMessage({
   const cleanContent = useMemo(() => {
     if (!content) return '';
     const finalContent = content.slice(finalContentStart);
-    const leakedEventType = /"type"\s*:\s*"(tool_result|tool_use|tool_output|status|text|thinking|result|done|error|keep_alive|referenced_contexts)"/;
-    // Line-by-line filter for leaked transport frames only. Do not strip
-    // arbitrary JSON from the actual final answer.
-    let cleaned = finalContent;
-    cleaned = cleaned.split('\n').filter(line => {
-      const trimmed = line.trim();
-      if (!trimmed) return true;
-      // Remove lines starting with $data or data: followed by JSON
-      if (/^\$?data\s*:?\s*\{/.test(trimmed)) return false;
-      // Remove standalone SSE-style JSON objects with a known transport type
-      if (/^\{.*\}$/.test(trimmed) && leakedEventType.test(trimmed)) return false;
-      return true;
-    }).join('\n').trim();
-    return cleaned;
+    return stripLeakedTransportContent(finalContent);
   }, [content, finalContentStart]);
 
   const renderedContent = useMemo(() => {
@@ -696,25 +685,34 @@ export function StreamingMessage({
 
         {/* Render the timeline (tools and thoughts interleaved) */}
         {(toolUses.length > 0 || liveTimelineSteps.length > 0) && (
-          <ToolActionsGroup
-            tools={toolUses.map((tool) => {
-              const result = toolResults.find((r) => r.tool_use_id === tool.id);
-              return {
-                id: tool.id,
-                name: tool.name,
-                input: tool.input,
-                result: result?.content,
-                isError: result?.is_error,
-                media: result?.media,
-              };
-            })}
-            steps={liveTimelineSteps}
-            isStreaming={isStreaming}
-            streamingToolOutput={streamingToolOutput}
-            statusText={statusText}
-            sessionId={sessionId}
-            rewindUserMessageId={rewindUserMessageId}
-          />
+          liveTimelineSteps.length > 0 ? (
+            <AgentTimeline
+              steps={liveTimelineSteps}
+              liveStatusText={statusText}
+              sessionId={sessionId}
+              onForceStop={onForceStop}
+            />
+          ) : (
+            <ToolActionsGroup
+              tools={toolUses.map((tool) => {
+                const result = toolResults.find((r) => r.tool_use_id === tool.id);
+                return {
+                  id: tool.id,
+                  name: tool.name,
+                  input: tool.input,
+                  result: result?.content,
+                  isError: result?.is_error,
+                  media: result?.media,
+                };
+              })}
+              steps={liveTimelineSteps}
+              isStreaming={isStreaming}
+              streamingToolOutput={streamingToolOutput}
+              statusText={statusText}
+              sessionId={sessionId}
+              rewindUserMessageId={rewindUserMessageId}
+            />
+          )
         )}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}

@@ -21,7 +21,10 @@ export function createTodoWriteTool(ctx: ToolContext) {
     description:
       'Create and manage a structured task list for your current coding session. ' +
       'Use this tool proactively for complex multi-step tasks to help the user understand ' +
-      'your progress and overall plan. Status can be "pending", "in_progress", or "completed".',
+      'your progress and overall plan. For any request with 3+ steps, multiple files, debugging, UI work, ' +
+      'or required verification, call this before other work with 3-7 actionable tasks. Keep exactly one ' +
+      'task in_progress while work is active, update statuses as soon as evidence changes, and never use it ' +
+      'as a substitute for the final user-facing answer. Status can be "pending", "in_progress", or "completed".',
     inputSchema: z.object({
       todos: z.array(z.object({
         id: z.string().describe('Unique identifier for the task'),

@@ -233,11 +233,12 @@ describe('Provider Catalog', () => {
       assert.equal(models.length, 0);
     });
 
-    it('oLMX localhost root and /v1 urls resolve to oLMX default models', () => {
+    it('oLMX localhost root and /v1 urls resolve to oLMX preset (no hardcoded default models)', () => {
+      // oLMX has no defaultModels - user must specify via model_names
       const rootModels = getDefaultModelsForProvider('anthropic', 'http://127.0.0.1:8000');
       const v1Models = getDefaultModelsForProvider('anthropic', 'http://127.0.0.1:8000/v1');
-      assert.ok(rootModels.some(m => m.modelId === 'Qwen3.5-35B-A3B-8bit'));
-      assert.ok(v1Models.some(m => m.modelId === 'Qwen3.5-35B-A3B-8bit'));
+      assert.equal(rootModels.length, 0, 'oLMX should have no hardcoded default models');
+      assert.equal(v1Models.length, 0, 'oLMX should have no hardcoded default models');
     });
   });
 

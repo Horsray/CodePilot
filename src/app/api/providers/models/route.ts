@@ -61,8 +61,22 @@ interface ModelEntry {
   value: string;
   label: string;
   upstreamModelId?: string;
+  contextWindow?: number;
   capabilities?: Record<string, unknown>;
   variants?: Record<string, unknown>;
+}
+
+function normalizeContextWindow(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function getModelContextWindow(entry: ModelEntry): number | undefined {
+  return normalizeContextWindow(entry.contextWindow)
+    ?? normalizeContextWindow(entry.capabilities?.contextWindow)
+    ?? getContextWindow(entry.value, { upstream: entry.upstreamModelId })
+    ?? undefined;
 }
 
 function isCCSwitchProvider(provider: ReturnType<typeof getAllProviders>[number]): boolean {
@@ -173,7 +187,7 @@ export async function GET(req: Request) {
         // Use upstreamModelId for context-window lookup so the bare `opus`
         // alias doesn't get clamped to the 200K Bedrock/Vertex value.
         models: DEFAULT_MODELS.map(m => {
-          const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
+          const cw = getModelContextWindow(m);
           return cw != null ? { ...m, contextWindow: cw } : m;
         }),
       });
@@ -191,7 +205,7 @@ export async function GET(req: Request) {
             // the concrete upstream so context window and downstream
             // sanitizer checks agree with the env provider's resolver.
             const upstream = ENV_ALIAS_TO_UPSTREAM[m.value];
-            const cw = getContextWindow(m.value, { upstream });
+            const cw = getModelContextWindow({ value: m.value, label: m.displayName, upstreamModelId: upstream });
             return {
               value: m.value,
               label: m.displayName,
@@ -229,7 +243,7 @@ export async function GET(req: Request) {
       let rawModels: ModelEntry[];
 
       // 1) Check DB provider_models table
-      let dbModels: { value: string; label: string; upstreamModelId?: string; capabilities?: Record<string, unknown> }[] = [];
+      let dbModels: ModelEntry[] = [];
       try {
         const provModels = getModelsForProvider(provider.id);
         if (provModels.length > 0) {
@@ -301,7 +315,7 @@ export async function GET(req: Request) {
         // first-party opus → 1M (Opus 4.7) vs Bedrock/Vertex opus → 200K
         // (Opus 4.6). The model API is per-provider, so the correct
         // upstream is whatever catalog declared for this provider group.
-        const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
+        const cw = getModelContextWindow(m);
         // Lift effort/thinking capability flags from nested `capabilities` to top-level
         // so MessageInput / EffortSelectorDropdown can read them without unwrapping.
         const caps = (m.capabilities || {}) as Record<string, unknown>;
