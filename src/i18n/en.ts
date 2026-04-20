@@ -1189,8 +1189,14 @@ const en = {
   'scheduledTasks.filterDisabled': '已禁用',
   'scheduledTasks.createdAt': '创建时间',
   'scheduledTasks.nextRun': '下次执行',
-  'scheduledTasks.permanent': '常驻任务',
-  'scheduledTasks.never': '从未',
+  'scheduledTasks.permanent': 'Permanent',
+  'scheduledTasks.never': 'Never',
+  'scheduledTasks.group': 'Group',
+  'scheduledTasks.tasks': 'tasks',
+  'scheduledTasks.pauseAll': 'Pause All',
+  'scheduledTasks.runAll': 'Run All',
+  'scheduledTasks.deleteAll': 'Delete All',
+  'scheduledTasks.confirmDeleteGroup': 'Are you sure you want to delete this group of scheduled tasks?',
 
   // ── Composer ──────────────────────────────────────────────
   'composer.slashCommand': 'Commands',

@@ -134,6 +134,9 @@ function selectOnDemandMcpServerNames(
   if (/web\s*search|websearch|联网搜索|网页搜索|搜索网页|查一下|查找.*网页|最新信息|latest/i.test(text)) {
     add('WebSearch', 'bailian-web-search', 'fetch');
   }
+  if (/minimax|图像识别|图片识别|ocr|分析图片/i.test(text)) {
+    add('minimax_vision', 'minimax');
+  }
   if (/memory|记忆|回忆/i.test(text)) {
     add('memory');
   }
@@ -711,6 +714,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__codepilot-image-gen',
             'mcp__codepilot-cli-tools',
             'mcp__codepilot-dashboard',
+            'mcp__codepilot-todo',
             // codepilot_cli_tools specific
             'codepilot_cli_tools_list',
             'codepilot_cli_tools_add',
@@ -844,6 +848,18 @@ if (claudePath) {
           };
           if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + NOTIFICATION_MCP_SYSTEM_PROMPT;
+          }
+        }
+
+        // TodoWrite MCP: globally available in all contexts
+        {
+          const { createTodoMcpServer, TODO_MCP_SYSTEM_PROMPT } = await import('@/lib/todo-mcp');
+          queryOptions.mcpServers = {
+            ...(queryOptions.mcpServers || {}),
+            'codepilot-todo': createTodoMcpServer(),
+          };
+          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + TODO_MCP_SYSTEM_PROMPT;
           }
         }
 
@@ -1070,6 +1086,8 @@ if (claudePath) {
             'codepilot_dashboard_refresh',
             'codepilot_dashboard_update',
             'codepilot_dashboard_remove',
+            'TodoWrite',
+            'mcp__codepilot-todo__TodoWrite',
           ];
           if (autoApprovedTools.some(t => toolName === t || toolName.endsWith(`__${t}`))) {
             return { behavior: 'allow' as const, updatedInput: input };
@@ -1501,7 +1519,7 @@ if (claudePath) {
                   }));
 
                   // Track TodoWrite calls — sync deferred until tool_result confirms success
-                  if (block.name === 'TodoWrite') {
+                  if (block.name === 'TodoWrite' || block.name === 'mcp__codepilot-todo__TodoWrite') {
                     try {
                       const toolInput = block.input as {
                         todos?: Array<{ content: string; status: string; activeForm?: string }>;

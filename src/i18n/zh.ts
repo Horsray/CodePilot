@@ -1188,6 +1188,12 @@ const zh: Record<TranslationKey, string> = {
   'scheduledTasks.nextRun': '下次执行',
   'scheduledTasks.permanent': '常驻任务',
   'scheduledTasks.never': '从未',
+  'scheduledTasks.group': '批量',
+  'scheduledTasks.tasks': '个任务',
+  'scheduledTasks.pauseAll': '全部暂停',
+  'scheduledTasks.runAll': '全部执行',
+  'scheduledTasks.deleteAll': '批量删除',
+  'scheduledTasks.confirmDeleteGroup': '确定要删除这一组定时任务吗？',
 
   // ── Composer ──────────────────────────────────────────────
   'composer.slashCommand': '命令',

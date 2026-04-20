@@ -39,6 +39,65 @@ interface TaskRunLog {
   created_at: string;
 }
 
+// ── 时间工具函数（北京时间 UTC+8）──────────────────────────
+// 生成当前时刻 + 指定分钟后的 datetime-local 值（北京时间，YYYY-MM-DDTHH:MM）
+function localAfterISO(minutes: number): string {
+  const d = new Date(Date.now() + minutes * 60000);
+  // 转换为北京时间：d.getTime() + (480 - d.getTimezoneOffset()) * 60000
+  // 480 = 8h * 60min（北京时间 UTC+8）
+  const tzOffset = d.getTimezoneOffset(); // 当地时区偏移（分钟），北京是 -480
+  const bjMs = d.getTime() - tzOffset * 60000 + 480 * 60000;
+  const bj = new Date(bjMs);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${bj.getFullYear()}-${pad(bj.getMonth() + 1)}-${pad(bj.getDate())}T${pad(bj.getHours())}:${pad(bj.getMinutes())}`;
+}
+
+// ── 任务分组 ──────────────────────────────────────────────────
+interface TaskGroup {
+  key: string;
+  name: string;
+  isGrouped: boolean;
+  count: number;         // 同组任务数量
+  tasks: ScheduledTask[];
+  description?: string;  // 组内任务的统一简介
+}
+
+// 将任务列表按 group_id 折叠分组（仅折叠同一 group_id、count>1 的）
+function groupTasks(tasks: ScheduledTask[]): TaskGroup[] {
+  const map = new Map<string, TaskGroup>();
+
+  for (const task of tasks) {
+    if (task.group_id && task.group_name) {
+      const key = `group-${task.group_id}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.tasks.push(task);
+      } else {
+        map.set(key, {
+          key,
+          name: task.group_name,
+          isGrouped: true,
+          count: 1,
+          tasks: [task],
+          description: task.prompt.slice(0, 100) + (task.prompt.length > 100 ? "…" : ""),
+        });
+      }
+    } else {
+      const key = `single-${task.id}`;
+      map.set(key, {
+        key,
+        name: task.name,
+        isGrouped: false,
+        count: 1,
+        tasks: [task],
+      });
+    }
+  }
+
+  return Array.from(map.values());
+}
+
 // ── Task card ────────────────────────────────────────────────
 function TaskCard({
   task,
@@ -48,6 +107,7 @@ function TaskCard({
   onRun,
   onShowLogs,
   expanded,
+  description,
 }: {
   task: ScheduledTask;
   onPause: () => void;
@@ -56,6 +116,7 @@ function TaskCard({
   onRun: () => void;
   onShowLogs: () => void;
   expanded: boolean;
+  description?: string;
 }) {
   const { t } = useTranslation();
 
@@ -144,6 +205,13 @@ function TaskCard({
         </div>
       </div>
 
+      {/* 任务简介（折叠组时显示） */}
+      {description && (
+        <div className="mx-4 mb-2 px-3 py-1.5 rounded-lg bg-muted/20 border border-border/30">
+          <p className="text-[11px] text-muted-foreground/80 leading-relaxed">{description}</p>
+        </div>
+      )}
+
       {/* Error / result summary */}
       {task.last_status === "error" && task.last_error && (
         <div className="mx-4 mb-3 px-3 py-2 rounded-lg bg-red-500/5 border border-red-500/20">
@@ -187,6 +255,128 @@ function TaskCard({
   );
 }
 
+// ── 折叠任务组卡片 ───────────────────────────────────────────
+function TaskGroupCard({
+  group,
+  expanded,
+  onToggle,
+  onPauseAll,
+  onResumeAll,
+  onDeleteAll,
+  onRunAll,
+}: {
+  group: TaskGroup;
+  expanded: boolean;
+  onToggle: () => void;
+  onPauseAll: () => void;
+  onResumeAll: () => void;
+  onDeleteAll: () => void;
+  onRunAll: () => void;
+}) {
+  const { t } = useTranslation();
+  // 统计组内各状态数量
+  const statusCounts = group.tasks.reduce((acc, task) => {
+    const s = task.last_status || task.status;
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-background hover:border-border transition-all overflow-hidden">
+      {/* 组头部 */}
+      <div className="flex items-center gap-3 px-4 py-3 cursor-pointer" onClick={onToggle}>
+        <button className="text-muted-foreground/40 hover:text-muted-foreground transition-colors">
+          {expanded ? <CaretDown size={14} /> : <CaretRight size={14} />}
+        </button>
+        {/* 分组标识 */}
+        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-indigo-500/10 text-indigo-500">
+          <Lightning size={10} />
+          {t('scheduledTasks.group')}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h4 className="text-sm font-semibold truncate">{group.name}</h4>
+          <div className="flex items-center gap-3 mt-0.5">
+            {/* 任务数量 */}
+            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <BellSimple size={10} />
+              {group.count} {t('scheduledTasks.tasks')}
+            </span>
+            {/* 状态分布 */}
+            {statusCounts["active"] > 0 && (
+              <span className="text-[10px] text-green-500 flex items-center gap-1">
+                <Circle size={8} weight="fill" /> {statusCounts["active"]}
+              </span>
+            )}
+            {statusCounts["paused"] > 0 && (
+              <span className="text-[10px] text-yellow-500 flex items-center gap-1">
+                <Pause size={8} /> {statusCounts["paused"]}
+              </span>
+            )}
+          </div>
+        </div>
+        {/* 批量操作 */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {statusCounts["active"] > 0 && (
+            <>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-yellow-500" onClick={(e) => { e.stopPropagation(); onPauseAll(); }} title={t('scheduledTasks.pauseAll')}>
+                <Pause size={14} />
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary" onClick={(e) => { e.stopPropagation(); onRunAll(); }} title={t('scheduledTasks.runAll')}>
+                <Play size={14} />
+              </Button>
+            </>
+          )}
+          {statusCounts["paused"] > 0 && (
+            <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground hover:text-green-500 gap-1 text-[11px]" onClick={(e) => { e.stopPropagation(); onResumeAll(); }}>
+              <Play size={12} /> {t('scheduledTasks.resume')}
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-red-500" onClick={(e) => { e.stopPropagation(); onDeleteAll(); }} title={t('scheduledTasks.deleteAll')}>
+            <Trash size={14} />
+          </Button>
+        </div>
+      </div>
+
+      {/* 简介 */}
+      {group.description && (
+        <div className="mx-4 mb-2 px-3 py-1.5 rounded-lg bg-muted/20 border border-border/30">
+          <p className="text-[11px] text-muted-foreground/80 leading-relaxed">{group.description}</p>
+        </div>
+      )}
+
+      {/* 展开后显示所有子任务 */}
+      {expanded && (
+        <div className="border-t border-border/30 divide-y divide-border/30">
+          {group.tasks.map((task) => (
+            <div key={task.id} className="px-4 py-2 flex items-center gap-3 hover:bg-muted/10">
+              <div className={cn("flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium",
+                task.last_status === "error" ? "bg-red-500/10 text-red-400" :
+                task.last_status === "success" ? "bg-green-500/10 text-green-400" :
+                task.status === "active" ? "bg-green-500/10 text-green-500" :
+                task.status === "paused" ? "bg-yellow-500/10 text-yellow-500" :
+                "bg-muted/30 text-muted-foreground"
+              )}>
+                {task.last_status === "error" ? <XCircle size={9} /> :
+                 task.last_status === "success" ? <CheckCircle size={9} /> :
+                 task.status === "active" ? <Circle size={9} weight="fill" /> :
+                 task.status === "paused" ? <Pause size={9} /> :
+                 <Circle size={9} />}
+                {task.last_status || task.status}
+              </div>
+              <span className="text-xs text-muted-foreground flex-1 truncate">{task.name}</span>
+              <span className="text-[10px] text-muted-foreground/60 shrink-0">
+                {task.schedule_type === "once" ? t('scheduledTasks.scheduleOnce') :
+                 task.schedule_type === "interval" ? task.schedule_value :
+                 task.schedule_value}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Create dialog ─────────────────────────────────────────────
 function CreateTaskDialog({
   open,
@@ -203,7 +393,8 @@ function CreateTaskDialog({
   const [scheduleType, setScheduleType] = useState<"once" | "interval" | "cron">("interval");
   const [intervalValue, setIntervalValue] = useState("30m");
   const [cronValue, setCronValue] = useState("0 9 * * *");
-  const [onceValue, setOnceValue] = useState("");
+  // 默认时间：北京时间 +1 小时，避免过去时间
+  const [onceValue, setOnceValue] = useState(localAfterISO(60));
   const [priority, setPriority] = useState<"low" | "normal" | "urgent">("normal");
   const [notifyOnComplete, setNotifyOnComplete] = useState(true);
   const [workingDirectory, setWorkingDirectory] = useState("");
@@ -259,7 +450,7 @@ function CreateTaskDialog({
       setPrompt("");
       setIntervalValue("30m");
       setCronValue("0 9 * * *");
-      setOnceValue("");
+      setOnceValue(localAfterISO(60));
       setPriority("normal");
       setNotifyOnComplete(true);
       setWorkingDirectory("");
@@ -579,16 +770,41 @@ export default function ScheduledTasksPage() {
     setTimeout(fetchTasks, 1000);
   };
 
+  // 计算过滤和分组
   const filteredTasks = tasks.filter((task) => {
     if (filter === "all") return true;
     return task.status === filter;
   });
+  const taskGroups = groupTasks(filteredTasks);
 
+  // 统计（按原始任务数统计，分组后显示分组数）
   const stats = {
     active: tasks.filter((t) => t.status === "active").length,
     paused: tasks.filter((t) => t.status === "paused").length,
     errors: tasks.filter((t) => t.last_status === "error").length,
-    total: tasks.length,
+    total: taskGroups.length,
+  };
+
+  // 批量操作：组内所有任务暂停/恢复/删除/运行
+  const handleGroupPauseAll = async (group: TaskGroup) => {
+    await Promise.all(group.tasks.map((t) => fetch(`/api/tasks/${t.id}/pause`, { method: "POST" })));
+    fetchTasks();
+  };
+  const handleGroupResumeAll = async (group: TaskGroup) => {
+    await Promise.all(group.tasks.map((t) => fetch(`/api/tasks/${t.id}/pause`, { method: "POST" })));
+    fetchTasks();
+  };
+  const handleGroupDeleteAll = async (group: TaskGroup) => {
+    if (!confirm(t('scheduledTasks.confirmDeleteGroup'))) return;
+    setDeletingId("group");
+    await Promise.all(group.tasks.map((t) => fetch(`/api/tasks/${t.id}`, { method: "DELETE" })));
+    setDeletingId(null);
+    setExpandedId(null);
+    fetchTasks();
+  };
+  const handleGroupRunAll = async (group: TaskGroup) => {
+    await Promise.all(group.tasks.map((t) => fetch(`/api/tasks/${t.id}/run`, { method: "POST" })));
+    setTimeout(fetchTasks, 1000);
   };
 
   return (
@@ -684,24 +900,37 @@ export default function ScheduledTasksPage() {
             </div>
           ) : (
             <div className="space-y-3 max-w-3xl">
-              {filteredTasks.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  expanded={expandedId === task.id}
-                  onShowLogs={() => setExpandedId(expandedId === task.id ? null : task.id)}
-                  onPause={() => handlePause(task.id)}
-                  onResume={() => handleResume(task.id)}
-                  onDelete={() => handleDelete(task.id)}
-                  onRun={() => handleRun(task.id)}
-                />
-              ))}
+              {taskGroups.map((group) =>
+                group.isGrouped ? (
+                  <TaskGroupCard
+                    key={group.key}
+                    group={group}
+                    expanded={expandedId === group.key}
+                    onToggle={() => setExpandedId(expandedId === group.key ? null : group.key)}
+                    onPauseAll={() => handleGroupPauseAll(group)}
+                    onResumeAll={() => handleGroupResumeAll(group)}
+                    onDeleteAll={() => handleGroupDeleteAll(group)}
+                    onRunAll={() => handleGroupRunAll(group)}
+                  />
+                ) : (
+                  <TaskCard
+                    key={group.key}
+                    task={group.tasks[0]}
+                    expanded={expandedId === group.key}
+                    onShowLogs={() => setExpandedId(expandedId === group.key ? null : group.key)}
+                    onPause={() => handlePause(group.tasks[0].id)}
+                    onResume={() => handleResume(group.tasks[0].id)}
+                    onDelete={() => handleDelete(group.tasks[0].id)}
+                    onRun={() => handleRun(group.tasks[0].id)}
+                  />
+                )
+              )}
             </div>
           )}
         </div>
 
-        {/* Log panel */}
-        {expandedId && (
+        {/* Log panel（仅对单条任务展开时显示，分组不显示日志面板） */}
+        {expandedId && !expandedId.startsWith("group-") && (
           <div className="w-[380px] shrink-0 border-l border-border/50 overflow-hidden flex flex-col">
             {(() => {
               const task = tasks.find((t) => t.id === expandedId);

@@ -49,12 +49,12 @@ function getDoingTasksSection() {
 
 # Task Orchestration and Planning
 
-- **Plan First**: For any task that requires modifying code, executing commands, or takes multiple steps, you MUST formulate a plan using the `TodoWrite` tool before execution.
-- **TodoWrite First for Complex Work**: For ANY user request that requires modifying code or executing commands, `TodoWrite` MUST be your very first tool call. Do not call Read, Grep, Edit, or Bash until a task list has been created via `TodoWrite`.
-- **STRICT PROHIBITION**: NEVER output step-by-step plans, checklists, or numbered task lists in plain Markdown text. If you need to present a plan or break down a task, you MUST exclusively use the `TodoWrite` tool.
+- **Plan First**: For any task that requires modifying code, executing commands, or takes multiple steps, you MUST formulate a plan using the \`TodoWrite\` tool before execution.
+- **TodoWrite First for Complex Work**: For ANY user request that requires modifying code or executing commands, \`TodoWrite\` MUST be your very first tool call. Do not call Read, Grep, Edit, or Bash until a task list has been created via \`TodoWrite\`.
+- **STRICT PROHIBITION**: NEVER output step-by-step plans, checklists, or numbered task lists in plain Markdown text. If you need to present a plan or break down a task, you MUST exclusively use the \`TodoWrite\` tool.
 - **Visible Task Decomposition**: Decompose broad requests into clear units (e.g. investigate, implement, verify). Keep task titles actionable.
 - **Chain of Thought (CoT)**: Before every tool call, briefly state your reasoning in your thought process. Why this tool? Why this input? What do you expect to see?
-- **Verification**: Every task is incomplete until verified. Always run tests, check the output, or use the `Read` tool to confirm your changes took effect as expected.`;
+- **Verification**: Every task is incomplete until verified. Always run tests, check the output, or use the \`Read\` tool to confirm your changes took effect as expected.`;
 }
 
 const MANAGING_TASKS_SECTION = `# Managing tasks

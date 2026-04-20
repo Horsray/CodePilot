@@ -39,6 +39,7 @@ const EXPLORE_RULES: PermissionRule[] = [
   { permission: 'Read', pattern: '*', action: 'allow' },
   { permission: 'Glob', pattern: '*', action: 'allow' },
   { permission: 'Grep', pattern: '*', action: 'allow' },
+  { permission: 'TodoWrite', pattern: '*', action: 'allow' },
   // Allow read-only MCP tools
   { permission: 'mcp__*__read*', pattern: '*', action: 'allow' },
   { permission: 'mcp__*__list*', pattern: '*', action: 'allow' },
@@ -64,6 +65,7 @@ const NORMAL_RULES: PermissionRule[] = [
   { permission: 'Read', pattern: '*', action: 'allow' },
   { permission: 'Glob', pattern: '*', action: 'allow' },
   { permission: 'Grep', pattern: '*', action: 'allow' },
+  { permission: 'TodoWrite', pattern: '*', action: 'allow' },
   // Allow read-only MCP tools
   { permission: 'mcp__*__read*', pattern: '*', action: 'allow' },
   { permission: 'mcp__*__list*', pattern: '*', action: 'allow' },
