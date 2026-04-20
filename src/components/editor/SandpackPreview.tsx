@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type { SandpackFiles, SandpackSetup } from "@codesandbox/sandpack-react";
 import { ErrorBoundary } from "@/components/layout/ErrorBoundary";
@@ -88,6 +88,20 @@ function inferMountPath(filePath?: string): string {
 }
 
 export function SandpackPreview({ filePath, content, bundlerURL }: SandpackPreviewProps) {
+  // Per-mount random token. Because PreviewPanel passes key={filePath} at
+  // the SandpackPreview call site, this component is freshly mounted on
+  // every file switch, which means useState(() => ...) runs once per
+  // switch and produces a brand-new token. Including it in providerKey
+  // defeats any internal Sandpack / bundler / service-worker cache keyed
+  // on "previously seen this provider" — the Provider looks unique on
+  // every file swap, so cached compilation results can't cross over.
+  //
+  // Why not also base it on content? Because when the same file is
+  // re-opened, filePath unchanged → this component doesn't remount →
+  // token stays stable → no redundant recompile on identical content.
+  // Only the path change triggers a fresh token.
+  const [mountToken] = useState(() => Math.random().toString(36).slice(2));
+
   const { files, setup, activeFile, providerKey } = useMemo(() => {
     const mount = inferMountPath(filePath);
     const files: SandpackFiles = {
@@ -97,16 +111,12 @@ export function SandpackPreview({ filePath, content, bundlerURL }: SandpackPrevi
       },
     };
     const setup: SandpackSetup = { dependencies: ALLOWED_DEPS };
-    // Force a SandpackProvider remount when either the file or its content
-    // changes. Without this, switching from App.tsx → Counter.tsx inside an
-    // already-mounted PreviewPanel just hands new `files` to the provider,
-    // but Sandpack's bundler keeps serving the previously-compiled entry
-    // because its iframe + bundler worker are still alive. Remounting
-    // tears the iframe down and reboots compilation from scratch so each
-    // TSX preview starts clean.
-    const providerKey = `${mount}::${content?.length ?? 0}`;
+    // mountToken makes the key unique across file switches; content length
+    // covers the rare "same file, external content change" case (e.g. the
+    // user edits the .tsx elsewhere while the preview is still open).
+    const providerKey = `${mount}::${mountToken}::${content?.length ?? 0}`;
     return { files, setup, activeFile: mount, providerKey };
-  }, [filePath, content]);
+  }, [filePath, content, mountToken]);
 
   return (
     <ErrorBoundary fallback={<PreviewError />}>
