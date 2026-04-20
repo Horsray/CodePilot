@@ -4,7 +4,7 @@ import { parseInterval, getNextCronTime, ensureSchedulerRunning } from '@/lib/ta
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, prompt, schedule_type, schedule_value, priority, notify_on_complete, session_id, working_directory } = body;
+    const { name, prompt, schedule_type, schedule_value, priority, notify_on_complete, session_id, working_directory, group_id, group_name } = body;
 
     if (!name || !prompt || !schedule_type || !schedule_value) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -39,6 +39,8 @@ export async function POST(request: NextRequest) {
       permanent: 0,
       session_id: session_id || null,
       working_directory: working_directory || null,
+      group_id: group_id || null,
+      group_name: group_name || null,
     });
 
     // Ensure the scheduler is running

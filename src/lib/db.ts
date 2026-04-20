@@ -984,6 +984,8 @@ function migrateDb(db: Database.Database): void {
       session_id TEXT,
       working_directory TEXT,
       permanent INTEGER NOT NULL DEFAULT 0,
+      group_id TEXT,
+      group_name TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -993,6 +995,9 @@ function migrateDb(db: Database.Database): void {
 
   // Migration: add permanent column for existing databases
   safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN permanent INTEGER NOT NULL DEFAULT 0");
+  // Migration: add group columns for task grouping (同组任务折叠显示)
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN group_id TEXT");
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN group_name TEXT");
 
   // Migration: set default_panel to 'file_tree' only if not already configured
   db.prepare(
@@ -2967,8 +2972,8 @@ export function bulkUpsertCliToolDescriptions(entries: Array<{ toolId: string; z
 export function createScheduledTask(task: Omit<ScheduledTask, 'id' | 'created_at' | 'updated_at'>): ScheduledTask {
   const db = getDb();
   const id = crypto.randomBytes(8).toString('hex');
-  db.prepare(`INSERT INTO scheduled_tasks (id, name, prompt, schedule_type, schedule_value, next_run, status, priority, notify_on_complete, session_id, working_directory, consecutive_errors) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
-    id, task.name, task.prompt, task.schedule_type, task.schedule_value, task.next_run, task.status || 'active', task.priority || 'normal', task.notify_on_complete ?? 1, task.session_id || null, task.working_directory || null
+  db.prepare(`INSERT INTO scheduled_tasks (id, name, prompt, schedule_type, schedule_value, next_run, status, priority, notify_on_complete, session_id, working_directory, consecutive_errors, group_id, group_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`).run(
+    id, task.name, task.prompt, task.schedule_type, task.schedule_value, task.next_run, task.status || 'active', task.priority || 'normal', task.notify_on_complete ?? 1, task.session_id || null, task.working_directory || null, task.group_id || null, task.group_name || null
   );
   return getScheduledTask(id)!;
 }

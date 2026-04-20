@@ -1439,6 +1439,8 @@ export interface ScheduledTask {
   session_id?: string;
   working_directory?: string;
   permanent: number;
+  group_id?: string;      // 同组任务的唯一标识，用于折叠显示
+  group_name?: string;    // 同组任务的统一显示名称
   created_at: string;
   updated_at: string;
 }

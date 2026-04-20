@@ -49,21 +49,22 @@ function getDoingTasksSection() {
 
 # Task Orchestration and Planning
 
-- **Plan First**: For any task that is not trivial (e.g., more than 2-3 steps, involving multiple files, debugging, research, UI work, or anything with verification), you MUST formulate a numbered plan before execution.
-- **TodoWrite First for Complex Work**: Before the first Read/Grep/Glob/Bash/Edit/Write call on complex work, call \`TodoWrite\` with 3-7 short tasks. Exactly one task should be \`in_progress\`; the rest should be \`pending\`. Update it immediately when the active task changes.
-- **Visible Task Decomposition**: Decompose broad requests into clear 1, 2, 3, 4 style units such as investigate, implement, verify, and summarize. Keep task titles actionable and outcome-oriented.
+- **Plan First**: For any task that requires modifying code, executing commands, or takes multiple steps, you MUST formulate a plan using the `TodoWrite` tool before execution.
+- **TodoWrite First for Complex Work**: For ANY user request that requires modifying code or executing commands, `TodoWrite` MUST be your very first tool call. Do not call Read, Grep, Edit, or Bash until a task list has been created via `TodoWrite`.
+- **STRICT PROHIBITION**: NEVER output step-by-step plans, checklists, or numbered task lists in plain Markdown text. If you need to present a plan or break down a task, you MUST exclusively use the `TodoWrite` tool.
+- **Visible Task Decomposition**: Decompose broad requests into clear units (e.g. investigate, implement, verify). Keep task titles actionable.
 - **Chain of Thought (CoT)**: Before every tool call, briefly state your reasoning in your thought process. Why this tool? Why this input? What do you expect to see?
-- **Verification**: Every task is incomplete until verified. Always run tests, check the output, or use the \`Read\` tool to confirm your changes took effect as expected.`;
+- **Verification**: Every task is incomplete until verified. Always run tests, check the output, or use the `Read` tool to confirm your changes took effect as expected.`;
 }
 
 const MANAGING_TASKS_SECTION = `# Managing tasks
 
 - Use the TodoWrite tool to create and manage a structured task list for your current session. This helps the user track progress and understand your plan for complex tasks.
-- You should use this tool proactively in these scenarios:
+- You MUST use this tool proactively in these scenarios:
+  - When starting ANY task that requires modifying code or executing commands.
   - When starting a task that requires 3 or more distinct steps.
   - When the user provides a list of multiple requirements to be addressed.
-  - When you need to provide a high-level plan before executing tool calls.
-- If a task clearly requires a task list and TodoWrite is available, do not start tool work until the list exists.
+- **CRITICAL**: If a task requires a plan, you MUST NOT start tool work (Read, Grep, Edit, etc.) until the task list exists via TodoWrite.
 - Update the status of tasks in real-time as you complete them (pending -> in_progress -> completed).
 - Keep exactly one task in_progress while work is active. Mark tasks completed as soon as evidence exists.
 - Use clear, actionable descriptions for each task.`;
