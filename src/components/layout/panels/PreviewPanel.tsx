@@ -37,14 +37,6 @@ const DataTableViewer = dynamic(
   { ssr: false, loading: () => <div className="flex h-full items-center justify-center py-12"><SpinnerGap size={20} className="animate-spin text-muted-foreground" /></div> },
 );
 
-// DataTable viewer (Phase 5.4 surface). Papaparse pulls in ~15 KB gzipped
-// so the dynamic boundary is cheap insurance against shipping it in
-// first paint for users who never view a .csv.
-const DataTableViewer = dynamic(
-  () => import("@/components/editor/DataTableViewer").then((m) => m.DataTableViewer),
-  { ssr: false, loading: () => <div className="flex h-full items-center justify-center py-12"><SpinnerGap size={20} className="animate-spin text-muted-foreground" /></div> },
-);
-
 // Lazy-load Streamdown and plugins — only loaded when rendered markdown is needed
 let _StreamdownComponent: typeof import("streamdown").Streamdown | null = null;
 let _streamdownPlugins: Record<string, unknown> | null = null;
