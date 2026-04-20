@@ -31,6 +31,9 @@ const ALLOWED_KEYS = [
   'codepilot:announcement:v0.48-agent-engine',
   'lang_opt_provider_id',
   'lang_opt_model',
+  'nightly_compaction_enabled',
+  'nightly_compaction_provider_id',
+  'nightly_compaction_model',
 ];
 
 export async function GET() {

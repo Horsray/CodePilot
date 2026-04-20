@@ -10,9 +10,10 @@ export const TODO_MCP_SYSTEM_PROMPT = `## Task Management
 - **CRITICAL**: If a task requires a plan, you MUST NOT start tool work (Read, Grep, Edit, Bash, etc.) until the task list exists via TodoWrite.
 - Update the status of tasks in real-time as you complete them (pending -> in_progress -> completed).
 - Keep exactly one task in_progress while work is active. Mark tasks completed as soon as evidence exists.
+- **Skill Crystallization**: If you successfully complete a complex workflow (e.g., resolving a difficult bug, configuring a new environment, creating a reusable script) that involved multiple tool calls and debugging, you MUST call \`codepilot_skill_create\` at the very end to save your successful steps as a reusable SKILL.md file before finishing the conversation.
 - STRICT PROHIBITION: NEVER output step-by-step plans, checklists, or numbered task lists in plain Markdown text. You MUST exclusively use the TodoWrite tool.`;
 
-export function createTodoMcpServer() {
+export function createTodoMcpServer(workspacePath: string) {
   return createSdkMcpServer({
     name: 'codepilot-todo',
     version: '1.0.0',
@@ -40,6 +41,51 @@ export function createTodoMcpServer() {
           return { content: [{ type: 'text' as const, text: `Task list updated with ${todos.length} items. UI has been synced.` }] };
         },
       ),
+      tool(
+        'codepilot_skill_create',
+        'Auto-crystallize a successful workflow into a reusable SKILL.md file. Use this ONLY after you have successfully completed a complex task (like setting up an environment or fixing a bug) to save the exact steps for future use.',
+        {
+          name: z.string().describe('The name of the skill, lowercase with dashes (e.g., "setup-nginx", "fix-cors")'),
+          description: z.string().describe('A short, one-sentence description of what this skill does.'),
+          whenToUse: z.string().describe('When should the AI use this skill? (e.g., "When the user asks to configure Nginx")'),
+          content: z.string().describe('The actual Markdown content of the skill. This should include the exact Bash commands, file paths, or code snippets that were proven to work in this session.'),
+        },
+        async ({ name, description, whenToUse, content }) => {
+          try {
+            const fs = await import('fs');
+            const path = await import('path');
+            const skillsDir = path.join(workspacePath, '.claude', 'skills', name);
+            fs.mkdirSync(skillsDir, { recursive: true });
+
+            const skillContent = `---
+name: ${name}
+description: "${description.replace(/"/g, '\\"')}"
+whenToUse: "${whenToUse.replace(/"/g, '\\"')}"
+---
+
+${content}
+`;
+            const filePath = path.join(skillsDir, 'SKILL.md');
+            fs.writeFileSync(filePath, skillContent, 'utf-8');
+
+            return { content: [{ type: 'text' as const, text: `Successfully crystallized skill! Saved to ${filePath}. In future conversations, you can call this skill by its name "${name}".` }] };
+          } catch (e) {
+            return { content: [{ type: 'text' as const, text: `Failed to create skill: ${e instanceof Error ? e.message : String(e)}` }] };
+          }
+        },
+      ),
+      tool(
+        'codepilot_mcp_activate',
+        'Activate a dormant MCP server from the <available_mcp_servers> list. Call this tool IMMEDIATELY when you realize you need a capability provided by an unloaded MCP server. DO NOT attempt to guess the tool names or call them before activating the server.',
+        {
+          serverName: z.string().describe('The exact name of the MCP server to activate (e.g., "minimax_vision", "github")'),
+        },
+        async ({ serverName }) => {
+          // The actual loading logic is handled dynamically by the Native Runtime loop
+          // or by the next turn keyword matcher in SDK runtime.
+          return { content: [{ type: 'text' as const, text: `Activation request received for ${serverName}. In Native Runtime, the tools will be available in your NEXT tool call step. In SDK Runtime, you MUST yield back to the user now and ask them to continue so the server can load. Do NOT try to call the unloaded tools in this step.` }] };
+        }
+      )
     ],
   });
 }

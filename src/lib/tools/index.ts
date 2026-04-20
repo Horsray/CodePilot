@@ -15,6 +15,8 @@ import { createEditTool } from './edit';
 import { createSkillTool } from './skill';
 import { createAgentTool } from './agent';
 import { createTodoWriteTool } from './todo-write';
+import { createSkillCreateTool } from '../builtin-tools/skill-create';
+import { createMcpActivateTool } from '../builtin-tools/mcp-activate';
 
 export interface ToolContext {
   /** Working directory for file operations */
@@ -48,6 +50,8 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
     Grep: createGrepTool(ctx),
     Skill: createSkillTool(ctx.workingDirectory),
     TodoWrite: createTodoWriteTool(ctx),
+    codepilot_skill_create: createSkillCreateTool(ctx.workingDirectory),
+    codepilot_mcp_activate: createMcpActivateTool(ctx.workingDirectory),
     Agent: createAgentTool({
       workingDirectory: ctx.workingDirectory,
       providerId: ctx.providerId,

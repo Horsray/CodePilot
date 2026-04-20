@@ -46,8 +46,12 @@ export class KnowledgeGraphProvider {
       throw new Error(`Failed to parse graph.json: ${err instanceof Error ? err.message : String(err)}`);
     }
     
-    // 3. Sync structural data to MCP Memory for AI real-time access
-    await this.syncToMcp(graphData);
+    // [Phase 1: Consolidation]
+    // Removed syncToMcp(graphData) here to prevent static AST nodes from polluting
+    // the dynamic MCP Memory database. Graphify output should be used purely as a 
+    // read-only structural reference, while MCP Memory is reserved for dynamic 
+    // business logic, architectural decisions, and user preferences.
+    console.log(`[KnowledgeGraphProvider] Learn complete. Graph data available at graphify-out/graph.json`);
     
     return graphData;
   }
@@ -55,51 +59,11 @@ export class KnowledgeGraphProvider {
   /**
    * Syncs graphify nodes and links to the MCP Memory server.
    * 中文：将 graphify 的节点和链接同步到 MCP 记忆服务器。
+   * @deprecated Removed in Hermes Unified Memory System update to prevent data pollution.
    */
   private async syncToMcp(graphData: any) {
-    const nodes = graphData.nodes || [];
-    const links = graphData.links || [];
-
-    console.log(`[KnowledgeGraphProvider] Syncing ${nodes.length} nodes and ${links.length} links to MCP Memory...`);
-
-    // Convert graphify nodes to MCP Entities
-    const entities = nodes.map((n: any) => ({
-      name: n.label || n.id,
-      entityType: n.type || 'file',
-      observations: [
-        `Description: ${n.description || ''}`,
-        `Level: ${n.level || ''}`,
-        `Path: ${n.id}`
-      ].filter(obs => !obs.endsWith(': '))
-    }));
-
-    // Batch create entities (Chunked to avoid large payload issues)
-    const chunkSize = 50;
-    for (let i = 0; i < entities.length; i += chunkSize) {
-      try {
-        await memoryClient.createEntities(entities.slice(i, i + chunkSize));
-      } catch (err) {
-        console.error(`[KnowledgeGraphProvider] Failed to sync node chunk ${i}:`, err);
-      }
-    }
-
-    // Convert graphify links to MCP Relations
-    const relations = links.map((l: any) => ({
-      from: l.source,
-      to: l.target,
-      relationType: l.type || 'relates_to'
-    }));
-
-    // Batch add relations
-    for (let i = 0; i < relations.length; i += chunkSize) {
-      try {
-        await memoryClient.addRelations(relations.slice(i, i + chunkSize));
-      } catch (err) {
-        console.error(`[KnowledgeGraphProvider] Failed to sync relation chunk ${i}:`, err);
-      }
-    }
-    
-    console.log(`[KnowledgeGraphProvider] Sync complete.`);
+    console.warn(`[KnowledgeGraphProvider] syncToMcp is deprecated and has been disabled to prevent MCP Memory pollution.`);
+    return;
   }
 
   /**

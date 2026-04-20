@@ -722,6 +722,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'codepilot_cli_tools_check_updates',
             'codepilot_cli_tools_update',
             'codepilot_cli_tools_install',
+            'codepilot_mcp_activate',
+            'mcp__codepilot-todo__codepilot_mcp_activate',
             // Builtin tools
             'Read',
             'Write',
@@ -822,6 +824,41 @@ if (claudePath) {
           }
         }
 
+        // Inject a dictionary of all available but dormant MCP servers into the system prompt.
+        // This solves the "keyword gating" limitation by making the AI aware of all installed
+        // MCP servers (global + project) so it can autonomously decide to request them.
+        try {
+          const { loadAllMcpServers } = await import('@/lib/mcp-loader');
+          const allServers = loadAllMcpServers(resolvedWorkingDirectory.path);
+          if (allServers) {
+            const loadedServerNames = new Set(Object.keys(queryOptions.mcpServers || {}));
+            const dormantServers = Object.entries(allServers)
+              .filter(([name]) => !loadedServerNames.has(name))
+              .map(([name, config]) => {
+                const target = config.command || config.url || '';
+                return `- **${name}**: ${target}`;
+              });
+
+            if (dormantServers.length > 0) {
+              const mcpDiscoveryPrompt = `
+<available_mcp_servers>
+The user has installed the following external MCP servers (global and project-level), but they are currently UNLOADED to save memory and startup time:
+${dormantServers.join('\n')}
+
+If the user's request requires any of these capabilities (e.g. database access, web search, image recognition), DO NOT say you cannot do it.
+Instead, explain that you have an unloaded MCP server that can help, and ask the user if you should proceed. 
+Once you or the user mention the exact server name (e.g., "${dormantServers[0]?.split('**')[1] || 'server_name'}") in the chat, it will be automatically loaded in the next turn!
+</available_mcp_servers>`;
+
+              if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+                queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n' + mcpDiscoveryPrompt;
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[claude-client] Failed to inject MCP discovery prompt:', e);
+        }
+
         // Memory MCP: always registered in assistant mode for memory search/retrieval.
         // Unlike other MCPs which are keyword-gated, memory search is a core assistant capability.
         {
@@ -856,7 +893,7 @@ if (claudePath) {
           const { createTodoMcpServer, TODO_MCP_SYSTEM_PROMPT } = await import('@/lib/todo-mcp');
           queryOptions.mcpServers = {
             ...(queryOptions.mcpServers || {}),
-            'codepilot-todo': createTodoMcpServer(),
+            'codepilot-todo': createTodoMcpServer(resolvedWorkingDirectory.path),
           };
           if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + TODO_MCP_SYSTEM_PROMPT;
@@ -1088,6 +1125,29 @@ if (claudePath) {
             'codepilot_dashboard_remove',
             'TodoWrite',
             'mcp__codepilot-todo__TodoWrite',
+            'codepilot_skill_create',
+            'mcp__codepilot-todo__codepilot_skill_create',
+            'codepilot_mcp_activate',
+            'mcp__codepilot-todo__codepilot_mcp_activate',
+            'Read',
+            'Write',
+            'Edit',
+            'Bash',
+            'Glob',
+            'Grep',
+            'Skill',
+            'Agent',
+            'mcp__filesystem__read_file',
+            'mcp__filesystem__read_multiple_files',
+            'mcp__filesystem__write_file',
+            'mcp__filesystem__edit_file',
+            'mcp__filesystem__create_directory',
+            'mcp__filesystem__list_directory',
+            'mcp__filesystem__directory_tree',
+            'mcp__filesystem__move_file',
+            'mcp__filesystem__search_files',
+            'mcp__filesystem__get_file_info',
+            'mcp__filesystem__list_allowed_directories'
           ];
           if (autoApprovedTools.some(t => toolName === t || toolName.endsWith(`__${t}`))) {
             return { behavior: 'allow' as const, updatedInput: input };

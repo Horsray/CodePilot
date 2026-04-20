@@ -112,9 +112,8 @@ function wrapWithPermissions(
   for (const [name, t] of Object.entries(tools)) {
     // Skip permission checks for safe tools:
     // - Read-only core tools (Read, Glob, Grep, Skill)
-    // - TodoWrite (managing tasks is safe and needs no user confirmation)
-    // - All CodePilot built-in tools (codepilot_*) — trusted internal tools
-    if (['Read', 'Glob', 'Grep', 'Skill', 'TodoWrite'].includes(name) || name.startsWith('codepilot_')) {
+    // - codepilot_skill_create (safe utility to write skill files)
+    if (['Read', 'Glob', 'Grep', 'Skill', 'TodoWrite', 'codepilot_skill_create'].includes(name) || name.startsWith('codepilot_')) {
       wrapped[name] = t;
       continue;
     }

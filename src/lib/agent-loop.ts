@@ -138,13 +138,10 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           console.log('[agent-loop] No MCP servers to sync');
         }
 
-        // 0b. Assemble tools with permission context (needs controller for SSE emission)
-        // When bypassPermissions is true (full_access profile), skip permission wrapping entirely.
-        let tools: import('ai').ToolSet;
+        // 0b. Initial tool assembly (so UI knows available tools on start)
+        let tools: any = toolsOverride || {};
         let toolSystemPrompts: string[] = [];
-        if (toolsOverride) {
-          tools = toolsOverride;
-        } else {
+        if (!toolsOverride) {
           const assembled = assembleTools({
             workingDirectory: workingDirectory || process.cwd(),
             prompt,
@@ -164,12 +161,6 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           tools = assembled.tools;
           toolSystemPrompts = assembled.systemPrompts;
         }
-
-        // Augment system prompt with tool-specific context snippets
-        // (notification hints, media capabilities, dashboard usage, etc.)
-        const effectiveSystemPrompt = toolSystemPrompts.length > 0 && systemPrompt
-          ? systemPrompt + '\n\n' + toolSystemPrompts.join('\n\n')
-          : systemPrompt;
 
         // 1. Create model
         const { languageModel, modelId, config, isThirdPartyProxy } = createModel({
@@ -245,6 +236,32 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
 
         while (step < maxSteps) {
           step++;
+
+          if (!toolsOverride) {
+            const assembled = assembleTools({
+              workingDirectory: workingDirectory || process.cwd(),
+              prompt,
+              mode: permissionMode,
+              providerId,
+              sessionProviderId,
+              model: modelOverride || sessionModel,
+              permissionContext: bypassPermissions ? undefined : {
+                sessionId,
+                permissionMode: (permissionMode || 'trust') as PermissionMode,
+                emitSSE: (event) => {
+                  controller.enqueue(formatSSE(event as SSEEvent));
+                },
+                abortSignal: abortController.signal,
+              },
+            });
+            tools = assembled.tools;
+            toolSystemPrompts = assembled.systemPrompts;
+          }
+
+          // Augment system prompt with tool-specific context snippets
+          const effectiveSystemPrompt = toolSystemPrompts.length > 0 && systemPrompt
+            ? systemPrompt + '\n\n' + toolSystemPrompts.join('\n\n')
+            : systemPrompt;
 
           // Build provider options (Anthropic-specific).
           // Shared sanitizer applies Opus 4.7 migration guards (manual

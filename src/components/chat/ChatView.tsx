@@ -341,6 +341,17 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
         setHasSummary(true);
+        // Toast 提示用户上下文已被压缩
+        import('@/hooks/useToast').then(({ showToast }) => {
+          const { messagesCompressed = 0, tokensSaved = 0 } = detail || {};
+          showToast({
+            type: 'info',
+            message: tokensSaved > 0
+              ? `上下文已压缩：${messagesCompressed} 条旧消息已摘要，节省约 ${tokensSaved.toLocaleString()} tokens`
+              : `上下文已压缩：${messagesCompressed} 条旧消息已摘要`,
+            duration: 6000,
+          });
+        }).catch(() => { /* toast 系统不可用 */ });
         // Phase 1b: if the user asked for "compress and retry", kick off
         // the retry now that compression actually finished. Stored flag
         // + last user message are consumed once so we can't replay

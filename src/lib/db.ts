@@ -2993,7 +2993,9 @@ export function listScheduledTasks(opts?: { status?: string }): ScheduledTask[] 
 
 export function getDueTasks(): ScheduledTask[] {
   const db = getDb();
-  return db.prepare("SELECT * FROM scheduled_tasks WHERE next_run <= datetime('now') AND status = 'active' AND (last_status IS NULL OR last_status != 'running')").all() as ScheduledTask[];
+  // Using ISO string to correctly compare with next_run format (YYYY-MM-DDTHH:mm:ss.sssZ)
+  const nowISO = new Date().toISOString();
+  return db.prepare("SELECT * FROM scheduled_tasks WHERE next_run <= ? AND status = 'active' AND (last_status IS NULL OR last_status != 'running')").all(nowISO) as ScheduledTask[];
 }
 
 export function updateScheduledTask(id: string, updates: Partial<ScheduledTask>): void {

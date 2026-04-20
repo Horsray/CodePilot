@@ -86,9 +86,22 @@ export async function extractMemories(
   try {
     const { generateTextFromProvider } = await import('./text-generator');
     const { resolveProvider } = await import('./provider-resolver');
-    const resolved = resolveProvider({ useCase: 'small' });
+    const { getSetting } = await import('./db');
+    
+    // Prefer nightly compaction model settings for memory extraction as well
+    const providerId = getSetting('nightly_compaction_provider_id');
+    const model = getSetting('nightly_compaction_model');
+    
+    const resolved = resolveProvider({ 
+      sessionProviderId: providerId || undefined,
+      sessionModel: model || undefined,
+      useCase: 'small' 
+    });
 
-    if (!resolved.hasCredentials) return;
+    if (!resolved.hasCredentials) {
+      console.warn('[memory-extractor] No credentials available for memory extraction');
+      return;
+    }
 
     // Take last 3 turns (6 messages max)
     const context = recentMessages.slice(-6).map(m =>
@@ -111,12 +124,17 @@ If nothing is worth remembering, output exactly: NOTHING`,
       maxTokens: 300,
     });
 
-    if (!result || result.trim() === 'NOTHING' || result.trim().length < 10) return;
+    console.log('[memory-extractor] Extracted result:', result);
+
+    if (!result || result.trim() === 'NOTHING' || result.trim().length < 10) {
+      console.log('[memory-extractor] Nothing valuable to extract.');
+      return;
+    }
 
     // Write to daily memory
     const fs = await import('fs');
     const path = await import('path');
-    const { getLocalDateString } = await import('@/lib/utils');
+    const { getLocalDateString } = await import('./utils');
     const today = getLocalDateString();
     const dailyDir = path.join(workspacePath, 'memory', 'daily');
 
@@ -140,7 +158,7 @@ If nothing is worth remembering, output exactly: NOTHING`,
 
       for (const milestone of milestones) {
         if (count === milestone) {
-          const { addMessage, getLatestSessionByWorkingDirectory } = await import('@/lib/db');
+          const { addMessage, getLatestSessionByWorkingDirectory } = await import('./db');
           const session = getLatestSessionByWorkingDirectory(workspacePath);
           if (session) {
             const { loadState } = await import('./assistant-workspace');
@@ -154,7 +172,9 @@ If nothing is worth remembering, output exactly: NOTHING`,
           break; // Only one milestone per extraction
         }
       }
-    } catch { /* best effort */ }
+    } catch (e) {
+      console.error('[memory-extractor] Failed to check milestones:', e);
+    }
   } catch (err) {
     console.error('[memory-extractor] Extraction failed:', err);
   }

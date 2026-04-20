@@ -57,6 +57,7 @@ export async function register() {
     // Start the task scheduler so persisted tasks resume on cold boot
     // (previously only started as a side effect of /api/chat)
     const { ensureSchedulerRunning } = await import('@/lib/task-scheduler');
+    console.log('[instrumentation] Initializing task scheduler...');
     ensureSchedulerRunning();
   }
 }

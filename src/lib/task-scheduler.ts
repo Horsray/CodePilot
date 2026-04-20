@@ -20,6 +20,7 @@ const RECURRING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // ── Session-only tasks (in-memory, not persisted) ────────────────
 const SESSION_TASKS_KEY = '__codepilot_session_tasks__';
+const LAST_COMPACTION_KEY = '__codepilot_last_compaction__';
 
 export function getSessionTasks(): Map<string, ScheduledTask> {
   if (!(globalThis as Record<string, unknown>)[SESSION_TASKS_KEY]) {
@@ -56,13 +57,133 @@ export function ensureSchedulerRunning(): void {
 
   const intervalId = setInterval(async () => {
     try {
-      const { getDueTasks } = await import('@/lib/db');
+      const now = new Date();
+      const { getDueTasks } = await import('./db');
       const dueTasks = getDueTasks();
+
+      if (dueTasks.length > 0) {
+        console.log(`[scheduler] Found ${dueTasks.length} due tasks at ${now.toISOString()}`);
+      }
+
+      // [Phase 3: Nightly Compaction]
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+      const todayStr = now.toISOString().split('T')[0];
+      const lastCompaction = (globalThis as Record<string, unknown>)[LAST_COMPACTION_KEY];
+      
+      // If it's exactly 3:00 AM and we haven't run compaction today
+      if (currentHour === 3 && currentMinute === 0 && lastCompaction !== todayStr) {
+        (globalThis as Record<string, unknown>)[LAST_COMPACTION_KEY] = todayStr;
+        
+        // Run nightly compaction asynchronously
+        (async () => {
+          try {
+            console.log('[Nightly Compaction] Starting nightly memory compaction...');
+            const { getSetting } = await import('./db');
+            const workspacePath = getSetting('assistant_workspace_path');
+            if (!workspacePath) {
+              console.log('[Nightly Compaction] No assistant_workspace_path configured. Skipping.');
+              return;
+            }
+
+            const nightlyEnabled = getSetting('nightly_compaction_enabled') !== 'false';
+            if (!nightlyEnabled) {
+              console.log('[Nightly Compaction] Nightly compaction is disabled in settings. Skipping.');
+              return;
+            }
+
+            const fs = await import('fs');
+            const path = await import('path');
+            const dailyDir = path.join(workspacePath, 'memory', 'daily');
+            
+            if (!fs.existsSync(dailyDir)) {
+              console.log('[Nightly Compaction] No daily memory directory found. Skipping.');
+              return;
+            }
+
+            // Get yesterday's file
+            const yesterday = new Date(now);
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yesterdayFile = path.join(dailyDir, `${yesterday.toISOString().split('T')[0]}.md`);
+
+            if (!fs.existsSync(yesterdayFile)) {
+              console.log(`[Nightly Compaction] No memory file found for yesterday (${yesterdayFile}). Skipping.`);
+              return;
+            }
+
+            const content = fs.readFileSync(yesterdayFile, 'utf-8').trim();
+            if (!content) return;
+
+            console.log(`[Nightly Compaction] Processing ${yesterdayFile}...`);
+
+            const { generateTextFromProvider } = await import('./text-generator');
+            const { resolveProvider } = await import('./provider-resolver');
+            
+            // Prefer dedicated nightly model config, fallback to default provider
+            const nightlyProviderId = getSetting('nightly_compaction_provider_id');
+            const nightlyModel = getSetting('nightly_compaction_model');
+            
+            const resolved = resolveProvider({ 
+              sessionProviderId: nightlyProviderId || undefined,
+              sessionModel: nightlyModel || undefined
+            });
+
+            if (!resolved.hasCredentials) {
+              console.warn('[Nightly Compaction] No API credentials configured. Skipping.');
+              return;
+            }
+
+            const result = await generateTextFromProvider({
+              providerId: resolved.provider?.id || '',
+              model: resolved.upstreamModel || resolved.model || 'haiku',
+              system: `You are an AI memory compaction agent. Extract high-value architectural decisions, proven solutions, and user preferences from the provided daily log. 
+Format your output STRICTLY as a JSON array of entities to be saved to the MCP Memory Graph.
+Example:
+[
+  {
+    "name": "TailwindCSS",
+    "entityType": "technology",
+    "observations": ["User prefers Tailwind over CSS modules", "Configured custom color palette"]
+  }
+]
+If there is nothing valuable to extract, return an empty array []. DO NOT wrap in markdown \`\`\`json block, just return the raw JSON array.`,
+              prompt: `Daily Log:\n\n${content}`,
+              maxTokens: 1000,
+            });
+
+            try {
+              // Strip markdown JSON block if the model included it
+              const rawJson = result.replace(/^```json/i, '').replace(/```$/i, '').trim();
+              const entities = JSON.parse(rawJson);
+              if (Array.isArray(entities) && entities.length > 0) {
+                const { memoryClient } = await import('./memory-client');
+                await memoryClient.createEntities(entities);
+                console.log(`[Nightly Compaction] Successfully extracted and saved ${entities.length} entities to MCP Memory.`);
+              } else {
+                console.log('[Nightly Compaction] No high-value entities extracted.');
+              }
+            } catch (parseErr) {
+              console.error('[Nightly Compaction] Failed to parse LLM output as JSON:', result);
+            }
+          } catch (err) {
+            console.error('[Nightly Compaction] Error during compaction:', err);
+          }
+        })();
+      }
+
       for (const task of dueTasks) {
-        // Fire-and-forget: don't block the poll loop
-        executeDueTask(task).catch(err =>
-          console.error(`[scheduler] Task ${task.id} (${task.name}) failed:`, err)
-        );
+        // Check active hours
+        if (task.active_hours_start && task.active_hours_end) {
+          const currentHourMin = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
+          if (currentHourMin < task.active_hours_start || currentHourMin > task.active_hours_end) {
+            console.log(`[scheduler] Skipping task ${task.id} (outside active hours ${task.active_hours_start}-${task.active_hours_end})`);
+            continue;
+          }
+        }
+        // Execute task asynchronously
+        executeDueTask(task).catch(err => {
+          console.error(`[scheduler] Unhandled error executing task ${task.id}:`, err);
+        });
       }
 
       // Check session-only tasks too
@@ -160,6 +281,8 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     if (!resolved.hasCredentials) {
       throw new Error('No API credentials configured');
     }
+
+    console.log(`[scheduler] Executing task ${task.id} with prompt:`, task.prompt);
 
     const result = await generateTextFromProvider({
       providerId: resolved.provider?.id || '',

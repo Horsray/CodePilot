@@ -9,6 +9,7 @@ import { ProviderManager } from "./ProviderManager";
 import { CliSettingsSection } from "./CliSettingsSection";
 import { UsageStatsSection } from "./UsageStatsSection";
 import { AssistantWorkspaceSection } from "./AssistantWorkspaceSection";
+import { LangOptSettingsSection } from "./LangOptSettingsSection";
 import { RulesSection } from "./RulesSection";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
@@ -106,7 +107,12 @@ export function SettingsLayout() {
           {activeSection === "providers" && <ProviderManager />}
           {activeSection === "cli" && <CliSettingsSection />}
           {activeSection === "usage" && <UsageStatsSection />}
-          {activeSection === "assistant" && <AssistantWorkspaceSection />}
+          {activeSection === "assistant" && (
+            <div className="space-y-6">
+              <AssistantWorkspaceSection />
+              <LangOptSettingsSection />
+            </div>
+          )}
           {activeSection === "rules" && <RulesSection />}
         </div>
       </div>
