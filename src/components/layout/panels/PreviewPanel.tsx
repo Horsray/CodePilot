@@ -267,8 +267,6 @@ export function PreviewPanel() {
         alert(`Save failed: ${data.error || res.statusText}`);
         return;
       }
-      // Success — sync savedContent so the dirty indicator clears, plus
-      // flash a 2s "Saved" label in the toolbar.
       setSavedContent(editContent);
       setEditJustSaved(true);
       setTimeout(() => setEditJustSaved(false), 2000);
@@ -278,6 +276,21 @@ export function PreviewPanel() {
       setSavingEdit(false);
     }
   }, [editDirty, savingEdit, previewSource, editContent, workingDirectory]);
+
+  // Debounced autosave. Fires 1 second after the user stops typing, as
+  // long as the buffer is dirty and we're not already saving. Cmd+S is
+  // still wired through handleSaveEdit for users who want immediate
+  // persistence, but the primary save path is now ambient so people
+  // don't lose work by forgetting to hit the shortcut.
+  useEffect(() => {
+    if (!editDirty || savingEdit) return;
+    if (previewSource?.kind !== "file") return;
+    if (!isEditable(filePath)) return;
+    const timer = setTimeout(() => {
+      void handleSaveEdit();
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [editContent, editDirty, savingEdit, previewSource, filePath, handleSaveEdit]);
   const handleExportLongShot = useCallback(async () => {
     if (!exportableHtml) return;
     setExporting(true);
@@ -357,7 +370,7 @@ export function PreviewPanel() {
           <ViewModeToggle
             value={previewViewMode}
             onChange={setPreviewViewMode}
-            showEdit={previewSource?.kind === "file" && isEditable(filePath)}
+            editable={previewSource?.kind === "file" && isEditable(filePath)}
           />
         )}
 
@@ -468,11 +481,11 @@ export function PreviewPanel() {
           </div>
         ) : preview ? (
           <>
-            {previewViewMode === "edit" && isEditable(filePath) ? (
-              // Phase 4.3: CodeMirror editor for .md/.mdx/.txt. Cmd+S calls
-              // handleSaveEdit through the editor's keymap; the external
-              // Save button in the toolbar is a second path to the same
-              // handler for people who prefer clicking.
+            {isEditable(filePath) && (previewViewMode === "edit" || previewViewMode === "source") ? (
+              // Editable files: Source and Edit both route to the
+              // CodeMirror surface (Edit is Source for Markdown). Cmd+S
+              // calls handleSaveEdit through the editor keymap; the
+              // debounce-driven autosave below is the primary path.
               <MarkdownEditor
                 value={editContent}
                 onChange={setEditContent}
@@ -484,7 +497,8 @@ export function PreviewPanel() {
             ) : (
               <SourceView preview={preview} isDark={isDark} />
             )}
-            {previewViewMode !== "edit" && preview.truncated && <TruncationBanner preview={preview} />}
+            {!(isEditable(filePath) && (previewViewMode === "edit" || previewViewMode === "source")) &&
+              preview.truncated && <TruncationBanner preview={preview} />}
           </>
         ) : null}
       </div>
@@ -516,28 +530,32 @@ function TruncationBanner({ preview }: { preview: FilePreviewType }) {
 }
 
 /**
- * Capsule toggle for Source / Preview / Edit view modes.
+ * Capsule toggle for view modes.
  *
- * `showEdit` hides the Edit pill for file types without a matching
- * editor — we don't want users to click "Edit" on .ts files and get
- * confused when Save doesn't materialize (EDITABLE_EXTENSIONS gates
- * actual save behavior too, but hiding the button is the UX-level fix).
+ * Editable files (.md/.mdx/.txt) show [Edit | Preview] — Edit *is*
+ * Source for these, so a separate Source pill would just duplicate
+ * the CodeMirror surface without adding value. Non-editable files
+ * (code, config, etc.) show [Source | Preview] as before.
+ *
+ * The `value` coming in may be "source" (legacy default) even for
+ * editable files — callers don't need to remap, we treat it as "edit"
+ * via highlighting so the UI stays consistent.
  */
 function ViewModeToggle({
   value,
   onChange,
-  showEdit,
+  editable,
 }: {
   value: ViewMode;
   onChange: (v: ViewMode) => void;
-  showEdit: boolean;
+  editable: boolean;
 }) {
-  const pill = (mode: ViewMode, label: string) => (
+  const pill = (mode: ViewMode, label: string, highlighted: boolean) => (
     <Button
       variant="ghost"
       size="sm"
       className={`rounded-full px-2 py-0.5 font-medium h-auto ${
-        value === mode
+        highlighted
           ? "bg-background text-foreground shadow-sm"
           : "text-muted-foreground hover:text-foreground"
       }`}
@@ -548,9 +566,10 @@ function ViewModeToggle({
   );
   return (
     <div className="flex h-6 items-center rounded-full bg-muted p-0.5 text-[11px]">
-      {showEdit && pill("edit", "Edit")}
-      {pill("source", "Source")}
-      {pill("rendered", "Preview")}
+      {editable
+        ? pill("edit", "Edit", value === "edit" || value === "source")
+        : pill("source", "Source", value === "source")}
+      {pill("rendered", "Preview", value === "rendered")}
     </div>
   );
 }
