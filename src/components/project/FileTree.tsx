@@ -18,6 +18,13 @@ interface FileTreeProps {
   workingDirectory: string;
   onFileSelect: (path: string) => void;
   onFileAdd?: (path: string) => void;
+  /**
+   * Called when the hover "+" button on a folder row is clicked. The
+   * receiver opens its new-file input pre-targeted at this folder path,
+   * so users can create a .md file inside a nested folder without
+   * navigating up to the workspace root.
+   */
+  onCreateChild?: (folderPath: string) => void;
   highlightPath?: string;
   highlightSeek?: string;
 }
@@ -129,7 +136,7 @@ function getParentPaths(filePath: string): string[] {
   return parents;
 }
 
-export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightPath, highlightSeek }: FileTreeProps) {
+export function FileTree({ workingDirectory, onFileSelect, onFileAdd, onCreateChild, highlightPath, highlightSeek }: FileTreeProps) {
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -293,6 +300,7 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- AI Elements FileTree onSelect type conflicts with HTMLAttributes.onSelect
             onSelect={onFileSelect as any}
             onAdd={onFileAdd}
+            onCreateChild={onCreateChild}
             className="border-0 rounded-none"
           >
             <RenderTreeNodes nodes={tree} searchQuery={searchQuery} highlightPath={highlightPath} />

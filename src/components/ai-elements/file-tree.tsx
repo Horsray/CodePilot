@@ -29,6 +29,12 @@ interface FileTreeContextType {
   selectedPath?: string;
   onSelect?: (path: string) => void;
   onAdd?: (path: string) => void;
+  /**
+   * Fired when the user clicks the "+" button that appears on a folder row
+   * hover. The receiver (FileTreePanel) opens its new-file input pre-
+   * targeted at this folder instead of the workspace root.
+   */
+  onCreateChild?: (folderPath: string) => void;
 }
 
 // Module-scope immutable empty Set. Inlining `new Set()` as a destructuring
@@ -52,6 +58,7 @@ export type FileTreeProps = HTMLAttributes<HTMLDivElement> & {
   selectedPath?: string;
   onSelect?: (path: string) => void;
   onAdd?: (path: string) => void;
+  onCreateChild?: (folderPath: string) => void;
   onExpandedChange?: (expanded: Set<string>) => void;
 };
 
@@ -61,6 +68,7 @@ export const FileTree = ({
   selectedPath,
   onSelect,
   onAdd,
+  onCreateChild,
   onExpandedChange,
   className,
   children,
@@ -84,8 +92,8 @@ export const FileTree = ({
   );
 
   const contextValue = useMemo(
-    () => ({ expandedPaths, onAdd, onSelect, selectedPath, togglePath }),
-    [expandedPaths, onAdd, onSelect, selectedPath, togglePath]
+    () => ({ expandedPaths, onAdd, onCreateChild, onSelect, selectedPath, togglePath }),
+    [expandedPaths, onAdd, onCreateChild, onSelect, selectedPath, togglePath]
   );
 
   return (
@@ -128,13 +136,25 @@ export const FileTreeFolder = ({
   children,
   ...props
 }: FileTreeFolderProps) => {
-  const { expandedPaths, togglePath } =
+  const { expandedPaths, togglePath, onCreateChild } =
     useContext(FileTreeContext);
   const isExpanded = expandedPaths.has(path);
 
   const handleToggle = useCallback(() => {
     togglePath(path);
   }, [togglePath, path]);
+
+  // Hover + button handler. stopPropagation so clicking "+" does not also
+  // toggle the folder open/close (which would annoy users who clicked
+  // the + on a collapsed folder and then had their new-file input pop up
+  // above a newly-expanded folder body).
+  const handleCreateChild = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onCreateChild?.(path);
+    },
+    [onCreateChild, path],
+  );
 
   const folderContextValue = useMemo(
     () => ({ isExpanded, name, path }),
@@ -151,7 +171,7 @@ export const FileTreeFolder = ({
         >
           <CollapsibleTrigger asChild>
             <div
-              className="flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left transition-colors hover:bg-muted/50"
+              className="group/folder flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left transition-colors hover:bg-muted/50"
               role="button"
               tabIndex={0}
               onKeyDown={(e) => {
@@ -178,6 +198,16 @@ export const FileTreeFolder = ({
                 )}
               </FileTreeIcon>
               <FileTreeName>{name}</FileTreeName>
+              {onCreateChild && (
+                <button
+                  type="button"
+                  className="ml-auto flex size-5 shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted group-hover/folder:opacity-100"
+                  onClick={handleCreateChild}
+                  title="New Markdown file in this folder"
+                >
+                  <Plus size={12} className="text-muted-foreground" />
+                </button>
+              )}
             </div>
           </CollapsibleTrigger>
           <CollapsibleContent>

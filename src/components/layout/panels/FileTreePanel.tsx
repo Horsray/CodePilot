@@ -20,7 +20,10 @@ export function FileTreePanel() {
   const { t } = useTranslation();
   const searchParams = useSearchParams();
   const [width, setWidth] = useState(TREE_DEFAULT_WIDTH);
-  const [newFileMode, setNewFileMode] = useState(false);
+  // null = input hidden; non-null = show input, targeting that directory.
+  // Populated either from the "+" in the panel header (→ workingDirectory)
+  // or from the hover "+" on any FileTreeFolder row (→ that folder path).
+  const [newFileTargetDir, setNewFileTargetDir] = useState<string | null>(null);
   const [newFileName, setNewFileName] = useState("untitled.md");
   const [newFileError, setNewFileError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -31,13 +34,13 @@ export function FileTreePanel() {
   // (everything before the final dot) so typing immediately replaces
   // "untitled" while keeping the .md extension.
   useEffect(() => {
-    if (newFileMode && newFileInputRef.current) {
+    if (newFileTargetDir && newFileInputRef.current) {
       const input = newFileInputRef.current;
       input.focus();
       const dot = input.value.lastIndexOf(".");
       input.setSelectionRange(0, dot >= 0 ? dot : input.value.length);
     }
-  }, [newFileMode]);
+  }, [newFileTargetDir]);
 
   const highlightPath = searchParams.get('file') || undefined;
   const highlightSeek = searchParams.get('seek') || undefined;
@@ -51,13 +54,14 @@ export function FileTreePanel() {
   }, []);
 
   /**
-   * Create a new Markdown file directly under the current workingDirectory.
-   * Calls /api/files/write with createParents=false and overwrite=false —
-   * the API will return 409 if the chosen name already exists, which we
-   * surface inline instead of silently clobbering. After a successful
-   * create we open the new file in PreviewPanel so the user lands on
-   * a ready-to-edit state (editing surface comes from SkillEditor-style
-   * MarkdownEditor in later Phase 4 work).
+   * Create a new Markdown file under the active targetDir (either the
+   * workspace root when opened from the header "+" button, or a specific
+   * folder when opened from that folder's hover "+" button).
+   *
+   * baseDir stays pinned to workingDirectory regardless — the path-safety
+   * check in /api/files/write needs to know the workspace envelope, not
+   * the per-folder target. If the target is a subfolder inside the
+   * workspace, the combined path still passes isPathSafe.
    */
   const handleCreateFile = useCallback(async () => {
     setNewFileError(null);
@@ -70,14 +74,11 @@ export function FileTreePanel() {
       setNewFileError(t('fileTree.newFileErrorNoWorkspace'));
       return;
     }
+    const targetDir = newFileTargetDir ?? workingDirectory;
     setCreating(true);
     try {
-      // Build the target path under the workspace. path.join would be nicer
-      // but this component is a Client Component — just use string concat
-      // and normalize separator for the current platform via the API's
-      // path.resolve on the server side.
-      const separator = workingDirectory.includes("\\") ? "\\" : "/";
-      const targetPath = `${workingDirectory}${separator}${trimmed}`;
+      const separator = targetDir.includes("\\") ? "\\" : "/";
+      const targetPath = `${targetDir}${separator}${trimmed}`;
       const res = await fetch("/api/files/write", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -95,11 +96,9 @@ export function FileTreePanel() {
         return;
       }
       const data = await res.json();
-      setNewFileMode(false);
+      setNewFileTargetDir(null);
       setNewFileName("untitled.md");
-      // Reload file tree so the new file appears
       setTreeReloadKey((k) => k + 1);
-      // Open the new file in preview
       setPreviewFile(data.path);
       setPreviewOpen(true);
     } catch (err) {
@@ -107,7 +106,20 @@ export function FileTreePanel() {
     } finally {
       setCreating(false);
     }
-  }, [newFileName, workingDirectory, t, setPreviewFile, setPreviewOpen]);
+  }, [newFileName, newFileTargetDir, workingDirectory, t, setPreviewFile, setPreviewOpen]);
+
+  /**
+   * Opens the new-file input pre-targeted at the given folder path. Called
+   * by FileTree (via onCreateChild) when the user clicks the hover "+"
+   * icon on a folder row. The input row reappears at the panel top with
+   * a breadcrumb-style hint showing the relative target path, so the
+   * user can see where the file will land.
+   */
+  const handleOpenNewFileInFolder = useCallback((folderPath: string) => {
+    setNewFileTargetDir(folderPath);
+    setNewFileName("untitled.md");
+    setNewFileError(null);
+  }, []);
 
   const handleFileSelect = useCallback((path: string) => {
     const ext = path.split(".").pop()?.toLowerCase() || "";
@@ -145,7 +157,9 @@ export function FileTreePanel() {
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={() => setNewFileMode((m) => !m)}
+              onClick={() =>
+                setNewFileTargetDir((cur) => (cur === null ? workingDirectory : null))
+              }
               disabled={!workingDirectory}
               title={t('fileTree.newMarkdown')}
             >
@@ -165,8 +179,18 @@ export function FileTreePanel() {
 
         {/* New file input row (shown when user clicks + in header). Enter
             submits, Esc cancels. Error surfaces below the input. */}
-        {newFileMode && (
+        {newFileTargetDir && (
           <div className="shrink-0 border-b border-border/40 bg-muted/30 px-3 py-2 space-y-1">
+            {/* Target breadcrumb — surfaces the folder the file will land
+                in, relative to the workspace root. When opened from the
+                header "+" this shows ".", when opened from a folder hover
+                it shows the relative path so the user has visible
+                feedback that Enter will create in *that* folder. */}
+            <p className="truncate text-[10px] text-muted-foreground/60 font-mono">
+              {newFileTargetDir === workingDirectory
+                ? "./"
+                : `./${newFileTargetDir.replace(workingDirectory, "").replace(/^[/\\]/, "")}/`}
+            </p>
             <div className="flex items-center gap-1.5">
               <Input
                 ref={newFileInputRef}
@@ -178,7 +202,7 @@ export function FileTreePanel() {
                     if (!creating) void handleCreateFile();
                   } else if (e.key === "Escape") {
                     e.preventDefault();
-                    setNewFileMode(false);
+                    setNewFileTargetDir(null);
                     setNewFileError(null);
                   }
                 }}
@@ -214,13 +238,16 @@ export function FileTreePanel() {
           <div className="mx-3 mt-1 mb-2 border-t border-border/40" />
 
           {/* File tree. Key changes after a successful create so the tree
-              reloads its directory scan and the new file appears. */}
+              reloads its directory scan and the new file appears.
+              onCreateChild opens the new-file input targeted at the
+              clicked folder (vs. the workspace root). */}
           <div className="flex-1 min-h-0 overflow-hidden">
             <FileTree
               key={treeReloadKey}
               workingDirectory={workingDirectory}
               onFileSelect={handleFileSelect}
               onFileAdd={handleFileAdd}
+              onCreateChild={handleOpenNewFileInFolder}
               highlightPath={highlightPath}
               highlightSeek={highlightSeek}
             />
