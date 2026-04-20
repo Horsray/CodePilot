@@ -12,7 +12,7 @@ import {
   FileTreeIcon,
   FileTreeName,
 } from "@/components/ai-elements/file-tree";
-import { CaretRight, Folder, FolderOpen, Plus } from "@phosphor-icons/react";
+import { Folder, FolderOpen, Plus } from "@phosphor-icons/react";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { ReactNode } from "react";
 
@@ -108,20 +108,12 @@ function FlatTreeNodeItem({
           }
         }}
       >
-        <span className="shrink-0 rounded p-0.5">
-          <CaretRight
-            size={16}
-            className={cn(
-              "text-muted-foreground transition-transform",
-              isExpanded && "rotate-90"
-            )}
-          />
-        </span>
+        {/* 文件夹图标同时作为展开/折叠按钮 */}
         <FileTreeIcon>
           {isExpanded ? (
-            <FolderOpen size={16} className="text-muted-foreground" />
+            <FolderOpen size={16} className="text-blue-400" weight="fill" />
           ) : (
-            <Folder size={16} className="text-muted-foreground" />
+            <Folder size={16} className="text-blue-400" weight="fill" />
           )}
         </FileTreeIcon>
         <FileTreeName>{node.name}</FileTreeName>

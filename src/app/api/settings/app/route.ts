@@ -29,6 +29,8 @@ const ALLOWED_KEYS = [
   'knowledge_base_enabled',
   // Feature announcement dismiss flags (persist across Electron restarts)
   'codepilot:announcement:v0.48-agent-engine',
+  'lang_opt_provider_id',
+  'lang_opt_model',
 ];
 
 export async function GET() {

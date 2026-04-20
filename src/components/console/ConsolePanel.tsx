@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { Trash, ArrowDown, Copy, Check, MagnifyingGlass, X, ListMagnifyingGlass } from "@/components/ui/icon";
+import { Trash, ArrowDown, Copy, Check, MagnifyingGlass, X, ListMagnifyingGlass, Sparkle } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -343,6 +343,32 @@ export function ConsolePanel() {
     []
   );
 
+  const appendToChat = useCallback((text: string) => {
+    window.dispatchEvent(new CustomEvent('append-chat-text', { detail: { text } }));
+  }, []);
+
+  const handleAppendSelectedToChat = useCallback(() => {
+    if (selectedEntryIds.size === 0) return;
+    const selectedEntries = [...runtimeEntries, ...eventEntries]
+      .filter((e) => selectedEntryIds.has(e.id))
+      .sort((a, b) => a.timestamp - b.timestamp);
+    const text = selectedEntries.map(formatConsoleEntryForCopy).join('\n');
+    appendToChat(`\`\`\`log\n${text}\n\`\`\``);
+  }, [selectedEntryIds, runtimeEntries, eventEntries, appendToChat]);
+
+  const handleAppendErrorsToChat = useCallback(() => {
+    const errorEntries = [...runtimeEntries, ...eventEntries]
+      .filter((e) => e.level === 'error')
+      .sort((a, b) => a.timestamp - b.timestamp);
+    if (errorEntries.length === 0) return;
+    const text = errorEntries.map(formatConsoleEntryForCopy).join('\n');
+    appendToChat(`我遇到了以下报错：\n\`\`\`log\n${text}\n\`\`\`\n请帮我分析原因并修复。`);
+  }, [runtimeEntries, eventEntries, appendToChat]);
+
+  const errorCount = useMemo(() => {
+    return [...runtimeEntries, ...eventEntries].filter(e => e.level === 'error').length;
+  }, [runtimeEntries, eventEntries]);
+
   const selectedCount = selectedEntryIds.size;
 
   return (
@@ -404,17 +430,42 @@ export function ConsolePanel() {
           </Button>
         )}
 
-        {selectedCount > 0 && (
+        {errorCount > 0 && selectedCount === 0 && (
           <Button
-            variant="ghost"
+            variant="secondary"
             size="sm"
-            className="h-6 px-2 text-[10px] gap-1"
-            onClick={() => void copySelectedEntries()}
-            title={t("console.copySelectedShortcut")}
+            className="h-6 px-2 text-[10px] gap-1 text-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-600 dark:hover:text-emerald-400 border-none shadow-none font-medium"
+            onClick={handleAppendErrorsToChat}
+            title="将控制台报错添加到对话中"
           >
-            <Copy size={11} />
-            {t("console.copySelected").replace("{count}", String(selectedCount))}
+            <Sparkle size={12} weight="fill" />
+            添加到对话 · {errorCount}
           </Button>
+        )}
+
+        {selectedCount > 0 && (
+          <div className="flex items-center gap-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-6 px-2 text-[10px] gap-1 text-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-600 dark:hover:text-emerald-400 border-none shadow-none font-medium"
+              onClick={handleAppendSelectedToChat}
+              title="将选中的日志添加到对话中"
+            >
+              <Sparkle size={12} weight="fill" />
+              添加到对话 · {selectedCount}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[10px] gap-1"
+              onClick={() => void copySelectedEntries()}
+              title={t("console.copySelectedShortcut")}
+            >
+              <Copy size={11} />
+              {t("console.copySelected").replace("{count}", String(selectedCount))}
+            </Button>
+          </div>
         )}
 
         {!autoScroll && (

@@ -40,6 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { LangOptSettingsSection } from "./LangOptSettingsSection";
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -565,6 +566,9 @@ export function ProviderManager() {
           )}
         </div>
       )}
+
+      {/* Language Optimization Settings */}
+      {!loading && <LangOptSettingsSection />}
 
       {/* ─── Section 2: Add Provider (Quick Presets) ─── */}
       {!loading && (

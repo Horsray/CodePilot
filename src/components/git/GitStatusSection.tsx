@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { GitBranch, GitCommit, CloudArrowUp, ArrowUp, ArrowLeft, ArrowDown, Circle, Plus, Minus, Trash, Eye, SpinnerGap } from "@/components/ui/icon";
+import { GitBranch, GitCommit, CloudArrowUp, ArrowUp, ArrowLeft, ArrowDown, Circle, Plus, Minus, Trash, Eye, SpinnerGap, Sparkle } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
 import { showToast } from "@/hooks/useToast";
-import { CommitDialog } from "./CommitDialog";
 import { GitDiffViewer } from "./GitDiffViewer";
 import type { GitStatus, GitChangedFile } from "@/types";
 
@@ -16,11 +16,145 @@ interface GitStatusSectionProps {
 
 export function GitStatusSection({ status }: GitStatusSectionProps) {
   const { t } = useTranslation();
-  const { workingDirectory } = usePanel();
-  const [commitDialogOpen, setCommitDialogOpen] = useState(false);
+  const { workingDirectory, sessionId } = usePanel();
   const [pulling, setPulling] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [diffFile, setDiffFile] = useState<{ path: string; staged: boolean } | null>(null);
+
+  const [commitMessage, setCommitMessage] = useState('');
+  const [committing, setCommitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [pushing, setPushing] = useState(false);
+
+  const handleGenerateMessage = useCallback(async () => {
+    if (!workingDirectory || generating) return;
+
+    setGenerating(true);
+    try {
+      const res = await fetch('/api/git/ai-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          cwd: workingDirectory, 
+          action: 'summary',
+          sessionId
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast({ type: 'error', message: data.error || 'Generate failed' });
+        return;
+      }
+      const data = await res.json();
+      setCommitMessage(data.result);
+    } catch (err) {
+      showToast({ type: 'error', message: err instanceof Error ? err.message : 'Generate failed' });
+    } finally {
+      setGenerating(false);
+    }
+  }, [workingDirectory, generating]);
+
+  const handleCommit = useCallback(async () => {
+    if (!workingDirectory || committing || !status.dirty) return;
+    setCommitting(true);
+    try {
+      const res = await fetch('/api/git/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: workingDirectory, message: commitMessage.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast({ type: 'error', message: data.error || 'Commit failed' });
+        return;
+      }
+      setCommitMessage('');
+      showToast({ type: 'success', message: '提交成功' });
+      handleCommitSuccess();
+    } catch (err) {
+      showToast({ type: 'error', message: err instanceof Error ? err.message : 'Commit failed' });
+    } finally {
+      setCommitting(false);
+    }
+  }, [workingDirectory, committing, commitMessage, status.dirty]);
+
+  const handleCommitAndPush = useCallback(async () => {
+    if (!workingDirectory || committing || pushing || !status.dirty) return;
+    
+    // First, commit
+    setCommitting(true);
+    let commitSuccess = false;
+    try {
+      const res = await fetch('/api/git/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: workingDirectory, message: commitMessage.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast({ type: 'error', message: data.error || 'Commit failed' });
+        setCommitting(false);
+        return;
+      }
+      setCommitMessage('');
+      commitSuccess = true;
+    } catch (err) {
+      showToast({ type: 'error', message: err instanceof Error ? err.message : 'Commit failed' });
+      setCommitting(false);
+      return;
+    }
+
+    if (!commitSuccess) return;
+    
+    // Update state to show pushing
+    setCommitting(false);
+    setPushing(true);
+
+    try {
+      const res = await fetch('/api/git/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: workingDirectory }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Push failed' }));
+        showToast({ type: 'error', message: data.error || 'Push failed' });
+        // Refresh git status so user sees the commit went through, even if push failed
+        window.dispatchEvent(new CustomEvent('git-refresh'));
+        return;
+      }
+      showToast({ type: 'success', message: '提交并推送成功' });
+      window.dispatchEvent(new CustomEvent('git-refresh'));
+    } catch (err) {
+      showToast({ type: 'error', message: err instanceof Error ? err.message : 'Push failed' });
+      window.dispatchEvent(new CustomEvent('git-refresh'));
+    } finally {
+      setPushing(false);
+    }
+  }, [workingDirectory, committing, pushing, commitMessage, status.dirty]);
+
+  const handlePush = useCallback(async () => {
+    if (!workingDirectory || pushing) return;
+    setPushing(true);
+    try {
+      const res = await fetch('/api/git/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: workingDirectory }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Push failed' }));
+        showToast({ type: 'error', message: data.error || 'Push failed' });
+        return;
+      }
+      showToast({ type: 'success', message: t('git.pushSuccess') });
+      window.dispatchEvent(new CustomEvent('git-refresh'));
+    } catch (err) {
+      showToast({ type: 'error', message: err instanceof Error ? err.message : 'Push failed' });
+    } finally {
+      setPushing(false);
+    }
+  }, [workingDirectory, pushing, t]);
 
   const handlePull = useCallback(async () => {
     if (!workingDirectory || pulling) return;
@@ -218,74 +352,67 @@ export function GitStatusSection({ status }: GitStatusSectionProps) {
         </div>
       )}
 
-      {/* Action buttons: Commit, Push, Pull, Fetch */}
-      <div className="grid grid-cols-2 gap-1.5 px-3 pt-1">
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs gap-1.5"
-          onClick={() => setCommitDialogOpen(true)}
-          disabled={!status.dirty}
-        >
-          <GitCommit size={14} />
-          {t('topBar.commit')}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs gap-1.5"
-          onClick={async () => {
-            if (!workingDirectory) return;
-            try {
-              const res = await fetch('/api/git/push', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cwd: workingDirectory }),
-              });
-              if (!res.ok) {
-                const data = await res.json().catch(() => ({ error: 'Push failed' }));
-                showToast({ type: 'error', message: data.error || 'Push failed' });
-                return;
-              }
-              showToast({ type: 'success', message: t('git.pushSuccess') });
-              window.dispatchEvent(new CustomEvent('git-refresh'));
-            } catch (err) {
-              showToast({ type: 'error', message: err instanceof Error ? err.message : 'Push failed' });
-            }
-          }}
-        >
-          <CloudArrowUp size={14} />
-          {t('topBar.push')}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs gap-1.5"
-          onClick={handlePull}
-          disabled={pulling}
-        >
-          <ArrowDown size={14} />
-          {pulling ? t('git.pulling') : t('git.pull')}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs gap-1.5"
-          onClick={handleFetch}
-          disabled={fetching}
-        >
-          {fetching ? <SpinnerGap size={14} className="animate-spin" /> : <ArrowDown size={14} />}
-          {fetching ? t('git.fetching') : t('git.fetchRemote')}
-        </Button>
+      {/* Action buttons: Commit, Push */}
+      <div className="flex flex-col gap-1.5 px-3 pt-1">
+        {status.dirty ? (
+          <>
+            <div className="relative">
+              <Textarea
+                value={commitMessage}
+                onChange={(e) => setCommitMessage(e.target.value)}
+                placeholder={`提交变更内容(⌘↵ 在"${status.branch}"上)`}
+                className="min-h-[32px] text-xs pr-8 py-2 resize-y"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && e.metaKey) {
+                    e.preventDefault();
+                    handleCommitAndPush();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={handleGenerateMessage}
+                disabled={generating || !status.dirty}
+                className="absolute right-2 top-2 text-emerald-500 hover:text-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="AI 生成提交说明"
+              >
+                {generating ? <SpinnerGap size={14} className="animate-spin" /> : <Sparkle size={14} weight="fill" />}
+              </button>
+            </div>
+            <Button
+              size="sm"
+              variant="default"
+              className="h-8 text-xs w-full gap-1.5"
+              onClick={handleCommitAndPush}
+              disabled={committing || pushing || !status.dirty}
+            >
+              {committing || pushing ? <SpinnerGap size={14} className="animate-spin" /> : <CloudArrowUp size={14} />}
+              {committing ? '提交中...' : pushing ? '推送中...' : '提交并推送'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs w-full gap-1.5"
+              onClick={handleCommit}
+              disabled={committing || pushing || !status.dirty}
+            >
+              {committing ? <SpinnerGap size={14} className="animate-spin" /> : <GitCommit size={14} />}
+              {committing ? '提交中...' : '仅提交到本地'}
+            </Button>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            variant="default"
+            className="h-8 text-xs w-full gap-1.5"
+            onClick={handlePush}
+            disabled={pushing || status.ahead === 0}
+          >
+            {pushing ? <SpinnerGap size={14} className="animate-spin" /> : <CloudArrowUp size={14} />}
+            {pushing ? '推送中...' : status.ahead > 0 ? `推送到远端 (${status.ahead})` : '没有需要推送的提交'}
+          </Button>
+        )}
       </div>
-
-      {/* Commit dialog */}
-      <CommitDialog
-        cwd={workingDirectory}
-        open={commitDialogOpen}
-        onClose={() => setCommitDialogOpen(false)}
-        onSuccess={handleCommitSuccess}
-      />
 
       {/* Diff viewer */}
       {diffFile && (

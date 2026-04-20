@@ -252,6 +252,15 @@ export function appendTimelineOutput(state: TimelineAccumulatorState, delta: str
   }
   const step = ensureActiveStep(state, now);
   step.output += delta;
+  
+  const lastEvent = step.events?.[step.events.length - 1];
+  if (lastEvent?.type === 'text') {
+    lastEvent.content += delta;
+    lastEvent.timestamp = now;
+  } else {
+    step.events = [...(step.events || []), { type: 'text', content: delta, timestamp: now }];
+  }
+
   if (looksLikeErrorText(step.output)) {
     step.status = 'failed';
     step.error = step.output.trim();

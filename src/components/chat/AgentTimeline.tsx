@@ -322,15 +322,17 @@ function getActivityInfo(step: TimelineStep) {
   };
 }
 
-function TimelineStepCard({
+function ActivityCard({
   step,
   compact,
+  isExpanded,
   liveStatusText,
   sessionId,
   onForceStop,
 }: {
   step: TimelineStep;
   compact?: boolean;
+  isExpanded?: boolean;
   liveStatusText?: string;
   sessionId?: string;
   onForceStop?: () => void;
@@ -338,7 +340,7 @@ function TimelineStepCard({
   const primaryTool = getPrimaryTool(step);
   const isCommandStep = Boolean(primaryTool && isCommandToolName(primaryTool.name));
   const isContextStep = step.toolCalls.length > 0 && step.toolCalls.every((tool) => isContextToolName(tool.name));
-  const [open, setOpen] = useState(step.status === 'running' || step.status === 'retrying');
+  const [open, setOpen] = useState(step.status === 'running' || step.status === 'retrying' || step.status === 'failed' || step.error);
   const [backgrounding, setBackgrounding] = useState(false);
   const activity = getActivityInfo(step);
   const reasoningText = cleanReasoningText(step.reasoning);
@@ -424,180 +426,106 @@ function TimelineStepCard({
   };
 
   return (
-    <div className="relative group">
-      <div className="absolute left-[7px] top-7 bottom-[-10px] w-px border-l border-dashed border-border/25 group-last:hidden" />
+    <div className="my-1.5 border-b border-border/20 last:border-0 pb-1.5 bg-background overflow-hidden">
+      <button
+        type="button"
+        onClick={() => hasDetails && setOpen((value) => value ? null : true)}
+        className="flex w-full items-center justify-between px-2 py-2 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
+      >
+        <div className="flex items-center gap-2">
+          {activity.icon}
+          <span className="font-medium text-foreground/80 truncate ml-1 text-left">
+            {activity.label}
+          </span>
+          <span className="text-border mx-1">|</span>
+          <span className="font-mono text-[12px] text-muted-foreground/60 truncate flex-1 text-left">
+            {isCommandStep && step.status === 'running' ? runningStatusText : collapsedLead}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-muted-foreground">
+          {step.status === 'running' && <SpinnerGap size={14} className="animate-spin text-primary" />}
+          {step.status === 'failed' && <XCircle size={14} className="text-red-500" />}
+          {step.status === 'completed' && <CheckCircle size={14} className="text-emerald-500" />}
+        </div>
+      </button>
 
-      <div className="relative flex gap-3">
-        <div className="mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-background ring-1 ring-border/35 z-10 overflow-hidden">
-          {step.status === 'running' ? (
-            <SpinnerGap size={10} className="animate-spin text-primary" />
-          ) : (
-            <div className="scale-75 opacity-70">{getStepIcon(step.status)}</div>
+      {open && hasDetails && (
+        <div className="space-y-3 mt-1.5 mb-2 ml-7">
+          {showReasoningDetail && (
+            <div className="rounded-[8px] bg-muted/20 border border-border/30 p-2.5">
+              <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-violet-500/80">
+                <Brain size={12} weight="bold" />
+                <span>思考内容</span>
+              </div>
+              <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/80 prose prose-sm dark:prose-invert max-w-none">
+                {reasoningText}
+              </div>
+            </div>
+          )}
+
+          {showToolDetail && (
+            <div className="space-y-2">
+              {step.toolCalls.map((tool) => (
+                <div key={tool.id} className="rounded-[8px] border border-border/30 bg-background/40 overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-muted/10">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <Gear size={12} weight="bold" className="text-primary/60 shrink-0" />
+                      <span className="truncate font-mono text-[11px] text-foreground/70">
+                        {tool.name}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground/50">
+                      {tool.status === 'running' ? '运行中...' : tool.status === 'failed' ? '执行失败' : '执行完毕'}
+                    </span>
+                  </div>
+                  {Boolean(tool.input) && (
+                    <div className="p-2 border-b border-border/20 bg-muted/5 overflow-x-auto">
+                      <span className="text-[10px] font-medium text-muted-foreground/50 uppercase mb-1 block">Input</span>
+                      <pre className="whitespace-pre-wrap text-[11px] leading-5 font-mono text-muted-foreground/70">
+                        {formatResultText(JSON.stringify(tool.input, null, 2), compact)}
+                      </pre>
+                    </div>
+                  )}
+                  {tool.result && (
+                    <div className="p-2 overflow-x-auto">
+                      <span className="text-[10px] font-medium text-muted-foreground/50 uppercase mb-1 block">Output</span>
+                      <pre className={cn(
+                        'whitespace-pre-wrap text-[11px] leading-5 font-mono',
+                        tool.isError ? 'text-red-500/80' : 'text-foreground/60',
+                      )}>
+                        {formatResultText(tool.result, compact)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {showFileDetail && (
+            <div className="space-y-2">
+              {step.fileChanges.map((change) => (
+                <DiffPreview key={`${change.path}-${change.operation}`} change={change} />
+              ))}
+            </div>
+          )}
+
+          {showErrorDetail && (
+            <div className="rounded-[8px] border border-red-500/20 bg-red-500/[0.05] p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[12px] text-red-500/80 font-medium">{step.error}</span>
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('chat-retry', { detail: { stepId: step.id } }))}
+                  className="flex shrink-0 items-center gap-1 rounded-[4px] bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-600 transition-colors hover:bg-red-500/20"
+                >
+                  <ClockCounterClockwise size={12} weight="bold" />
+                  重试
+                </button>
+              </div>
+            </div>
           )}
         </div>
-
-        <div className="flex-1 pb-3">
-          <div className={cn('overflow-hidden rounded-xl border transition-all duration-200', rowTone)}>
-            <button
-              type="button"
-              onClick={() => hasDetails && setOpen((value) => !value)}
-              className={cn(
-                'flex w-full items-start gap-3 px-3 py-2 text-left',
-                hasDetails && 'hover:bg-muted/10',
-              )}
-            >
-              <div className={cn('mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg', activity.bgClass)}>
-                {activity.icon}
-              </div>
-
-              <div className="min-w-0 flex-1">
-                {isFirstThinkingStage ? (
-                  <div className="flex items-center gap-2 text-[13px] font-medium text-foreground/80">
-                    <SpinnerGap size={14} className="animate-spin text-primary" />
-                    <span>正在连接模型...</span>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className={cn(
-                          'truncate text-[13px] leading-tight',
-                          isContextStep && step.status === 'completed' ? 'font-medium text-muted-foreground/75' : 'font-semibold text-foreground/90',
-                        )}>
-                          {activity.label}
-                        </div>
-                        <div className={cn(
-                          'mt-0.5 truncate text-[11px]',
-                          isCommandStep && step.status === 'running' ? 'text-foreground/75' : 'text-muted-foreground/60',
-                        )}>
-                          {isCommandStep && step.status === 'running' ? runningStatusText : collapsedLead}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {step.status !== 'completed' && step.status !== 'pending' && (
-                          <span className={cn(
-                            'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
-                            step.status === 'running' && 'bg-primary/10 text-primary',
-                            step.status === 'failed' && 'bg-red-500/10 text-red-600',
-                            step.status === 'stopped' && 'bg-amber-500/10 text-amber-600',
-                          )}>
-                            {getStepStatusLabel(step.status)}
-                          </span>
-                        )}
-                        {hasDetails && (
-                          <CaretDown size={12} className={cn('text-muted-foreground/40 transition-transform duration-200', open && 'rotate-180')} />
-                        )}
-                      </div>
-                    </div>
-
-                    {isCommandStep && step.status === 'running' && primaryTool && (
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-muted/60 px-2 py-1 font-mono text-[11px] text-foreground/80">
-                          {summarizeToolInput(primaryTool.name, primaryTool.input, true)}
-                        </span>
-                        {sessionId && primaryTool.id && (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleBackground();
-                            }}
-                            disabled={backgrounding}
-                            className="rounded-md border border-border/40 px-2 py-1 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
-                          >
-                            {backgrounding ? '转入中...' : '后台运行'}
-                          </button>
-                        )}
-                        {onForceStop && (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onForceStop();
-                            }}
-                            className="rounded-md border border-border/40 px-2 py-1 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                          >
-                            取消
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </button>
-
-            {open && hasDetails && (
-              <div className="space-y-3 border-t border-border/10 bg-muted/[0.03] px-3 py-2.5">
-                {showReasoningDetail && (
-                  <div className="rounded-lg bg-muted/20 p-2.5">
-                    <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-violet-500/80">
-                      <Brain size={12} weight="bold" />
-                      <span>思考内容</span>
-                    </div>
-                    <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/80">
-                      {previewText(reasoningText, compact ? 300 : 800)}
-                    </div>
-                  </div>
-                )}
-
-                {showToolDetail && (
-                  <div className="space-y-2">
-                    {step.toolCalls.map((tool) => (
-                      <div key={tool.id} className="rounded-lg border border-border/20 bg-background/40 overflow-hidden">
-                        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-muted/10">
-                          <div className="flex items-center gap-2 overflow-hidden">
-                            <Gear size={12} weight="bold" className="text-primary/60 shrink-0" />
-                            <span className="truncate font-mono text-[11px] text-foreground/70">
-                              {tool.name}({summarizeToolInput(tool.name, tool.input, true)})
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-muted-foreground/50">
-                            {tool.status === 'running' ? '运行中...' : tool.status === 'failed' ? '执行失败' : '执行完毕'}
-                          </span>
-                        </div>
-                        {tool.result && (
-                          <div className="p-2 overflow-x-auto">
-                            <pre className={cn(
-                              'whitespace-pre-wrap text-[11px] leading-5 font-mono',
-                              tool.isError ? 'text-red-500/80' : 'text-foreground/60',
-                            )}>
-                              {formatResultText(tool.result, compact)}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {showFileDetail && (
-                  <div className="space-y-2">
-                    {step.fileChanges.map((change) => (
-                      <DiffPreview key={`${change.path}-${change.operation}`} change={change} />
-                    ))}
-                  </div>
-                )}
-
-                {showErrorDetail && (
-                  <div className="rounded-lg border border-red-500/20 bg-red-500/[0.05] p-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[12px] text-red-500/80 font-medium">{step.error}</span>
-                      <button
-                        onClick={() => window.dispatchEvent(new CustomEvent('chat-retry', { detail: { stepId: step.id } }))}
-                        className="flex shrink-0 items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-600 transition-colors hover:bg-red-500/20"
-                      >
-                        <ClockCounterClockwise size={12} weight="bold" />
-                        重试
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -656,7 +584,7 @@ export function AgentTimeline({
           >
             <div className="space-y-1 ml-1 pl-1">
               {visibleSteps.map((step) => (
-                <TimelineStepCard
+                <ActivityCard
                   key={step.id}
                   step={step}
                   compact={compact}

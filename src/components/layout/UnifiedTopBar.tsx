@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   GitBranch,
   TreeStructure,
+  Copy,
   FileCode,
   PencilSimple,
   DotOutline,
@@ -295,7 +296,7 @@ export function UnifiedTopBar() {
                     className={fileTreeOpen ? "" : "text-muted-foreground hover:text-foreground"}
                     onClick={() => setFileTreeOpen(!fileTreeOpen)}
                   >
-                    <TreeStructure size={16} />
+                    <Copy size={16} weight="regular" />
                     <span className="sr-only">{t('topBar.fileTree')}</span>
                   </Button>
                 </TooltipTrigger>

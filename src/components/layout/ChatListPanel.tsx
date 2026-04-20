@@ -654,40 +654,18 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
         <img src="/icons/toplogo.png" alt="CodePilot" className="h-8 w-auto object-contain" />
       </div>
 
-      {/* Top action bar: New Chat + IDE tools + Search */}
+      {/* Top action bar: New Chat + Search */}
       <div className="flex items-center gap-2 px-3 pb-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              className="h-8 w-8 shrink-0"
-              disabled={creatingChat}
-              onClick={handleNewChat}
-            >
-              <Plus size={14} />
-              <span className="sr-only">{t('chatList.newConversation')}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{t('chatList.newConversation')}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant={bottomPanelOpen && bottomPanelTab === "console" ? "secondary" : "outline"}
-              size="icon-sm"
-              className="h-8 w-8 shrink-0"
-              onClick={() => {
-                setBottomPanelTab("console");
-                setBottomPanelOpen(true);
-              }}
-            >
-              <ListBullets size={14} />
-              <span className="sr-only">{t('bottomPanel.console')}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{t('bottomPanel.console')}</TooltipContent>
-        </Tooltip>
+        <Button
+          variant="outline"
+          size="sm"
+          className="flex-1 justify-center gap-1.5 h-8 text-xs"
+          disabled={creatingChat}
+          onClick={handleNewChat}
+        >
+          <Plus size={14} />
+          {t('chatList.newConversation')}
+        </Button>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

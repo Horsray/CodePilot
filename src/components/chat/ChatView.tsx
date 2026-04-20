@@ -12,6 +12,7 @@ import { ModeIndicator } from './ModeIndicator';
 import { ChatPermissionSelector } from './ChatPermissionSelector';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { RuntimeBadge } from './RuntimeBadge';
+import { CaretRight, CaretDown } from '@/components/ui/icon';
 import { ImageGenToggle } from './ImageGenToggle';
 import { Button } from '@/components/ui/button';
 import { usePanel } from '@/hooks/usePanel';
@@ -65,7 +66,7 @@ interface ChatViewProps {
 const MAX_MESSAGES_IN_MEMORY = 300;
 
 export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialHasSummary }: ChatViewProps) {
-  const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setDashboardPanelOpen, setFileTreeOpen, setIsAssistantWorkspace } = usePanel();
+  const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setDashboardPanelOpen, setFileTreeOpen, setIsAssistantWorkspace, bottomPanelOpen, setBottomPanelOpen, setBottomPanelTab } = usePanel();
   const { t } = useTranslation();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -1071,13 +1072,30 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         hasMessages={messages.length > 0}
       />
       <ChatComposerActionBar
-        left={<><ModeIndicator mode={mode} onModeChange={handleModeChange} disabled={isStreaming} /><ImageGenToggle /></>}
+        left={
+          <>
+            <ModeIndicator mode={mode} onModeChange={handleModeChange} disabled={isStreaming} />
+            <ImageGenToggle />
+          </>
+        }
         center={
-          <ChatPermissionSelector
-            sessionId={sessionId}
-            permissionProfile={permissionProfile}
-            onPermissionChange={setPermissionProfile}
-          />
+          <div className="flex items-center">
+            <ChatPermissionSelector
+              sessionId={sessionId}
+              permissionProfile={permissionProfile}
+              onPermissionChange={setPermissionProfile}
+            />
+            <button
+              onClick={() => {
+                setBottomPanelTab('console');
+                setBottomPanelOpen(!bottomPanelOpen);
+              }}
+              className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors ml-3 border-l border-border/40 pl-3 h-4"
+            >
+              {bottomPanelOpen ? <CaretDown size={14} /> : <CaretRight size={14} />}
+              <span>控制台日志</span>
+            </button>
+          </div>
         }
         right={
           <div className="flex items-center gap-1">

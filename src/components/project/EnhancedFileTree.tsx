@@ -219,24 +219,16 @@ function TreeNode({
             )}
             id={isHighlighted ? "file-tree-highlight" : undefined}
           >
-            {/* 展开/折叠指示器 */}
-            {isDirectory && (
-              <span className="w-3 h-3 flex items-center justify-center text-muted-foreground">
-                {isExpanded ? (
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
-                    <path d="M0 2 L4 6 L8 2 Z" />
-                  </svg>
-                ) : (
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
-                    <path d="M2 0 L6 4 L2 8 Z" />
-                  </svg>
-                )}
-              </span>
+            {/* 文件夹图标同时作为展开/折叠按钮 */}
+            {isDirectory ? (
+              isExpanded ? (
+                <FolderOpen size={16} className="shrink-0 text-blue-400" weight="fill" />
+              ) : (
+                <Folder size={16} className="shrink-0 text-blue-400" weight="fill" />
+              )
+            ) : (
+              getFileIcon(node.name, isDirectory, isExpanded)
             )}
-            {!isDirectory && <span className="w-3" />}
-
-            {/* 图标 */}
-            {getFileIcon(node.name, isDirectory, isExpanded)}
 
             {/* 文件名 */}
             <span className="truncate flex-1">{node.name}</span>

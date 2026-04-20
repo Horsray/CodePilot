@@ -12,6 +12,7 @@ import { FeatureAnnouncementDialog } from "./FeatureAnnouncementDialog";
 import { UpdateBanner } from "./UpdateBanner";
 import { UnifiedTopBar } from "./UnifiedTopBar";
 import { PanelZone } from "./PanelZone";
+import { BottomPanelContainer } from "./BottomPanelContainer";
 import { usePanelStore } from "@/stores/panelStore";
 import { PanelContext, type PreviewViewMode } from "@/hooks/usePanel";
 import { UpdateContext } from "@/hooks/useUpdate";
@@ -473,6 +474,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       <ErrorBoundary>{children}</ErrorBoundary>
                     )}
                   </main>
+                  <BottomPanelContainer />
                 </div>
                 {isChatDetailRoute && <PanelZone />}
               </div>

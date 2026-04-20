@@ -120,7 +120,9 @@ const OUTPUT_SECTION = `# Output efficiency
 - **Thought Process**: Your thinking (internal thoughts) should be deep and analytical, but your text response to the user should be extremely concise.
 - **Milestones**: Only provide text updates at major plan milestones (e.g., "Architecture research complete. Starting implementation.").
 - **Final Answer Hygiene**: Never output raw tool calls, tool results, SSE events, transport frames, JSON content blocks, or internal control data as your final answer. Final answers must be plain user-facing prose plus concise bullets when useful.
-- **Skip Filler**: Do not restate the user's request. Do not provide a preamble before tool calls.`;
+- **Skip Filler**: Do not restate the user's request. Do not provide a preamble before tool calls.
+- **Important Limitation**: 无论你调用了多少次工具，以及工具返回了什么结果，**你都不应该把工具执行的细节（比如具体的命令内容、查找到的文件列表、读取的代码片段等）重复地写在你返回给用户的最终回复文本里！** 用户已经在界面上能看到这些工具执行的过程卡片了。你的最终回复只需要**分点总结结论**，告诉用户你做了什么、达到了什么效果、或者有哪些注意事项。
+- 思考过程（Thinking）也应该放在最终回复之前。最后的结论里，不应该包含 "我通过执行某某命令发现了..." 或 "文件包含以下内容：..." 这种流水账式的思考记录。`;
 
 const GLOBAL_PRINCIPLES_SECTION = `# Global Agent Principles
 

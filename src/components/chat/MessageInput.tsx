@@ -1,8 +1,9 @@
 'use client';
 
 import { useRef, useState, useCallback, useEffect, useMemo, type KeyboardEvent, type FormEvent } from 'react';
-import { Terminal } from "@/components/ui/icon";
+import { Terminal, SpinnerGap, Sparkle, ArrowsCounterClockwise } from "@/components/ui/icon";
 import { useTranslation } from '@/hooks/useTranslation';
+import { showToast } from '@/hooks/useToast';
 import type { TranslationKey } from '@/i18n';
 import {
   PromptInput,
@@ -121,7 +122,10 @@ export function MessageInput({
   hasMessages,
 }: MessageInputProps) {
   const { t, locale } = useTranslation();
+  const isZh = t('nav.chats') === '对话';
   const imageGen = useImageGen();
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [optimizedOriginalText, setOptimizedOriginalText] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const cliSearchRef = useRef<HTMLInputElement>(null);
@@ -272,8 +276,21 @@ export function MessageInput({
       });
       setTimeout(() => textareaRef.current?.focus(), 0);
     };
+    const textHandler = (e: Event) => {
+      const detail = (e as CustomEvent<{ text: string }>).detail;
+      if (!detail?.text) return;
+      setInputValue((prev) => {
+        const needsSpace = prev.length > 0 && !prev.endsWith('\n');
+        return prev + (needsSpace ? '\n' : '') + detail.text + '\n';
+      });
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    };
     window.addEventListener('insert-file-mention', handler);
-    return () => window.removeEventListener('insert-file-mention', handler);
+    window.addEventListener('append-chat-text', textHandler);
+    return () => {
+      window.removeEventListener('insert-file-mention', handler);
+      window.removeEventListener('append-chat-text', textHandler);
+    };
   }, [setInputValue, setMentionNodeTypes, ensureMentionOrder]);
 
   const normalizeMentionPath = useCallback((rawPath: string): string => {
@@ -504,33 +521,36 @@ export function MessageInput({
         // destructive commands (e.g. /clear) would race with the active stream.
         if (isStreaming) return;
         if (slashResult.action === 'immediate_command') {
-          if (onCommand) {
-            setInputValue('');
-            onCommand(slashResult.commandValue!);
-            return;
-          }
-        } else {
-          addBadgeWithOrder(slashResult.badge!);
+        if (onCommand) {
           setInputValue('');
+          setOptimizedOriginalText(null);
+          onCommand(slashResult.commandValue!);
           return;
         }
+      } else {
+        addBadgeWithOrder(slashResult.badge!);
+        setInputValue('');
+        setOptimizedOriginalText(null);
+        return;
       }
     }
+  }
 
-    // If CLI badge is active, inject systemPromptAppend to guide model
-    const cliAppend = buildCliAppend(cliBadge);
-    if (cliBadge) setCliBadge(null);
+  // If CLI badge is active, inject systemPromptAppend to guide model
+  const cliAppend = buildCliAppend(cliBadge);
+  if (cliBadge) setCliBadge(null);
 
-    const displayOverride = mentionPayload.mentions.length > 0 ? content : undefined;
-    onSend(
-      finalContent || 'Please review the attached file(s).',
-      hasFiles ? files : undefined,
-      cliAppend,
-      displayOverride,
-      mentionPayload.mentions.length > 0 ? mentionPayload.mentions : undefined,
-    );
-    setInputValue('');
-  }, [inputValue, mentionNodeTypes, onSend, onCommand, disabled, isStreaming, popover, badges, cliBadge, imageGen, addBadgeWithOrder, clearBadgesWithOrder, setCliBadge, setInputValue, fetchDirectorySummary, fetchMentionFileAttachment]);
+  const displayOverride = mentionPayload.mentions.length > 0 ? content : undefined;
+  onSend(
+    finalContent || 'Please review the attached file(s).',
+    hasFiles ? files : undefined,
+    cliAppend,
+    displayOverride,
+    mentionPayload.mentions.length > 0 ? mentionPayload.mentions : undefined,
+  );
+  setInputValue('');
+  setOptimizedOriginalText(null);
+}, [inputValue, mentionNodeTypes, onSend, onCommand, disabled, isStreaming, popover, badges, cliBadge, imageGen, addBadgeWithOrder, clearBadgesWithOrder, setCliBadge, setInputValue, setOptimizedOriginalText, fetchDirectorySummary, fetchMentionFileAttachment]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -725,6 +745,33 @@ export function MessageInput({
     onEffortChange?.(v);
   }, [onEffortChange]);
 
+  const handleOptimizePrompt = useCallback(async () => {
+    if (optimizedOriginalText) {
+      setInputValue(optimizedOriginalText);
+      setOptimizedOriginalText(null);
+      return;
+    }
+
+    if (!inputValue.trim()) return;
+
+    setIsOptimizing(true);
+    try {
+      const res = await fetch('/api/chat/optimize-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: inputValue }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Optimization failed');
+      setOptimizedOriginalText(inputValue);
+      setInputValue(data.result);
+    } catch (err: any) {
+      showToast({ type: 'error', message: err.message || (isZh ? '优化失败' : 'Optimization failed') });
+    } finally {
+      setIsOptimizing(false);
+    }
+  }, [inputValue, optimizedOriginalText, setInputValue, isZh]);
+
   const currentModelValue = modelName || 'sonnet';
   const chatStatus: ChatStatus = isStreaming ? 'streaming' : 'ready';
 
@@ -777,6 +824,7 @@ export function MessageInput({
               onSend(text);
               // Clear input after send to avoid stale text
               setInputValue('');
+              setOptimizedOriginalText(null);
             }}
           />
 
@@ -816,6 +864,24 @@ export function MessageInput({
             />
             <PromptInputFooter>
               <PromptInputTools>
+                {/* Optimize Prompt Button */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PromptInputButton onClick={handleOptimizePrompt} disabled={isOptimizing || (!inputValue.trim() && !optimizedOriginalText)}>
+                      {isOptimizing ? (
+                        <SpinnerGap size={16} className="animate-spin text-emerald-500" />
+                      ) : optimizedOriginalText ? (
+                        <ArrowsCounterClockwise size={16} className="text-emerald-500" />
+                      ) : (
+                        <Sparkle size={16} className={inputValue.trim() ? "text-emerald-500" : ""} />
+                      )}
+                    </PromptInputButton>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {optimizedOriginalText ? (isZh ? '撤销优化' : 'Undo optimization') : (isZh ? '优化提示词' : 'Optimize prompt')}
+                  </TooltipContent>
+                </Tooltip>
+
                 {/* Attach file button */}
                 <AttachFileButton />
 

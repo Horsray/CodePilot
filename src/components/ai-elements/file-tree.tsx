@@ -12,7 +12,6 @@ import {
   Folder,
   FolderOpen,
   File,
-  CaretRight,
   Plus,
 } from "@phosphor-icons/react";
 import {
@@ -161,20 +160,12 @@ export const FileTreeFolder = ({
                 }
               }}
             >
-              <span className="shrink-0 rounded p-0.5">
-                <CaretRight
-                  size={16}
-                  className={cn(
-                    "text-muted-foreground transition-transform",
-                    isExpanded && "rotate-90"
-                  )}
-                />
-              </span>
+              {/* 文件夹图标同时作为展开/折叠按钮 */}
               <FileTreeIcon>
                 {isExpanded ? (
-                  <FolderOpen size={16} className="text-muted-foreground" />
+                  <FolderOpen size={16} className="text-blue-400" weight="fill" />
                 ) : (
-                  <Folder size={16} className="text-muted-foreground" />
+                  <Folder size={16} className="text-blue-400" weight="fill" />
                 )}
               </FileTreeIcon>
               <FileTreeName>{name}</FileTreeName>

@@ -19,6 +19,7 @@ import { AgentTimeline } from './AgentTimeline';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
   appendTimelineReasoning,
+  appendTimelineOutput,
   appendTimelineToolResult,
   appendTimelineToolUse,
   cloneTimelineSteps,
@@ -427,7 +428,7 @@ export function StreamingMessage({
       const delta = currentContent.slice(activityContentLength, toLength);
       activityContentLength = toLength;
       if (delta.trim()) {
-        appendTimelineReasoning(currentState, delta, timestamp);
+        appendTimelineOutput(currentState, delta, timestamp);
       }
     };
 
@@ -685,34 +686,26 @@ export function StreamingMessage({
 
         {/* Render the timeline (tools and thoughts interleaved) */}
         {(toolUses.length > 0 || liveTimelineSteps.length > 0) && (
-          liveTimelineSteps.length > 0 ? (
-            <AgentTimeline
-              steps={liveTimelineSteps}
-              liveStatusText={statusText}
-              sessionId={sessionId}
-              onForceStop={onForceStop}
-            />
-          ) : (
-            <ToolActionsGroup
-              tools={toolUses.map((tool) => {
-                const result = toolResults.find((r) => r.tool_use_id === tool.id);
-                return {
-                  id: tool.id,
-                  name: tool.name,
-                  input: tool.input,
-                  result: result?.content,
-                  isError: result?.is_error,
-                  media: result?.media,
-                };
-              })}
-              steps={liveTimelineSteps}
-              isStreaming={isStreaming}
-              streamingToolOutput={streamingToolOutput}
-              statusText={statusText}
-              sessionId={sessionId}
-              rewindUserMessageId={rewindUserMessageId}
-            />
-          )
+          <ToolActionsGroup
+            tools={toolUses.map((tool) => {
+              const result = toolResults.find((r) => r.tool_use_id === tool.id);
+              return {
+                id: tool.id,
+                name: tool.name,
+                input: tool.input,
+                result: result?.content,
+                isError: result?.is_error,
+                media: result?.media,
+              };
+            })}
+            steps={liveTimelineSteps}
+            isStreaming={isStreaming}
+            streamingToolOutput={streamingToolOutput}
+            statusText={statusText}
+            sessionId={sessionId}
+            rewindUserMessageId={rewindUserMessageId}
+            flat={true}
+          />
         )}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}

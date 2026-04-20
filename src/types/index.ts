@@ -205,6 +205,7 @@ export interface TimelineFileChange {
 
 export type TimelineEvent =
   | { type: 'reasoning'; content: string; timestamp: number }
+  | { type: 'text'; content: string; timestamp: number }
   | { type: 'tool'; toolCallId: string; timestamp: number };
 
 export interface TimelineStep {
