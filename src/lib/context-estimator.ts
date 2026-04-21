@@ -31,7 +31,17 @@ export function roughTokenEstimate(text: string, isJson = false): number {
  */
 export function estimateMessageTokens(content: string): number {
   if (!content) return 0;
-  const isJson = content.startsWith('[') || content.startsWith('{');
+  
+  // Refined JSON detection: don't just check the first character,
+  // as large tool_results are often wrapped in JSON arrays but
+  // are actually 99% plain text. If it's a huge string (>10KB),
+  // assume the bulk of it is plain text (4 bytes/token) rather
+  // than dense JSON syntax (2 bytes/token) to prevent overestimation.
+  let isJson = content.startsWith('[') || content.startsWith('{');
+  if (isJson && content.length > 10000) {
+    isJson = false; // Prevent massive overestimation of plain text inside JSON
+  }
+  
   return roughTokenEstimate(content, isJson);
 }
 

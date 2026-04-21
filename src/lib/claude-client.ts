@@ -87,7 +87,7 @@ function sanitizeEnv(env: Record<string, string>): Record<string, string> {
   return clean;
 }
 
-function selectOnDemandMcpServerNames(
+export function selectOnDemandMcpServerNames(
   prompt: string,
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>,
   projectCwd?: string,
@@ -210,7 +210,7 @@ export function invalidateClaudeClientCache(): void {
  * Convert our MCPServerConfig to the SDK's McpServerConfig format.
  * Supports stdio, sse, and http transport types.
  */
-function toSdkMcpConfig(
+export function toSdkMcpConfig(
   servers: Record<string, MCPServerConfig>
 ): Record<string, McpServerConfig> {
   const result: Record<string, McpServerConfig> = {};
@@ -295,11 +295,22 @@ function extractTextFromMessage(msg: SDKAssistantMessage): string {
 function extractTokenUsage(msg: SDKResultMessage, durationMs?: number): TokenUsage | null {
   if (!msg.usage && !durationMs) return null;
   const usage = msg.usage || {};
+  
+  const input_tokens = usage.input_tokens || 0;
+  const cache_read_input_tokens = usage.cache_read_input_tokens ?? 0;
+  const cache_creation_input_tokens = usage.cache_creation_input_tokens ?? 0;
+  
+  const totalCumulativeInput = input_tokens + cache_read_input_tokens + cache_creation_input_tokens;
+  const turns = 'num_turns' in msg && typeof msg.num_turns === 'number' ? Math.max(1, msg.num_turns) : 1;
+  // Estimate single-turn context size for UI display
+  const context_input_tokens = Math.round(totalCumulativeInput / turns);
+
   return {
-    input_tokens: usage.input_tokens,
+    input_tokens,
     output_tokens: usage.output_tokens,
-    cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+    cache_read_input_tokens,
+    cache_creation_input_tokens,
+    context_input_tokens, // Plumbed to UI so it knows the single-turn scale
     cost_usd: 'total_cost_usd' in msg ? msg.total_cost_usd : undefined,
     ...(durationMs ? { duration_sec: Math.round(durationMs / 1000) } : {}),
   };
@@ -422,6 +433,8 @@ export async function generateTextViaSdk(params: {
   system: string;
   prompt: string;
   abortSignal?: AbortSignal;
+  mcpServers?: Record<string, McpServerConfig>;
+  sessionId?: string;
 }): Promise<string> {
   const resolved = resolveForClaudeCode(undefined, {
     providerId: params.providerId,
@@ -455,6 +468,10 @@ export async function generateTextViaSdk(params: {
 
   if (params.model) {
     queryOptions.model = params.model;
+  }
+
+  if (params.mcpServers && Object.keys(params.mcpServers).length > 0) {
+    queryOptions.mcpServers = params.mcpServers;
   }
 
   const claudePath = findClaudePath();
@@ -1579,7 +1596,7 @@ Once you or the user mention the exact server name (e.g., "${dormantServers[0]?.
                   }));
 
                   // Track TodoWrite calls — sync deferred until tool_result confirms success
-                  if (block.name === 'TodoWrite' || block.name === 'mcp__codepilot-todo__TodoWrite') {
+                  if (block.name === 'TodoWrite' || block.name === 'mcp__codepilot-todo__TodoWrite' || block.name === 'mcp__codepilot-todo__codepilot_todo_write') {
                     try {
                       const toolInput = block.input as {
                         todos?: Array<{ content: string; status: string; activeForm?: string }>;

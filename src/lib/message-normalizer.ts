@@ -61,6 +61,44 @@ export function normalizeMessageContent(role: string, raw: string): string {
       // Not JSON, use as-is
     }
   }
+
+  // Add processing for user role which might contain tool_result blocks (in JSON)
+  // that need to be normalized so they don't break token limits or get improperly truncated
+  if (role === 'user' && content.startsWith('[')) {
+    try {
+      const blocks = JSON.parse(content);
+      let isToolResult = false;
+      const parts: string[] = [];
+      
+      for (const b of blocks) {
+        if (b.type === 'tool_result') {
+          isToolResult = true;
+          const toolName = b.tool_name || b.name || 'unknown_tool';
+          // Try to get a short excerpt of the result without keeping the whole massive string
+          const resultStr = typeof b.content === 'string' 
+            ? b.content 
+            : (Array.isArray(b.content) && b.content.length > 0 && typeof b.content[0].text === 'string') 
+              ? b.content[0].text 
+              : JSON.stringify(b.content || '');
+              
+          const truncated = resultStr.length > 200 ? resultStr.slice(0, 200) + '...' : resultStr;
+          parts.push(`<prior-tool-result name="${escapeXmlAttr(toolName)}">${escapeXmlAttr(truncated)}</prior-tool-result>`);
+        } else if (b.type === 'text' && b.text) {
+          parts.push(b.text);
+        } else {
+          // Keep other user blocks as JSON strings to avoid losing content
+          parts.push(JSON.stringify(b));
+        }
+      }
+      
+      if (isToolResult) {
+        content = parts.length > 0 ? parts.join('\n') : '<prior-tool-results/>';
+      }
+    } catch {
+      // Not valid JSON or parsing failed, use as-is
+    }
+  }
+
   return content;
 }
 

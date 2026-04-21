@@ -406,233 +406,203 @@ export async function POST(request: NextRequest) {
     let streamSdkSessionId: string | undefined = session.sdk_session_id || undefined;
     let streamConversationHistory: typeof historyMsgs = historyMsgs;
 
-    try {
-      const { estimateContextTokens } = await import('@/lib/context-estimator');
-      const { getContextWindow } = await import('@/lib/model-context');
-      const { needsCompression, compressConversation } = await import('@/lib/context-compressor');
-      const { updateSessionSummary } = await import('@/lib/db');
+    const responseStream = new ReadableStream<string>({
+      async start(controllerRaw) {
+        const controller = wrapController(controllerRaw);
 
-      const modelForWindow = resolved.upstreamModel || resolved.model || effectiveModel || 'sonnet';
-      // Pass upstream explicitly so alias lookups (e.g. 'opus') resolve to
-      // the correct per-provider window — first-party opus → 4.7 (1M) vs
-      // Bedrock/Vertex opus → 4.6 (200K).
-      const contextWindow = getContextWindow(modelForWindow, {
-        context1m: context_1m,
-        upstream: resolved.upstreamModel,
-      }) || 200000;
+        let compressionOccurred = false;
+        let compressionStats: { messagesCompressed: number; tokensSaved: number } | null = null;
 
-      // Estimate using normalized content (matches what buildFallbackContext actually sends).
-      // Raw transcript overestimates tool-heavy conversations because normalize + microcompact
-      // strip metadata and truncate old tool results significantly.
-      const { normalizeMessageContent, microCompactMessage } = await import('@/lib/message-normalizer');
-      const { roughTokenEstimate } = await import('@/lib/context-estimator');
-      const normalizedHistory = historyMsgs.map((m, i) => ({
-        role: m.role,
-        content: microCompactMessage(m.role, normalizeMessageContent(m.role, m.content), historyMsgs.length - 1 - i),
-      }));
+        try {
+          const { estimateContextTokens } = await import('@/lib/context-estimator');
+          const { getContextWindow } = await import('@/lib/model-context');
+          const { needsCompression, compressConversation } = await import('@/lib/context-compressor');
+          const { updateSessionSummary } = await import('@/lib/db');
 
-      const estimate = estimateContextTokens({
-        systemPrompt: finalSystemPrompt,
-        history: normalizedHistory,
-        currentUserMessage: content,
-        sessionSummary: activeSessionSummary,
-      });
+          const modelForWindow = resolved.upstreamModel || resolved.model || effectiveModel || 'sonnet';
+          const contextWindow = getContextWindow(modelForWindow, {
+            context1m: context_1m,
+            upstream: resolved.upstreamModel,
+          }) || 200000;
 
-      // Budget for history = 70% of window minus system prompt, summary, and current user message.
-      // buildFallbackContext adds summary + prompt on top of the history, so we must account for them.
-      fallbackTokenBudget = Math.floor(
-        contextWindow * 0.7 - estimate.breakdown.system - estimate.breakdown.summary - estimate.breakdown.userMessage
-      );
+          const { normalizeMessageContent, microCompactMessage } = await import('@/lib/message-normalizer');
+          const { roughTokenEstimate } = await import('@/lib/context-estimator');
+          const normalizedHistory = historyMsgs.map((m, i) => ({
+            role: m.role,
+            content: microCompactMessage(m.role, normalizeMessageContent(m.role, m.content), historyMsgs.length - 1 - i),
+          }));
 
-      if (needsCompression(estimate.total, contextWindow, session_id)) {
-        console.log(`[chat API] Context at ${((estimate.total / contextWindow) * 100).toFixed(1)}% — triggering compression`);
+          const estimate = estimateContextTokens({
+            systemPrompt: finalSystemPrompt,
+            history: normalizedHistory,
+            currentUserMessage: content,
+            sessionSummary: activeSessionSummary,
+          });
 
-        // Slice keep/compress on the raw DB rows (with _rowid) FIRST, then
-        // map to {role, content} when calling compressConversation. This
-        // preserves rowid on rowsToCompress so we can write the true
-        // coverage boundary below. historyMsgs[i] corresponds 1:1 to
-        // historyAfterBoundary[i] (same filter result, the map at L299
-        // just drops fields).
-        const recentBudget = Math.floor(contextWindow * 0.5);
-        const rowsToKeep: typeof historyAfterBoundary = [];
-        let keptTokens = 0;
-        for (let i = normalizedHistory.length - 1; i >= 0; i--) {
-          const msgTokens = roughTokenEstimate(normalizedHistory[i].content) + 10;
-          if (keptTokens + msgTokens > recentBudget) break;
-          rowsToKeep.unshift(historyAfterBoundary[i]);
-          keptTokens += msgTokens;
-        }
-        const rowsToCompress = historyAfterBoundary.slice(0, historyAfterBoundary.length - rowsToKeep.length);
-        // messagesToKeep must carry _rowid through — if a reactive compact
-        // fires on this same turn (CONTEXT_TOO_LONG retry) it will see
-        // these rows as conversationHistory and need the rowids to write a
-        // correct boundary. messagesToCompress only feeds compressConversation
-        // which needs role/content; no need to plumb _rowid there.
-        const messagesToKeep = rowsToKeep.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, _rowid: m._rowid }));
-        const messagesToCompress = rowsToCompress.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+          fallbackTokenBudget = Math.floor(
+            contextWindow * 0.7 - estimate.breakdown.system - estimate.breakdown.summary - estimate.breakdown.userMessage
+          );
 
-        if (messagesToCompress.length > 0) {
-          try {
-            const result = await compressConversation({
-              sessionId: session_id,
-              messages: messagesToCompress,
-              existingSummary: activeSessionSummary,
-              providerId: effectiveProviderId || undefined,
-              sessionModel: effectiveModel || undefined,
-            });
-            activeSessionSummary = result.summary;
-            // Coverage boundary = rowid of the last message actually in
-            // messagesToCompress. rowid, not timestamp: rowsToCompress.last
-            // and rowsToKeep.first may share a second on fast paths and the
-            // strict-gt filter would mis-classify one of them. Do NOT use
-            // summary WRITE time: the current user turn was addMessage'd
-            // just before this branch ran and sits at a created_at slightly
-            // earlier than "now", which would silently drop it on the next
-            // turn's filter. The user turn has rowid strictly greater than
-            // any row in rowsToCompress, so the rowid boundary naturally
-            // spares it.
-            const autoCompactBoundaryRowid = rowsToCompress[rowsToCompress.length - 1]._rowid ?? 0;
-            updateSessionSummary(session_id, result.summary, autoCompactBoundaryRowid);
-            // Recalculate budget with new (larger) summary
-            const newSummaryTokens = roughTokenEstimate(result.summary);
-            const userMsgTokens = roughTokenEstimate(content);
-            fallbackTokenBudget = Math.floor(
-              contextWindow * 0.7 - estimate.breakdown.system - newSummaryTokens - userMsgTokens
-            );
-            // Flag so we can notify frontend via a leading SSE event
-            compressionOccurred = true;
-            compressionStats = {
-              messagesCompressed: result.messagesCompressed,
-              tokensSaved: result.estimatedTokensSaved,
-            };
+          if (needsCompression(estimate.total, contextWindow, session_id)) {
+            console.log(`[chat API] Context at ${((estimate.total / contextWindow) * 100).toFixed(1)}% — triggering compression`);
 
-            // Force this turn AND all subsequent turns off SDK resume — see
-            // planStreamHandoffAfterCompaction for the rationale.
-            updateSdkSessionId(session_id, '');
-            const { planStreamHandoffAfterCompaction } = await import('@/lib/context-compressor');
-            const handoff = planStreamHandoffAfterCompaction({
-              compressed: true,
-              originalHistory: historyMsgs,
-              messagesToKeep,
-              originalSdkSessionId: streamSdkSessionId,
-            });
-            streamSdkSessionId = handoff.sdkSessionId;
-            streamConversationHistory = handoff.conversationHistory;
+            const recentBudget = Math.floor(contextWindow * 0.5);
+            const rowsToKeep: typeof historyAfterBoundary = [];
+            let keptTokens = 0;
+            for (let i = normalizedHistory.length - 1; i >= 0; i--) {
+              const msgTokens = roughTokenEstimate(normalizedHistory[i].content) + 10;
+              if (keptTokens + msgTokens > recentBudget) break;
+              rowsToKeep.unshift(historyAfterBoundary[i]);
+              keptTokens += msgTokens;
+            }
+            const rowsToCompress = historyAfterBoundary.slice(0, historyAfterBoundary.length - rowsToKeep.length);
+            const messagesToKeep = rowsToKeep.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, _rowid: m._rowid }));
+            const messagesToCompress = rowsToCompress.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
-            console.log(`[chat API] Compressed ${result.messagesCompressed} messages, saved ~${result.estimatedTokensSaved} tokens; cleared SDK session, switching to fresh query with summary + ${messagesToKeep.length} recent turns`);
-          } catch (compErr) {
-            console.warn('[chat API] Compression failed, proceeding without:', compErr);
+            if (messagesToCompress.length > 0) {
+              // Notify frontend immediately BEFORE compression starts so it can show the loading state
+              controller.enqueue(`data: ${JSON.stringify({
+                type: 'status',
+                data: JSON.stringify({ notification: true, message: 'context_compressing_retry' })
+              })}\n\n`);
+
+              try {
+                const result = await compressConversation({
+                  sessionId: session_id,
+                  messages: messagesToCompress,
+                  existingSummary: activeSessionSummary,
+                  providerId: effectiveProviderId || undefined,
+                  sessionModel: effectiveModel || undefined,
+                });
+                activeSessionSummary = result.summary;
+                const autoCompactBoundaryRowid = rowsToCompress[rowsToCompress.length - 1]._rowid ?? 0;
+                updateSessionSummary(session_id, result.summary, autoCompactBoundaryRowid);
+                const newSummaryTokens = roughTokenEstimate(result.summary);
+                const userMsgTokens = roughTokenEstimate(content);
+                fallbackTokenBudget = Math.floor(
+                  contextWindow * 0.7 - estimate.breakdown.system - newSummaryTokens - userMsgTokens
+                );
+                compressionOccurred = true;
+                compressionStats = {
+                  messagesCompressed: result.messagesCompressed,
+                  tokensSaved: result.estimatedTokensSaved,
+                };
+
+                updateSdkSessionId(session_id, '');
+                const { planStreamHandoffAfterCompaction } = await import('@/lib/context-compressor');
+                const handoff = planStreamHandoffAfterCompaction({
+                  compressed: true,
+                  originalHistory: historyMsgs,
+                  messagesToKeep,
+                  originalSdkSessionId: streamSdkSessionId,
+                });
+                streamSdkSessionId = handoff.sdkSessionId;
+                streamConversationHistory = handoff.conversationHistory;
+
+                console.log(`[chat API] Compressed ${result.messagesCompressed} messages, saved ~${result.estimatedTokensSaved} tokens; cleared SDK session, switching to fresh query with summary + ${messagesToKeep.length} recent turns`);
+              } catch (compErr) {
+                console.warn('[chat API] Compression failed, proceeding without:', compErr);
+              }
+            }
           }
+        } catch (estimateErr) {
+          console.warn('[chat API] Context estimation failed, proceeding without compression:', estimateErr);
+        }
+
+        if (compressionOccurred && compressionStats) {
+          const { buildContextCompressedStatus } = await import('@/lib/context-compressor');
+          controller.enqueue(`data: ${JSON.stringify({
+            type: 'status',
+            data: JSON.stringify(buildContextCompressedStatus({
+              messagesCompressed: compressionStats.messagesCompressed,
+              tokensSaved: compressionStats.tokensSaved,
+            })),
+          })}\n\n`);
+        }
+
+        console.log('[chat API] streamClaude params:', {
+          promptLength: content.length,
+          promptFirst200: content.slice(0, 200),
+          sdkSessionId: streamSdkSessionId || 'none',
+          compressionOccurred,
+          historyMessageCount: streamConversationHistory.length,
+          systemPromptLength: finalSystemPrompt?.length || 0,
+          systemPromptFirst200: finalSystemPrompt?.slice(0, 200) || 'none',
+        });
+
+        try {
+          const stream = streamClaude({
+            prompt: content,
+            sessionId: session_id,
+            sdkSessionId: streamSdkSessionId,
+            model: resolved.upstreamModel || resolved.model || effectiveModel,
+            systemPrompt: finalSystemPrompt,
+            referencedContexts,
+            workingDirectory: session.sdk_cwd || session.working_directory || undefined,
+            abortController,
+            permissionMode,
+            files: fileAttachments,
+            imageAgentMode: isImageAgentMode,
+            toolTimeoutSeconds: toolTimeout || 300,
+            provider: resolvedProvider,
+            providerId: effectiveProviderId || undefined,
+            sessionProviderId: session.provider_id || undefined,
+            mcpServers,
+            conversationHistory: streamConversationHistory,
+            sessionSummary: activeSessionSummary,
+            sessionSummaryBoundaryRowid: sessionSummaryData.boundaryRowid,
+            fallbackTokenBudget,
+            bypassPermissions,
+            thinking: thinking as any,
+            effort: effort as any,
+            context1m: context_1m,
+            generativeUI: generativeUIEnabled,
+            enableFileCheckpointing: enableFileCheckpointing ?? true,
+            autoTrigger: !!autoTrigger,
+            agents: {
+              explore: {
+                description: 'Fast agent for codebase exploration. Read-only tools, quick searches.',
+                prompt: 'You are a fast codebase exploration agent. Search efficiently, report findings concisely. Do not modify any files.',
+              },
+              general: {
+                description: 'General-purpose sub-agent for complex multi-step tasks.',
+                disallowedTools: ['Agent'],
+              },
+            },
+            onRuntimeStatusChange: (status: string) => {
+              try { setSessionRuntimeStatus(session_id, status); } catch { /* best effort */ }
+            },
+          });
+
+          const [streamForClient, streamForCollect] = stream.tee();
+
+          const lockRenewalInterval = setInterval(() => {
+            try { renewSessionLock(session_id, lockId, 600); } catch { /* best effort */ }
+          }, 60_000);
+
+          const isHeartbeatTurn = !!autoTrigger && content.includes('心跳检查');
+          collectStreamResponse(streamForCollect, session_id, telegramNotifyOpts, () => {
+            clearInterval(lockRenewalInterval);
+            releaseSessionLock(session_id, lockId);
+            setSessionRuntimeStatus(session_id, 'idle');
+          }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts });
+
+          const reader = streamForClient.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+            if (controller.closed) break;
+          }
+        } catch (err) {
+          console.error('[chat API] streamClaude execution failed:', err);
+          controller.enqueue(`data: ${JSON.stringify({ type: 'error', data: err instanceof Error ? err.message : 'Internal Server Error' })}\n\n`);
+          controller.enqueue(`data: ${JSON.stringify({ type: 'done', data: '' })}\n\n`);
+        } finally {
+          controller.close();
         }
       }
-    } catch (estimateErr) {
-      console.warn('[chat API] Context estimation failed, proceeding without compression:', estimateErr);
-    }
-
-    // Stream Claude response, using SDK session ID for resume if available
-    console.log('[chat API] streamClaude params:', {
-      promptLength: content.length,
-      promptFirst200: content.slice(0, 200),
-      // Log the handoff value, not the DB value — after auto-compaction these
-      // diverge and the handoff is what streamClaude actually receives.
-      sdkSessionId: streamSdkSessionId || 'none',
-      compressionOccurred,
-      historyMessageCount: streamConversationHistory.length,
-      systemPromptLength: finalSystemPrompt?.length || 0,
-      systemPromptFirst200: finalSystemPrompt?.slice(0, 200) || 'none',
     });
-    const stream = streamClaude({
-      prompt: content,
-      sessionId: session_id,
-      sdkSessionId: streamSdkSessionId,
-      model: resolved.upstreamModel || resolved.model || effectiveModel,
-      systemPrompt: finalSystemPrompt,
-      referencedContexts,
-      workingDirectory: session.sdk_cwd || session.working_directory || undefined,
-      abortController,
-      permissionMode,
-      files: fileAttachments,
-      imageAgentMode: isImageAgentMode,
-      toolTimeoutSeconds: toolTimeout || 300,
-      provider: resolvedProvider,
-      providerId: effectiveProviderId || undefined,
-      sessionProviderId: session.provider_id || undefined,
-      mcpServers,
-      conversationHistory: streamConversationHistory,
-      sessionSummary: activeSessionSummary,
-      // Plumbed through so reactive compact (CONTEXT_TOO_LONG retry inside
-      // streamClaude) can preserve the already-established boundary when
-      // conversationHistory has no _rowid to derive a new one from. Prevents
-      // a degraded reactive compact from silently resetting a real boundary
-      // back to 0 and regressing the next turn's filter to passthrough.
-      sessionSummaryBoundaryRowid: sessionSummaryData.boundaryRowid,
-      fallbackTokenBudget,
-      bypassPermissions,
-      thinking: thinking as ClaudeStreamOptions['thinking'],
-      effort: effort as ClaudeStreamOptions['effort'],
-      context1m: context_1m,
-      generativeUI: generativeUIEnabled,
-      enableFileCheckpointing: enableFileCheckpointing ?? true,
-      autoTrigger: !!autoTrigger,
-      agents: {
-        explore: {
-          description: 'Fast agent for codebase exploration. Read-only tools, quick searches.',
-          prompt: 'You are a fast codebase exploration agent. Search efficiently, report findings concisely. Do not modify any files.',
-        },
-        general: {
-          description: 'General-purpose sub-agent for complex multi-step tasks.',
-          disallowedTools: ['Agent'],
-        },
-      },
-      onRuntimeStatusChange: (status: string) => {
-        try { setSessionRuntimeStatus(session_id, status); } catch { /* best effort */ }
-      },
-    });
-
-    // Tee the stream: one for client, one for collecting the response
-    const [streamForClient, streamForCollect] = stream.tee();
-
-    // Periodically renew the session lock so long-running tasks don't expire
-    const lockRenewalInterval = setInterval(() => {
-      try { renewSessionLock(session_id, lockId, 600); } catch { /* best effort */ }
-    }, 60_000);
-
-    // Save assistant message in background, with cleanup callback to release lock
-    const isHeartbeatTurn = !!autoTrigger && content.includes('心跳检查');
-    collectStreamResponse(streamForCollect, session_id, telegramNotifyOpts, () => {
-      clearInterval(lockRenewalInterval);
-      releaseSessionLock(session_id, lockId);
-      setSessionRuntimeStatus(session_id, 'idle');
-    }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts });
-
-    // If auto-compression happened, prepend a notification event to the stream.
-    // The message is human-readable so the browser status bar shows something
-    // meaningful, and includes structured data for future rich UI handling.
-    const responseStream = compressionOccurred
-      ? new ReadableStream<string>({
-          async start(controllerRaw) {
-            const controller = wrapController(controllerRaw);
-            controller.enqueue(`data: ${JSON.stringify({
-              type: 'status',
-              data: JSON.stringify(buildContextCompressedStatus({
-                messagesCompressed: compressionStats?.messagesCompressed ?? 0,
-                tokensSaved: compressionStats?.tokensSaved ?? 0,
-              })),
-            })}\n\n`);
-            const reader = streamForClient.getReader();
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                controller.enqueue(value);
-                if (controller.closed) break; // consumer aborted
-              }
-            } finally {
-              controller.close();
-            }
-          },
-        })
-      : streamForClient;
 
     return new Response(responseStream, {
       headers: {

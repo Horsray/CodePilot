@@ -145,9 +145,31 @@ export function useContextUsage(
         const cacheRead = usage.cache_read_input_tokens || 0;
         const cacheCreation = usage.cache_creation_input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
-        const contextInputTokens = usage.context_input_tokens || inputTokens;
-        const used = contextInputTokens + cacheRead + cacheCreation;
+        
+        // Calculate the total cumulative tokens from all steps in the API response
+        const totalCumulativeInput = inputTokens + cacheRead + cacheCreation;
+        
+        // Use the estimated single-turn context tokens if provided by the backend (claude-client.ts)
+        // This prevents massive over-reporting when an agent loop runs for 20+ steps and sums up
+        // the cache reads for every single step.
+        const contextInputTokens = usage.context_input_tokens !== undefined 
+          ? usage.context_input_tokens 
+          : totalCumulativeInput;
+          
+        const used = contextInputTokens;
         const ratio = contextWindow ? used / contextWindow : 0;
+        
+        // Scale down the display numbers for cache reads/creations so the dropdown 
+        // panel numbers match the scaled single-turn context, rather than the raw 
+        // 4.4M multi-step accumulation.
+        let displayCacheRead = cacheRead;
+        let displayCacheCreation = cacheCreation;
+        
+        if (usage.context_input_tokens !== undefined && totalCumulativeInput > 0 && usage.context_input_tokens < totalCumulativeInput) {
+          const scale = usage.context_input_tokens / totalCumulativeInput;
+          displayCacheRead = Math.round(cacheRead * scale);
+          displayCacheCreation = Math.round(cacheCreation * scale);
+        }
 
         // Estimate next turn: current input context + this turn's output + ~200 token overhead for a new user message
         const estimatedNextTurn = used + outputTokens + 200;
@@ -166,8 +188,8 @@ export function useContextUsage(
           ratio,
           estimatedNextTurn,
           estimatedNextRatio,
-          cacheReadTokens: cacheRead,
-          cacheCreationTokens: cacheCreation,
+          cacheReadTokens: displayCacheRead,
+          cacheCreationTokens: displayCacheCreation,
           outputTokens,
           hasData: true,
           state,

@@ -374,7 +374,14 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           }
 
           // Prune old tool results to reduce token usage
-          const prunedMessages = pruneOldToolResults(messages);
+          // Switch to budget-based pruning to enforce strict limits even for recent turns
+          // to prevent context explosion if a tool returns massive output.
+          const { pruneOldToolResultsByBudget } = await import('./context-pruner');
+          const prunedMessages = pruneOldToolResultsByBudget(messages, {
+            tokenBudget: 50000, // Hard limit for tool results in the active agent loop
+            protectFirstN: 3,
+            protectLastN: 2, // Protect fewer tail turns if they're massive
+          });
 
           // Determine activeTools based on mode (plan = read-only subset)
           const isPlanMode = permissionMode === 'plan';
