@@ -1422,6 +1422,21 @@ export interface InstructionSource {
 // Scheduled Tasks
 // ==========================================
 
+// 通知渠道类型
+export type NotificationChannel = 'toast' | 'system' | 'telegram' | 'email' | 'session';
+
+// 工具授权类型
+export interface ToolAuthorization {
+  type: 'full_access' | 'web_search' | 'cli_tools' | 'mcp';
+  tool_ids?: string[];  // MCP 时指定具体工具 ID
+}
+
+// 会话绑定信息
+export interface SessionBinding {
+  session_id: string;
+  project_name?: string;  // 所属项目名称，用于前端显示
+}
+
 export interface ScheduledTask {
   id: string;
   name: string;
@@ -1438,12 +1453,18 @@ export interface ScheduledTask {
   priority: 'low' | 'normal' | 'urgent';
   notify_on_complete: number;
   session_id?: string;
+  // 新增：通知渠道（多选）
+  notification_channels?: NotificationChannel[];
+  // 新增：会话绑定（可以指定写入哪个 session）
+  session_binding?: SessionBinding;
+  // 新增：工具授权
+  tool_authorization?: ToolAuthorization;
   working_directory?: string;
   permanent: number;
-  group_id?: string;      // 同组任务的唯一标识，用于折叠显示
-  group_name?: string;    // 同组任务的统一显示名称
-  active_hours_start?: string;  // 活跃时段开始时间，格式 HH:mm
-  active_hours_end?: string;    // 活跃时段结束时间，格式 HH:mm
+  group_id?: string;
+  group_name?: string;
+  active_hours_start?: string;
+  active_hours_end?: string;
   created_at: string;
   updated_at: string;
 }

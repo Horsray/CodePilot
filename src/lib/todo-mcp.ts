@@ -42,6 +42,21 @@ export function createTodoMcpServer(workspacePath: string) {
         },
       ),
       tool(
+        'codepilot_todo_write',
+        'Alias of TodoWrite for compatibility with older prompts/tool names.',
+        {
+          todos: z.array(z.object({
+            id: z.string().describe('Unique identifier for the task'),
+            content: z.string().describe('Short, actionable description of the task'),
+            status: z.enum(['pending', 'in_progress', 'completed']).describe('Current status of the task'),
+            activeForm: z.string().optional().describe('Present-continuous label for the task (e.g., "Reading files...")'),
+          })).describe('The full list of tasks for the current session'),
+        },
+        async ({ todos }) => {
+          return { content: [{ type: 'text' as const, text: `Task list updated with ${todos.length} items. UI has been synced.` }] };
+        },
+      ),
+      tool(
         'codepilot_skill_create',
         'Auto-crystallize a successful workflow into a reusable SKILL.md file. Use this ONLY after you have successfully completed a complex task (like setting up an environment or fixing a bug) to save the exact steps for future use.',
         {

@@ -23,9 +23,14 @@ import {
   Info,
   Calendar,
   BellSimple,
+  TelegramLogo,
+  ChatCircle,
+  Desktop,
+  Wrench,
+  CaretUp,
 } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
-import type { ScheduledTask } from "@/types";
+import type { ScheduledTask, ChatSession } from "@/types";
 
 type FilterStatus = "all" | "active" | "paused" | "completed" | "disabled";
 
@@ -378,6 +383,19 @@ function TaskGroupCard({
 }
 
 // ── Create dialog ─────────────────────────────────────────────
+// 通知渠道类型
+type NotificationChannelType = 'toast' | 'system' | 'telegram' | 'session';
+
+// 工具授权类型
+type ToolAuthType = 'none' | 'full_access' | 'partial';
+
+// MCP Server item for UI
+interface McpServerItem {
+  name: string;
+  type: string;
+  enabled: boolean;
+}
+
 function CreateTaskDialog({
   open,
   onClose,
@@ -401,6 +419,61 @@ function CreateTaskDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  // 高级选项
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [notificationChannels, setNotificationChannels] = useState<NotificationChannelType[]>(["toast", "system"]);
+  const [sessionBindingMode, setSessionBindingMode] = useState<"none" | "specify">("none");
+  const [selectedSessionId, setSelectedSessionId] = useState("");
+  const [toolAuthType, setToolAuthType] = useState<ToolAuthType>("none");
+  const [selectedTools, setSelectedTools] = useState<string[]>([]);
+  const [activeHoursStart, setActiveHoursStart] = useState("");
+  const [activeHoursEnd, setActiveHoursEnd] = useState("");
+
+  // 可用的会话列表
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  // 可用的 MCP 服务器列表
+  const [mcpServers, setMcpServers] = useState<McpServerItem[]>([]);
+  const [loadingData, setLoadingData] = useState(false);
+
+  // 加载会话和 MCP 服务器列表
+  useEffect(() => {
+    if (!open) return;
+    setLoadingData(true);
+    Promise.all([
+      fetch("/api/chat/sessions").then(r => r.json()).catch(() => ({ sessions: [] })),
+      fetch("/api/plugins/mcp/servers").then(r => r.json()).catch(() => ({ servers: [] })),
+    ]).then(([sessionData, mcpData]) => {
+      if (sessionData.sessions) {
+        setSessions(sessionData.sessions);
+        // 默认选择第一个会话
+        if (sessionData.sessions.length > 0 && !selectedSessionId) {
+          setSelectedSessionId(sessionData.sessions[0].id);
+        }
+      }
+      if (mcpData.servers) {
+        setMcpServers(mcpData.servers);
+      }
+    }).finally(() => setLoadingData(false));
+  }, [open]);
+
+  // 切换通知渠道
+  const toggleChannel = (channel: NotificationChannelType) => {
+    setNotificationChannels(prev =>
+      prev.includes(channel)
+        ? prev.filter(c => c !== channel)
+        : [...prev, channel]
+    );
+  };
+
+  // 切换工具选择
+  const toggleTool = (toolName: string) => {
+    setSelectedTools(prev =>
+      prev.includes(toolName)
+        ? prev.filter(t => t !== toolName)
+        : [...prev, toolName]
+    );
+  };
+
   const handleSubmit = async () => {
     if (!name.trim() || !prompt.trim()) return;
 
@@ -423,6 +496,19 @@ function CreateTaskDialog({
         scheduleValue = onceValue;
       }
 
+      // 构建 session_binding
+      const sessionBinding = sessionBindingMode === "specify" && selectedSessionId
+        ? { session_id: selectedSessionId }
+        : null;
+
+      // 构建 tool_authorization
+      let toolAuthorization = null;
+      if (toolAuthType === "full_access") {
+        toolAuthorization = { type: "full_access" as const };
+      } else if (toolAuthType === "partial" && selectedTools.length > 0) {
+        toolAuthorization = { type: "mcp" as const, tool_ids: selectedTools };
+      }
+
       const res = await fetch("/api/tasks/schedule", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -434,6 +520,12 @@ function CreateTaskDialog({
           priority,
           notify_on_complete: notifyOnComplete ? 1 : 0,
           working_directory: workingDirectory || null,
+          // 新增字段
+          notification_channels: notificationChannels,
+          session_binding: sessionBinding,
+          tool_authorization: toolAuthorization,
+          active_hours_start: activeHoursStart || null,
+          active_hours_end: activeHoursEnd || null,
         }),
       });
 
@@ -454,6 +546,14 @@ function CreateTaskDialog({
       setPriority("normal");
       setNotifyOnComplete(true);
       setWorkingDirectory("");
+      setShowAdvanced(false);
+      setNotificationChannels(["toast", "system"]);
+      setSessionBindingMode("none");
+      setSelectedSessionId("");
+      setToolAuthType("none");
+      setSelectedTools([]);
+      setActiveHoursStart("");
+      setActiveHoursEnd("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "创建失败");
     } finally {
@@ -461,11 +561,19 @@ function CreateTaskDialog({
     }
   };
 
+  // 通知渠道配置
+  const channelConfig: Record<NotificationChannelType, { label: string; icon: React.ReactNode; color: string }> = {
+    toast: { label: "Toast", icon: <BellSimple size={12} />, color: "text-blue-500" },
+    system: { label: "系统通知", icon: <Desktop size={12} />, color: "text-purple-500" },
+    telegram: { label: "Telegram", icon: <TelegramLogo size={12} />, color: "text-cyan-500" },
+    session: { label: "写入对话", icon: <ChatCircle size={12} />, color: "text-green-500" },
+  };
+
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-background border border-border/50 rounded-2xl shadow-2xl w-[520px] max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-background border border-border/50 rounded-2xl shadow-2xl w-[580px] max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border/50">
           <div className="flex items-center gap-3">
@@ -602,6 +710,171 @@ function CreateTaskDialog({
             />
             <span className="text-xs">{t('scheduledTasks.notifyOnComplete')}</span>
           </label>
+
+          {/* 高级选项折叠按钮 */}
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {showAdvanced ? <CaretUp size={12} /> : <CaretDown size={12} />}
+            高级选项
+          </button>
+
+          {/* 高级选项内容 */}
+          {showAdvanced && (
+            <div className="space-y-4 p-4 bg-muted/10 rounded-xl border border-border/30">
+              {/* 通知渠道 */}
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-2 block">通知渠道（可多选）</label>
+                <div className="flex flex-wrap gap-2">
+                  {(Object.entries(channelConfig) as [NotificationChannelType, typeof channelConfig[NotificationChannelType]][]).map(([key, cfg]) => (
+                    <button
+                      key={key}
+                      onClick={() => toggleChannel(key)}
+                      className={cn(
+                        "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all border",
+                        notificationChannels.includes(key)
+                          ? "bg-primary/10 border-primary/30 text-primary"
+                          : "bg-muted/20 border-border/50 text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      <span className={cfg.color}>{cfg.icon}</span>
+                      {cfg.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-muted-foreground/60 mt-1">
+                  提示：Telegram 需要在设置中配置 Bot Token 才能接收通知
+                </p>
+              </div>
+
+              {/* 会话绑定 */}
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-2 block">任务结果写入</label>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="sessionBinding"
+                      checked={sessionBindingMode === "none"}
+                      onChange={() => setSessionBindingMode("none")}
+                      className="w-3.5 h-3.5"
+                    />
+                    <span className="text-xs">不写入任何对话</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="sessionBinding"
+                      checked={sessionBindingMode === "specify"}
+                      onChange={() => setSessionBindingMode("specify")}
+                      className="w-3.5 h-3.5"
+                    />
+                    <span className="text-xs">指定对话：</span>
+                  </label>
+                  {sessionBindingMode === "specify" && (
+                    <select
+                      value={selectedSessionId}
+                      onChange={(e) => setSelectedSessionId(e.target.value)}
+                      className="w-full h-8 px-2 text-xs bg-muted/20 border border-border/50 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary/30"
+                    >
+                      <option value="">选择对话...</option>
+                      {sessions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.title || '未命名对话'} ({new Date(s.updated_at).toLocaleDateString()})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+
+              {/* 工具授权 */}
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-2 block">工具授权</label>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="toolAuth"
+                      checked={toolAuthType === "none"}
+                      onChange={() => setToolAuthType("none")}
+                      className="w-3.5 h-3.5"
+                    />
+                    <span className="text-xs">不使用工具（纯文本生成）</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="toolAuth"
+                      checked={toolAuthType === "full_access"}
+                      onChange={() => setToolAuthType("full_access")}
+                      className="w-3.5 h-3.5"
+                    />
+                    <span className="text-xs">全量授权（自动使用所有可用工具）</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="toolAuth"
+                      checked={toolAuthType === "partial"}
+                      onChange={() => setToolAuthType("partial")}
+                      className="w-3.5 h-3.5"
+                    />
+                    <span className="text-xs">部分授权（勾选需要的工具）：</span>
+                  </label>
+                  {toolAuthType === "partial" && (
+                    <div className="ml-6 flex flex-wrap gap-1.5 mt-2">
+                      {mcpServers.length === 0 ? (
+                        <span className="text-[10px] text-muted-foreground/60">暂无可用的 MCP 工具</span>
+                      ) : (
+                        mcpServers.map((server) => (
+                          <button
+                            key={server.name}
+                            onClick={() => toggleTool(server.name)}
+                            className={cn(
+                              "flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all border",
+                              selectedTools.includes(server.name)
+                                ? "bg-green-500/10 border-green-500/30 text-green-500"
+                                : "bg-muted/20 border-border/50 text-muted-foreground hover:text-foreground"
+                            )}
+                          >
+                            <Wrench size={10} />
+                            {server.name}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 活跃时段 */}
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-2 block">活跃时段（可选）</label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="time"
+                    value={activeHoursStart}
+                    onChange={(e) => setActiveHoursStart(e.target.value)}
+                    placeholder="09:00"
+                    className="h-8 w-28 text-xs"
+                  />
+                  <span className="text-muted-foreground">至</span>
+                  <Input
+                    type="time"
+                    value={activeHoursEnd}
+                    onChange={(e) => setActiveHoursEnd(e.target.value)}
+                    placeholder="18:00"
+                    className="h-8 w-28 text-xs"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground/60 mt-1">
+                  设置后，任务只在该时间段内执行
+                </p>
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-[11px] text-red-400">

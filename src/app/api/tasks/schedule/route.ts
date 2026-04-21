@@ -1,10 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseInterval, getNextCronTime, ensureSchedulerRunning } from '@/lib/task-scheduler';
+import type { NotificationChannel, SessionBinding, ToolAuthorization } from '@/types';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, prompt, schedule_type, schedule_value, priority, notify_on_complete, session_id, working_directory, group_id, group_name } = body;
+    const {
+      name,
+      prompt,
+      schedule_type,
+      schedule_value,
+      priority,
+      notify_on_complete,
+      session_id,
+      working_directory,
+      group_id,
+      group_name,
+      notification_channels,
+      session_binding,
+      tool_authorization,
+      active_hours_start,
+      active_hours_end,
+    } = body;
 
     if (!name || !prompt || !schedule_type || !schedule_value) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -15,7 +32,12 @@ export async function POST(request: NextRequest) {
     const now = new Date();
 
     if (schedule_type === 'once') {
-      next_run = new Date(schedule_value).toISOString();
+      // Parse the datetime-local input (YYYY-MM-DDTHH:mm) as local time and convert to UTC ISO string
+      const localDate = new Date(schedule_value);
+      if (isNaN(localDate.getTime())) {
+        return NextResponse.json({ error: 'Invalid datetime format' }, { status: 400 });
+      }
+      next_run = localDate.toISOString();
     } else if (schedule_type === 'interval') {
       const ms = parseInterval(schedule_value);
       next_run = new Date(now.getTime() + ms).toISOString();
@@ -31,7 +53,11 @@ export async function POST(request: NextRequest) {
 
     const { createScheduledTask } = await import('@/lib/db');
     const task = createScheduledTask({
-      name, prompt, schedule_type, schedule_value, next_run,
+      name,
+      prompt,
+      schedule_type,
+      schedule_value,
+      next_run,
       status: 'active',
       priority: priority || 'normal',
       notify_on_complete: notify_on_complete ?? 1,
@@ -41,6 +67,12 @@ export async function POST(request: NextRequest) {
       working_directory: working_directory || null,
       group_id: group_id || null,
       group_name: group_name || null,
+      // 新增字段
+      notification_channels: notification_channels || ['toast'],
+      session_binding: session_binding || null,
+      tool_authorization: tool_authorization || null,
+      active_hours_start: active_hours_start || null,
+      active_hours_end: active_hours_end || null,
     });
 
     // Ensure the scheduler is running

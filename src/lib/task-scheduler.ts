@@ -9,7 +9,7 @@
  * - Auto-disables after 10 consecutive failures
  */
 
-import type { ScheduledTask } from '@/types';
+import type { ScheduledTask, NotificationChannel } from '@/types';
 import crypto from 'crypto';
 
 const POLL_INTERVAL = 10_000; // 10s
@@ -264,7 +264,7 @@ export function stopScheduler(): void {
  * @param isSessionTask If true, skip SQLite writes and re-throw errors for caller handling.
  */
 async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promise<void> {
-  const { updateScheduledTask, insertTaskRunLog } = await import('@/lib/db');
+  const { updateScheduledTask, insertTaskRunLog, getSession, getAllSessions, getSetting } = await import('@/lib/db');
   const startTime = Date.now();
 
   // Mark as running (skip for session tasks — they're not in SQLite)
@@ -273,23 +273,93 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
   }
 
   try {
-    // Lightweight execution via text generation (no streaming UI needed)
-    const { generateTextFromProvider } = await import('./text-generator');
-    const { resolveProvider } = await import('./provider-resolver');
-    const resolved = resolveProvider();
+    // Determine target session for provider resolution
+    let targetSessionId = task.session_id;
+    if (task.session_binding?.session_id) {
+      targetSessionId = task.session_binding.session_id;
+    }
 
+    // Load session to get its provider configuration
+    let providerId: string | undefined;
+    let model: string | undefined;
+    if (targetSessionId) {
+      const session = getSession(targetSessionId);
+      if (session) {
+        providerId = session.provider_id;
+        model = session.model;
+      }
+    }
+
+    // Resolve provider using session's configuration (or fallback to global)
+    const { resolveProvider } = await import('./provider-resolver');
+    const { generateTextViaSdk } = await import('./claude-client');
+    const { selectOnDemandMcpServerNames, toSdkMcpConfig } = await import('./claude-client');
+    const { loadAllMcpServers } = await import('./mcp-loader');
+
+    const resolved = resolveProvider({ sessionProviderId: providerId, sessionModel: model });
     if (!resolved.hasCredentials) {
       throw new Error('No API credentials configured');
     }
 
-    console.log(`[scheduler] Executing task ${task.id} with prompt:`, task.prompt);
+    console.log(`[scheduler] Executing task ${task.id} with provider ${resolved.provider?.id}, model ${resolved.upstreamModel || resolved.model}`);
 
-    const result = await generateTextFromProvider({
+    // Auto-detect MCP servers based on task prompt + tool authorization
+    const onDemandMcpNames = selectOnDemandMcpServerNames(task.prompt);
+
+    // Apply tool authorization: add explicitly authorized tools
+    if (task.tool_authorization) {
+      if (task.tool_authorization.type === 'full_access') {
+        // Load all available MCP servers
+        const allServers = loadAllMcpServers();
+        if (allServers) {
+          for (const name of Object.keys(allServers)) {
+            onDemandMcpNames.add(name);
+          }
+        }
+      } else if (task.tool_authorization.type === 'web_search') {
+        onDemandMcpNames.add('WebSearch');
+        onDemandMcpNames.add('bailian-web-search');
+        onDemandMcpNames.add('fetch');
+      } else if (task.tool_authorization.type === 'cli_tools') {
+        onDemandMcpNames.add('cli-tools');
+      } else if (task.tool_authorization.type === 'mcp' && task.tool_authorization.tool_ids) {
+        for (const id of task.tool_authorization.tool_ids) {
+          onDemandMcpNames.add(id);
+        }
+      }
+    }
+
+    // Get MCP server configs for the selected servers
+    const mcpServerConfigs: Record<string, import('@/types').MCPServerConfig> = {};
+    const allServers = loadAllMcpServers();
+    if (allServers) {
+      for (const name of onDemandMcpNames) {
+        if (allServers[name]) {
+          mcpServerConfigs[name] = allServers[name];
+        }
+      }
+    }
+
+    // Build system prompt with task context and current system time
+    const systemTime = new Date().toLocaleString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const system = `You are executing a scheduled task. Be concise and direct.\nTask name: ${task.name}\nCurrent system time (Shanghai): ${systemTime}`;
+
+    // Execute via SDK path with MCP tools support
+    const result = await generateTextViaSdk({
       providerId: resolved.provider?.id || '',
       model: resolved.upstreamModel || resolved.model || 'sonnet',
-      system: `You are executing a scheduled task. Be concise and direct.\nTask name: ${task.name}\nCurrent time: ${new Date().toLocaleString()}`,
+      system,
       prompt: task.prompt,
-      maxTokens: 1000,
+      sessionId: targetSessionId,
+      mcpServers: Object.keys(mcpServerConfigs).length > 0 ? toSdkMcpConfig(mcpServerConfigs) : undefined,
     });
 
     // Success — update SQLite (skip for session tasks)
@@ -309,33 +379,35 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
       computeNextRun(task);
     }
 
-    // Notify on completion — always use 'urgent' priority to ensure mobile delivery via Telegram
+    // Notify on completion via all configured channels
     if (task.notify_on_complete) {
-      await sendTaskNotification(
+      const channels = task.notification_channels || ['toast'];
+      await sendMultiChannelNotification(
+        channels,
         `✅ ${task.name}`,
-        `${task.prompt}\n\n---\n执行结果：\n${result.slice(0, 500)}`,
-        'urgent',
+        `${task.prompt}\n\n---\n执行结果：\n${result.slice(0, 1000)}`,
+        task.priority || 'normal',
       );
     }
 
     // Insert result as assistant message in the task's session (or latest assistant session)
     try {
-      const { addMessage, getSetting, getLatestSessionByWorkingDirectory, getAllSessions } = await import('@/lib/db');
+      const { addMessage } = await import('@/lib/db');
       const workspacePath = getSetting('assistant_workspace_path');
-      let targetSessionId = task.session_id;
+      let msgTargetSessionId = targetSessionId;
 
-      if (!targetSessionId && workspacePath) {
-        const session = getLatestSessionByWorkingDirectory(workspacePath);
-        if (session) targetSessionId = session.id;
+      if (!msgTargetSessionId && workspacePath) {
+        const session = (await import('@/lib/db')).getLatestSessionByWorkingDirectory(workspacePath);
+        if (session) msgTargetSessionId = session.id;
       }
 
       // Fallback: if still no session, use the most recent session overall
-      if (!targetSessionId) {
+      if (!msgTargetSessionId) {
         const sessions = getAllSessions();
-        if (sessions.length > 0) targetSessionId = sessions[0].id;
+        if (sessions.length > 0) msgTargetSessionId = sessions[0].id;
       }
 
-      if (targetSessionId) {
+      if (msgTargetSessionId) {
         // Load buddy info for personalized notification
         let buddyPrefix = '📋';
         try {
@@ -347,7 +419,7 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
             }
           }
         } catch {}
-        addMessage(targetSessionId, 'assistant', `${buddyPrefix} **${task.name}**\n\n${result}`);
+        addMessage(msgTargetSessionId, 'assistant', `${buddyPrefix} **${task.name}**\n\n${result}`);
       }
     } catch { /* best effort */ }
 
@@ -360,7 +432,13 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     if (isSessionTask) {
       // Notify on failure (best effort)
       if (task.notify_on_complete) {
-        await sendTaskNotification(`❌ ${task.name}`, errorMsg.slice(0, 200), 'urgent').catch(() => {});
+        const channels = task.notification_channels || ['toast'];
+        await sendMultiChannelNotification(
+          channels,
+          `❌ ${task.name}`,
+          `任务执行失败：\n${task.prompt}\n\n错误信息：\n${errorMsg.slice(0, 300)}`,
+          'urgent',
+        ).catch(() => {});
       }
       console.error(`[scheduler] Session task ${task.id} (${task.name}) error:`, errorMsg);
       throw err;
@@ -381,9 +459,11 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     // Exponential backoff
     applyBackoff(task.id, errors);
 
-    // Notify on failure — always use 'urgent' priority to ensure mobile delivery via Telegram
+    // Notify on failure via all configured channels
     if (task.notify_on_complete) {
-      await sendTaskNotification(
+      const channels = task.notification_channels || ['toast'];
+      await sendMultiChannelNotification(
+        channels,
         `❌ ${task.name}`,
         `任务执行失败：\n${task.prompt}\n\n错误信息：\n${errorMsg.slice(0, 300)}`,
         'urgent',
@@ -392,22 +472,25 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
 
     // Insert error as assistant message in the task's session
     try {
-      const { addMessage, getSetting, getLatestSessionByWorkingDirectory, getAllSessions } = await import('@/lib/db');
+      const { addMessage, getSetting } = await import('@/lib/db');
       const workspacePath = getSetting('assistant_workspace_path');
-      let targetSessionId = task.session_id;
+      let msgTargetSessionId = task.session_id;
+      if (task.session_binding?.session_id) {
+        msgTargetSessionId = task.session_binding.session_id;
+      }
 
-      if (!targetSessionId && workspacePath) {
-        const session = getLatestSessionByWorkingDirectory(workspacePath);
-        if (session) targetSessionId = session.id;
+      if (!msgTargetSessionId && workspacePath) {
+        const session = (await import('@/lib/db')).getLatestSessionByWorkingDirectory(workspacePath);
+        if (session) msgTargetSessionId = session.id;
       }
 
       // Fallback: if still no session, use the most recent session overall
-      if (!targetSessionId) {
+      if (!msgTargetSessionId) {
         const sessions = getAllSessions();
-        if (sessions.length > 0) targetSessionId = sessions[0].id;
+        if (sessions.length > 0) msgTargetSessionId = sessions[0].id;
       }
 
-      if (targetSessionId) {
+      if (msgTargetSessionId) {
         // Load buddy info for personalized error notification
         let buddyPrefix = '❌';
         try {
@@ -419,7 +502,7 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
             }
           }
         } catch {}
-        addMessage(targetSessionId, 'assistant', `${buddyPrefix} ❌ **${task.name}** (定时任务失败)\n\n${errorMsg}`);
+        addMessage(msgTargetSessionId, 'assistant', `${buddyPrefix} ❌ **${task.name}** (定时任务失败)\n\n${errorMsg}`);
       }
     } catch { /* best effort */ }
 
@@ -500,6 +583,54 @@ async function sendTaskNotification(title: string, body: string, priority: 'low'
     await sendNotification({ title, body, priority });
   } catch {
     // Best effort — don't let notification failure affect task execution
+  }
+}
+
+/**
+ * Send notification through multiple channels based on task configuration.
+ * @param channels Array of notification channels: 'toast', 'system', 'telegram', 'email', 'session'
+ * @param title Notification title
+ * @param body Notification body
+ * @param priority Notification priority (controls Telegram delivery)
+ */
+async function sendMultiChannelNotification(
+  channels: NotificationChannel[],
+  title: string,
+  body: string,
+  priority: 'low' | 'normal' | 'urgent'
+): Promise<void> {
+  try {
+    const { sendNotification, enqueueNotification } = await import('@/lib/notification-manager');
+
+    // Channel 1: Toast (in-app) — always via notification queue
+    if (channels.includes('toast')) {
+      enqueueNotification(title, body, priority);
+    }
+
+    // Channel 2: System notification (Electron) — for normal/urgent priority
+    if (channels.includes('system')) {
+      enqueueNotification(title, body, priority);
+    }
+
+    // Channel 3: Telegram (mobile) — only for urgent priority
+    if (priority === 'urgent' || channels.includes('telegram')) {
+      try {
+        const { notifyGeneric } = await import('@/lib/telegram-bot');
+        await notifyGeneric(title, body);
+      } catch { /* best effort */ }
+    }
+
+    // Channel 4: Email — placeholder for future email integration
+    if (channels.includes('email')) {
+      // TODO: Implement email notification
+    }
+
+    // Channel 5: Session — write directly to the task's session
+    if (channels.includes('session')) {
+      // Already handled in executeDueTask via addMessage
+    }
+  } catch {
+    // Best effort
   }
 }
 

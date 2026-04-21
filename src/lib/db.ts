@@ -987,7 +987,12 @@ function migrateDb(db: Database.Database): void {
       group_id TEXT,
       group_name TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      notification_channels TEXT NOT NULL DEFAULT '["toast"]',
+      session_binding TEXT,
+      tool_authorization TEXT,
+      active_hours_start TEXT,
+      active_hours_end TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status ON scheduled_tasks(status);
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run);
@@ -998,6 +1003,15 @@ function migrateDb(db: Database.Database): void {
   // Migration: add group columns for task grouping (同组任务折叠显示)
   safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN group_id TEXT");
   safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN group_name TEXT");
+  // Migration: add notification_channels (多选通知渠道)
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN notification_channels TEXT NOT NULL DEFAULT '[\"toast\"]'");
+  // Migration: add session_binding (会话绑定)
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN session_binding TEXT");
+  // Migration: add tool_authorization (工具授权)
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN tool_authorization TEXT");
+  // Migration: add active hours
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN active_hours_start TEXT");
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN active_hours_end TEXT");
 
   // Migration: set default_panel to 'file_tree' only if not already configured
   db.prepare(
@@ -2972,30 +2986,45 @@ export function bulkUpsertCliToolDescriptions(entries: Array<{ toolId: string; z
 export function createScheduledTask(task: Omit<ScheduledTask, 'id' | 'created_at' | 'updated_at'>): ScheduledTask {
   const db = getDb();
   const id = crypto.randomBytes(8).toString('hex');
-  db.prepare(`INSERT INTO scheduled_tasks (id, name, prompt, schedule_type, schedule_value, next_run, status, priority, notify_on_complete, session_id, working_directory, consecutive_errors, group_id, group_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`).run(
-    id, task.name, task.prompt, task.schedule_type, task.schedule_value, task.next_run, task.status || 'active', task.priority || 'normal', task.notify_on_complete ?? 1, task.session_id || null, task.working_directory || null, task.group_id || null, task.group_name || null
+  db.prepare(`INSERT INTO scheduled_tasks (id, name, prompt, schedule_type, schedule_value, next_run, status, priority, notify_on_complete, session_id, working_directory, consecutive_errors, group_id, group_name, notification_channels, session_binding, tool_authorization, active_hours_start, active_hours_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`).run(
+    id, task.name, task.prompt, task.schedule_type, task.schedule_value, task.next_run, task.status || 'active', task.priority || 'normal', task.notify_on_complete ?? 1, task.session_id || null, task.working_directory || null, task.group_id || null, task.group_name || null,
+    JSON.stringify(task.notification_channels || ['toast']),
+    task.session_binding ? JSON.stringify(task.session_binding) : null,
+    task.tool_authorization ? JSON.stringify(task.tool_authorization) : null,
+    task.active_hours_start || null,
+    task.active_hours_end || null
   );
   return getScheduledTask(id)!;
 }
 
+function parseTaskFromDb(row: Record<string, unknown>): ScheduledTask {
+  return {
+    ...row,
+    notification_channels: row.notification_channels ? JSON.parse(row.notification_channels as string) : ['toast'],
+    session_binding: row.session_binding ? JSON.parse(row.session_binding as string) : undefined,
+    tool_authorization: row.tool_authorization ? JSON.parse(row.tool_authorization as string) : undefined,
+  } as ScheduledTask;
+}
+
 export function getScheduledTask(id: string): ScheduledTask | undefined {
   const db = getDb();
-  return db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as ScheduledTask | undefined;
+  const row = db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  return row ? parseTaskFromDb(row) : undefined;
 }
 
 export function listScheduledTasks(opts?: { status?: string }): ScheduledTask[] {
   const db = getDb();
-  if (opts?.status) {
-    return db.prepare('SELECT * FROM scheduled_tasks WHERE status = ? ORDER BY next_run ASC').all(opts.status) as ScheduledTask[];
-  }
-  return db.prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC').all() as ScheduledTask[];
+  const rows = opts?.status
+    ? db.prepare('SELECT * FROM scheduled_tasks WHERE status = ? ORDER BY next_run ASC').all(opts.status) as Record<string, unknown>[]
+    : db.prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC').all() as Record<string, unknown>[];
+  return rows.map(parseTaskFromDb);
 }
 
 export function getDueTasks(): ScheduledTask[] {
   const db = getDb();
-  // Using ISO string to correctly compare with next_run format (YYYY-MM-DDTHH:mm:ss.sssZ)
   const nowISO = new Date().toISOString();
-  return db.prepare("SELECT * FROM scheduled_tasks WHERE next_run <= ? AND status = 'active' AND (last_status IS NULL OR last_status != 'running')").all(nowISO) as ScheduledTask[];
+  const rows = db.prepare("SELECT * FROM scheduled_tasks WHERE next_run <= ? AND status = 'active' AND (last_status IS NULL OR last_status != 'running')").all(nowISO) as Record<string, unknown>[];
+  return rows.map(parseTaskFromDb);
 }
 
 export function updateScheduledTask(id: string, updates: Partial<ScheduledTask>): void {
@@ -3004,8 +3033,13 @@ export function updateScheduledTask(id: string, updates: Partial<ScheduledTask>)
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(updates)) {
     if (key === 'id' || key === 'created_at') continue;
-    fields.push(`${key} = ?`);
-    values.push(value);
+    if (key === 'notification_channels' || key === 'session_binding' || key === 'tool_authorization') {
+      fields.push(`${key} = ?`);
+      values.push(value ? JSON.stringify(value) : null);
+    } else {
+      fields.push(`${key} = ?`);
+      values.push(value);
+    }
   }
   if (fields.length === 0) return;
   fields.push("updated_at = datetime('now')");
