@@ -1,9 +1,9 @@
 appId: com.codepilot.app
 productName: CodePilot
-publish:
-  provider: github
-  owner: op7418
-  repo: CodePilot
+# publish:
+#   provider: github
+#   owner: op7418
+#   repo: CodePilot
 directories:
   output: release
 npmRebuild: false
@@ -60,7 +60,7 @@ mac:
   notarize: false
   target:
     - target: dmg
-    - target: zip
+    # - target: zip
 win:
   icon: build/icon.ico
   target:

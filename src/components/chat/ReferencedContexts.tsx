@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { Code, Book, CaretRight, CaretDown } from '@/components/ui/icon';
 import { usePanel } from '@/hooks/usePanel';
@@ -6,11 +6,19 @@ import { usePanel } from '@/hooks/usePanel';
 interface ReferencedContextsProps {
   files: string[];
   className?: string;
+  isStreaming?: boolean;
 }
 
-export function ReferencedContexts({ files, className }: ReferencedContextsProps) {
+export function ReferencedContexts({ files, className, isStreaming }: ReferencedContextsProps) {
   const { setPreviewFile, setPreviewOpen } = usePanel();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
+
+  // Automatically collapse when streaming finishes
+  useEffect(() => {
+    if (isStreaming === false) {
+      setExpanded(false);
+    }
+  }, [isStreaming]);
 
   if (!files || files.length === 0) return null;
 
@@ -26,10 +34,10 @@ export function ReferencedContexts({ files, className }: ReferencedContextsProps
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded bg-muted/50 hover:bg-muted/70 text-[12px] text-foreground/80 font-medium transition-colors mb-2"
+        className="flex items-center gap-1.5 px-2 py-1 rounded bg-muted/30 hover:bg-muted/50 text-[12px] text-muted-foreground transition-colors mb-2"
       >
         {expanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
-        <span>参考内容</span>
+        <span>参考了 {files.length} 个上下文</span>
       </button>
 
       {expanded && (

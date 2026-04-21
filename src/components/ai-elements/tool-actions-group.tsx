@@ -559,7 +559,7 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center justify-between px-2 py-2 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
+        className="flex w-full items-center justify-between px-2 py-1.5 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
       >
         <div className="flex items-center gap-2">
           <MagnifyingGlass size={16} className="text-blue-500" />
@@ -630,7 +630,7 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="flex w-full items-center justify-between px-2 py-2 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
+        className="flex w-full items-center justify-between px-2 py-1.5 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
       >
         <div className="flex items-center gap-2">
           <Brain size={16} className="text-violet-500" />
@@ -715,7 +715,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           }
         }}
         className={cn(
-          "flex w-full items-center gap-2 px-2 py-2 text-[13px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
+          "flex w-full items-center gap-2 px-2 py-1.5 text-[13px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
           status === 'error' ? "bg-red-500/[0.03]" : ""
         )}
       >
@@ -797,7 +797,10 @@ function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rew
     if (status === 'running') {
       setExpanded(true);
     } else {
-      setExpanded(false);
+      const timer = setTimeout(() => {
+        setExpanded(false);
+      }, 2000);
+      return () => clearTimeout(timer);
     }
   }, [status]);
 
@@ -817,16 +820,24 @@ function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rew
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center justify-between px-2 py-2 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
+          className="flex w-full items-center justify-between px-2 py-1.5 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
         >
-          <div className="flex items-center gap-2">
-            <TerminalWindow size={16} weight="bold" className="text-violet-500" />
-            <span className="font-medium text-foreground/80 truncate max-w-[200px]">{displayName}</span>
-            <span className="rounded bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground ml-1">
+          <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4">
+            <TerminalWindow size={16} weight="bold" className="text-violet-500 shrink-0" />
+            <span className="font-medium text-foreground/80 shrink-0">{displayName}</span>
+            <span className="rounded bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground shrink-0">
               {status === 'running' ? '运行中' : status === 'error' ? '失败' : '完成'}
             </span>
+            {cmd && (
+              <>
+                <span className="text-muted-foreground/40 shrink-0 ml-1">|</span>
+                <span className="text-muted-foreground/70 font-mono text-[12px] truncate ml-1 text-left">
+                  $ {cmd}
+                </span>
+              </>
+            )}
           </div>
-          <div className="flex items-center gap-2 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
+          <div className="flex shrink-0 items-center gap-2 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
             {status === 'running' && <SpinnerGap size={14} className="animate-spin text-primary mr-1" />}
             在终端查看 <ArrowSquareOut size={12} />
           </div>
@@ -837,11 +848,10 @@ function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rew
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
+              transition={{ duration: 0.3, ease: 'easeInOut' }}
               style={{ overflow: 'hidden' }}
             >
-              <div className="px-4 py-3 border-l-2 border-violet-500/20 ml-3">
-                <div className="font-mono text-[13px] font-medium text-foreground/90 mb-2">$ {cmd}</div>
+              <div className="px-4 pb-2.5 pt-0.5 border-l-2 border-violet-500/20 ml-3">
                 <pre className="whitespace-pre-wrap break-all font-mono text-[12px] text-muted-foreground/80 max-h-[300px] overflow-auto">
                   {status === 'running' ? streamingToolOutput : tool.result}
                 </pre>

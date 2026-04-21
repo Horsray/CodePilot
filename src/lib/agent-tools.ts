@@ -112,8 +112,9 @@ function wrapWithPermissions(
   for (const [name, t] of Object.entries(tools)) {
     // Skip permission checks for safe tools:
     // - Read-only core tools (Read, Glob, Grep, Skill)
+    // - Agent (safe sub-agent spawner, sub-agents inherit and enforce their own permissions)
     // - codepilot_skill_create (safe utility to write skill files)
-    if (['Read', 'Glob', 'Grep', 'Skill', 'TodoWrite', 'codepilot_skill_create'].includes(name) || name.startsWith('codepilot_')) {
+    if (['Read', 'Glob', 'Grep', 'Skill', 'Agent', 'TodoWrite', 'codepilot_skill_create'].includes(name) || name.startsWith('codepilot_')) {
       wrapped[name] = t;
       continue;
     }

@@ -350,8 +350,23 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
         const { assembleTools } = await import('./agent-tools');
         const all = assembleTools({ workingDirectory: task.working_directory || process.cwd() });
         toolsOverride = {};
+        
+        // 1. Always include all built-in tools (not starting with mcp__)
+        for (const [key, tool] of Object.entries(all.tools)) {
+          if (!key.startsWith('mcp__')) {
+            toolsOverride[key] = tool;
+          }
+        }
+        
+        // 2. Include selected MCP tools (tool_ids are MCP server names)
         for (const id of task.tool_authorization.tool_ids) {
-          if (all.tools[id]) toolsOverride[id] = all.tools[id];
+          if (all.tools[id]) toolsOverride[id] = all.tools[id]; // exact match just in case
+          const prefix = `mcp__${id}__`;
+          for (const [key, tool] of Object.entries(all.tools)) {
+            if (key.startsWith(prefix)) {
+              toolsOverride[key] = tool;
+            }
+          }
         }
       }
 

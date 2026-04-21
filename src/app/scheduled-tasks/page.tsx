@@ -291,12 +291,27 @@ function TaskGroupCard({
   onRunAll: () => void;
 }) {
   const { t } = useTranslation();
-  // 统计组内各状态数量
   const statusCounts = group.tasks.reduce((acc, task) => {
     const s = task.last_status || task.status;
     acc[s] = (acc[s] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+
+  const formatTime = (iso: string | undefined) => {
+    if (!iso) return t('scheduledTasks.never');
+    try {
+      const d = new Date(iso);
+      const now = new Date();
+      const diff = d.getTime() - now.getTime();
+      if (diff < 0) return `已过期 ${Math.abs(Math.floor(diff / 60000))} 分钟`;
+      if (diff < 60000) return "即将执行";
+      if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟后`;
+      if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时后`;
+      return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return iso;
+    }
+  };
 
   return (
     <div className="rounded-xl border border-border/50 bg-background hover:border-border transition-all overflow-hidden">
@@ -380,12 +395,25 @@ function TaskGroupCard({
                  <Circle size={9} />}
                 {task.last_status || task.status}
               </div>
-              <span className="text-xs text-muted-foreground flex-1 truncate" title={task.name}>{task.name}</span>
-              <span className="text-[10px] text-muted-foreground/60 shrink-0">
-                {task.schedule_type === "once" ? t('scheduledTasks.scheduleOnce') :
-                 task.schedule_type === "interval" ? task.schedule_value :
-                 task.schedule_value}
-              </span>
+              <div className="flex-1 min-w-0 flex flex-col justify-center">
+                <span className="text-xs text-foreground font-medium truncate" title={task.name}>
+                  {task.name}
+                </span>
+                <span className="text-[10px] text-muted-foreground truncate mt-0.5" title={task.prompt}>
+                  {task.prompt}
+                </span>
+              </div>
+              <div className="flex flex-col items-end shrink-0 gap-0.5">
+                <span className="text-[10px] text-muted-foreground/60 flex items-center gap-1">
+                  <Calendar size={10} />
+                  {t('scheduledTasks.nextRun')}: <span className="text-foreground/70">{formatTime(task.next_run)}</span>
+                </span>
+                <span className="text-[10px] text-muted-foreground/60">
+                  {task.schedule_type === "once" ? t('scheduledTasks.scheduleOnce') :
+                   task.schedule_type === "interval" ? task.schedule_value :
+                   task.schedule_value}
+                </span>
+              </div>
             </div>
           ))}
         </div>

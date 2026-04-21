@@ -16,6 +16,7 @@ import { CaretRight, CaretDown } from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
+import { showToast } from '@/hooks/useToast';
 import type { TranslationKey } from '@/i18n';
 import { PermissionPrompt } from './PermissionPrompt';
 import { FileReviewBar } from './FileReviewBar';

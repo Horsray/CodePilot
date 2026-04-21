@@ -797,7 +797,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       <MessageContent>
         {/* Referenced Contexts (Rule tags) */}
         {!isUser && referencedFiles.length > 0 && (
-          <ReferencedContexts files={referencedFiles} />
+          <ReferencedContexts files={referencedFiles} isStreaming={false} />
         )}
 
         {/* File attachments for user messages */}

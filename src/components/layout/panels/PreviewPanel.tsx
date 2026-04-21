@@ -58,12 +58,18 @@ function loadStreamdown(): Promise<void> {
 type ViewMode = "source" | "rendered";
 
 /** Extensions that support a rendered preview */
-const RENDERABLE_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
+const RENDERABLE_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm", ".jsx", ".tsx", ".vue"]);
 
 /** Media file extensions that get direct preview (no API fetch needed) */
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".avif", ".ico"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".webm", ".mkv", ".avi"]);
 const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".flac", ".aac"]);
+
+import dynamic from 'next/dynamic';
+
+const SandpackPreview = dynamic(() => import('@/components/editor/SandpackPreview').then(mod => mod.SandpackPreview), {
+  ssr: false,
+});
 
 function getExtension(filePath: string): string {
   const dot = filePath.lastIndexOf(".");
@@ -489,6 +495,16 @@ function RenderedView({
         sandbox=""
         className="h-full w-full border-0"
         title={t('docPreview.htmlPreview')}
+      />
+    );
+  }
+
+  const ext = getExtension(filePath);
+  if (ext === '.jsx' || ext === '.tsx' || ext === '.vue') {
+    return (
+      <SandpackPreview 
+        filePath={filePath} 
+        content={content} 
       />
     );
   }

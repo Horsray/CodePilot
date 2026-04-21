@@ -296,7 +296,7 @@ export function UnifiedTopBar() {
                     className={fileTreeOpen ? "" : "text-muted-foreground hover:text-foreground"}
                     onClick={() => setFileTreeOpen(!fileTreeOpen)}
                   >
-                    <Copy size={16} weight="regular" />
+                    <Folder size={16} weight={fileTreeOpen ? "fill" : "regular"} />
                     <span className="sr-only">{t('topBar.fileTree')}</span>
                   </Button>
                 </TooltipTrigger>

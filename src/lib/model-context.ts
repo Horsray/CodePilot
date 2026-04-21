@@ -30,6 +30,8 @@
   'minimax-m2.7': 204800,
   'minimax-m2.5': 196608,
   'qwen3.6-35B-A3B-8bit': 262144,
+  // Qwen3.6-35B-A3B-bf16：原生支持 262,144 tokens（约 256K）上下文窗口
+  'qwen3.6-35B-A3B-bf16': 262144,
   'Step3.5-Flash-mixed-2-8bit': 262144,
 
 };

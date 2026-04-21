@@ -42,10 +42,15 @@ const SandpackPreviewInner = dynamic(
  * comes in — new entries here also need to be safe-to-load from Sandpack's
  * CDN resolver.
  */
-const ALLOWED_DEPS: Record<string, string> = {
+const ALLOWED_DEPS_REACT: Record<string, string> = {
   react: "^18.3.1",
   "react-dom": "^18.3.1",
   "lucide-react": "^0.468.0",
+};
+
+const ALLOWED_DEPS_VUE: Record<string, string> = {
+  vue: "^3.4.0",
+  "lucide-vue-next": "^0.468.0",
 };
 
 /**
@@ -94,46 +99,32 @@ function hashString(str: string): string {
 const MOUNT_PATH = "/App.tsx";
 
 export function SandpackPreview({ filePath, content, bundlerURL }: SandpackPreviewProps) {
-  // Per-mount random token. Because PreviewPanel passes key={filePath} at
-  // the SandpackPreview call site, this component is freshly mounted on
-  // every file switch, which means useState(() => ...) runs once per
-  // switch and produces a brand-new token. Including it in providerKey
-  // defeats any internal Sandpack / bundler / service-worker cache keyed
-  // on "previously seen this provider" — the Provider looks unique on
-  // every file swap, so cached compilation results can't cross over.
   const [mountToken] = useState(() => Math.random().toString(36).slice(2));
 
+  const isVue = filePath?.endsWith('.vue');
+  const templateType = isVue ? "vue3-ts" : "react-ts";
+  const mountPath = isVue ? "/src/App.vue" : "/App.tsx";
+  const allowedDeps = isVue ? ALLOWED_DEPS_VUE : ALLOWED_DEPS_REACT;
+
   const { files, setup, activeFile, providerKey } = useMemo(() => {
-    // Codex P1: the user's source ALWAYS goes to /App.tsx, not to a
-    // basename-derived path. Sandpack's react-ts template is wired so
-    // /index.tsx (template default) imports from './App', which resolves
-    // to /App.tsx. If we write user code to /Counter.tsx and set
-    // activeFile=/Counter.tsx, activeFile only moves the editor cursor —
-    // the runtime still renders whatever lives at /App.tsx, which for
-    // non-first-file cases was the template's default stub.
-    //
-    // File switch identity lives in providerKey now: (realFilePath +
-    // content hash + mountToken). The real path is preserved in the
-    // key / data-filename so callers can still see which file they're
-    // looking at, without letting the path leak into the runtime entry.
     const files: SandpackFiles = {
-      [MOUNT_PATH]: {
-        code: content ?? "export default () => null;\n",
+      [mountPath]: {
+        code: content ?? (isVue ? "<template></template>" : "export default () => null;\n"),
         active: true,
       },
     };
-    const setup: SandpackSetup = { dependencies: ALLOWED_DEPS };
+    const setup: SandpackSetup = { dependencies: allowedDeps };
     const pathKey = filePath ?? "inline";
     const contentHash = hashString(content ?? "");
     const providerKey = `${pathKey}::${mountToken}::${contentHash}`;
-    return { files, setup, activeFile: MOUNT_PATH, providerKey };
-  }, [filePath, content, mountToken]);
+    return { files, setup, activeFile: mountPath, providerKey };
+  }, [filePath, content, mountToken, isVue, mountPath, allowedDeps]);
 
   return (
     <ErrorBoundary fallback={<PreviewError />}>
       <SandpackProvider
         key={providerKey}
-        template="react-ts"
+        template={templateType}
         files={files}
         customSetup={setup}
         options={{
@@ -191,7 +182,7 @@ function PreviewError() {
     <div className="flex h-full min-h-[480px] flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
       <p className="font-medium">Preview unavailable</p>
       <p className="text-xs max-w-sm">
-        Single-file React preview only — multi-file imports, <code>@/</code>{" "}
+        Single-file React/Vue preview only — multi-file imports, <code>@/</code>{" "}
         path aliases, CSS imports, and custom tsconfig aren’t supported in
         this version.
       </p>
