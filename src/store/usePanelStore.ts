@@ -1,13 +1,17 @@
-import { create } from 'zustand';
-import type { PreviewViewMode, BottomPanelTab, WorkspaceTab } from '@/hooks/usePanel';
+"use client";
 
-interface PanelState {
+import { create } from "zustand";
+import type { PreviewViewMode, WorkspaceTab, BottomPanelTab } from "@/hooks/usePanel";
+
+interface PanelStore {
   fileTreeOpen: boolean;
   setFileTreeOpen: (open: boolean) => void;
   gitPanelOpen: boolean;
   setGitPanelOpen: (open: boolean) => void;
   previewOpen: boolean;
   setPreviewOpen: (open: boolean) => void;
+  terminalOpen: boolean;
+  setTerminalOpen: (open: boolean) => void;
   dashboardPanelOpen: boolean;
   setDashboardPanelOpen: (open: boolean) => void;
   assistantPanelOpen: boolean;
@@ -21,14 +25,10 @@ interface PanelState {
   workspaceTabs: WorkspaceTab[];
   activeWorkspaceTabId: string | null;
   setActiveWorkspaceTabId: (id: string | null) => void;
-
-  currentBranch: string;
-  gitDirtyCount: number;
-  setGitSummary: (branch: string, dirtyCount: number) => void;
-
+  openPreviewTab: (path: string, defaultViewMode: (path: string) => PreviewViewMode) => void;
+  closeWorkspaceTab: (id: string) => void;
   currentWorktreeLabel: string;
   setCurrentWorktreeLabel: (label: string) => void;
-
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   sessionId: string;
@@ -39,44 +39,25 @@ interface PanelState {
   setStreamingSessionId: (id: string) => void;
   pendingApprovalSessionId: string;
   setPendingApprovalSessionId: (id: string) => void;
-
   activeStreamingSessions: Set<string>;
   setActiveStreamingSessions: (sessions: Set<string>) => void;
   pendingApprovalSessionIds: Set<string>;
   setPendingApprovalSessionIds: (ids: Set<string>) => void;
-
   previewFile: string | null;
-  setPreviewFile: (path: string | null) => void;
+  setPreviewFile: (path: string | null, defaultViewMode: (path: string) => PreviewViewMode) => void;
   previewViewMode: PreviewViewMode;
   setPreviewViewMode: (mode: PreviewViewMode) => void;
-
-  openPreviewTab: (path: string) => void;
-  closeWorkspaceTab: (id: string) => void;
 }
 
-const RENDERED_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
-
-function defaultViewMode(filePath: string): PreviewViewMode {
-  const dot = filePath.lastIndexOf(".");
-  const ext = dot >= 0 ? filePath.slice(dot).toLowerCase() : "";
-  return RENDERED_EXTENSIONS.has(ext) ? "rendered" : "source";
-}
-
-function createWorkspaceId(kind: string): string {
-  return `${kind}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function getFileTabTitle(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() || path;
-}
-
-export const usePanelStore = create<PanelState>((set, get) => ({
-  fileTreeOpen: false,
+export const usePanelStore = create<PanelStore>((set, get) => ({
+  fileTreeOpen: true,
   setFileTreeOpen: (open) => set({ fileTreeOpen: open }),
   gitPanelOpen: false,
   setGitPanelOpen: (open) => set({ gitPanelOpen: open }),
   previewOpen: false,
   setPreviewOpen: (open) => set({ previewOpen: open }),
+  terminalOpen: false,
+  setTerminalOpen: (open) => set({ terminalOpen: open }),
   dashboardPanelOpen: false,
   setDashboardPanelOpen: (open) => set({ dashboardPanelOpen: open }),
   assistantPanelOpen: false,
@@ -87,18 +68,41 @@ export const usePanelStore = create<PanelState>((set, get) => ({
   setBottomPanelOpen: (open) => set({ bottomPanelOpen: open }),
   bottomPanelTab: "console",
   setBottomPanelTab: (tab) => set({ bottomPanelTab: tab }),
-  
   workspaceTabs: [],
   activeWorkspaceTabId: null,
   setActiveWorkspaceTabId: (id) => set({ activeWorkspaceTabId: id }),
-
-  currentBranch: "",
-  gitDirtyCount: 0,
-  setGitSummary: (currentBranch, gitDirtyCount) => set({ currentBranch, gitDirtyCount }),
-
+  openPreviewTab: (path, defaultViewMode) => {
+    const { workspaceTabs, previewOpen, setPreviewOpen } = get();
+    const existingTab = workspaceTabs.find((t) => t.filePath === path);
+    if (existingTab) {
+      set({ activeWorkspaceTabId: existingTab.id });
+    } else {
+      const newTab: WorkspaceTab = {
+        id: `preview-${Date.now()}`,
+        kind: "preview",
+        title: path.split("/").pop() || path,
+        closable: true,
+        filePath: path,
+      };
+      set({
+        workspaceTabs: [...workspaceTabs, newTab],
+        activeWorkspaceTabId: newTab.id,
+        previewViewMode: defaultViewMode(path),
+      });
+    }
+    if (!previewOpen) setPreviewOpen(true);
+  },
+  closeWorkspaceTab: (id) => {
+    const { workspaceTabs, activeWorkspaceTabId } = get();
+    const newTabs = workspaceTabs.filter((t) => t.id !== id);
+    let newActiveId = activeWorkspaceTabId;
+    if (activeWorkspaceTabId === id) {
+      newActiveId = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null;
+    }
+    set({ workspaceTabs: newTabs, activeWorkspaceTabId: newActiveId });
+  },
   currentWorktreeLabel: "",
   setCurrentWorktreeLabel: (label) => set({ currentWorktreeLabel: label }),
-
   workingDirectory: "",
   setWorkingDirectory: (dir) => set({ workingDirectory: dir }),
   sessionId: "",
@@ -109,61 +113,17 @@ export const usePanelStore = create<PanelState>((set, get) => ({
   setStreamingSessionId: (id) => set({ streamingSessionId: id }),
   pendingApprovalSessionId: "",
   setPendingApprovalSessionId: (id) => set({ pendingApprovalSessionId: id }),
-
   activeStreamingSessions: new Set(),
   setActiveStreamingSessions: (sessions) => set({ activeStreamingSessions: sessions }),
   pendingApprovalSessionIds: new Set(),
   setPendingApprovalSessionIds: (ids) => set({ pendingApprovalSessionIds: ids }),
-
   previewFile: null,
-  setPreviewFile: (path) => {
-    set({ previewFile: path });
-    if (path) {
-      set({ previewViewMode: defaultViewMode(path), previewOpen: true });
-    } else {
-      set({ previewOpen: false });
-    }
+  setPreviewFile: (path, defaultViewMode) => {
+    set({
+      previewFile: path,
+      previewViewMode: path ? defaultViewMode(path) : "source",
+    });
   },
   previewViewMode: "source",
   setPreviewViewMode: (mode) => set({ previewViewMode: mode }),
-
-  openPreviewTab: (path: string) => {
-    const state = get();
-    const existingTab = state.workspaceTabs.find((tab) => tab.kind === "preview" && tab.filePath === path);
-    set({
-      previewFile: path,
-      previewViewMode: defaultViewMode(path),
-      previewOpen: false,
-    });
-    if (existingTab) {
-      set({ activeWorkspaceTabId: existingTab.id });
-      return;
-    }
-    const id = createWorkspaceId("preview");
-    set({
-      workspaceTabs: [
-        ...state.workspaceTabs,
-        {
-          id,
-          kind: "preview",
-          title: getFileTabTitle(path),
-          filePath: path,
-          closable: true,
-        },
-      ],
-      activeWorkspaceTabId: id,
-    });
-  },
-
-  closeWorkspaceTab: (id: string) => {
-    const state = get();
-    const index = state.workspaceTabs.findIndex((tab) => tab.id === id);
-    if (index === -1) return;
-    const next = state.workspaceTabs.filter((tab) => tab.id !== id);
-    if (state.activeWorkspaceTabId === id) {
-      const fallback = next[index] || next[index - 1] || next[0] || null;
-      set({ activeWorkspaceTabId: fallback?.id ?? null });
-    }
-    set({ workspaceTabs: next });
-  },
 }));

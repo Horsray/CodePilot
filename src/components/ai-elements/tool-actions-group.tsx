@@ -23,8 +23,17 @@ import {
   Code,
   FilePlus,
   CaretDown,
+  Play
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
+import { usePanel } from '@/hooks/usePanel';
+
+const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.tsx', '.jsx', '.csv', '.tsv']);
+
+function canPreview(filename: string): boolean {
+  const ext = '.' + filename.split('.').pop()?.toLowerCase();
+  return RENDERABLE_EXTENSIONS.has(ext);
+}
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import { useStickToBottomContext } from 'use-stick-to-bottom';
 import { Streamdown } from 'streamdown';
@@ -980,6 +989,9 @@ export function extractDiff(t: ToolAction): DiffInfo | null {
 function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionId?: string; rewindId?: string }) {
   const [open, setOpen] = useState(false);
   const { stopScroll } = useStickToBottomContext();
+  const { openPreviewTab } = usePanel();
+
+  const showPreviewBtn = canPreview(diff.filename);
 
   const openFile = () => {
     fetch('/api/open-file', {
@@ -1004,12 +1016,29 @@ function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionI
           {diff.added > 0 && <span className="text-emerald-500/80">+{diff.added}</span>}
           {diff.removed > 0 && <span className="text-red-500/80">-{diff.removed}</span>}
         </div>
-        <button
-          type="button"
-          className="ml-2 flex items-center gap-1 rounded px-1 text-[11px] text-muted-foreground transition hover:text-foreground"
-        >
-          <ArrowSquareOut size={14} />
-        </button>
+        <div className="ml-2 flex items-center gap-1 shrink-0">
+          {showPreviewBtn && (
+             <button
+               type="button"
+               onClick={(e) => {
+                 e.stopPropagation();
+                 openPreviewTab(diff.fullPath);
+               }}
+               className="p-1 rounded text-muted-foreground/60 hover:text-primary hover:bg-primary/10 transition-colors"
+               title="预览渲染效果"
+             >
+               <Play size={14} weight="fill" />
+             </button>
+           )}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); openFile(); }}
+            className="flex items-center gap-1 rounded p-1 text-muted-foreground/60 transition hover:text-foreground hover:bg-muted/50"
+            title="在编辑器打开"
+          >
+            <ArrowSquareOut size={14} />
+          </button>
+        </div>
       </div>
 
       <AnimatePresence initial={false}>

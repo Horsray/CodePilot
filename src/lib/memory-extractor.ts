@@ -150,6 +150,17 @@ If nothing is worth remembering, output exactly: NOTHING`,
 
     console.log(`[memory-extractor] Extracted memories to ${dailyPath}`);
 
+    try {
+      const { sendNotification } = await import('./notification-manager');
+      await sendNotification({
+        title: '🧠 记忆更新',
+        body: '刚刚自动总结并保存了新的长期记忆',
+        priority: 'low'
+      });
+    } catch (e) {
+      console.error('[memory-extractor] Failed to notify:', e);
+    }
+
     // Check memory milestones
     try {
       const dailyFiles = fs.readdirSync(dailyDir).filter((f: string) => f.endsWith('.md'));

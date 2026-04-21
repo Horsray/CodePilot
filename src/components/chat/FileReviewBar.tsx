@@ -11,10 +11,19 @@ import {
   Eye,
   XCircle,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Play
 } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
 import { createPortal } from 'react-dom';
+import { usePanel } from '@/hooks/usePanel';
+
+const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.tsx', '.jsx', '.csv', '.tsv']);
+
+function canPreview(filename: string): boolean {
+  const ext = '.' + filename.split('.').pop()?.toLowerCase();
+  return RENDERABLE_EXTENSIONS.has(ext);
+}
 
 interface ModifiedFile {
   path: string;
@@ -188,14 +197,13 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
                 exit={{ height: 0, opacity: 0 }}
                 className="border-b border-border/10 max-h-[320px] overflow-y-auto bg-muted/5 scrollbar-thin"
               >
-                <div className="py-1">
+                <div className="py-1 flex flex-col">
                   {modifiedFiles.map((file, i) => (
-                    <div key={file.path} className="flex flex-col border-b border-border/5 last:border-0">
-                      <FileRow 
-                        file={file} 
-                        onClick={() => setDiffModalFile(file)}
-                      />
-                    </div>
+                    <FileRow 
+                      key={file.path}
+                      file={file} 
+                      onClick={() => setDiffModalFile(file)}
+                    />
                   ))}
                 </div>
               </motion.div>
@@ -259,25 +267,42 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
 
 function FileRow({ file, onClick }: { file: ModifiedFile, onClick: () => void }) {
   const filename = file.path.split('/').pop() || file.path;
+  const { openPreviewTab } = usePanel();
+  const showPreviewBtn = canPreview(filename);
   
   return (
-    <button 
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors group text-left w-full"
-    >
-      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
-        <NotePencil size={14} weight="bold" />
-      </div>
-      <div className="flex-1 min-w-0 flex flex-col">
-        <span className="text-[12px] font-mono text-foreground/80 truncate font-semibold leading-tight">{filename}</span>
-        <span className="text-[10px] text-muted-foreground/40 truncate tracking-tight">{file.path}</span>
-      </div>
-      <div className="flex items-center gap-1.5 font-mono text-[10px] shrink-0">
-        {file.added > 0 && <span className="text-emerald-500/60">+{file.added}</span>}
-        {file.removed > 0 && <span className="text-red-500/50">-{file.removed}</span>}
-        <Eye size={12} className="ml-1 text-muted-foreground/30 group-hover:text-primary/60 transition-colors" />
-      </div>
-    </button>
+    <div className="flex items-center group w-full border-b border-border/5 last:border-0 hover:bg-muted/40 transition-colors">
+      <button 
+        onClick={(e) => { e.stopPropagation(); onClick(); }}
+        className="flex items-center gap-3 px-4 py-2.5 text-left flex-1"
+      >
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
+          <NotePencil size={14} weight="bold" />
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col">
+          <span className="text-[12px] font-mono text-foreground/80 truncate font-semibold leading-tight">{filename}</span>
+          <span className="text-[10px] text-muted-foreground/40 truncate tracking-tight">{file.path}</span>
+        </div>
+        <div className="flex items-center gap-1.5 font-mono text-[10px] shrink-0 mr-2">
+          {file.added > 0 && <span className="text-emerald-500/60">+{file.added}</span>}
+          {file.removed > 0 && <span className="text-red-500/50">-{file.removed}</span>}
+          <Eye size={12} className="ml-1 text-muted-foreground/30 group-hover:text-primary/60 transition-colors" />
+        </div>
+      </button>
+
+      {showPreviewBtn && (
+         <button
+           onClick={(e) => {
+             e.stopPropagation();
+             openPreviewTab(file.path);
+           }}
+           className="flex h-7 w-7 items-center justify-center rounded-md mr-4 text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+           title="预览渲染效果"
+         >
+           <Play size={14} weight="fill" />
+         </button>
+       )}
+    </div>
   );
 }
 

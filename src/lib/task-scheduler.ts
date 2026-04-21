@@ -317,6 +317,16 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     });
 
     // Build system prompt with task context and current system time
+    const { buildSystemPrompt } = await import('./agent-system-prompt');
+    const systemPromptResult = buildSystemPrompt({
+      workingDirectory: task.working_directory || process.cwd(),
+      modelId: resolved.upstreamModel || resolved.model || 'MiniMax-M2.7',
+    });
+    
+    const baseSystem = typeof systemPromptResult === 'string'
+      ? systemPromptResult
+      : (systemPromptResult as { prompt?: string }).prompt || '';
+
     const systemTime = new Date().toLocaleString('zh-CN', {
       timeZone: 'Asia/Shanghai',
       year: 'numeric',
@@ -326,7 +336,8 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
       minute: '2-digit',
       second: '2-digit',
     });
-    const system = `You are executing a scheduled task. Be concise and direct.\nTask name: ${task.name}\nCurrent system time (Shanghai): ${systemTime}`;
+    
+    const system = `${baseSystem}\n\n=================================\n\nYou are executing a scheduled task. Be concise and direct.\nTask name: ${task.name}\nCurrent system time (Shanghai): ${systemTime}`;
 
     let result = '';
 
@@ -358,15 +369,17 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
       });
 
       const reader = stream.getReader();
-      const decoder = new TextDecoder();
       let buffer = '';
-      let executionLog = `### 任务目标\n${task.prompt}\n\n### 执行过程\n`;
-      let hasToolCalls = false;
+      let executionLog = '';
+      let toolCallCount = 0;
+
+      let currentToolName = '';
+      let currentToolInput = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        buffer += typeof value === 'string' ? value : new TextDecoder().decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
         for (const line of lines) {
@@ -377,10 +390,23 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
                 result += data.data;
               } else if (data.type === 'tool_use') {
                 const tu = JSON.parse(data.data);
-                hasToolCalls = true;
-                executionLog += `- 🛠️ 调用工具：\`${tu.name}\`\n`;
+                toolCallCount++;
+                currentToolName = tu.name;
+                currentToolInput = typeof tu.input === 'string' ? tu.input : JSON.stringify(tu.input);
               } else if (data.type === 'tool_result') {
                 const tr = JSON.parse(data.data);
+                
+                // For bash commands, extract the command string
+                let displayInput = currentToolInput;
+                try {
+                  const parsedInput = JSON.parse(currentToolInput);
+                  if (currentToolName === 'Bash' && parsedInput.command) {
+                    displayInput = parsedInput.command;
+                  }
+                } catch {}
+
+                const inputPreview = displayInput.length > 50 ? displayInput.slice(0, 47) + '...' : displayInput;
+                executionLog += `- 🛠️ 调用工具：\`${currentToolName}\` (输入: ${inputPreview})\n`;
                 executionLog += `  - 结果：${tr.is_error ? '❌ 失败' : '✅ 成功'}\n`;
               } else if (data.type === 'error') {
                 executionLog += `- ❌ 发生错误：${data.data}\n`;
@@ -390,8 +416,7 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
         }
       }
       
-      // Flush the remaining decoder buffer
-      buffer += decoder.decode();
+      // Flush the remaining buffer
       const finalLines = buffer.split('\n');
       for (const line of finalLines) {
         if (line.startsWith('data: ')) {
@@ -402,8 +427,22 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
         }
       }
 
-      executionLog += `\n### 最终输出\n${result || '(无文本输出)'}`;
-      result = executionLog;
+      const finalStatus = executionLog.includes('❌ 失败') || executionLog.includes('❌ 发生错误') ? '失败' : '成功';
+      
+      const finalOutput = result.trim() || '(无文本输出)';
+
+      const formattedLog = `---定时任务结果---
+任务目标：
+${task.prompt}
+执行结果：${finalStatus}
+最终输出：
+${finalOutput}
+--------------
+小结：工具使用：${toolCallCount}个${toolCallCount > 0 ? '\n' + executionLog.trim() : ''}`;
+
+      result = formattedLog;
+      // We also keep the clean output for the chat session
+      (task as any)._cleanOutput = finalOutput;
     } else {
       // Execute without tools (lightweight text generation)
       const { generateTextFromProvider } = await import('./text-generator');
@@ -414,7 +453,16 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
         prompt: task.prompt,
         maxTokens: 4096,
       });
-      result = `### 任务目标\n${task.prompt}\n\n### 最终输出\n${rawResult}`;
+      const finalOutput = rawResult.trim() || '(无文本输出)';
+      result = `---定时任务结果---
+任务目标：
+${task.prompt}
+执行结果：成功
+最终输出：
+${finalOutput}
+--------------
+小结：未使用工具`;
+      (task as any)._cleanOutput = finalOutput;
     }
 
     // Success — update SQLite (skip for session tasks)
@@ -440,7 +488,7 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
       await sendMultiChannelNotification(
         channels,
         `✅ ${task.name}`,
-        `${task.prompt}\n\n---\n执行结果：\n${result.slice(0, 1000)}`,
+        `${task.prompt}\n\n---\n执行结果：\n${((task as any)._cleanOutput || result).slice(0, 1000)}`,
         task.priority || 'normal',
       );
     }
@@ -478,7 +526,7 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
           
           // Build structured final message for the session and bridge
           const header = `**⏰ 定时任务执行完毕**\n- **任务名称**：${task.name}\n- **计划时间**：${task.next_run}\n- **执行耗时**：${(Date.now() - startTime) / 1000}s\n\n---\n\n`;
-          const finalMessage = `${buddyPrefix} ${header}${result}`;
+          const finalMessage = `${buddyPrefix} ${header}${(task as any)._cleanOutput || result}`;
           addMessage(msgTargetSessionId, 'assistant', finalMessage);
           
           // Forward message to any active bridge channels bound to this session

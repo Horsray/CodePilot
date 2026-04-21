@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useMemo } from "react";
-import { usePanelStore } from "@/stores/panelStore";
+import { usePanelStore } from "@/store/usePanelStore";
 import { useGitStatus } from "@/hooks/useGitStatus";
 
 export type PanelContent = "files" | "tasks";

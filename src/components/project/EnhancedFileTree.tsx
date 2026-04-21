@@ -842,7 +842,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
             ref={virtuosoRef}
             style={{ height: '100%', width: '100%' }}
             data={flatNodes}
-            itemContent={(_index, flatNode) => (
+            itemContent={(_index: number, flatNode: any) => (
               <TreeNode
                 key={flatNode.node.path}
                 flatNode={flatNode}

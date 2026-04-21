@@ -446,7 +446,7 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
             <Virtuoso
               style={{ height: '100%', width: '100%' }}
               data={flatNodes}
-              itemContent={(_index, flatNode) => (
+              itemContent={(_index: number, flatNode: any) => (
                 <FlatTreeNodeItem
                   key={flatNode.node.path}
                   flatNode={flatNode}

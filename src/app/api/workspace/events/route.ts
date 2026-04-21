@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import * as chokidar from 'chokidar';
+// import * as chokidar from 'chokidar';
 import { EventEmitter } from 'events';
 
 // Global emitter to broadcast file changes to all connected SSE clients
@@ -8,7 +8,7 @@ const workspaceEvents = new EventEmitter();
 workspaceEvents.setMaxListeners(100);
 
 // Global watcher instance map
-const watchers = new Map<string, chokidar.FSWatcher>();
+const watchers = new Map<string, any>();
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -20,36 +20,43 @@ export async function GET(request: NextRequest) {
 
   // Initialize watcher if not already watching this directory
   if (!watchers.has(cwd)) {
-    const watcher = chokidar.watch(cwd, {
-      ignored: [
-        /(^|[\/\\])\../, // ignore dotfiles
-        /node_modules/, // ignore node_modules
-        /\.git/, // ignore .git
-        /\.next/, // ignore .next
-        /dist/, // ignore dist
-      ],
-      persistent: true,
-      ignoreInitial: true,
+    watchers.set(cwd, null); // Set a placeholder to prevent concurrent initialization
+
+    import('chokidar').then(chokidar => {
+      const watcher = chokidar.watch(cwd, {
+        ignored: [
+          /(^|[\/\\])\../, // ignore dotfiles
+          /node_modules/, // ignore node_modules
+          /\.git/, // ignore .git
+          /\.next/, // ignore .next
+          /dist/, // ignore dist
+        ],
+        persistent: true,
+        ignoreInitial: true,
+      });
+
+      // We use a simple debounce mechanism to avoid flooding the client
+      // with events when many files change at once (e.g. git checkout)
+      let timeout: NodeJS.Timeout | null = null;
+      const emitChange = () => {
+        if (timeout) clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          workspaceEvents.emit(`change:${cwd}`);
+        }, 500);
+      };
+
+      watcher
+        .on('add', emitChange)
+        .on('change', emitChange)
+        .on('unlink', emitChange)
+        .on('addDir', emitChange)
+        .on('unlinkDir', emitChange);
+
+      watchers.set(cwd, watcher);
+    }).catch(e => {
+      console.error("Failed to load chokidar:", e);
+      watchers.delete(cwd);
     });
-
-    // We use a simple debounce mechanism to avoid flooding the client
-    // with events when many files change at once (e.g. git checkout)
-    let timeout: NodeJS.Timeout | null = null;
-    const emitChange = () => {
-      if (timeout) clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        workspaceEvents.emit(`change:${cwd}`);
-      }, 500);
-    };
-
-    watcher
-      .on('add', emitChange)
-      .on('change', emitChange)
-      .on('unlink', emitChange)
-      .on('addDir', emitChange)
-      .on('unlinkDir', emitChange);
-
-    watchers.set(cwd, watcher);
   }
 
   // Setup SSE stream

@@ -2,7 +2,15 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useTheme } from "next-themes";
-import { X, Copy, Check, SpinnerGap, PencilSimple, FloppyDisk } from "@/components/ui/icon";
+import {
+  X,
+  Copy,
+  Check,
+  SpinnerGap,
+  PencilSimple,
+  FloppyDisk,
+  DeviceMobile,
+} from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import { useThemeFamily } from "@/lib/theme/context";
@@ -12,6 +20,11 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview as FilePreviewType } from "@/types";
+// We'll stub this out for now until the artifact-export module is fully ported
+const downloadArtifactImage = async (html: string, ext: string, filename: string) => {
+  console.log("downloadArtifactImage stub:", { ext, filename });
+  alert("Image export feature is coming soon!");
+};
 
 // Lazy-load Streamdown and plugins — only loaded when rendered markdown is needed
 let _StreamdownComponent: typeof import("streamdown").Streamdown | null = null;
@@ -21,13 +34,13 @@ let _streamdownPromise: Promise<void> | null = null;
 function loadStreamdown(): Promise<void> {
   if (_streamdownPromise) return _streamdownPromise;
   _streamdownPromise = Promise.all([
-    import("streamdown"),
+    import("streamdown").then(sd => sd.Streamdown as any),
     import("@streamdown/cjk"),
     import("@streamdown/code"),
     import("@streamdown/math"),
     import("@streamdown/mermaid"),
   ]).then(([sd, cjkMod, codeMod, mathMod, mermaidMod]) => {
-    _StreamdownComponent = sd.Streamdown;
+    _StreamdownComponent = sd;
     _streamdownPlugins = {
       cjk: cjkMod.cjk,
       code: codeMod.code,
@@ -103,12 +116,23 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
   const [width, setWidth] = useState(PREVIEW_DEFAULT_WIDTH);
   const [isEditing, setIsEditing] = useState(false);
   const [editedContent, setEditedContent] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const handleResize = useCallback((delta: number) => {
-    // Left-side handle: dragging left (negative delta) = wider
     setWidth((w) => Math.min(PREVIEW_MAX_WIDTH, Math.max(PREVIEW_MIN_WIDTH, w - delta)));
   }, []);
+
+  const handleExportImage = async () => {
+    if (!preview?.content) return;
+    setIsExporting(true);
+    try {
+      await downloadArtifactImage(preview.content, getExtension(filePath) || ".html", filePath);
+    } catch (e) {
+      console.error("Export image failed:", e);
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const filePath = filePathOverride || previewFile || "";
 
@@ -161,24 +185,26 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
   };
 
   const handleSave = async () => {
-    if (!filePath || saving) return;
-    setSaving(true);
+    if (!preview) return;
     try {
       const res = await fetch("/api/files/write", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: filePath, content: editedContent }),
+        body: JSON.stringify({
+          path: filePath,
+          content: editedContent,
+          cwd: workingDirectory,
+          sessionId,
+        }),
       });
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to save file");
+        const d = await res.json();
+        throw new Error(d.error || "Save failed");
       }
-      setPreview((prev) => prev ? { ...prev, content: editedContent } : null);
+      setPreview((p) => (p ? { ...p, content: editedContent } : p));
       setIsEditing(false);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save file");
-    } finally {
-      setSaving(false);
+    } catch (e) {
+      console.error("Save error:", e);
     }
   };
 
@@ -231,12 +257,12 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
 
         {!isMedia && preview && (
           <>
-            {isEditing ? (
-              <Button variant="ghost" size="icon-sm" onClick={handleSave} disabled={saving} className="text-primary">
-                {saving ? <SpinnerGap size={14} className="animate-spin" /> : <FloppyDisk size={14} />}
-                <span className="sr-only">Save</span>
-              </Button>
-            ) : (
+              {isEditing ? (
+                <Button variant="ghost" size="icon-sm" onClick={handleSave} disabled={isExporting} className="text-primary">
+                  {isExporting ? <SpinnerGap size={14} className="animate-spin" /> : <FloppyDisk size={14} />}
+                  <span className="sr-only">Save</span>
+                </Button>
+              ) : (
               <Button variant="ghost" size="icon-sm" onClick={() => {
                 setEditedContent(preview.content);
                 setIsEditing(true);
@@ -256,6 +282,13 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
               <Copy size={14} />
             )}
             <span className="sr-only">Copy content</span>
+          </Button>
+        )}
+
+        {isHtml(filePath) && (
+          <Button variant="ghost" size="icon-sm" onClick={handleExportImage} disabled={isExporting || !preview}>
+            {isExporting ? <SpinnerGap size={14} className="animate-spin" /> : <DeviceMobile size={14} />}
+            <span className="sr-only">Export Image</span>
           </Button>
         )}
 
@@ -303,8 +336,8 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
                 <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)} className="h-7 text-[10px]">
                   Cancel
                 </Button>
-                <Button variant="default" size="sm" onClick={handleSave} disabled={saving} className="h-7 text-[10px]">
-                  {saving ? "Saving..." : "Save Changes"}
+                <Button variant="default" size="sm" onClick={handleSave} className="h-7 text-[10px]">
+                  Save Changes
                 </Button>
               </div>
             </div>

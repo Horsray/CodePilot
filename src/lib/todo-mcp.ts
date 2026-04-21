@@ -83,6 +83,17 @@ ${content}
             const filePath = path.join(skillsDir, 'SKILL.md');
             fs.writeFileSync(filePath, skillContent, 'utf-8');
 
+            try {
+              const { sendNotification } = await import('@/lib/notification-manager');
+              await sendNotification({
+                title: '技能习得',
+                body: `已成功保存新技能：${name}`,
+                priority: 'low'
+              });
+            } catch (e) {
+              console.error('[todo-mcp] Failed to notify skill creation:', e);
+            }
+
             return { content: [{ type: 'text' as const, text: `Successfully crystallized skill! Saved to ${filePath}. In future conversations, you can call this skill by its name "${name}".` }] };
           } catch (e) {
             return { content: [{ type: 'text' as const, text: `Failed to create skill: ${e instanceof Error ? e.message : String(e)}` }] };

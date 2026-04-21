@@ -492,7 +492,7 @@ export function ConsolePanel() {
             totalCount={visibleEntries.length}
             overscan={220}
             atBottomStateChange={setAutoScroll}
-            itemContent={(index) => {
+            itemContent={(index: number) => {
               const item = visibleEntries[index];
               const { entry, isMatch, highlightRanges } = item;
               const selected = selectedEntryIds.has(entry.id);

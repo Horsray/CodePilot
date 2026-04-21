@@ -19,9 +19,18 @@ import {
   TerminalWindow,
   WarningCircle,
   XCircle,
+  Play
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import type { TimelineFileChange, TimelineStep } from '@/types';
+import { usePanel } from '@/hooks/usePanel';
+
+const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.tsx', '.jsx', '.csv', '.tsv']);
+
+function canPreview(filename: string): boolean {
+  const ext = '.' + filename.split('.').pop()?.toLowerCase();
+  return RENDERABLE_EXTENSIONS.has(ext);
+}
 
 interface AgentTimelineProps {
   steps: TimelineStep[];
@@ -194,6 +203,9 @@ function DiffPreview({ change }: { change: TimelineFileChange }) {
   const afterLines = useMemo(() => change.afterText.replace(/\r\n/g, '\n').split('\n'), [change.afterText]);
   const beforePreview = open ? beforeLines : beforeLines.slice(0, 4);
   const afterPreview = open ? afterLines : afterLines.slice(0, 4);
+  const { openPreviewTab } = usePanel();
+
+  const showPreviewBtn = canPreview(change.fileName);
 
   return (
     <div className="rounded-lg border border-border/25 bg-background/40 overflow-hidden">
@@ -204,6 +216,20 @@ function DiffPreview({ change }: { change: TimelineFileChange }) {
           <span className="text-emerald-500/70">+{change.addedLines}</span>
           {change.operation !== 'create' && <span className="text-red-500/60">-{change.removedLines}</span>}
         </div>
+        {showPreviewBtn && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openPreviewTab(change.path);
+              }}
+              className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary transition hover:bg-primary/20"
+              title="预览渲染效果"
+            >
+              <Play size={10} weight="fill" />
+              预览
+            </button>
+          )}
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}

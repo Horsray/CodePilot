@@ -24,14 +24,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid path" }, { status: 400 });
     }
 
-    // Check if file exists (optional, but good practice)
+    // Allow creating new files via PreviewPanel editor
+    // Check if parent directory exists instead of the file itself
     try {
-      await fs.access(normalizedPath);
+      const dir = path.dirname(normalizedPath);
+      await fs.access(dir);
     } catch {
-      return NextResponse.json({ error: "File does not exist" }, { status: 404 });
+      return NextResponse.json({ error: "Parent directory does not exist" }, { status: 404 });
     }
 
     // Write content
+    const dir = path.dirname(normalizedPath);
+    try {
+      await fs.access(dir);
+    } catch {
+      await fs.mkdir(dir, { recursive: true });
+    }
+    
     await fs.writeFile(normalizedPath, content || "", "utf-8");
 
     return NextResponse.json({ success: true, path: normalizedPath });

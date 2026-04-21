@@ -249,6 +249,10 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           distinctToolCount: detail.distinctToolCount || 0,
           toolNames: detail.toolNames || [],
         });
+        showToast({
+          type: "success",
+          message: "检测到高价值工作流！建议点击顶部横幅将其保存为 Skill",
+        });
       }
     };
     window.addEventListener('skill-nudge', handler);

@@ -248,7 +248,7 @@ function TaskCard({
         )}
         {/* 通知渠道与工具授权展示 */}
         <div className="flex items-center gap-2 ml-auto">
-          {task.tool_authorization && task.tool_authorization.type !== "none" && (
+          {task.tool_authorization && task.tool_authorization.type !== ("none" as any) && (
             <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-muted/30 border border-border/40 text-muted-foreground" title={`工具授权: ${task.tool_authorization.type}`}>
               <Lightning size={10} className="text-amber-500" />
               {task.tool_authorization.type === "full_access" ? "所有工具" : `${task.tool_authorization.tool_ids?.length || 0}个工具`}

@@ -13,8 +13,8 @@ import { UpdateBanner } from "./UpdateBanner";
 import { UnifiedTopBar } from "./UnifiedTopBar";
 import { PanelZone } from "./PanelZone";
 import { BottomPanelContainer } from "./BottomPanelContainer";
-import { usePanelStore } from "@/stores/panelStore";
-import { PanelContext, type PreviewViewMode } from "@/hooks/usePanel";
+import { usePanelStore } from "@/store/usePanelStore";
+import { PanelContext, type PreviewViewMode, type WorkspaceTab } from "@/hooks/usePanel";
 import { UpdateContext } from "@/hooks/useUpdate";
 import { useUpdateChecker } from "@/hooks/useUpdateChecker";
 import { ImageGenContext, useImageGenState } from "@/hooks/useImageGen";
@@ -368,7 +368,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const updateContextValue = useUpdateChecker();
 
   const activeWorkspaceTab = useMemo(
-    () => store.workspaceTabs.find((tab) => tab.id === store.activeWorkspaceTabId) || null,
+    () => store.workspaceTabs.find((t: WorkspaceTab) => t.id === store.activeWorkspaceTabId) || null,
     [store.workspaceTabs, store.activeWorkspaceTabId]
   );
 
