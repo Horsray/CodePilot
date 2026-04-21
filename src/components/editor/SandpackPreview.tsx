@@ -102,7 +102,7 @@ export function SandpackPreview({ filePath, content, bundlerURL }: SandpackPrevi
   const [mountToken] = useState(() => Math.random().toString(36).slice(2));
 
   const isVue = filePath?.endsWith('.vue');
-  const templateType = isVue ? "vue3-ts" : "react-ts";
+  const templateType = isVue ? "vue-ts" : "react-ts";
   const mountPath = isVue ? "/src/App.vue" : "/App.tsx";
   const allowedDeps = isVue ? ALLOWED_DEPS_VUE : ALLOWED_DEPS_REACT;
 

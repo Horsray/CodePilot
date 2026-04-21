@@ -7,6 +7,7 @@ import {
   TreeStructure,
   Copy,
   FileCode,
+  Folder,
   PencilSimple,
   DotOutline,
   ChartBar,
