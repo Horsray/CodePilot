@@ -234,7 +234,7 @@ function WidgetRendererInner({ widgetCode, isStreaming, title, showOverlay, extr
       {/* iframe — always visible, no skeleton, no hiding */}
       <iframe
         ref={iframeRef}
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-same-origin"
         srcDoc={srcdoc}
         title={title || 'Widget'}
         // Fallback for missed widget:ready postMessage (race with useEffect listener setup).

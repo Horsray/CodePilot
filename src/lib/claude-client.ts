@@ -779,6 +779,11 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__github__get_file_contents',
             'mcp__github__search_repositories',
           ],
+          // Explicitly declare built-in tools. `--bare` (CLAUDE_CODE_SIMPLE) 
+          // normally hard-limits tools to just Bash/Read/Edit. Passing 'default'
+          // bypasses this restriction and restores full functionality, including
+          // all MCP tools.
+          tools: ['default'],
         };
 
         if (skipPermissions) {

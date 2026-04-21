@@ -234,8 +234,36 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
     renderDetail: (tool, streamingOutput) => {
       const isRunning = tool.result === undefined;
-      const outputText = isRunning ? streamingOutput : undefined;
-      if (!outputText && isRunning) return null;
+      if (!isRunning) {
+        return (
+          <div className="px-3 py-3 border-l-2 ml-3 border-blue-500/20">
+            {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
+              <div className="mb-3">
+                <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">任务详情 (Input)</h5>
+                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[200px] overflow-auto">
+                  {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+            {tool.result ? (
+              <div>
+                <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
+                  {tool.isError ? '执行失败 (Error)' : '执行结果 (Result)'}
+                </h5>
+                <pre className={cn(
+                  "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
+                  tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
+                )}>
+                  {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        );
+      }
+
+      const outputText = streamingOutput;
+      if (!outputText) return null;
 
       // Parse progress lines into structured items
       const lines = (outputText || '').split('\n').filter(Boolean);
@@ -282,14 +310,42 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     getSummary: (input) => {
       const inp = input as Record<string, unknown> | undefined;
       const agentType = (inp?.agent || inp?.subagent_type || 'general') as string;
-      const prompt = (inp?.prompt || inp?.description || '') as string;
+      const prompt = (inp?.prompt || inp?.description || inp?.query || '') as string;
       const short = prompt.length > 50 ? prompt.slice(0, 47) + '...' : prompt;
-      return `${agentType}: ${short}`;
+      return `executor: ${short}`;
     },
     renderDetail: (tool, streamingOutput) => {
       const isRunning = tool.result === undefined;
-      const outputText = isRunning ? streamingOutput : undefined;
-      if (!outputText && isRunning) return null;
+      if (!isRunning) {
+        return (
+          <div className="px-3 py-3 border-l-2 ml-3 border-blue-500/20">
+            {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
+              <div className="mb-3">
+                <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">任务详情 (Input)</h5>
+                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[200px] overflow-auto">
+                  {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+            {tool.result ? (
+              <div>
+                <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
+                  {tool.isError ? '执行失败 (Error)' : '执行结果 (Result)'}
+                </h5>
+                <pre className={cn(
+                  "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
+                  tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
+                )}>
+                  {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        );
+      }
+
+      const outputText = streamingOutput;
+      if (!outputText) return null;
 
       // Parse progress lines into structured items
       const lines = (outputText || '').split('\n').filter(Boolean);
@@ -559,11 +615,11 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center justify-between px-2 py-1.5 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
+        className="flex w-full items-center justify-between px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px]"
       >
         <div className="flex items-center gap-2">
-          <MagnifyingGlass size={16} className="text-blue-500" />
-          <span className="font-medium text-foreground/80 ml-1">
+          <MagnifyingGlass size={14} className="text-blue-500" />
+          <span className="text-foreground/80 ml-1">
             {hasRunning ? `正在检索 (${tools.length})` : `检索了 ${tools.length} 个文件`}
           </span>
         </div>
@@ -630,11 +686,11 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="flex w-full items-center justify-between px-2 py-1.5 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
+        className="flex w-full items-center justify-between px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px]"
       >
         <div className="flex items-center gap-2">
-          <Brain size={16} className="text-violet-500" />
-          <span className="font-medium text-foreground/80 truncate ml-1 text-left">
+          <Brain size={14} className="text-violet-500" />
+          <span className="text-foreground/80 truncate ml-1 text-left">
             {isStreaming ? '正在思考' : '思考'}
           </span>
         </div>
@@ -715,16 +771,16 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           }
         }}
         className={cn(
-          "flex w-full items-center gap-2 px-2 py-1.5 text-[13px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
+          "flex w-full items-center gap-2 px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
           status === 'error' ? "bg-red-500/[0.03]" : ""
         )}
       >
         <div className="flex shrink-0 items-center justify-center">
-          {createElement(renderer.icon, { size: 16, className: status === 'error' ? "text-red-500/80" : "text-blue-500" })}
+          {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : "text-blue-500" })}
         </div>
 
         <span className={cn(
-          "font-medium truncate ml-1",
+          "truncate ml-1 text-left",
           status === 'error' ? "text-red-500/80" : "text-foreground/80"
         )}>
           {renderer.label || summary}
@@ -747,7 +803,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           </>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 text-muted-foreground">
           {status === 'running' && <SpinnerGap size={14} className="animate-spin text-primary" />}
           {status === 'success' && <CheckCircle size={14} className="text-emerald-500" />}
           {status === 'error' && <XCircle size={14} className="text-red-500" />}
@@ -820,11 +876,11 @@ function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rew
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center justify-between px-2 py-1.5 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
+          className="flex w-full items-center justify-between px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px]"
         >
           <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4">
-            <TerminalWindow size={16} weight="bold" className="text-violet-500 shrink-0" />
-            <span className="font-medium text-foreground/80 shrink-0">{displayName}</span>
+            <TerminalWindow size={14} weight="bold" className="text-violet-500 shrink-0" />
+            <span className="text-foreground/80 shrink-0 text-left">{displayName}</span>
             <span className="rounded bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground shrink-0">
               {status === 'running' ? '运行中' : status === 'error' ? '失败' : '完成'}
             </span>
@@ -863,8 +919,16 @@ function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rew
     );
   }
   
+  if (k === 'agent') {
+    return (
+      <div className="bg-muted/30 my-1.5 border border-blue-500/30 rounded-[6px] overflow-hidden">
+        <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-muted/30 p-0.5 my-1.5 border border-border/50 rounded-[6px] overflow-hidden">
+    <div className="bg-muted/30 my-1.5 border border-border/50 rounded-[6px] overflow-hidden">
       <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
     </div>
   );
@@ -948,7 +1012,7 @@ function extractDiffFromMcpFilesystemEditInput(input: unknown): { oldText: strin
   if (oldParts.length === 0 && newParts.length === 0) return null;
   return { oldText: oldParts.join('\n'), newText: newParts.join('\n') };
 }
-function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'other' {
+function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'agent' | 'other' {
   const n = name.toLowerCase();
   if (['read', 'readfile', 'read_file', 'read_text_file', 'read_multiple_files'].includes(n)) return 'read';
   if (['edit', 'notebookedit', 'notebook_edit', 'apply_patch'].includes(n) || n.endsWith('__edit_file')) return 'write';
@@ -956,6 +1020,7 @@ function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash
   if (['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(n)) return 'create';
   if (['glob', 'grep', 'search', 'find_files', 'search_files', 'websearch', 'web_search'].some(x => n.includes(x))) return 'search';
   if (['bash', 'execute', 'run', 'shell', 'execute_command', 'computer'].includes(n)) return 'bash';
+  if (n === 'agent') return 'agent';
   return 'other';
 }
 
@@ -1012,14 +1077,14 @@ function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionI
 
   return (
     <div className="my-1.5 border border-border/50 bg-muted/30 rounded-[6px] overflow-hidden">
-      <div className="flex items-center gap-2 px-2 py-2 text-[13px] hover:bg-muted/40 transition-colors cursor-pointer" onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}>
+      <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors cursor-pointer" onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}>
         <div className="flex shrink-0 items-center justify-center">
           {diff.mode === 'create'
-            ? <FilePlus size={16} className="text-emerald-500" />
-            : <NotePencil size={16} className="text-amber-500" />}
+            ? <FilePlus size={14} className="text-emerald-500" />
+            : <NotePencil size={14} className="text-amber-500" />}
         </div>
         <div className="flex min-w-0 flex-1 items-center gap-2 ml-1">
-          <span className="truncate font-medium text-foreground/80">{diff.filename}</span>
+          <span className="truncate text-foreground/80">{diff.filename}</span>
           <span className="truncate font-mono text-[11px] text-muted-foreground/50 hidden sm:inline max-w-[200px]">{diff.fullPath}</span>
         </div>
         <div className="flex items-center gap-2 ml-auto shrink-0 font-mono text-[12px]">
@@ -1055,21 +1120,25 @@ function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionI
         {open && (
           <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }}
             transition={{ duration: 0.15 }} style={{ overflow: 'hidden' }}>
-            <div className="grid divide-y divide-border/20 border-t border-border/20 text-[11px] md:grid-cols-2 md:divide-x md:divide-y-0 max-h-[400px] overflow-y-auto">
-              {diff.mode === 'edit' && (
-                <div className="bg-red-500/[0.03] px-3 py-2.5">
-                  <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-muted-foreground/50">
-                    {diff.beforeLines.map((l, i) => <div key={i}><span className="mr-1 select-none text-red-400/30">−</span>{l}</div>)}
-                    {diff.moreB > 0 && <div className="text-muted-foreground/25">… +{diff.moreB} lines</div>}
-                  </pre>
+            <div className="flex flex-col border-t border-border/20 text-[11px] max-h-[400px] overflow-y-auto font-mono">
+              {diff.mode === 'edit' && diff.beforeLines.map((l, i) => (
+                <div key={`b-${i}`} className="flex bg-red-500/[0.08] hover:bg-red-500/[0.12] transition-colors border-b border-border/5">
+                  <div className="w-8 shrink-0 text-center select-none text-red-500/60 py-0.5 border-r border-border/5">-</div>
+                  <div className="flex-1 px-3 py-0.5 whitespace-pre-wrap break-all text-red-600 dark:text-red-400 font-medium line-through opacity-80">{l || ' '}</div>
                 </div>
+              ))}
+              {diff.mode === 'edit' && diff.moreB > 0 && (
+                <div className="px-8 py-1 text-muted-foreground/40 bg-red-500/[0.02] border-b border-border/5">… +{diff.moreB} lines</div>
               )}
-              <div className={cn('bg-emerald-500/[0.03] px-3 py-2.5', diff.mode === 'create' && 'md:col-span-2')}>
-                <pre className="whitespace-pre-wrap break-all font-mono leading-[1.65] text-foreground/65">
-                  {diff.afterLines.map((l, i) => <div key={i}><span className="mr-1 select-none text-emerald-500/30">+</span>{l}</div>)}
-                  {diff.moreA > 0 && <div className="text-muted-foreground/25">… +{diff.moreA} lines</div>}
-                </pre>
-              </div>
+              {diff.afterLines.map((l, i) => (
+                <div key={`a-${i}`} className="flex bg-emerald-500/[0.08] hover:bg-emerald-500/[0.12] transition-colors border-b border-border/5">
+                  <div className="w-8 shrink-0 text-center select-none text-emerald-500/60 py-0.5 border-r border-border/5">+</div>
+                  <div className="flex-1 px-3 py-0.5 whitespace-pre-wrap break-all text-emerald-600 dark:text-emerald-400 font-medium">{l || ' '}</div>
+                </div>
+              ))}
+              {diff.moreA > 0 && (
+                <div className="px-8 py-1 text-muted-foreground/40 bg-emerald-500/[0.02] border-b border-border/5">… +{diff.moreA} lines</div>
+              )}
             </div>
           </motion.div>
         )}

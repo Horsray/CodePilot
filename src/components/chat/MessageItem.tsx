@@ -772,6 +772,9 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     return null;
   }
 
+  // Handle temporary compacting message styling
+  const isCompactingMsg = !isUser && message.content === '上下文压缩中...';
+
   const timestamp = parseDBDate(message.created_at).toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
@@ -779,6 +782,18 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
 
   const showAssistantAvatar = !isUser && isAssistantProject;
   const buddyInfo = isAssistantProject ? (globalThis as Record<string, unknown>).__codepilot_buddy_info__ as { emoji?: string; species?: string; rarity?: string } | undefined : undefined;
+
+  if (isCompactingMsg) {
+    return (
+      <div className="flex items-center gap-3 py-2 px-1 text-[13px] text-violet-500 font-medium justify-center border-y border-border/40 my-4">
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500"></span>
+        </span>
+        上下文压缩中...
+      </div>
+    );
+  }
 
   return (
     <div className={showAssistantAvatar ? 'flex gap-2.5 items-start' : ''}>

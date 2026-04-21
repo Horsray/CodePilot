@@ -31,6 +31,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { BatchExecutionDashboard, BatchContextSync } from './batch-image-gen';
+import { ContextWidgetPortal } from './context-widget/ContextWidgetPortal';
 import { setLastGeneratedImages, loadLastGenerated } from '@/lib/image-ref-store';
 import { useChatCommands } from '@/hooks/useChatCommands';
 import { useAssistantTrigger } from '@/hooks/useAssistantTrigger';
@@ -1041,6 +1042,28 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
       {/* Global File Review Bar */}
       <FileReviewBar sessionId={sessionId} />
+
+      <ContextWidgetPortal
+        messages={messages}
+        modelName={currentModel}
+        context1m={context1m}
+        hasSummary={hasSummary}
+        contextWindow={currentModelMeta.contextWindow}
+        upstreamModelId={currentModelMeta.upstreamModelId}
+        onCompress={() => {
+          sendMessage('/compact', undefined, undefined, '压缩上下文');
+          // Add a temporary streaming assistant message to show the indicator immediately
+          const compressionMsg: Message = {
+            id: 'temp-compact-' + Date.now(),
+            session_id: sessionId,
+            role: 'assistant',
+            content: '上下文压缩中...',
+            created_at: new Date().toISOString(),
+            token_usage: null,
+          };
+          cappedSetMessages(prev => [...prev, compressionMsg]);
+        }}
+      />
 
       {/* Queued message banner — shown above input when messages are waiting */}
       {messageQueue.length > 0 && (

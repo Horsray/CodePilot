@@ -95,7 +95,7 @@ export function buildReceiverSrcdoc(
     "style-src 'unsafe-inline'",
     "img-src * data: blob:",
     "font-src * data:",
-    "connect-src 'none'",
+    "connect-src *",
   ].join('; ');
 
   const receiverScript = `(function(){

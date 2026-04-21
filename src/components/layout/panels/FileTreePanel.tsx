@@ -4,7 +4,6 @@ import { useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePanel } from "@/hooks/usePanel";
 import { EnhancedFileTree } from "@/components/project/EnhancedFileTree";
-import { TaskList } from "@/components/project/TaskList";
 import { showToast } from "@/hooks/useToast";
 
 export function FileTreePanel() {
@@ -33,7 +32,6 @@ export function FileTreePanel() {
       onFileAdd={handleFileAdd}
       highlightPath={highlightPath}
       highlightSeek={highlightSeek}
-      topSlot={sessionId ? <TaskList sessionId={sessionId} /> : null}
     />
   );
 }

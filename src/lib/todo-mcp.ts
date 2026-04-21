@@ -8,8 +8,9 @@ export const TODO_MCP_SYSTEM_PROMPT = `## Task Management
   - When starting a task that requires 3 or more distinct steps.
   - When the user provides a list of multiple requirements to be addressed.
 - **CRITICAL**: If a task requires a plan, you MUST NOT start tool work (Read, Grep, Edit, Bash, etc.) until the task list exists via TodoWrite.
-- Update the status of tasks in real-time as you complete them (pending -> in_progress -> completed).
+- Update the status of tasks in real-time as you progress (pending -> in_progress -> completed/failed).
 - Keep exactly one task in_progress while work is active. Mark tasks completed as soon as evidence exists.
+- **CRITICAL**: You MUST NOT leave any task in "in_progress" state when you yield back to the user. If you encounter an error or cannot finish a step, mark it as "failed" and optionally add new recovery steps to the plan.
 - **Skill Crystallization**: If you successfully complete a complex workflow (e.g., resolving a difficult bug, configuring a new environment, creating a reusable script) that involved multiple tool calls and debugging, you MUST call \`codepilot_skill_create\` at the very end to save your successful steps as a reusable SKILL.md file before finishing the conversation.
 - STRICT PROHIBITION: NEVER output step-by-step plans, checklists, or numbered task lists in plain Markdown text. You MUST exclusively use the TodoWrite tool.`;
 
@@ -25,12 +26,13 @@ export function createTodoMcpServer(workspacePath: string) {
         'Plain text markdown plans will NOT be tracked. You MUST call this tool as your FIRST action ' +
         'for ANY user request that requires modifying code, executing commands, or involves 3+ steps. ' +
         'Keep exactly one task in_progress while work is active, update statuses as soon as evidence changes. ' +
-        'Status can be "pending", "in_progress", or "completed".',
+        'Status can be "pending", "in_progress", "completed", or "failed". ' +
+        'If a task cannot be completed, mark it as "failed" and optionally update the plan.',
         {
           todos: z.array(z.object({
             id: z.string().describe('Unique identifier for the task'),
             content: z.string().describe('Short, actionable description of the task'),
-            status: z.enum(['pending', 'in_progress', 'completed']).describe('Current status of the task'),
+            status: z.enum(['pending', 'in_progress', 'completed', 'failed']).describe('Current status of the task'),
             activeForm: z.string().optional().describe('Present-continuous label for the task (e.g., "Reading files...")'),
           })).describe('The full list of tasks for the current session'),
         },
@@ -43,12 +45,13 @@ export function createTodoMcpServer(workspacePath: string) {
       ),
       tool(
         'codepilot_todo_write',
-        'Alias of TodoWrite for compatibility with older prompts/tool names.',
+        'Alias of TodoWrite for compatibility with older prompts/tool names. ' +
+        'If a task cannot be completed, mark it as "failed".',
         {
           todos: z.array(z.object({
             id: z.string().describe('Unique identifier for the task'),
             content: z.string().describe('Short, actionable description of the task'),
-            status: z.enum(['pending', 'in_progress', 'completed']).describe('Current status of the task'),
+            status: z.enum(['pending', 'in_progress', 'completed', 'failed']).describe('Current status of the task'),
             activeForm: z.string().optional().describe('Present-continuous label for the task (e.g., "Reading files...")'),
           })).describe('The full list of tasks for the current session'),
         },

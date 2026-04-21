@@ -336,7 +336,7 @@ function DiffModal({ file, onClose }: { file: ModifiedFile, onClose: () => void 
     if (index < 0 || index >= changeIndices.length || !scrollRef.current) return;
     
     const targetIdx = changeIndices[index];
-    const row = scrollRef.current.querySelector(`tr[data-idx="${targetIdx}"]`);
+    const row = scrollRef.current.querySelector(`div[data-idx="${targetIdx}"]`);
     if (row) {
       row.scrollIntoView({ behavior: 'smooth', block: 'center' });
       setCurrentChangeIndex(index);
@@ -412,77 +412,47 @@ function DiffModal({ file, onClose }: { file: ModifiedFile, onClose: () => void 
           </div>
         </div>
 
-        {/* Modal Body - Aligned Diff View */}
+        {/* Modal Body - Unified Diff View */}
         <div 
           ref={scrollRef}
           className="flex-1 overflow-x-hidden overflow-y-auto bg-background font-mono text-[12px] leading-relaxed scrollbar-thin"
         >
-          <div className="w-full">
+          <div className="w-full flex flex-col pb-4">
             {diffLines.length > 0 ? (
-              <table className="w-full border-collapse table-fixed">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-widest text-muted-foreground/50 border-b border-border/5 bg-muted/5 sticky top-0 z-10">
-                    <th className="w-12 py-2 font-normal">Line</th>
-                    <th className="py-2 px-4 font-bold text-left border-r border-border/10">Original (原始内容)</th>
-                    <th className="w-12 py-2 font-normal">Line</th>
-                    <th className="py-2 px-4 font-bold text-left">Modified (修改后内容)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {diffLines.map((line, idx) => (
-                    <tr 
-                      key={idx} 
-                      data-idx={idx}
-                      className={cn(
-                        "group border-b border-border/5 transition-colors",
-                        line.type === 'added' && "bg-emerald-500/[0.08] hover:bg-emerald-500/[0.12]",
-                        line.type === 'removed' && "bg-red-500/[0.08] hover:bg-red-500/[0.12]",
-                        line.type === 'unchanged' && "hover:bg-muted/5",
-                        changeIndices[currentChangeIndex] === idx && "ring-1 ring-inset ring-primary/30"
-                      )}
-                    >
-                      {/* Original Side */}
-                      <td className={cn(
-                        "w-12 py-0.5 text-right pr-2 select-none border-r border-border/5 align-top",
-                        line.type === 'removed' ? "text-red-500/50" : "text-muted-foreground/20"
-                      )}>
-                        {line.oldLineNumber || ''}
-                      </td>
-                      <td className={cn(
-                        "px-4 py-0.5 whitespace-pre-wrap break-all border-r border-border/10 align-top",
-                        line.type === 'removed' ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground/40"
-                      )}>
-                        {line.type !== 'added' ? (
-                          <div className="flex gap-2">
-                            <span className="opacity-30 select-none">{line.type === 'removed' ? '-' : ' '}</span>
-                            <span className="break-words">{line.content || ' '}</span>
-                          </div>
-                        ) : ' '}
-                      </td>
-
-                      {/* Modified Side */}
-                      <td className={cn(
-                        "w-12 py-0.5 text-right pr-2 select-none border-r border-border/5 align-top",
-                        line.type === 'added' ? "text-emerald-500/50" : "text-muted-foreground/20"
-                      )}>
-                        {line.newLineNumber || ''}
-                      </td>
-                      <td className={cn(
-                        "px-4 py-0.5 whitespace-pre-wrap break-all align-top",
-                        line.type === 'added' ? "text-emerald-600 dark:text-emerald-400 font-medium" : 
-                        line.type === 'unchanged' ? "text-foreground/80" : "text-muted-foreground/40"
-                      )}>
-                        {line.type !== 'removed' ? (
-                          <div className="flex gap-2">
-                            <span className="opacity-30 select-none">{line.type === 'added' ? '+' : ' '}</span>
-                            <span className="break-words">{line.content || ' '}</span>
-                          </div>
-                        ) : ' '}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              diffLines.map((line, idx) => (
+                <div 
+                  key={idx} 
+                  data-idx={idx}
+                  className={cn(
+                    "flex group border-b border-border/5 transition-colors",
+                    line.type === 'added' && "bg-emerald-500/[0.08] hover:bg-emerald-500/[0.12]",
+                    line.type === 'removed' && "bg-red-500/[0.08] hover:bg-red-500/[0.12]",
+                    line.type === 'unchanged' && "hover:bg-muted/5",
+                    changeIndices[currentChangeIndex] === idx && "ring-1 ring-inset ring-primary/30"
+                  )}
+                >
+                  <div className="w-12 shrink-0 py-0.5 text-right pr-2 select-none border-r border-border/5 align-top text-muted-foreground/40">
+                    {line.oldLineNumber || ''}
+                  </div>
+                  <div className="w-12 shrink-0 py-0.5 text-right pr-2 select-none border-r border-border/5 align-top text-muted-foreground/40">
+                    {line.newLineNumber || ''}
+                  </div>
+                  <div className={cn(
+                    "w-6 shrink-0 py-0.5 text-center select-none align-top",
+                    line.type === 'added' ? "text-emerald-500/60" :
+                    line.type === 'removed' ? "text-red-500/60" : "text-muted-foreground/30"
+                  )}>
+                    {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
+                  </div>
+                  <div className={cn(
+                    "flex-1 px-2 py-0.5 whitespace-pre-wrap break-all align-top",
+                    line.type === 'added' ? "text-emerald-600 dark:text-emerald-400 font-medium" : 
+                    line.type === 'removed' ? "text-red-600 dark:text-red-400 font-medium line-through opacity-80" : "text-foreground/80"
+                  )}>
+                    {line.content || ' '}
+                  </div>
+                </div>
+              ))
             ) : (
               <div className="p-12 text-center text-muted-foreground italic">
                 No differences found or diff is still loading...

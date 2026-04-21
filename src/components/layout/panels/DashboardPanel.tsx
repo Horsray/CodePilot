@@ -9,6 +9,7 @@ import { usePanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import { WidgetRenderer } from "@/components/chat/WidgetRenderer";
+import { TaskList } from "@/components/project/TaskList";
 import type { DashboardConfig, DashboardWidget } from "@/types/dashboard";
 import type { TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -33,7 +34,7 @@ interface AssistantSummary {
 }
 
 export function DashboardPanel() {
-  const { setDashboardPanelOpen, workingDirectory, isAssistantWorkspace } = usePanel();
+  const { setDashboardPanelOpen, workingDirectory, isAssistantWorkspace, sessionId } = usePanel();
   const { t } = useTranslation();
   const [width, setWidth] = useState(DASHBOARD_DEFAULT_WIDTH);
   const [config, setConfig] = useState<DashboardConfig | null>(null);
@@ -264,85 +265,20 @@ export function DashboardPanel() {
         className="flex h-full flex-1 flex-col overflow-hidden border-r border-border/40 bg-background"
         style={{ width }}
       >
-        {/* Header */}
-        <div className="flex h-10 shrink-0 items-center justify-between px-3">
-          <div className="flex items-center gap-2">
-            {isAssistantWorkspace ? (
-              assistantSummary?.buddy ? (
-                <img
-                  src={SPECIES_IMAGE_URL[assistantSummary.buddy.species as Species] || ''}
-                  alt={assistantSummary.buddy.species}
-                  width={24} height={24}
-                  className="rounded"
-                />
-              ) : (
-                <img src={EGG_IMAGE_URL} alt="egg" width={24} height={24} />
-              )
-            ) : null}
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {isAssistantWorkspace
-                ? (assistantSummary?.buddy
-                    ? (assistantSummary.name || t('assistant.defaultName'))
-                    : t('buddy.adoptPrompt'))
-                : t('dashboard.title')}
-            </span>
-          </div>
-          <div className="flex items-center gap-1">
-            {(widgets.length > 0 || isAssistantWorkspace) && (
-              <>
-                {/* Auto-refresh toggle */}
-                <button
-                  onClick={handleToggleAutoRefresh}
-                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <span>{t('dashboard.autoRefreshLabel')}</span>
-                  <span className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full transition-colors ${autoRefresh ? 'bg-primary' : 'bg-muted'}`}>
-                    <span className={`pointer-events-none block h-3 w-3 rounded-full bg-background shadow-sm ring-0 transition-transform mt-0.5 ${autoRefresh ? 'translate-x-3.5 ml-0' : 'translate-x-0.5'}`} />
-                  </span>
-                </button>
-                <div className="h-4 w-px bg-border/60 mx-1" />
-                {/* Refresh all */}
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => {
-                    // Refresh widgets + assistant status
-                    handleRefreshAll();
-                    if (isAssistantWorkspace) {
-                      fetch('/api/workspace/summary')
-                        .then(r => r.ok ? r.json() : null)
-                        .then(data => setAssistantSummary(data))
-                        .catch(() => {});
-                    }
-                  }}
-                  disabled={refreshingAll}
-                  title={t('dashboard.refresh')}
-                >
-                  <ArrowClockwise size={14} className={refreshingAll ? "animate-spin" : ""} />
-                  <span className="sr-only">{t('dashboard.refresh')}</span>
-                </Button>
-              </>
-            )}
-            {/* Close button — always visible */}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setDashboardPanelOpen(false)}
-            >
-              <X size={14} />
-              <span className="sr-only">{t('common.close')}</span>
-            </Button>
-          </div>
-        </div>
-
         {/* Content */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+          {/* Top slot for TaskList and Context Compression */}
+          {sessionId && <div className="border-b border-border/40 mx-4"><TaskList sessionId={sessionId} /></div>}
+          <div className="mx-4" id="dashboard-context-slot" />
+          
+          <div className="border-t border-border/40" />
+
           {loading ? (
             <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
               {t('common.loading' as TranslationKey)}
             </div>
           ) : widgets.length === 0 ? (
-            <div className="flex flex-col h-full px-3 pt-3">
+            <div className="flex flex-col h-full px-4 pt-4">
               {isAssistantWorkspace && assistantSummary?.configured && (
                 <AssistantStatusCard summary={assistantSummary} t={t} />
               )}
@@ -354,7 +290,7 @@ export function DashboardPanel() {
               )}
             </div>
           ) : (
-            <div className="flex flex-col gap-4 p-3">
+            <div className="flex flex-col gap-4 p-4">
               {/* Assistant status card — always first in assistant workspace */}
               {isAssistantWorkspace && assistantSummary?.configured && (
                 <AssistantStatusCard summary={assistantSummary} t={t} />

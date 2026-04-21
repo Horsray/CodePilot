@@ -2,14 +2,15 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { CheckCircle, Circle, ListBullets, SpinnerGap } from "@/components/ui/icon";
+import { CheckCircle, Circle, ListBullets, SpinnerGap, XCircle } from "@/components/ui/icon";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TaskItem, TaskStatus } from "@/types";
+import { parseDBDate } from "@/lib/utils";
 
 // 格式化任务完成时间（相对时间）
 function formatCompletedTime(dateStr: string | undefined): string {
   if (!dateStr) return "未知时间";
-  const date = new Date(dateStr);
+  const date = parseDBDate(dateStr);
   if (isNaN(date.getTime())) return "未知时间";
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
@@ -79,33 +80,40 @@ export function TaskList({ sessionId }: TaskListProps) {
 
   if (loading && tasks.length === 0) {
     return (
-      <div className="rounded-lg border border-border/35 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
-        {t('tasks.loading')}
+      <div className="py-4 shrink-0">
+        <div className="text-[13px] font-medium text-foreground/80 mb-3">待办</div>
+        <div className="text-xs text-muted-foreground">
+          {t('tasks.loading')}
+        </div>
       </div>
     );
   }
 
   if (tasks.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-border/35 bg-background/45 px-3 py-2">
-        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/60">
-          <ListBullets size={13} />
-          <span>任务进度</span>
+      <div className="py-4 shrink-0">
+        <div className="text-[13px] font-medium text-foreground/80 mb-6">待办</div>
+        <div className="flex flex-col items-center justify-center pb-6 text-center">
+          <div className="bg-muted/50 rounded-lg p-2 mb-3">
+            <ListBullets size={20} className="text-muted-foreground/70" />
+          </div>
+          <p className="text-[13px] font-medium text-foreground/80 mb-1">暂无待办</p>
+          <p className="text-[12px] text-muted-foreground/60">复杂任务的进展会显示在这里</p>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground/55">
-          {t('tasks.noTasks')}
-        </p>
       </div>
     );
   }
 
   const completed = tasks.filter((task) => task.status === "completed").length;
+  const failed = tasks.filter((task) => task.status === "failed").length;
+  const finished = completed + failed;
   const running = tasks.filter((task) => task.status === "in_progress").length;
-  const progress = Math.round((completed / Math.max(tasks.length, 1)) * 100);
+  const progress = Math.round((finished / Math.max(tasks.length, 1)) * 100);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border/35 bg-background/80 shadow-[0_10px_30px_-24px_rgba(0,0,0,0.45)]">
-      <div className="px-3 py-2">
+    <div className="py-4 shrink-0">
+      <div className="text-[13px] font-medium text-foreground/80 mb-3">待办</div>
+      <div className="mb-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
@@ -116,7 +124,7 @@ export function TaskList({ sessionId }: TaskListProps) {
                 任务进度
               </div>
               <div className="truncate text-[12px] text-foreground/80">
-                {completed}/{tasks.length} 已完成
+                {finished}/{tasks.length} 已处理 {failed > 0 && <span className="text-red-500/70 ml-1">({failed} 失败)</span>}
               </div>
             </div>
           </div>
@@ -132,19 +140,22 @@ export function TaskList({ sessionId }: TaskListProps) {
         </div>
       </div>
 
-      <div className="border-t border-border/25 px-1.5 py-1">
+      <div className="space-y-1">
       {tasks.map((task) => {
         const isDone = task.status === "completed";
         const isRunning = task.status === "in_progress";
+        const isFailed = task.status === "failed";
         return (
           <button
             key={task.id}
             type="button"
-            className="flex min-h-8 w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition hover:bg-muted/35"
+            className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition hover:bg-muted/35"
             onClick={() => handleToggle(task)}
           >
             {isRunning ? (
               <SpinnerGap size={14} className="shrink-0 animate-spin text-primary" />
+            ) : isFailed ? (
+              <XCircle size={14} weight="fill" className="shrink-0 text-red-500" />
             ) : isDone ? (
               <CheckCircle size={14} weight="fill" className="shrink-0 text-emerald-500" />
             ) : (
@@ -153,9 +164,10 @@ export function TaskList({ sessionId }: TaskListProps) {
             <div className="flex flex-col min-w-0 flex-1">
               <span
                 className={cn(
-                  "truncate text-xs",
+                  "truncate text-[13px]",
                   isRunning && "font-medium text-foreground/90",
-                  isDone && "text-muted-foreground/75 line-through"
+                  isDone && "text-muted-foreground/75",
+                  isFailed && "text-red-500/80 line-through"
                 )}
               >
                 {task.title}
@@ -163,6 +175,11 @@ export function TaskList({ sessionId }: TaskListProps) {
               {isDone && (
                 <span className="text-[10px] text-muted-foreground/60">
                   已完成 {formatCompletedTime(task.updated_at)}
+                </span>
+              )}
+              {isFailed && (
+                <span className="text-[10px] text-red-500/60">
+                  已失败 {formatCompletedTime(task.updated_at)}
                 </span>
               )}
             </div>

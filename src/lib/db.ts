@@ -1627,6 +1627,7 @@ export function syncSdkTasks(
     switch (s) {
       case 'completed': return 'completed';
       case 'in_progress': return 'in_progress';
+      case 'failed': return 'failed';
       case 'pending': return 'pending';
       default: return 'pending';
     }

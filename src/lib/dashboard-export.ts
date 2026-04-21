@@ -69,7 +69,7 @@ function buildExportHtml(widgetCode: string, styleBlock: string, isDark: boolean
 <html class="${isDark ? 'dark' : ''}">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' ${cspDomains}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' ${cspDomains}; style-src 'unsafe-inline'; img-src * data: blob:; font-src * data:; connect-src *">
 <style>
 ${styleBlock}
 </style>
