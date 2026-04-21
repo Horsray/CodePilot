@@ -368,6 +368,18 @@ function handleSSEEvent(
       return next;
     }
 
+    case 'terminal_mirror': {
+      // 中文注释：功能名称「终端镜像事件」，用法是将 AI Bash 工具执行的命令和输出
+      // 镜像到终端面板，通过 window 事件通知终端组件实时显示。
+      try {
+        const mirrorData = JSON.parse(event.data);
+        window.dispatchEvent(new CustomEvent('terminal:mirror', { detail: mirrorData }));
+      } catch {
+        // skip malformed terminal_mirror data
+      }
+      return accumulated;
+    }
+
     case 'done': {
       return accumulated;
     }

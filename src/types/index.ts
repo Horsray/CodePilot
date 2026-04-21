@@ -599,6 +599,7 @@ export type SSEEventType =
   | 'referenced_contexts' // List of files referenced in system prompt
   | 'rate_limit'         // SDK 0.2.111 subscription rate-limit telemetry
   | 'context_usage'      // SDK 0.2.111 post-turn context usage snapshot
+  | 'terminal_mirror'    // AI Bash tool command/output mirror to terminal panel
   | 'done';              // stream complete
 
 export interface SSEEvent {

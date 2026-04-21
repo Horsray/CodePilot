@@ -99,6 +99,39 @@ function WebTerminalSession({ terminalId }: { terminalId?: string }) {
     }
   }, [terminal.connected, terminal.isElectron]);
 
+  // 监听 AI Bash 工具的终端镜像事件
+  // 中文注释：功能名称「AI 命令镜像监听」，用法是接收 AI Bash 工具执行的命令和输出，
+  // 在终端面板中以特殊样式显示，与用户手动输入的命令区分开来。
+  useEffect(() => {
+    if (!ready || !xtermRef.current) return;
+
+    const handleMirror = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const { action, command, output, exitCode } = customEvent.detail || {};
+      const term = xtermRef.current;
+      if (!term) return;
+
+      switch (action) {
+        case 'command':
+          term.write(`\r\n\x1b[36m❯ AI: ${command}\x1b[0m\r\n`);
+          break;
+        case 'output':
+          if (output) {
+            term.write(output);
+          }
+          break;
+        case 'exit':
+          if (exitCode !== 0) {
+            term.write(`\x1b[31m[Exit code: ${exitCode}]\x1b[0m\r\n`);
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('terminal:mirror', handleMirror);
+    return () => window.removeEventListener('terminal:mirror', handleMirror);
+  }, [ready]);
+
   const handleRetry = useCallback(() => {
     setError(null);
     setConnectionAttempted(false);

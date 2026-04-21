@@ -1,5 +1,5 @@
 /**
- * tools/bash.ts — Execute shell commands.
+ * tools/bash.ts — Execute shell commands with terminal panel mirroring.
  */
 
 import { tool } from 'ai';
@@ -22,10 +22,23 @@ export function createBashTool(ctx: ToolContext) {
       timeout: z.number().int().positive().optional()
         .describe('Timeout in milliseconds (default 120000)'),
     }),
-    // 中文注释：功能名称「Bash 工具直连执行」，用法是直接通过 bash -c 执行命令，
-    // 不再接管到 PTY/WebTerminal，避免工具链被交互终端层干扰。
+    // 中文注释：功能名称「Bash 工具直连执行+终端镜像」，用法是直接通过 bash -c 执行命令，
+    // 同时通过 SSE 将命令和输出镜像到终端面板，让用户可以实时看到 AI 执行的命令。
     execute: async ({ command, timeout }, { abortSignal }) => {
       const timeoutMs = timeout ?? DEFAULT_TIMEOUT_MS;
+
+      // 通过 SSE 将命令发送到终端面板显示
+      // 中文注释：功能名称「终端命令镜像」，用法是将 AI 执行的命令通过 SSE 推送到前端终端面板。
+      if (ctx.emitSSE) {
+        ctx.emitSSE({
+          type: 'terminal_mirror',
+          data: JSON.stringify({
+            action: 'command',
+            command,
+            cwd: ctx.workingDirectory,
+          }),
+        });
+      }
 
       return new Promise<string>((resolve) => {
         const chunks: Buffer[] = [];
@@ -37,7 +50,7 @@ export function createBashTool(ctx: ToolContext) {
           env: { ...process.env, TERM: 'dumb' },
           stdio: ['ignore', 'pipe', 'pipe'],
           timeout: timeoutMs,
-          detached: process.platform !== 'win32', // Detach to kill the process group
+          detached: process.platform !== 'win32',
         });
 
         const collect = (data: Buffer) => {
@@ -57,7 +70,16 @@ export function createBashTool(ctx: ToolContext) {
           if (ctx.emitSSE && chunkStr) {
             ctx.emitSSE({
               type: 'tool_output',
-              data: chunkStr
+              data: chunkStr,
+            });
+            // 同时将输出镜像到终端面板
+            // 中文注释：功能名称「终端输出镜像」，用法是将命令输出实时推送到终端面板。
+            ctx.emitSSE({
+              type: 'terminal_mirror',
+              data: JSON.stringify({
+                action: 'output',
+                output: chunkStr,
+              }),
             });
           }
         };
@@ -66,7 +88,6 @@ export function createBashTool(ctx: ToolContext) {
         proc.stderr?.on('data', collect);
 
         const onAbort = () => {
-          // Kill the process group to ensure child processes are also killed
           try {
             if (proc.pid) {
               process.kill(-proc.pid, 'SIGTERM');
@@ -94,6 +115,19 @@ export function createBashTool(ctx: ToolContext) {
 
           if (code !== null && code !== 0) {
             output += `\n\n[Exit code: ${code}]`;
+          }
+
+          // 通过 SSE 将退出码发送到终端面板
+          // 中文注释：功能名称「终端退出码镜像」，用法是命令执行完毕后推送退出码到终端面板。
+          if (ctx.emitSSE) {
+            ctx.emitSSE({
+              type: 'terminal_mirror',
+              data: JSON.stringify({
+                action: 'exit',
+                exitCode: code ?? 0,
+                signal: signal || undefined,
+              }),
+            });
           }
 
           resolve(output || '(no output)');
