@@ -247,6 +247,77 @@ const createRawTokens = (code: string): TokenizedCode => ({
   ),
 });
 
+/**
+ * Shim TokenizedCode (this file's internal shape) → Shiki's TokensResult
+ * (the shape @streamdown/code's CodeHighlighterPlugin expects). Fills the
+ * two optional metadata fields Streamdown's renderer reads when present:
+ * themeName (used as a class hint on <pre>) and rootStyle (used as inline
+ * styles for background/foreground on the wrapper). Phase 5.5.
+ */
+function toTokensResult(
+  tokenized: TokenizedCode,
+  darkTheme: BundledTheme,
+): {
+  tokens: ThemedToken[][];
+  bg: string;
+  fg: string;
+  themeName: string;
+  rootStyle: string;
+} {
+  return {
+    ...tokenized,
+    themeName: String(darkTheme),
+    rootStyle: `background-color:${tokenized.bg};color:${tokenized.fg}`,
+  };
+}
+
+/**
+ * Create a Streamdown-compatible CodeHighlighterPlugin that routes through
+ * this file's highlightCode(). Sharing the LRU + Shiki highlighter pool
+ * with CodeBlockContent means chat messages and file previews don't each
+ * spin up their own unbounded caches — Phase 0.2 POC showed @streamdown/
+ * code's default plugin maintains its own unbounded module-level Map,
+ * which long chat sessions can grow without limit.
+ *
+ * Shape matches @streamdown/code/dist/index.d.ts's CodeHighlighterPlugin.
+ * themes prop is the [light, dark] pair; when null/undefined the caller
+ * gets SHIKI_DEFAULT_LIGHT / SHIKI_DEFAULT_DARK.
+ */
+export function createSharedCodePlugin(options?: {
+  themes?: [BundledTheme, BundledTheme];
+}): {
+  name: "shiki";
+  type: "code-highlighter";
+  highlight: (
+    params: { code: string; language: BundledLanguage; themes: [string, string] },
+    callback?: (result: ReturnType<typeof toTokensResult>) => void,
+  ) => ReturnType<typeof toTokensResult> | null;
+  supportsLanguage: (language: BundledLanguage) => boolean;
+  getSupportedLanguages: () => BundledLanguage[];
+  getThemes: () => [BundledTheme, BundledTheme];
+} {
+  const [defaultLight, defaultDark] = options?.themes ?? [SHIKI_DEFAULT_LIGHT, SHIKI_DEFAULT_DARK];
+  return {
+    name: "shiki" as const,
+    type: "code-highlighter" as const,
+    highlight(params, callback) {
+      const light = (params.themes[0] as BundledTheme) ?? defaultLight;
+      const dark = (params.themes[1] as BundledTheme) ?? defaultDark;
+      const tokenized = highlightCode(
+        params.code,
+        params.language,
+        callback ? (result) => callback(toTokensResult(result, dark)) : undefined,
+        light,
+        dark,
+      );
+      return tokenized ? toTokensResult(tokenized, dark) : null;
+    },
+    supportsLanguage: () => true,
+    getSupportedLanguages: () => [] as BundledLanguage[],
+    getThemes: () => [defaultLight, defaultDark],
+  };
+}
+
 // Synchronous highlight with callback for async results
 export const highlightCode = (
   code: string,
