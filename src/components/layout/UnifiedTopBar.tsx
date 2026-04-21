@@ -5,9 +5,8 @@ import { usePathname } from "next/navigation";
 import {
   GitBranch,
   TreeStructure,
-  Copy,
+  Globe,
   FileCode,
-  Folder,
   PencilSimple,
   DotOutline,
   ChartBar,
@@ -213,6 +212,7 @@ export function UnifiedTopBar() {
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-hide pr-2">
             {workspaceTabs.map((tab) => {
               const isActive = activeWorkspaceTabId === tab.id;
+              const isBrowserTab = tab.kind === "browser";
               const isPreviewTab = tab.kind === "preview";
 
               return (
@@ -233,7 +233,9 @@ export function UnifiedTopBar() {
                       : "border-transparent bg-muted/30 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                   }`}
                 >
-                  {isPreviewTab ? (
+                  {isBrowserTab ? (
+                    <Globe size={13} className="shrink-0" />
+                  ) : isPreviewTab ? (
                     <FileCode size={13} className="shrink-0" />
                   ) : (
                     <PencilSimple size={13} className="shrink-0" />
@@ -297,7 +299,7 @@ export function UnifiedTopBar() {
                     className={fileTreeOpen ? "" : "text-muted-foreground hover:text-foreground"}
                     onClick={() => setFileTreeOpen(!fileTreeOpen)}
                   >
-                    <Folder size={16} weight={fileTreeOpen ? "fill" : "regular"} />
+                    <TreeStructure size={16} />
                     <span className="sr-only">{t('topBar.fileTree')}</span>
                   </Button>
                 </TooltipTrigger>
