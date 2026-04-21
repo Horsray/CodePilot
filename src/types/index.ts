@@ -39,6 +39,7 @@ export interface ChatSession {
   permission_profile?: 'default' | 'full_access';
   context_summary?: string;
   context_summary_updated_at?: string;
+  context_summary_boundary_rowid?: number;
   team_mode?: 'off' | 'on' | 'auto';
   orchestration_tier?: 'single' | 'multi';
   orchestration_profile_id?: string;

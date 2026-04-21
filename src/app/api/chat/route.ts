@@ -348,12 +348,27 @@ export async function POST(request: NextRequest) {
     // not just any systemPromptAppend (which could come from CLI badges or skills).
     const isImageAgentMode = !!systemPromptAppend && systemPromptAppend.includes('image-gen-request');
 
+    let finalSystemPromptAppend = systemPromptAppend;
+
+    // --- AUTO-ROUTING FOR SEARCH AGENT ---
+    // We can pass the agents configuration to Claude Code CLI!
+    if (effectiveMode !== 'plan' && content) {
+      const searchKeywords = ['查一下', '搜一下', '调研', '看看代码库', '分析代码', '查找', '检索', '看看怎么', '找一下'];
+      const isSearchIntent = searchKeywords.some(k => content.includes(k));
+      if (isSearchIntent) {
+        const isNative = predictNativeRuntime(effectiveProviderId);
+        const agentParam = isNative ? 'agent="explore"' : 'subagent_type="explore"';
+        const routePrompt = `\n\n<system-reminder>\nUser intent implies codebase search or exploration. You MUST IMMEDIATELY invoke the 'Agent' tool with ${agentParam} (and description/prompt) to gather information before answering. Do not attempt to read/grep files manually first.\n</system-reminder>`;
+        finalSystemPromptAppend = finalSystemPromptAppend ? finalSystemPromptAppend + routePrompt : routePrompt;
+      }
+    }
+
     // Unified context assembly — extracts workspace, CLI tools, widget prompt
     const assembled = await assembleContext({
       session,
       entryPoint: 'desktop',
       userPrompt: content,
-      systemPromptAppend,
+      systemPromptAppend: finalSystemPromptAppend,
       conversationHistory: historyMsgs,
       imageAgentMode: isImageAgentMode,
       autoTrigger: !!autoTrigger,
@@ -559,6 +574,16 @@ export async function POST(request: NextRequest) {
       generativeUI: generativeUIEnabled,
       enableFileCheckpointing: enableFileCheckpointing ?? true,
       autoTrigger: !!autoTrigger,
+      agents: {
+        explore: {
+          description: 'Fast agent for codebase exploration. Read-only tools, quick searches.',
+          prompt: 'You are a fast codebase exploration agent. Search efficiently, report findings concisely. Do not modify any files.',
+        },
+        general: {
+          description: 'General-purpose sub-agent for complex multi-step tasks.',
+          disallowedTools: ['Agent'],
+        },
+      },
       onRuntimeStatusChange: (status: string) => {
         try { setSessionRuntimeStatus(session_id, status); } catch { /* best effort */ }
       },

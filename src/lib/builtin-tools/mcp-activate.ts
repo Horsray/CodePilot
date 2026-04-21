@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 export const createMcpActivateTool = (workspacePath: string) => tool({
   description: 'Activate a dormant MCP server from the <available_mcp_servers> list. Call this tool IMMEDIATELY when you realize you need a capability provided by an unloaded MCP server. DO NOT attempt to guess the tool names or call them before activating the server.',
-  parameters: z.object({
+  inputSchema: z.object({
     serverName: z.string().describe('The exact name of the MCP server to activate (e.g., "minimax_vision", "github")'),
   }),
   execute: async ({ serverName }: { serverName: string }) => {

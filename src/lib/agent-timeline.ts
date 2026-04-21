@@ -36,16 +36,40 @@ function makeStepTitle(index: number): string {
 function formatToolTitle(toolName: string, input: unknown): string {
   const normalized = toolName.toLowerCase();
   const data = input && typeof input === 'object' ? input as Record<string, unknown> : {};
-  const filePath = String(data.file_path ?? data.path ?? data.filePath ?? '').trim();
+  let filePath = String(data.file_path ?? data.path ?? data.filePath ?? '').trim();
+  if (!filePath && normalized === 'apply_patch') {
+    const patch = typeof data.patch === 'string'
+      ? data.patch
+      : typeof data.patch_text === 'string'
+        ? data.patch_text
+        : typeof data.patchText === 'string'
+          ? data.patchText
+          : typeof data.diff === 'string'
+            ? data.diff
+            : typeof data.diff_text === 'string'
+              ? data.diff_text
+              : '';
+    const m = patch ? patch.match(/^\*\*\*\s+(?:Update|Add)\s+File:\s+(.+)\s*$/m) : null;
+    if (m) filePath = m[1].trim();
+  }
   const fileName = shortenPath(filePath);
 
+  if (normalized.endsWith('__read_file')) {
+    return fileName ? `读取 ${fileName}` : '读取文件';
+  }
+  if (normalized.endsWith('__write_file')) {
+    return fileName ? `新建 ${fileName}` : '创建文件';
+  }
+  if (normalized.endsWith('__edit_file')) {
+    return fileName ? `修改 ${fileName}` : '修改文件';
+  }
   if (['read', 'readfile', 'read_file'].includes(normalized)) {
     return fileName ? `读取 ${fileName}` : '读取文件';
   }
   if (['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(normalized)) {
     return fileName ? `新建 ${fileName}` : '创建文件';
   }
-  if (['edit', 'notebookedit', 'notebook_edit'].includes(normalized)) {
+  if (['edit', 'notebookedit', 'notebook_edit', 'apply_patch'].includes(normalized)) {
     return fileName ? `修改 ${fileName}` : '修改文件';
   }
   if (['grep', 'searchcodebase', 'glob', 'ls'].includes(normalized)) {
@@ -138,7 +162,30 @@ function extractFileChange(tool: Pick<ToolUseInfo, 'name' | 'input'>): TimelineF
   if (!tool.input || typeof tool.input !== 'object') return null;
   const input = tool.input as Record<string, unknown>;
   const toolName = tool.name.toLowerCase();
-  const filePath = String(input.file_path ?? input.path ?? input.filePath ?? '');
+  let filePath = String(input.file_path ?? input.path ?? input.filePath ?? '');
+  let patchMode: 'edit' | 'create' | null = null;
+  const isMcpWriteFile = toolName.endsWith('__write_file');
+  const isMcpEditFile = toolName.endsWith('__edit_file');
+
+  if (!filePath && toolName === 'apply_patch') {
+    const patch = typeof input.patch === 'string'
+      ? input.patch
+      : typeof input.patch_text === 'string'
+        ? input.patch_text
+        : typeof input.patchText === 'string'
+          ? input.patchText
+          : typeof input.diff === 'string'
+            ? input.diff
+            : typeof input.diff_text === 'string'
+              ? input.diff_text
+              : '';
+    const m = patch ? patch.match(/^\*\*\*\s+(Update|Add)\s+File:\s+(.+)\s*$/m) : null;
+    if (m) {
+      patchMode = m[1] === 'Add' ? 'create' : 'edit';
+      filePath = m[2].trim();
+    }
+  }
+
   if (!filePath) return null;
 
   const oldText = typeof input.old_string === 'string'
@@ -155,22 +202,73 @@ function extractFileChange(tool: Pick<ToolUseInfo, 'name' | 'input'>): TimelineF
       : '';
   const content = typeof input.content === 'string' ? input.content : '';
 
-  const isCreate = ['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(toolName)
+  const isCreate = (
+    ['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(toolName)
+    || isMcpWriteFile
+  )
     && !!content
     && !oldText
     && !newText;
-  const isEdit = ['edit', 'notebookedit', 'notebook_edit'].includes(toolName) || (!!oldText || !!newText);
+  const isEdit = ['edit', 'notebookedit', 'notebook_edit', 'apply_patch'].includes(toolName) || isMcpEditFile || (!!oldText || !!newText);
   if (!isCreate && !isEdit) return null;
 
-  const beforeText = isCreate ? '' : oldText;
-  const afterText = isCreate ? content : newText;
+  let beforeText = isCreate ? '' : oldText;
+  let afterText = isCreate ? content : newText;
+  let operation: 'create' | 'edit' = isCreate ? 'create' : 'edit';
+
+  if (isMcpWriteFile) {
+    operation = 'create';
+    beforeText = '';
+    afterText = content;
+  }
+
+  if (isMcpEditFile) {
+    const edits = Array.isArray(input.edits) ? input.edits as Array<Record<string, unknown>> : [];
+    const oldParts: string[] = [];
+    const newParts: string[] = [];
+    for (const edit of edits) {
+      const o = typeof edit.oldText === 'string' ? edit.oldText : (typeof edit.old_string === 'string' ? edit.old_string : '');
+      const n = typeof edit.newText === 'string' ? edit.newText : (typeof edit.new_string === 'string' ? edit.new_string : '');
+      if (o) oldParts.push(o);
+      if (n) newParts.push(n);
+    }
+    if (oldParts.length === 0 && newParts.length === 0) return null;
+    operation = 'edit';
+    beforeText = oldParts.join('\n');
+    afterText = newParts.join('\n');
+  }
+
+  if (toolName === 'apply_patch') {
+    const patch = typeof input.patch === 'string'
+      ? input.patch
+      : typeof input.patch_text === 'string'
+        ? input.patch_text
+        : typeof input.patchText === 'string'
+          ? input.patchText
+          : typeof input.diff === 'string'
+            ? input.diff
+            : typeof input.diff_text === 'string'
+              ? input.diff_text
+              : '';
+    const normalizedPatch = patch.replace(/\r\n/g, '\n');
+    const lines = normalizedPatch.split('\n');
+    const removedLines = lines
+      .filter((l) => l.startsWith('-') && !l.startsWith('---'))
+      .map((l) => l.slice(1));
+    const addedLines = lines
+      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+      .map((l) => l.slice(1));
+    operation = patchMode === 'create' ? 'create' : 'edit';
+    beforeText = operation === 'create' ? '' : removedLines.join('\n');
+    afterText = addedLines.join('\n');
+  }
 
   return {
     path: filePath,
     fileName: shortenPath(filePath),
-    operation: isCreate ? 'create' : 'edit',
+    operation,
     addedLines: countLines(afterText),
-    removedLines: isCreate ? 0 : countLines(beforeText),
+    removedLines: operation === 'create' ? 0 : countLines(beforeText),
     beforeText,
     afterText,
     diffText: makeUnifiedDiff(beforeText, afterText),

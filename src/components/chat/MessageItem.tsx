@@ -632,7 +632,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
 
   const timelineCompletionInfo = useMemo(() => {
     if (isUser || timelineSteps.length === 0) return null;
-    const changedFiles = timelineSteps.flatMap((step) => step.fileChanges.map((change, index) => ({
+    const changedFiles = timelineSteps.flatMap((step) => (step.fileChanges || []).map((change, index) => ({
       tool: {
         id: `${step.id}-${index}`,
         name: change.operation === 'create' ? 'write' : 'edit',
@@ -652,8 +652,23 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
         moreA: Math.max(0, (change.afterText ? change.afterText.replace(/\r\n/g, '\n').split('\n').length : 0) - 1000),
       },
     })));
+
+    // Merge duplicate file edit statistics
+    const mergedFiles = new Map<string, typeof changedFiles[0]>();
+    changedFiles.forEach((item) => {
+      const path = item.diff.fullPath;
+      if (mergedFiles.has(path)) {
+        const existing = mergedFiles.get(path)!;
+        existing.diff.added += item.diff.added;
+        existing.diff.removed += item.diff.removed;
+      } else {
+        mergedFiles.set(path, { tool: item.tool, diff: { ...item.diff } });
+      }
+    });
+    
+    const finalChangedFiles = Array.from(mergedFiles.values());
     const errCount = timelineSteps.filter((step) => step.status === 'failed' || step.error).length;
-    return changedFiles.length > 0 ? { errCount, changedFiles } : null;
+    return finalChangedFiles.length > 0 ? { errCount, changedFiles: finalChangedFiles } : null;
   }, [isUser, timelineSteps]);
 
   const taskCompletionInfo = useMemo(() => {
@@ -700,9 +715,23 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     const errCount = mappedTools.filter(t => t.isError).length;
     const changedFiles = mappedTools
       .map(t => ({ tool: t as any, diff: extractDiff(t as any) }))
-      .filter((x): x is { tool: any; diff: any } => x.diff !== null);
+      .filter((x): x is { tool: any; diff: NonNullable<ReturnType<typeof extractDiff>> } => x.diff !== null);
     
-    return { errCount, changedFiles };
+    // Merge duplicate file edit statistics
+    const mergedFiles = new Map<string, typeof changedFiles[0]>();
+    changedFiles.forEach((item) => {
+      const path = item.diff.fullPath;
+      if (mergedFiles.has(path)) {
+        const existing = mergedFiles.get(path)!;
+        existing.diff.added += item.diff.added;
+        existing.diff.removed += item.diff.removed;
+      } else {
+        mergedFiles.set(path, { tool: item.tool, diff: { ...item.diff } });
+      }
+    });
+
+    const finalChangedFiles = Array.from(mergedFiles.values());
+    return finalChangedFiles.length > 0 || errCount > 0 ? { errCount, changedFiles: finalChangedFiles } : null;
   }, [isUser, pairedTools]);
 
   // Memoize file attachment parsing for the FIRST text block of a user message

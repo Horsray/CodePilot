@@ -26,6 +26,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   const [sessionPermissionProfile, setSessionPermissionProfile] = useState<'default' | 'full_access'>('default');
   const [sessionMode, setSessionMode] = useState<'code' | 'plan'>('code');
   const [sessionHasSummary, setSessionHasSummary] = useState(false);
+  const [sessionSummaryBoundaryRowid, setSessionSummaryBoundaryRowid] = useState(0);
   const { setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
   const targetFilePath = searchParams.get('file') || undefined;
   const { t } = useTranslation();
@@ -66,6 +67,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
           setSessionPermissionProfile(data.session.permission_profile || 'default');
           setSessionMode((data.session.mode as 'code' | 'plan') || 'code');
           setSessionHasSummary(!!data.session.context_summary);
+          setSessionSummaryBoundaryRowid(data.session.context_summary_boundary_rowid || 0);
         }
       } catch {
         // Session info load failed - panel will still work without directory
@@ -186,7 +188,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} />
+      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} initialSummaryBoundaryRowid={sessionSummaryBoundaryRowid} />
     </div>
   );
 }

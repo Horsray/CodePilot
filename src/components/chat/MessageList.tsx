@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, Fragment, useMemo, type ReactNode } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import { Button } from '@/components/ui/button';
@@ -164,6 +164,9 @@ interface MessageListProps {
   isAssistantProject?: boolean;
   /** Assistant name for avatar display */
   assistantName?: string;
+  hasSummary?: boolean;
+  summaryBoundaryRowid?: number;
+  isContextCompressing?: boolean;
 }
 
 function getRewindTargetForMessage(messages: Message[], rewindPoints: RewindPoint[], message: Message): string | undefined {
@@ -232,6 +235,9 @@ export function MessageList({
   startedAt,
   isAssistantProject,
   assistantName,
+  hasSummary,
+  summaryBoundaryRowid,
+  isContextCompressing,
 }: MessageListProps) {
   const { t } = useTranslation();
   // Scroll anchor: preserve position when older messages are prepended
@@ -324,24 +330,43 @@ export function MessageList({
             </Button>
           </div>
         )}
-        {messages.map((message) => {
-          const rewindTargetId = sessionId ? getRewindTargetForMessage(messages, rewindPoints, message) : undefined;
+        <ContextCompressionDivider
+          messages={messages}
+          boundaryRowid={summaryBoundaryRowid || 0}
+          hasSummary={!!hasSummary}
+          isCompressing={!!isContextCompressing}
+        >
+          {({ dividerIndex }) => (
+            <>
+              {messages.map((message, idx) => {
+                const rewindTargetId = sessionId ? getRewindTargetForMessage(messages, rewindPoints, message) : undefined;
 
-          return (
-            <div key={message.id} id={`msg-${message.id}`} className="group">
-              <MessageItem
-                message={message}
-                sessionId={sessionId}
-                rewindUserMessageId={message.role === 'assistant' ? rewindTargetId : undefined}
-                isAssistantProject={isAssistantProject}
-                assistantName={assistantName}
-              />
-              {message.role === 'user' && rewindTargetId && sessionId && !isStreaming && (
-                <RewindButton sessionId={sessionId} rewindTargetId={rewindTargetId} />
+                return (
+                  <Fragment key={message.id}>
+                    {idx === dividerIndex && (
+                      <DividerRow label={t((isContextCompressing ? 'context.compressing' : 'context.compressed') as TranslationKey)} spinning={!!isContextCompressing} />
+                    )}
+                    <div id={`msg-${message.id}`} className="group">
+                      <MessageItem
+                        message={message}
+                        sessionId={sessionId}
+                        rewindUserMessageId={message.role === 'assistant' ? rewindTargetId : undefined}
+                        isAssistantProject={isAssistantProject}
+                        assistantName={assistantName}
+                      />
+                      {message.role === 'user' && rewindTargetId && sessionId && !isStreaming && (
+                        <RewindButton sessionId={sessionId} rewindTargetId={rewindTargetId} />
+                      )}
+                    </div>
+                  </Fragment>
+                );
+              })}
+              {dividerIndex === messages.length && (
+                <DividerRow label={t((isContextCompressing ? 'context.compressing' : 'context.compressed') as TranslationKey)} spinning={!!isContextCompressing} />
               )}
-            </div>
-          );
-        })}
+            </>
+          )}
+        </ContextCompressionDivider>
 
         {isStreaming && (
           <StreamingMessage
@@ -364,4 +389,41 @@ export function MessageList({
       <ConversationScrollButton />
     </Conversation>
   );
+}
+
+function DividerRow({ label, spinning }: { label: string; spinning: boolean }) {
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <div className="h-px flex-1 bg-border/50" />
+      <div className="flex items-center gap-2 text-[12px] text-muted-foreground/70">
+        {spinning && <SpinnerGap size={14} className="animate-spin" />}
+        <span>{label}</span>
+      </div>
+      <div className="h-px flex-1 bg-border/50" />
+    </div>
+  );
+}
+
+function ContextCompressionDivider({
+  children,
+  messages,
+  boundaryRowid,
+  hasSummary,
+  isCompressing,
+}: {
+  children: (args: { dividerIndex: number }) => ReactNode;
+  messages: Message[];
+  boundaryRowid: number;
+  hasSummary: boolean;
+  isCompressing: boolean;
+}) {
+  const dividerIndex = useMemo(() => {
+    if (isCompressing) return 0;
+    if (!hasSummary) return -1;
+    if (boundaryRowid <= 0) return 0;
+    const idx = messages.findIndex((m) => (m._rowid ?? Number.POSITIVE_INFINITY) > boundaryRowid);
+    return idx === -1 ? messages.length : idx;
+  }, [boundaryRowid, hasSummary, isCompressing, messages]);
+
+  return <>{children({ dividerIndex })}</>;
 }

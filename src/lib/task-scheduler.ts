@@ -309,24 +309,30 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
       computeNextRun(task);
     }
 
-    // Notify on completion
+    // Notify on completion — always use 'urgent' priority to ensure mobile delivery via Telegram
     if (task.notify_on_complete) {
       await sendTaskNotification(
         `✅ ${task.name}`,
-        result.slice(0, 200),
-        task.priority as 'low' | 'normal' | 'urgent',
+        `${task.prompt}\n\n---\n执行结果：\n${result.slice(0, 500)}`,
+        'urgent',
       );
     }
 
     // Insert result as assistant message in the task's session (or latest assistant session)
     try {
-      const { addMessage, getSetting, getLatestSessionByWorkingDirectory } = await import('@/lib/db');
+      const { addMessage, getSetting, getLatestSessionByWorkingDirectory, getAllSessions } = await import('@/lib/db');
       const workspacePath = getSetting('assistant_workspace_path');
       let targetSessionId = task.session_id;
 
       if (!targetSessionId && workspacePath) {
         const session = getLatestSessionByWorkingDirectory(workspacePath);
         if (session) targetSessionId = session.id;
+      }
+
+      // Fallback: if still no session, use the most recent session overall
+      if (!targetSessionId) {
+        const sessions = getAllSessions();
+        if (sessions.length > 0) targetSessionId = sessions[0].id;
       }
 
       if (targetSessionId) {
@@ -375,24 +381,30 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     // Exponential backoff
     applyBackoff(task.id, errors);
 
-    // Notify on failure
+    // Notify on failure — always use 'urgent' priority to ensure mobile delivery via Telegram
     if (task.notify_on_complete) {
       await sendTaskNotification(
         `❌ ${task.name}`,
-        errorMsg.slice(0, 200),
+        `任务执行失败：\n${task.prompt}\n\n错误信息：\n${errorMsg.slice(0, 300)}`,
         'urgent',
       );
     }
 
     // Insert error as assistant message in the task's session
     try {
-      const { addMessage, getSetting, getLatestSessionByWorkingDirectory } = await import('@/lib/db');
+      const { addMessage, getSetting, getLatestSessionByWorkingDirectory, getAllSessions } = await import('@/lib/db');
       const workspacePath = getSetting('assistant_workspace_path');
       let targetSessionId = task.session_id;
 
       if (!targetSessionId && workspacePath) {
         const session = getLatestSessionByWorkingDirectory(workspacePath);
         if (session) targetSessionId = session.id;
+      }
+
+      // Fallback: if still no session, use the most recent session overall
+      if (!targetSessionId) {
+        const sessions = getAllSessions();
+        if (sessions.length > 0) targetSessionId = sessions[0].id;
       }
 
       if (targetSessionId) {
@@ -498,7 +510,7 @@ async function sendTaskNotification(title: string, body: string, priority: 'low'
  * Finds past-due one-shot tasks and executes them immediately with a notification.
  */
 async function handleMissedTasks(): Promise<void> {
-  const { getDueTasks, getSetting, getLatestSessionByWorkingDirectory, addMessage } = await import('@/lib/db');
+  const { getDueTasks, getSetting, getLatestSessionByWorkingDirectory, getAllSessions, addMessage } = await import('@/lib/db');
 
   // Find one-shot tasks that are past due (missed while app was closed)
   const dueTasks = getDueTasks();
@@ -519,6 +531,11 @@ async function handleMissedTasks(): Promise<void> {
       if (!targetSessionId && workspacePath) {
         const session = getLatestSessionByWorkingDirectory(workspacePath);
         if (session) targetSessionId = session.id;
+      }
+      // Fallback: if still no session, use the most recent session overall
+      if (!targetSessionId) {
+        const sessions = getAllSessions();
+        if (sessions.length > 0) targetSessionId = sessions[0].id;
       }
       if (targetSessionId) {
         addMessage(targetSessionId, 'assistant', message);

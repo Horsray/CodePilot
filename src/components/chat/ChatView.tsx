@@ -60,12 +60,13 @@ interface ChatViewProps {
   initialPermissionProfile?: 'default' | 'full_access';
   initialMode?: 'code' | 'plan';
   initialHasSummary?: boolean;
+  initialSummaryBoundaryRowid?: number;
 }
 
 /** Maximum messages kept in React state. Older messages are trimmed and reloaded on scroll. */
 const MAX_MESSAGES_IN_MEMORY = 300;
 
-export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialHasSummary }: ChatViewProps) {
+export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialHasSummary, initialSummaryBoundaryRowid }: ChatViewProps) {
   const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setDashboardPanelOpen, setFileTreeOpen, setIsAssistantWorkspace, bottomPanelOpen, setBottomPanelOpen, setBottomPanelTab } = usePanel();
   const { t } = useTranslation();
   const router = useRouter();
@@ -163,10 +164,12 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
   const [context1m, setContext1m] = useState(false);
   const [hasSummary, setHasSummary] = useState(initialHasSummary || false);
+  const [summaryBoundaryRowid, setSummaryBoundaryRowid] = useState(initialSummaryBoundaryRowid || 0);
 
   // Sync model/provider when session data loads
   useEffect(() => { if (modelName) setCurrentModel(modelName); }, [modelName]);
   useEffect(() => { if (providerId) setCurrentProviderId(providerId); }, [providerId]);
+  useEffect(() => { setSummaryBoundaryRowid(initialSummaryBoundaryRowid || 0); }, [initialSummaryBoundaryRowid]);
 
   // Fetch provider-specific options (with abort to prevent stale responses on fast switch)
   useEffect(() => {
@@ -341,6 +344,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
         setHasSummary(true);
+        fetch(`/api/chat/sessions/${sessionId}`)
+          .then((res) => res.ok ? res.json() : null)
+          .then((data) => {
+            const boundary = data?.session?.context_summary_boundary_rowid;
+            if (typeof boundary === 'number') setSummaryBoundaryRowid(boundary);
+          })
+          .catch(() => {});
         // Toast 提示用户上下文已被压缩
         import('@/hooks/useToast').then(({ showToast }) => {
           const { messagesCompressed = 0, tokensSaved = 0 } = detail || {};
@@ -374,6 +384,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     window.addEventListener('context-compressed', handler);
     return () => window.removeEventListener('context-compressed', handler);
   }, [sessionId]);
+
+  const isContextCompressing = statusText === 'Compressing context...';
 
   // Phase 1b — TerminalReason action state
   // Refs (not state) so the context-compressed handler above can read the
@@ -939,6 +951,9 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         startedAt={streamSnapshot?.startedAt}
         isAssistantProject={isAssistantProject}
         assistantName={assistantName}
+        hasSummary={hasSummary}
+        summaryBoundaryRowid={summaryBoundaryRowid}
+        isContextCompressing={isContextCompressing}
       />
       {/* End-of-turn terminal reason chip (only shown when stream is not active) */}
       {!isStreaming && (

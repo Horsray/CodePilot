@@ -366,9 +366,23 @@ export function StreamingMessage({
     const errCount = toolResults.filter(t => t.is_error).length;
     const changedFiles = mappedTools
       .map(t => ({ tool: t as any, diff: extractDiff(t as any) }))
-      .filter((x): x is { tool: any; diff: any } => x.diff !== null);
+      .filter((x): x is { tool: any; diff: NonNullable<ReturnType<typeof extractDiff>> } => x.diff !== null);
 
-    return { errCount, changedFiles };
+    // Merge duplicate file edit statistics
+    const mergedFiles = new Map<string, typeof changedFiles[0]>();
+    changedFiles.forEach((item) => {
+      const path = item.diff.fullPath;
+      if (mergedFiles.has(path)) {
+        const existing = mergedFiles.get(path)!;
+        existing.diff.added += item.diff.added;
+        existing.diff.removed += item.diff.removed;
+      } else {
+        mergedFiles.set(path, { tool: item.tool, diff: { ...item.diff } });
+      }
+    });
+
+    const finalChangedFiles = Array.from(mergedFiles.values());
+    return finalChangedFiles.length > 0 || errCount > 0 ? { errCount, changedFiles: finalChangedFiles } : null;
   }, [isStreaming, toolUses, toolResults]);
 
   useEffect(() => {

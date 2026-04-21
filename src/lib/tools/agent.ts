@@ -41,9 +41,12 @@ export function createAgentTool(ctx: {
     inputSchema: z.object({
       prompt: z.string().describe('The task for the sub-agent to perform'),
       agent: z.string().optional().describe(`Agent type: ${subAgentIds.join(' | ')} (default: general)`),
+      description: z.string().optional().describe('A short description of the task (used by SDK runtimes, optional here)'),
+      subagent_type: z.string().optional().describe('Agent type (used by SDK runtimes, optional here)'),
     }),
-    execute: async ({ prompt, agent: agentId }) => {
-      const agentDef = getAgent(agentId || 'general');
+    execute: async ({ prompt, agent, subagent_type }) => {
+      const agentId = agent || subagent_type || 'general';
+      const agentDef = getAgent(agentId);
       if (!agentDef) {
         return `Error: Unknown agent "${agentId}". Available: ${subAgentIds.join(', ')}`;
       }

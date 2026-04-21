@@ -71,7 +71,7 @@ interface ToolActionsGroupProps {
 // ---------------------------------------------------------------------------
 
 interface ToolRendererDef {
-  match: (name: string) => boolean;
+  match: (name: string, input?: unknown) => boolean;
   icon: Icon;
   label: string;
   getSummary: (input: unknown, name?: string) => string;
@@ -211,13 +211,69 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    match: (n) => n.toLowerCase() === 'agent',
+    match: (n, input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      return n.toLowerCase() === 'agent' && (inp?.agent === 'explore' || inp?.subagent_type === 'explore');
+    },
+    icon: MagnifyingGlass,
+    label: 'Search Agent',
+    getSummary: (input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      const prompt = (inp?.prompt || inp?.description || '') as string;
+      const short = prompt.length > 50 ? prompt.slice(0, 47) + '...' : prompt;
+      return short;
+    },
+    renderDetail: (tool, streamingOutput) => {
+      const isRunning = tool.result === undefined;
+      const outputText = isRunning ? streamingOutput : undefined;
+      if (!outputText && isRunning) return null;
+
+      // Parse progress lines into structured items
+      const lines = (outputText || '').split('\n').filter(Boolean);
+      // Only show last 8 lines to avoid clutter
+      const visible = lines.slice(-8);
+
+      return (
+        <div className="mt-1 ml-4 border-l-2 border-border/30 pl-2 space-y-0.5">
+          {visible.map((line, i) => {
+            const isActive = line.startsWith('>');
+            const isDone = line.startsWith('[+]');
+            const isError = line.startsWith('[x]');
+            const isHeader = line.startsWith('[subagent:');
+            return (
+              <div
+                key={i}
+                className={cn(
+                  "text-[11px] font-mono truncate",
+                  isHeader ? "text-muted-foreground/70" :
+                  isActive ? "text-muted-foreground/60" :
+                  isDone ? "text-green-500/60" :
+                  isError ? "text-red-500/60" :
+                  "text-muted-foreground/50"
+                )}
+              >
+                {isActive && <SpinnerGap size={10} className="inline-block mr-1 animate-spin align-text-bottom" />}
+                {isDone && <CheckCircle size={10} className="inline-block mr-1 align-text-bottom" />}
+                {isError && <XCircle size={10} className="inline-block mr-1 align-text-bottom" />}
+                {line.replace(/^\[subagent:\w+\]\s*/, '').replace(/^>\s*/, '').replace(/^\[[+x]\]\s*/, '')}
+              </div>
+            );
+          })}
+        </div>
+      );
+    },
+  },
+  {
+    match: (n, input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      return n.toLowerCase() === 'agent' && inp?.agent !== 'explore' && inp?.subagent_type !== 'explore';
+    },
     icon: Lightning,
     label: '智能体',
     getSummary: (input) => {
       const inp = input as Record<string, unknown> | undefined;
-      const agentType = (inp?.agent || 'general') as string;
-      const prompt = (inp?.prompt || '') as string;
+      const agentType = (inp?.agent || inp?.subagent_type || 'general') as string;
+      const prompt = (inp?.prompt || inp?.description || '') as string;
       const short = prompt.length > 50 ? prompt.slice(0, 47) + '...' : prompt;
       return `${agentType}: ${short}`;
     },
@@ -281,8 +337,8 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   },
 ];
 
-function getRenderer(name: string): ToolRendererDef {
-  return TOOL_REGISTRY.find((r) => r.match(name)) || TOOL_REGISTRY[TOOL_REGISTRY.length - 1];
+function getRenderer(name: string, input?: unknown): ToolRendererDef {
+  return TOOL_REGISTRY.find((r) => r.match(name, input)) || TOOL_REGISTRY[TOOL_REGISTRY.length - 1];
 }
 
 /** Register a custom tool renderer. It takes priority over built-in ones. */
@@ -359,6 +415,11 @@ function isContextTool(name: string): boolean {
 
 function isActionTool(name: string): boolean {
   const n = name.toLowerCase();
+  if (
+    n === 'apply_patch' ||
+    n.endsWith('__edit_file') ||
+    n.endsWith('__write_file')
+  ) return true;
   return ['bash', 'execute', 'run', 'shell', 'execute_command', 'write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'notebookedit', 'notebook_edit'].includes(n) || n.startsWith('mcp__playwright');
 }
 
@@ -610,7 +671,7 @@ function getToolDisplayName(name: string): string {
 }
 
 function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggle }: { tool: ToolAction; streamingToolOutput?: string; expandedOverride?: boolean; onToggle?: () => void }) {
-  const renderer = getRenderer(tool.name);
+  const renderer = getRenderer(tool.name, tool.input);
   const baseSummary = renderer.getSummary(tool.input, tool.name);
   const summary = MCP_TOOL_NAME_MAP[tool.name] ? baseSummary.replace(tool.name, MCP_TOOL_NAME_MAP[tool.name]) : baseSummary;
   const filePath = getFilePath(tool.input);
@@ -810,10 +871,69 @@ function sv2(input: unknown, keys: string[]): string {
   for (const k of keys) if (typeof o[k] === 'string' && o[k]) return o[k] as string;
   return '';
 }
+function extractFirstFileFromPatch(patch: string): { path: string; mode: 'edit' | 'create' } | null {
+  const m = patch.match(/^\*\*\*\s+(Update|Add)\s+File:\s+(.+)\s*$/m);
+  if (!m) return null;
+  return { mode: m[1] === 'Add' ? 'create' : 'edit', path: m[2].trim() };
+}
+function extractDiffFromPatchInput(input: unknown): DiffInfo | null {
+  const patch = sv2(input, ['patch', 'patch_text', 'patchText', 'diff', 'diff_text']);
+  if (!patch) return null;
+  const file = extractFirstFileFromPatch(patch);
+  if (!file) return null;
+  const lines = patch.replace(/\r\n/g, '\n').split('\n');
+  const removed = lines
+    .filter((l) => l.startsWith('-') && !l.startsWith('---'))
+    .map((l) => l.slice(1));
+  const added = lines
+    .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+    .map((l) => l.slice(1));
+  const beforeText = file.mode === 'create' ? '' : removed.join('\n');
+  const afterText = added.join('\n');
+  const { lines: bl, more: mb } = previewLines(beforeText, 1000);
+  const { lines: al, more: ma } = previewLines(afterText, 1000);
+  return {
+    filename: fname2(file.path),
+    fullPath: file.path,
+    mode: file.mode,
+    added: added.length,
+    removed: file.mode === 'create' ? 0 : removed.length,
+    beforeLines: bl,
+    afterLines: al,
+    moreB: mb,
+    moreA: ma,
+  };
+}
+function extractDiffFromMcpFilesystemEditInput(input: unknown): { oldText: string; newText: string } | null {
+  const o = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const edits = Array.isArray(o.edits) ? o.edits as Array<Record<string, unknown>> : null;
+  if (!edits || edits.length === 0) return null;
+
+  const oldParts: string[] = [];
+  const newParts: string[] = [];
+  for (const edit of edits) {
+    const oldText = typeof edit.oldText === 'string'
+      ? edit.oldText
+      : typeof edit.old_string === 'string'
+        ? edit.old_string
+        : '';
+    const newText = typeof edit.newText === 'string'
+      ? edit.newText
+      : typeof edit.new_string === 'string'
+        ? edit.new_string
+        : '';
+    if (!oldText && !newText) continue;
+    if (oldText) oldParts.push(oldText);
+    if (newText) newParts.push(newText);
+  }
+  if (oldParts.length === 0 && newParts.length === 0) return null;
+  return { oldText: oldParts.join('\n'), newText: newParts.join('\n') };
+}
 function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'other' {
   const n = name.toLowerCase();
   if (['read', 'readfile', 'read_file', 'read_text_file', 'read_multiple_files'].includes(n)) return 'read';
-  if (['edit', 'notebookedit', 'notebook_edit'].includes(n)) return 'write';
+  if (['edit', 'notebookedit', 'notebook_edit', 'apply_patch'].includes(n) || n.endsWith('__edit_file')) return 'write';
+  if (n.endsWith('__write_file')) return 'create';
   if (['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(n)) return 'create';
   if (['glob', 'grep', 'search', 'find_files', 'search_files', 'websearch', 'web_search'].some(x => n.includes(x))) return 'search';
   if (['bash', 'execute', 'run', 'shell', 'execute_command', 'computer'].includes(n)) return 'bash';
@@ -830,9 +950,15 @@ export interface DiffInfo {
 export function extractDiff(t: ToolAction): DiffInfo | null {
   const k = toolKind2(t.name);
   if (k !== 'write' && k !== 'create') return null;
+  const name = t.name.toLowerCase();
+  if (name === 'apply_patch') {
+    const diff = extractDiffFromPatchInput(t.input);
+    if (diff) return diff;
+  }
   const p = fp2(t.input);
-  const old = sv2(t.input, ['old_string', 'oldText', 'previous']);
-  const nw = sv2(t.input, ['new_string', 'newText']);
+  const mcpEdit = name.endsWith('__edit_file') ? extractDiffFromMcpFilesystemEditInput(t.input) : null;
+  const old = mcpEdit?.oldText || sv2(t.input, ['old_string', 'oldText', 'previous']);
+  const nw = mcpEdit?.newText || sv2(t.input, ['new_string', 'newText']);
   const content = sv2(t.input, ['content']);
   if (k === 'write' && !old && !nw) return null;
   if (k === 'create' && !content) return null;
@@ -1023,7 +1149,7 @@ export function ToolActionsGroup({
       if (segment.kind === 'action') {
         flushLineGroup();
         blocks.push(
-          <ActionToolCard 
+          <ActionToolCard
             key={`action-${idx}`}
             tool={segment.tool} 
             isStreaming={isStreaming && segment.tool.result === undefined} 
