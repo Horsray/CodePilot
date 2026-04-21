@@ -1,0 +1,153 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - img "CodePilot" [ref=e6]
+      - generic [ref=e7]:
+        - button "新对话" [ref=e118]:
+          - img
+          - text: 新对话
+        - button "搜索会话..." [ref=e119]:
+          - img
+          - generic [ref=e10]: 搜索会话...
+        - button "内置浏览器" [ref=e11]:
+          - img
+          - generic [ref=e12]: 内置浏览器
+      - generic [ref=e14]:
+        - link "Skills" [ref=e15] [cursor=pointer]:
+          - /url: /skills
+          - button "Skills" [ref=e16]:
+            - img
+            - text: Skills
+        - link "MCP" [ref=e17] [cursor=pointer]:
+          - /url: /mcp
+          - button "MCP" [ref=e18]:
+            - img
+            - text: MCP
+        - link "CLI 工具" [ref=e120] [cursor=pointer]:
+          - /url: /cli-tools
+          - button "CLI 工具" [ref=e121]:
+            - img
+            - text: CLI 工具
+        - link "素材库" [ref=e122] [cursor=pointer]:
+          - /url: /gallery
+          - button "素材库" [ref=e123]:
+            - img
+            - text: 素材库
+        - link "知识库" [ref=e124] [cursor=pointer]:
+          - /url: /knowledge-base
+          - button "知识库" [ref=e125]:
+            - img
+            - text: 知识库
+        - link "定时任务 10" [ref=e126] [cursor=pointer]:
+          - /url: /scheduled-tasks
+          - button "定时任务 10" [ref=e127]:
+            - img
+            - text: 定时任务
+            - generic [ref=e128]: "10"
+        - link "远程桥接" [ref=e129] [cursor=pointer]:
+          - /url: /bridge
+          - button "远程桥接" [ref=e130]:
+            - img
+            - text: 远程桥接
+      - generic [ref=e30]:
+        - generic [ref=e31]: 对话列表
+        - button "新建项目" [ref=e131]:
+          - img
+          - text: 新建项目
+      - generic [ref=e37]:
+        - generic [ref=e133] [cursor=pointer]:
+          - generic [ref=e134]:
+            - generic [ref=e135]:
+              - generic [ref=e136]: 绘影科技智能体
+              - img [ref=e137]
+            - generic [ref=e139]: / agentHelper
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+        - generic [ref=e142] [cursor=pointer]:
+          - img [ref=e292]
+          - img [ref=e294]
+          - generic [ref=e147]: CodePilot
+          - generic [ref=e296]:
+            - button [ref=e297]:
+              - img
+            - button [ref=e298]:
+              - img
+        - generic [ref=e234] [cursor=pointer]:
+          - img [ref=e235]
+          - img [ref=e237]
+          - generic [ref=e239]: No Project
+        - generic [ref=e243] [cursor=pointer]:
+          - img [ref=e244]
+          - img [ref=e246]
+          - generic [ref=e248]: bridge-workspace
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+        - generic [ref=e252] [cursor=pointer]:
+          - img [ref=e253]
+          - img [ref=e255]
+          - generic [ref=e257]: Ps-plugins
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+      - link "设置" [ref=e259] [cursor=pointer]:
+        - /url: /settings
+        - button "设置" [ref=e260]:
+          - img
+          - text: 设置
+    - main [ref=e49]:
+      - generic [ref=e51]:
+        - generic [ref=e262]:
+          - img [ref=e264]
+          - generic [ref=e285]:
+            - heading "CodePilot 对话" [level=3] [ref=e286]
+            - paragraph [ref=e287]: 开始与 CodePilot 对话。提问、获取代码帮助或探索想法。
+        - group [ref=e76]:
+          - generic [ref=e78] [cursor=pointer]: Agent 引擎：Claude Code
+          - textbox "Message Claude..." [ref=e79]
+          - group [ref=e80]:
+            - generic [ref=e81]:
+              - button [disabled]:
+                - img
+              - button [ref=e82]:
+                - img
+              - button [ref=e83]:
+                - img
+              - button [ref=e84]:
+                - img
+              - button [ref=e85]:
+                - img
+              - button "MiniMax-M2.7" [ref=e288]:
+                - generic [ref=e88]: MiniMax-M2.7
+                - img
+            - button "Submit" [disabled]:
+              - img
+        - generic [ref=e93]:
+          - tablist [ref=e95]:
+            - tab "代码" [selected] [ref=e289]:
+              - img
+              - text: 代码
+            - tab "计划" [ref=e290]:
+              - img
+              - text: 计划
+          - generic [ref=e98]:
+            - button "默认权限" [ref=e291]:
+              - img
+              - generic [ref=e100]: 默认权限
+              - img
+            - button "控制台日志" [ref=e101]:
+              - img [ref=e102]
+              - generic [ref=e104]: 控制台日志
+  - generic [ref=e105]:
+    - heading "Global Search" [level=2] [ref=e106]
+    - paragraph [ref=e107]: Search across sessions, messages, and files
+  - button "Open Next.js Dev Tools" [ref=e113] [cursor=pointer]:
+    - img [ref=e114]
+  - alert [ref=e117]

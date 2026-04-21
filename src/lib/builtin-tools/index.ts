@@ -157,5 +157,17 @@ function getToolGroups(options: { workspacePath?: string }): BuiltinToolGroup[] 
     });
   } catch { /* module not available */ }
 
+  // Browser tools — always available
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createBrowserTool, BROWSER_SYSTEM_PROMPT } = require('./browser');
+    groups.push({
+      name: 'codepilot-browser',
+      systemPrompt: BROWSER_SYSTEM_PROMPT,
+      condition: 'always',
+      tools: { codepilot_open_browser: createBrowserTool() },
+    });
+  } catch { /* module not available */ }
+
   return groups;
 }

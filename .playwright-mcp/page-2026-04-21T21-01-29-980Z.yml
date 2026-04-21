@@ -1,0 +1,62 @@
+- generic [active] [ref=e1]:
+  - main [ref=e7]:
+    - generic [ref=e9]:
+      - generic [ref=e11]:
+        - generic [ref=e12]:
+          - generic [ref=e13] [cursor=pointer]:
+            - generic [ref=e14]:
+              - generic [ref=e15]:
+                - img [ref=e16]
+                - generic [ref=e18]: Project Chat
+              - generic [ref=e19]: Open a project folder, AI helps you code, debug and refactor
+            - button "Select Folder" [ref=e21]:
+              - img
+              - text: Select Folder
+          - generic [ref=e22] [cursor=pointer]:
+            - generic [ref=e23]:
+              - generic [ref=e25]: Personal Assistant
+              - generic [ref=e26]: Set up an AI that remembers you, manages schedule, assists creation
+            - button "Set Up Assistant" [ref=e28]
+        - paragraph [ref=e29]: Project Chat works within a codebase folder. Personal Assistant works across all your tasks without a specific project.
+      - group [ref=e34]:
+        - generic [ref=e36] [cursor=pointer]: "Agent: Claude Code"
+        - textbox "Message Claude..." [disabled] [ref=e37]
+        - group [ref=e38]:
+          - generic [ref=e39]:
+            - button [disabled]:
+              - img
+            - button [ref=e40]:
+              - img
+            - button [ref=e41]:
+              - img
+            - button [ref=e42]:
+              - img
+            - button [ref=e43]:
+              - img
+            - button "Sonnet 4.6" [ref=e45]:
+              - generic [ref=e46]: Sonnet 4.6
+              - img
+            - button "Auto" [ref=e48]:
+              - generic [ref=e49]: Auto
+              - img
+          - button "Submit" [disabled]:
+            - img
+      - generic [ref=e51]:
+        - tablist [ref=e53]:
+          - tab "Code" [selected] [ref=e54]:
+            - img
+            - text: Code
+          - tab "Plan" [ref=e55]:
+            - img
+            - text: Plan
+        - generic [ref=e56]:
+          - button "Default" [ref=e57]:
+            - img
+            - generic [ref=e58]: Default
+            - img
+          - button "控制台日志" [ref=e59]:
+            - img [ref=e60]
+            - generic [ref=e62]: 控制台日志
+  - generic [ref=e63]:
+    - heading "Global Search" [level=2] [ref=e64]
+    - paragraph [ref=e65]: Search across sessions, messages, and files

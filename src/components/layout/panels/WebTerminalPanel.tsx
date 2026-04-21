@@ -112,7 +112,10 @@ function WebTerminalSession({ terminalId }: { terminalId?: string }) {
   }, [terminal]);
 
   return (
-    <div className="h-full w-full relative min-h-[100px]">
+    <div 
+      className="h-full w-full relative min-h-[100px] flex flex-col"
+      onClick={() => xtermRef.current?.focus()}
+    >
       <XtermTerminal
         key={terminalKey}
         onData={handleData}

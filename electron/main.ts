@@ -872,6 +872,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('terminal:write', (e, id, data) => {
     terminalManager.write(id, data);
+    return true;
   });
 
   ipcMain.handle('terminal:resize', (e, id, cols, rows) => {

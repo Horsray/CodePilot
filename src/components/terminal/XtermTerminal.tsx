@@ -64,16 +64,6 @@ export function XtermTerminal({
     onReadyRef.current = onReady;
   }, [onReady]);
 
-  const handleResize = useCallback(() => {
-    if (fitAddonRef.current && termRef.current) {
-      try {
-        fitAddonRef.current.fit();
-        const { cols, rows } = termRef.current;
-        onResizeRef.current(cols, rows);
-      } catch { /* ignore */ }
-    }
-  }, []);
-
   useEffect(() => {
     if (!containerRef.current || readyRef.current) return;
     readyRef.current = true;
@@ -120,29 +110,35 @@ export function XtermTerminal({
         // Focus the terminal when it opens and on container click
         term.focus();
 
-        // Forward user input to parent (from xterm.js internal handling)
         term.onData((data) => {
           onDataRef.current(data);
         });
 
-        // Some Electron environments need extra help passing keyboard events
+        // Add a raw DOM listener to catch and manually forward keys if needed.
         const handleKey = (e: KeyboardEvent) => {
-          // In some cases, the container catches the event before xterm
-          // Usually we let xterm handle it, but we can capture it here if needed
+          if (document.activeElement === containerRef.current || 
+              containerRef.current?.contains(document.activeElement)) {
+            
+            // Allow xterm.js to handle most keys naturally.
+            // But if your Electron/React combo drops some simple keys, 
+            // you can uncomment this block to forcefully push them:
+            /*
+            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+              onDataRef.current(e.key);
+            }
+            */
+          }
         };
-
-        // Focus terminal when clicking on the container
-        const handleContainerClick = () => {
-          term.focus();
-        };
-        containerRef.current.addEventListener('click', handleContainerClick);
-        containerRef.current.addEventListener('keydown', handleKey);
 
         // Ensure focus stays in the terminal when container is focused
         const handleContainerFocus = () => {
           term.focus();
         };
         containerRef.current.addEventListener('focus', handleContainerFocus);
+        
+        // Ensure clicking anywhere in the container focuses the terminal
+        containerRef.current.addEventListener('click', handleContainerFocus);
+        document.addEventListener('keydown', handleKey);
 
         // Force an initial resize to ensure the terminal picks up its container dimensions
         setTimeout(() => {
@@ -157,9 +153,9 @@ export function XtermTerminal({
         onReadyRef.current(term);
 
         return () => {
-          containerRef.current?.removeEventListener('click', handleContainerClick);
-          containerRef.current?.removeEventListener('keydown', handleKey);
           containerRef.current?.removeEventListener('focus', handleContainerFocus);
+          containerRef.current?.removeEventListener('click', handleContainerFocus);
+          document.removeEventListener('keydown', handleKey);
         };
       }
     }
@@ -198,9 +194,18 @@ export function XtermTerminal({
 
   // Also listen for window resize
   useEffect(() => {
+    const handleResize = () => {
+      if (fitAddonRef.current && termRef.current) {
+        try {
+          fitAddonRef.current.fit();
+          onResizeRef.current(termRef.current.cols, termRef.current.rows);
+        } catch { /* ignore */ }
+      }
+    };
+
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [handleResize]);
+  }, []);
 
   useEffect(() => {
     const handleFocus = () => {
@@ -223,7 +228,7 @@ export function XtermTerminal({
       ref={containerRef}
       className="absolute inset-0 focus:outline-none xterm-container flex"
       style={{ padding: 0 }}
-      tabIndex={-1}
+      onClick={() => termRef.current?.focus()}
     />
   );
 }

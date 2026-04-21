@@ -1,0 +1,183 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - img "CodePilot" [ref=e6]
+      - generic [ref=e7]:
+        - button "新对话" [ref=e8]:
+          - img
+          - text: 新对话
+        - button "搜索会话..." [ref=e9]:
+          - img
+          - generic [ref=e10]: 搜索会话...
+        - button "内置浏览器" [ref=e11]:
+          - img
+          - generic [ref=e12]: 内置浏览器
+      - generic [ref=e14]:
+        - link "Skills" [ref=e15] [cursor=pointer]:
+          - /url: /skills
+          - button "Skills" [ref=e16]:
+            - img
+            - text: Skills
+        - link "MCP" [ref=e17] [cursor=pointer]:
+          - /url: /mcp
+          - button "MCP" [ref=e18]:
+            - img
+            - text: MCP
+        - link "CLI 工具" [ref=e19] [cursor=pointer]:
+          - /url: /cli-tools
+          - button "CLI 工具" [ref=e20]:
+            - img
+            - text: CLI 工具
+        - link "素材库" [ref=e21] [cursor=pointer]:
+          - /url: /gallery
+          - button "素材库" [ref=e22]:
+            - img
+            - text: 素材库
+        - link "知识库" [ref=e23] [cursor=pointer]:
+          - /url: /knowledge-base
+          - button "知识库" [ref=e24]:
+            - img
+            - text: 知识库
+        - link "定时任务 10" [ref=e25] [cursor=pointer]:
+          - /url: /scheduled-tasks
+          - button "定时任务 10" [ref=e26]:
+            - img
+            - text: 定时任务
+            - generic [ref=e27]: "10"
+        - link "远程桥接" [ref=e28] [cursor=pointer]:
+          - /url: /bridge
+          - button "远程桥接" [ref=e29]:
+            - img
+            - text: 远程桥接
+      - generic [ref=e31]:
+        - generic [ref=e32]: 对话列表
+        - button "新建项目" [ref=e34]:
+          - img
+          - text: 新建项目
+      - generic [ref=e38]:
+        - generic [ref=e40] [cursor=pointer]:
+          - generic [ref=e41]:
+            - generic [ref=e42]:
+              - generic [ref=e43]: 绘影科技智能体
+              - img [ref=e44]
+            - generic [ref=e46]: / agentHelper
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+        - generic [ref=e49] [cursor=pointer]:
+          - img [ref=e50]
+          - img [ref=e52]
+          - generic [ref=e54]: CodePilot
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+        - generic [ref=e58] [cursor=pointer]:
+          - img [ref=e59]
+          - img [ref=e61]
+          - generic [ref=e63]: No Project
+        - generic [ref=e67] [cursor=pointer]:
+          - img [ref=e68]
+          - img [ref=e70]
+          - generic [ref=e72]: bridge-workspace
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+        - generic [ref=e76] [cursor=pointer]:
+          - img [ref=e77]
+          - img [ref=e79]
+          - generic [ref=e81]: Ps-plugins
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+      - link "设置" [ref=e85] [cursor=pointer]:
+        - /url: /settings
+        - button "设置" [ref=e86]:
+          - img
+          - text: 设置
+    - generic [ref=e89]:
+      - generic [ref=e90]:
+        - generic [ref=e128]:
+          - button "CodePilot" [ref=e129]
+          - generic [ref=e130]: /
+          - generic [ref=e131]:
+            - button "New Chat" [ref=e132]:
+              - generic [ref=e133]: New Chat
+            - button [ref=e134]:
+              - img
+        - generic [ref=e91]:
+          - button "sync/v0.52.1-artifact-preview 6 Git" [ref=e135]:
+            - img
+            - generic [ref=e136]: sync/v0.52.1-artifact-preview
+            - generic [ref=e137]:
+              - img
+              - text: "6"
+            - generic [ref=e93]: Git
+          - button "Toggle Terminal" [ref=e94]:
+            - img
+            - generic [ref=e95]: Toggle Terminal
+          - button "文件树" [ref=e96]:
+            - img
+            - generic [ref=e97]: 文件树
+          - button "看板" [active] [ref=e98]:
+            - img
+            - generic [ref=e99]: 看板
+      - main [ref=e102]:
+        - generic [ref=e138]:
+          - generic [ref=e140]:
+            - img [ref=e142]
+            - generic [ref=e163]:
+              - heading "CodePilot 对话" [level=3] [ref=e164]
+              - paragraph [ref=e165]: 开始与 CodePilot 对话。提问、获取代码帮助或探索想法。
+          - group [ref=e170]:
+            - generic [ref=e172] [cursor=pointer]: Agent 引擎：Claude Code
+            - textbox "Message Claude..." [ref=e173]
+            - group [ref=e174]:
+              - generic [ref=e175]:
+                - button [disabled]:
+                  - img
+                - button [ref=e176]:
+                  - img
+                - button [ref=e177]:
+                  - img
+                - button [ref=e178]:
+                  - img
+                - button [ref=e179]:
+                  - img
+                - button "Qwen 3.6 Plus" [ref=e181]:
+                  - generic [ref=e182]: Qwen 3.6 Plus
+                  - img
+              - button "Submit" [disabled]:
+                - img
+          - generic [ref=e183]:
+            - generic [ref=e184]:
+              - tablist [ref=e186]:
+                - tab "代码" [selected] [ref=e187]:
+                  - img
+                  - text: 代码
+                - tab "计划" [ref=e188]:
+                  - img
+                  - text: 计划
+              - generic [ref=e189]:
+                - button "默认权限" [ref=e190]:
+                  - img
+                  - generic [ref=e191]: 默认权限
+                  - img
+                - button "控制台日志" [ref=e192]:
+                  - img [ref=e193]
+                  - generic [ref=e195]: 控制台日志
+            - button [ref=e197]:
+              - img
+  - generic [ref=e115]:
+    - heading "Global Search" [level=2] [ref=e116]
+    - paragraph [ref=e117]: Search across sessions, messages, and files
+  - button "Open Next.js Dev Tools" [ref=e123] [cursor=pointer]:
+    - img [ref=e124]
+  - alert [ref=e127]
