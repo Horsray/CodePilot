@@ -57,4 +57,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => { ipcRenderer.removeListener('notification:click', listener); };
     },
   },
+  terminal: {
+    create: (opts: any) => ipcRenderer.invoke('terminal:create', opts),
+    write: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
+    resize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
+    kill: (id: string) => ipcRenderer.invoke('terminal:kill', id),
+    onData: (callback: (data: { id: string; data: string }) => void) => {
+      const listener = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('terminal:data', listener);
+      return () => { ipcRenderer.removeListener('terminal:data', listener); };
+    },
+    onExit: (callback: (data: { id: string; exitCode: number }) => void) => {
+      const listener = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('terminal:exit', listener);
+      return () => { ipcRenderer.removeListener('terminal:exit', listener); };
+    },
+  },
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useCallback, useEffect, useMemo, type KeyboardEvent, type FormEvent } from 'react';
-import { Terminal, SpinnerGap, Sparkle, ArrowsCounterClockwise } from "@/components/ui/icon";
+import { Terminal, Toolbox, SpinnerGap, Sparkle, ArrowsCounterClockwise } from "@/components/ui/icon";
 import { useTranslation } from '@/hooks/useTranslation';
 import { showToast } from '@/hooks/useToast';
 import type { TranslationKey } from '@/i18n';
@@ -900,7 +900,7 @@ export function MessageInput({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <PromptInputButton onClick={cliToolsFetch.handleOpenCliPopover}>
-                      <Terminal size={16} />
+                      <Toolbox size={16} />
                     </PromptInputButton>
                   </TooltipTrigger>
                   <TooltipContent>

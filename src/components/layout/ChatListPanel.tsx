@@ -6,18 +6,22 @@ import Link from "next/link";
 import { motion, AnimatePresence } from "motion/react";
 import {
   MagnifyingGlass,
+  Globe,
   FileArrowDown,
   Plus,
   FolderPlus,
   Lightning,
-  Plug,
+  Cube,
   Terminal,
+  Toolbox,
   Image,
-  WifiHigh,
+  ShareNetwork,
   Gear,
   ListBullets,
   BookOpen,
   Timer,
+  MagicWand,
+  Shapes,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -76,6 +80,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     setBottomPanelOpen,
     bottomPanelTab,
     setBottomPanelTab,
+    openBrowserTab,
   } = usePanel();
   const { splitSessions, isSplitActive, activeColumnId, addToSplit, removeFromSplit, setActiveColumn, isInSplit } = useSplit();
   const { t } = useTranslation();
@@ -651,13 +656,13 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
   if (!open) return null;
 
   const navItems = [
-    { href: "/skills", label: t('nav.skills' as TranslationKey), icon: Lightning },
-    { href: "/mcp", label: t('nav.mcp' as TranslationKey), icon: Plug },
-    { href: "/cli-tools", label: t('nav.cliTools' as TranslationKey), icon: Terminal },
-    { href: "/gallery", label: t('nav.gallery' as TranslationKey), icon: Image },
+    { href: "/skills", label: t('nav.skills' as TranslationKey), icon: MagicWand },
+    { href: "/mcp", label: t('nav.mcp' as TranslationKey), icon: Cube },
+    { href: "/cli-tools", label: t('nav.cliTools' as TranslationKey), icon: Toolbox },
+    { href: "/gallery", label: t('nav.gallery' as TranslationKey), icon: Shapes },
     { href: "/knowledge-base", label: t('nav.knowledgeBase' as TranslationKey), icon: BookOpen },
     { href: "/scheduled-tasks", label: t('nav.scheduledTasks' as TranslationKey), icon: Timer },
-    { href: "/bridge", label: t('nav.bridge' as TranslationKey), icon: WifiHigh },
+    { href: "/bridge", label: t('nav.bridge' as TranslationKey), icon: ShareNetwork },
   ];
 
   return (
@@ -672,7 +677,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       </div>
 
       {/* Top action bar: New Chat + Search */}
-      <div className="flex items-center gap-2 px-3 pb-2">
+      <div className="flex items-center gap-1.5 px-3 pb-2">
         <Button
           variant="outline"
           size="sm"
@@ -696,6 +701,20 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{t('chatList.searchSessions')}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              className="h-8 w-8 shrink-0"
+              onClick={() => openBrowserTab('', '新标签页')}
+            >
+              <Globe size={14} />
+              <span className="sr-only">内置浏览器</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">内置浏览器</TooltipContent>
         </Tooltip>
       </div>
 

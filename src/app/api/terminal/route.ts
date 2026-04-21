@@ -26,15 +26,14 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, id, cwd, cols, rows, data } = body;
+    const { action, id, cwd, cols, rows, data, customId } = body;
 
     switch (action) {
       case 'create': {
-        if (!id) {
-          return NextResponse.json({ error: 'id is required' }, { status: 400 });
-        }
-        const session = ensurePtySession(id, cwd || process.cwd(), cols || 120, rows || 30);
-        ensurePtyOutputBuffered(id);
+        // Allow custom ID for AI tools
+        const sessionId = customId || id || 'default';
+        const session = ensurePtySession(sessionId, cwd || process.cwd(), cols || 120, rows || 30);
+        ensurePtyOutputBuffered(sessionId);
 
         return NextResponse.json({ success: true, id: session.id, cwd: session.cwd });
       }

@@ -119,6 +119,11 @@ const en = {
   'settings.claudeCli': 'Claude Code',
   'settings.assistant': 'Assistant',
   'settings.rules': 'Context Rules',
+  'settings.widgets': 'Widgets',
+  'widgets.title': 'Widgets Management',
+  'widgets.description': 'Manage all your generated widgets, set them as permanent, and reorder them.',
+  'widgets.empty': 'No widgets generated yet.',
+  'widgets.globalToggle': 'Pin globally',
   'rules.title': 'Context Rules',
   'rules.description': 'Manage global and project-specific instructions for the AI.',
   'rules.personal': 'Personal Rules',
@@ -1414,7 +1419,7 @@ const en = {
 
   // ── Dashboard ─────────────────────────────────────────────────
   'dashboard.title': 'Dashboard',
-  'dashboard.empty': 'No widgets pinned yet. Pin widgets from chat to build your dashboard.',
+  'dashboard.empty': 'You can ask the agent to generate components in chat',
   'dashboard.exportFailed': 'Export failed',
   'dashboard.refresh': 'Refresh All',
   'dashboard.refreshing': 'Refreshing...',

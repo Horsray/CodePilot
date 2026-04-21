@@ -4,12 +4,14 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import {
   GitBranch,
-  TreeStructure,
+  Folder,
   Globe,
   FileCode,
   PencilSimple,
   DotOutline,
   ChartBar,
+  Terminal,
+  SquaresFour,
   X,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
@@ -44,6 +46,11 @@ export function UnifiedTopBar() {
     closeWorkspaceTab,
     currentBranch,
     gitDirtyCount,
+    openTerminalTab,
+    bottomPanelOpen,
+    setBottomPanelOpen,
+    bottomPanelTab,
+    setBottomPanelTab,
   } = usePanel();
   const { t } = useTranslation();
   const { isWindows } = useClientPlatform();
@@ -212,8 +219,6 @@ export function UnifiedTopBar() {
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-hide pr-2">
             {workspaceTabs.map((tab) => {
               const isActive = activeWorkspaceTabId === tab.id;
-              const isBrowserTab = tab.kind === "browser";
-              const isPreviewTab = tab.kind === "preview";
 
               return (
                 <div
@@ -233,11 +238,13 @@ export function UnifiedTopBar() {
                       : "border-transparent bg-muted/30 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                   }`}
                 >
-                  {isBrowserTab ? (
-                    <Globe size={13} className="shrink-0" />
-                  ) : isPreviewTab ? (
+                  {tab.kind === "preview" ? (
                     <FileCode size={13} className="shrink-0" />
-                  ) : (
+                  ) : tab.kind === "browser" ? (
+                    <Globe size={13} className="shrink-0" />
+                  ) : tab.kind === "terminal" ? (
+                      <Terminal size={13} className="shrink-0" />
+                    ) : (
                     <PencilSimple size={13} className="shrink-0" />
                   )}
                   <span className="max-w-[180px] truncate">{tab.title}</span>
@@ -294,12 +301,35 @@ export function UnifiedTopBar() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
+                    variant={(bottomPanelOpen && bottomPanelTab === "terminal") ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    className={(bottomPanelOpen && bottomPanelTab === "terminal") ? "" : "text-muted-foreground hover:text-foreground"}
+                    onClick={() => {
+                      if (bottomPanelOpen && bottomPanelTab === "terminal") {
+                        setBottomPanelOpen(false);
+                      } else {
+                        setBottomPanelTab("terminal");
+                        setBottomPanelOpen(true);
+                        setTimeout(() => window.dispatchEvent(new CustomEvent('action:focus-terminal')), 50);
+                      }
+                    }}
+                  >
+                    <Terminal size={16} />
+                    <span className="sr-only">Toggle Terminal</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Toggle Terminal</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
                     variant={fileTreeOpen ? "secondary" : "ghost"}
                     size="icon-sm"
                     className={fileTreeOpen ? "" : "text-muted-foreground hover:text-foreground"}
                     onClick={() => setFileTreeOpen(!fileTreeOpen)}
                   >
-                    <TreeStructure size={16} />
+                    <Folder size={16} weight={fileTreeOpen ? "fill" : "regular"} />
                     <span className="sr-only">{t('topBar.fileTree')}</span>
                   </Button>
                 </TooltipTrigger>
@@ -319,7 +349,7 @@ export function UnifiedTopBar() {
                           src={buddySpecies ? (SPECIES_IMAGE_URL[buddySpecies as Species] || '') : EGG_IMAGE_URL}
                           alt="" width={16} height={16} className="rounded-sm"
                         />
-                      : <ChartBar size={16} />}
+                      : <SquaresFour size={16} />}
                     <span className="sr-only">{t('topBar.dashboard')}</span>
                   </Button>
                 </TooltipTrigger>

@@ -7,8 +7,8 @@ import { useGitStatus } from "@/hooks/useGitStatus";
 export type PanelContent = "files" | "tasks";
 
 export type PreviewViewMode = "source" | "rendered";
-export type BottomPanelTab = "console";
-export type WorkspaceTabKind = "preview";
+export type BottomPanelTab = "console" | "terminal";
+export type WorkspaceTabKind = "preview" | "browser" | "terminal";
 
 export interface WorkspaceTab {
   id: string;
@@ -18,6 +18,7 @@ export interface WorkspaceTab {
   url?: string;
   filePath?: string;
   sessionId?: string;
+  terminalId?: string;
 }
 
 export interface PanelContextValue {
@@ -43,6 +44,9 @@ export interface PanelContextValue {
   activeWorkspaceTabId: string | null;
   setActiveWorkspaceTabId: (id: string | null) => void;
   openPreviewTab: (path: string) => void;
+  openBrowserTab: (url: string, title?: string) => void;
+  openTerminalTab: (terminalId?: string, title?: string) => void;
+  updateWorkspaceTab: (id: string, updates: Partial<WorkspaceTab>) => void;
   closeWorkspaceTab: (id: string) => void;
 
   currentBranch: string;
@@ -90,6 +94,9 @@ export function usePanel(): PanelContextValue {
     currentBranch,
     gitDirtyCount,
     openPreviewTab: (path: string) => store.openPreviewTab(path, defaultViewMode),
+    openBrowserTab: store.openBrowserTab,
+    openTerminalTab: store.openTerminalTab,
+    updateWorkspaceTab: store.updateWorkspaceTab,
     setPreviewFile: (path: string | null) => store.setPreviewFile(path, defaultViewMode),
   }), [store, currentBranch, gitDirtyCount]);
 }

@@ -1,18 +1,22 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
+/**
+ * TODO_MCP_SYSTEM_PROMPT: 任务管理 MCP 服务器的系统提示词。
+ * 告知大语言模型如何使用 mcp__codepilot-todo__TodoWrite 或 TodoWrite 工具来规划和管理任务列表。
+ */
 export const TODO_MCP_SYSTEM_PROMPT = `## Task Management
-- Use the TodoWrite tool to create and manage a structured task list for your current session. This helps the user track progress and understand your plan for complex tasks.
+- Use the mcp__codepilot-todo__TodoWrite tool (or TodoWrite if available natively) to create and manage a structured task list for your current session. This helps the user track progress and understand your plan for complex tasks.
 - You MUST use this tool proactively in these scenarios:
   - When starting ANY task that requires modifying code or executing commands.
   - When starting a task that requires 3 or more distinct steps.
   - When the user provides a list of multiple requirements to be addressed.
-- **CRITICAL**: If a task requires a plan, you MUST NOT start tool work (Read, Grep, Edit, Bash, etc.) until the task list exists via TodoWrite.
+- **CRITICAL**: If a task requires a plan, you MUST NOT start tool work (Read, Grep, Edit, Bash, etc.) until the task list exists via the tool.
 - Update the status of tasks in real-time as you progress (pending -> in_progress -> completed/failed).
 - Keep exactly one task in_progress while work is active. Mark tasks completed as soon as evidence exists.
 - **CRITICAL**: You MUST NOT leave any task in "in_progress" state when you yield back to the user. If you encounter an error or cannot finish a step, mark it as "failed" and optionally add new recovery steps to the plan.
-- **Skill Crystallization**: If you successfully complete a complex workflow (e.g., resolving a difficult bug, configuring a new environment, creating a reusable script) that involved multiple tool calls and debugging, you MUST call \`codepilot_skill_create\` at the very end to save your successful steps as a reusable SKILL.md file before finishing the conversation.
-- STRICT PROHIBITION: NEVER output step-by-step plans, checklists, or numbered task lists in plain Markdown text. You MUST exclusively use the TodoWrite tool.`;
+- **Skill Crystallization**: If you successfully complete a complex workflow (e.g., resolving a difficult bug, configuring a new environment, creating a reusable script) that involved multiple tool calls and debugging, you MUST call \`mcp__codepilot-todo__codepilot_skill_create\` at the very end to save your successful steps as a reusable SKILL.md file before finishing the conversation.
+- STRICT PROHIBITION: NEVER output step-by-step plans, checklists, or numbered task lists in plain Markdown text. You MUST exclusively use the task management tool.`;
 
 export function createTodoMcpServer(workspacePath: string) {
   return createSdkMcpServer({

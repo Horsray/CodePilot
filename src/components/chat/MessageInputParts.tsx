@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useCallback } from 'react';
-import { ArrowUp, Plus, X, Stop, Terminal, Brain, NotePencil, Lightning, File as FileIcon, Folder } from '@/components/ui/icon';
+import { ArrowUp, Plus, X, Stop, Toolbox, Brain, NotePencil, Lightning, File as FileIcon, Folder } from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
@@ -252,7 +252,7 @@ export function CliBadge({
   return (
     <div className="flex w-full items-center gap-1.5 px-3 pt-2.5 pb-0 order-first">
       <span className="inline-flex items-center gap-1.5 rounded-full bg-status-success-muted text-status-success-foreground pl-2.5 pr-1.5 py-1 text-xs font-medium border border-status-success-border">
-        <Terminal size={12} />
+        <Toolbox size={12} />
         <span>CLI: {name}</span>
         <Button
           type="button"

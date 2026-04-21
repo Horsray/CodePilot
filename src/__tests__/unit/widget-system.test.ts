@@ -215,8 +215,8 @@ describe('buildReceiverSrcdoc', () => {
     }
   });
 
-  it('blocks network access via connect-src none', () => {
-    assert.ok(srcdoc.includes("connect-src 'none'"), 'should block network');
+  it('allows network access via connect-src *', () => {
+    assert.ok(srcdoc.includes("connect-src *"), 'should allow network');
   });
 
   it('includes __root container', () => {

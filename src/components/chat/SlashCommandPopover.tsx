@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { Terminal, NotePencil, Brain, GlobeSimple, Lightning, Folder, File } from '@/components/ui/icon';
+import { Terminal, NotePencil, Brain, GlobeSimple, Lightning, Folder, File, X, MagicWand, Toolbox } from '@/components/ui/icon';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import type { PopoverItem, PopoverMode } from '@/types';
@@ -107,13 +107,13 @@ export function SlashCommandPopover({
       ) : item.builtIn && item.icon ? (
         (() => { const ItemIcon = item.icon; return <ItemIcon size={16} className="shrink-0 text-muted-foreground" />; })()
       ) : item.kind === 'agent_skill' ? (
-        <Brain size={16} className="shrink-0 text-muted-foreground" />
+        <MagicWand size={16} className="shrink-0 text-muted-foreground" />
       ) : item.kind === 'slash_command' ? (
         <NotePencil size={16} className="shrink-0 text-muted-foreground" />
       ) : !item.builtIn ? (
         <GlobeSimple size={16} className="shrink-0 text-muted-foreground" />
       ) : (
-        <Terminal size={16} className="shrink-0 text-muted-foreground" />
+        <Toolbox size={16} className="shrink-0 text-muted-foreground" />
       )}
       <span className="font-mono text-xs truncate">{item.display || item.label}</span>
       {(item.descriptionKey || item.description) && (
@@ -198,7 +198,7 @@ export function SlashCommandPopover({
         {popoverMode === 'skill' && (
           <CommandListFooter>
             <CommandListFooterAction onClick={() => { onClosePopover(); window.location.href = '/skills'; }}>
-              <Lightning size={14} />
+              <MagicWand size={14} />
               {t('composer.manageSkills' as TranslationKey)}
             </CommandListFooterAction>
           </CommandListFooter>

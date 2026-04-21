@@ -270,9 +270,8 @@ export function DashboardPanel() {
           {/* Top slot for TaskList and Context Compression */}
           {sessionId && <div className="border-b border-border/40 mx-4"><TaskList sessionId={sessionId} /></div>}
           <div className="mx-4" id="dashboard-context-slot" />
+          <div className="h-[1px] w-[calc(100%-2rem)] mx-auto bg-border/40 shrink-0" />
           
-          <div className="border-t border-border/40" />
-
           {loading ? (
             <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
               {t('common.loading' as TranslationKey)}
@@ -283,9 +282,8 @@ export function DashboardPanel() {
                 <AssistantStatusCard summary={assistantSummary} t={t} />
               )}
               {!(isAssistantWorkspace && assistantSummary?.configured) && (
-                <div className="flex flex-col items-center justify-center flex-1 text-center text-muted-foreground">
-                  <ChartBar size={32} className="mb-3 opacity-40" />
-                  <p className="text-sm">{t('dashboard.empty')}</p>
+                <div className="flex flex-col items-center justify-center flex-1 text-center text-muted-foreground/60 py-8">
+                  <p className="text-xs">{t('dashboard.empty')}</p>
                 </div>
               )}
             </div>
@@ -334,16 +332,9 @@ function DashboardWidgetCard({ widget, refreshing, isFirst, isLast, style, onRef
 
   return (
     <div className="group/card relative rounded-lg overflow-hidden" style={style}>
-      {/* Permanent title bar */}
-      <div className="flex items-center justify-between px-2 py-1.5">
-        <button
-          className="text-xs font-medium text-foreground/70 truncate hover:text-foreground transition-colors text-left"
-          onClick={() => window.dispatchEvent(new CustomEvent('dashboard-widget-drilldown', { detail: { title: widget.title, dataContract: widget.dataContract } }))}
-          title={t('dashboard.drilldown')}
-        >
-          {widget.title}
-        </button>
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/card:opacity-100 transition-opacity">
+      {/* Permanent title bar - Removed the text title, but kept the hover actions container */}
+      <div className="absolute top-0 right-0 z-10 px-2 py-1.5 flex justify-end w-full bg-gradient-to-b from-background/50 to-transparent opacity-0 group-hover/card:opacity-100 transition-opacity pointer-events-none">
+        <div className="flex items-center gap-0.5 shrink-0 pointer-events-auto bg-background/80 backdrop-blur rounded-md p-0.5 shadow-sm border border-border/40">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -403,7 +394,6 @@ function DashboardWidgetCard({ widget, refreshing, isFirst, isLast, style, onRef
           </Button>
         </div>
       </div>
-
       {/* Shimmer overlay during refresh */}
       {refreshing && (
         <div className="absolute inset-0 z-5 bg-background/30 backdrop-blur-[1px] flex items-center justify-center">

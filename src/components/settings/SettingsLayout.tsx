@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useSyncExternalStore } from "react";
-import { type Icon, Gear, Code, UserCircle, Plug, ChartBar, BookOpen } from "@/components/ui/icon";
+import { type Icon, Gear, Code, UserCircle, Plug, ChartBar, BookOpen, SquaresFour } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { GeneralSection } from "./GeneralSection";
@@ -11,10 +11,11 @@ import { UsageStatsSection } from "./UsageStatsSection";
 import { AssistantWorkspaceSection } from "./AssistantWorkspaceSection";
 import { LangOptSettingsSection } from "./LangOptSettingsSection";
 import { RulesSection } from "./RulesSection";
+import { WidgetsSection } from "./WidgetsSection";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
 
-type Section = "general" | "providers" | "cli" | "usage" | "assistant" | "rules";
+type Section = "general" | "providers" | "cli" | "usage" | "assistant" | "rules" | "widgets";
 
 interface SidebarItem {
   id: Section;
@@ -25,6 +26,7 @@ interface SidebarItem {
 const sidebarItems: SidebarItem[] = [
   { id: "general", label: "General", icon: Gear },
   { id: "rules", label: "Rules", icon: BookOpen },
+  { id: "widgets", label: "Widgets", icon: SquaresFour },
   { id: "providers", label: "Providers", icon: Plug },
   { id: "cli", label: "Claude CLI", icon: Code },
   { id: "usage", label: "Usage", icon: ChartBar },
@@ -58,6 +60,7 @@ export function SettingsLayout() {
   const settingsLabelKeys: Record<string, TranslationKey> = {
     'General': 'settings.general',
     'Rules': 'settings.rules',
+    'Widgets': 'settings.widgets',
     'Providers': 'settings.providers',
     'Claude CLI': 'settings.claudeCli',
     'Usage': 'settings.usage',
@@ -114,6 +117,7 @@ export function SettingsLayout() {
             </div>
           )}
           {activeSection === "rules" && <RulesSection />}
+          {activeSection === "widgets" && <WidgetsSection />}
         </div>
       </div>
     </div>

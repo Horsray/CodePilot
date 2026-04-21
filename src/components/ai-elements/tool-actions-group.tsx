@@ -3,10 +3,10 @@
 import React, { useState, createElement } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Icon } from '@phosphor-icons/react';
+import { TerminalWindow } from '@phosphor-icons/react';
 import {
   File,
   NotePencil,
-  TerminalWindow,
   MagnifyingGlass,
   Wrench,
   SpinnerGap,
@@ -38,6 +38,9 @@ import { Shimmer } from '@/components/ai-elements/shimmer';
 import { useStickToBottomContext } from 'use-stick-to-bottom';
 import { Streamdown } from 'streamdown';
 import { cjk } from '@streamdown/cjk';
+import { usePanelStore } from "@/store/usePanelStore";
+
+const LOCAL_URL_REGEX = /(https?:\/\/(?:localhost|127\.0\.0\.1):\d+)/i;
 import { math } from '@streamdown/math';
 import { mermaid } from '@streamdown/mermaid';
 
@@ -709,7 +712,31 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
             style={{ overflow: 'hidden' }}
           >
             <div className="px-3 py-2 text-[12px] text-foreground/80 prose prose-sm dark:prose-invert max-w-none border-l-2 border-violet-500/20 ml-3">
-              <Streamdown plugins={thinkingPlugins}>{content}</Streamdown>
+              <Streamdown
+                plugins={thinkingPlugins}
+                components={{
+                  a: ({ node, href, children, ...aProps }: any) => {
+                    return (
+                      <a
+                        href={href}
+                        {...aProps}
+                        onClick={(e) => {
+                          if (href && LOCAL_URL_REGEX.test(href)) {
+                            e.preventDefault();
+                            usePanelStore.getState().openBrowserTab(href, "本地预览");
+                          } else if (aProps.onClick) {
+                            aProps.onClick(e);
+                          }
+                        }}
+                      >
+                        {children}
+                      </a>
+                    );
+                  }
+                }}
+              >
+                {content}
+              </Streamdown>
             </div>
           </motion.div>
         )}
@@ -848,6 +875,20 @@ function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rew
   
   // Unconditional hook calls at the top level
   const [expanded, setExpanded] = useState(status === 'running');
+  const prevStatusRef = React.useRef(status);
+
+  React.useEffect(() => {
+    // Special side-effect for opening browser panel when the tool completes
+    if (tool.name === 'codepilot_open_browser' && prevStatusRef.current === 'running' && status === 'success') {
+      const input = tool.input as { url?: string; title?: string } | undefined;
+      if (input?.url) {
+        window.dispatchEvent(new CustomEvent('action:open-browser-panel', {
+          detail: { url: input.url, title: input.title }
+        }));
+      }
+    }
+    prevStatusRef.current = status;
+  }, [tool.name, status, tool.input]);
 
   React.useEffect(() => {
     if (status === 'running') {
@@ -1275,7 +1316,31 @@ export function ToolActionsGroup({
         flushLineGroup();
         blocks.push(
           <div key={`text-${idx}`} className="my-1.5 px-2 text-[12px] text-muted-foreground/60 leading-relaxed break-words prose prose-sm dark:prose-invert max-w-none">
-            <Streamdown plugins={thinkingPlugins}>{segment.content}</Streamdown>
+            <Streamdown
+              plugins={thinkingPlugins}
+              components={{
+                a: ({ node, href, children, ...aProps }: any) => {
+                  return (
+                    <a
+                      href={href}
+                      {...aProps}
+                      onClick={(e) => {
+                        if (href && LOCAL_URL_REGEX.test(href)) {
+                          e.preventDefault();
+                          usePanelStore.getState().openBrowserTab(href, "本地预览");
+                        } else if (aProps.onClick) {
+                          aProps.onClick(e);
+                        }
+                      }}
+                    >
+                      {children}
+                    </a>
+                  );
+                }
+              }}
+            >
+              {segment.content}
+            </Streamdown>
           </div>
         );
       } else if (segment.kind === 'context_group') {

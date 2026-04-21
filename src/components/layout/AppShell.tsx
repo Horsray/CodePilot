@@ -77,6 +77,8 @@ function defaultViewMode(filePath: string): PreviewViewMode {
 
 const LG_BREAKPOINT = 1024;
 
+import { BrowserTabView } from "@/components/layout/BrowserTabView";
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -85,6 +87,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupInitialCard, setSetupInitialCard] = useState<'claude' | 'provider' | 'project' | undefined>();
   const [searchOpen, setSearchOpen] = useState(false);
+  const store = usePanelStore();
 
   useGlobalSearchShortcut(() => setSearchOpen(true));
 
@@ -113,6 +116,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     window.addEventListener('open-setup-center', handler);
     return () => window.removeEventListener('open-setup-center', handler);
   }, []);
+
+  // Listen for open-browser-panel events
+  useEffect(() => {
+    const handleOpenBrowser = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const { url, title } = customEvent.detail || {};
+      if (url) {
+        store.openBrowserTab(url, title);
+      }
+    };
+    window.addEventListener("action:open-browser-panel", handleOpenBrowser);
+    return () => window.removeEventListener("action:open-browser-panel", handleOpenBrowser);
+  }, [store]);
+
+  useEffect(() => {
+    const handleOpenTerminal = (event: Event) => {
+      store.setBottomPanelTab("terminal");
+      store.setBottomPanelOpen(true);
+      setTimeout(() => window.dispatchEvent(new CustomEvent('action:focus-terminal')), 50);
+    };
+    window.addEventListener("action:open-terminal-panel", handleOpenTerminal);
+    return () => window.removeEventListener("action:open-terminal-panel", handleOpenTerminal);
+  }, [store]);
 
   // Hash bridge: error messages render `[Open Settings](/settings#providers)`
   // markdown links as fallback when the frontend cannot directly dispatch the
@@ -168,12 +194,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Panel state — chatListOpen is no longer gated by route (sidebar always visible)
-  const isChatRoute = pathname.startsWith("/chat/") || pathname === "/chat";
+  const isChatRoute = pathname === "/chat" || pathname.startsWith("/chat/");
   const chatListOpen = chatListOpenRaw;
 
 
   // --- New independent panel states ---
-  const store = usePanelStore();
 
   // Listen for global stream events from stream-session-manager
   useEffect(() => {
@@ -416,6 +441,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       activeWorkspaceTabId: store.activeWorkspaceTabId,
       setActiveWorkspaceTabId: store.setActiveWorkspaceTabId,
       openPreviewTab: (p: string) => store.openPreviewTab(p, defaultViewMode),
+      openBrowserTab: store.openBrowserTab,
+      openTerminalTab: store.openTerminalTab,
+      updateWorkspaceTab: store.updateWorkspaceTab,
       closeWorkspaceTab: store.closeWorkspaceTab,
     }),
     [store, gitStatus?.branch, gitStatus?.changedFiles?.length]
@@ -458,6 +486,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                               standalone
                               filePath={activeWorkspaceTab.filePath}
                               onClose={() => store.closeWorkspaceTab(activeWorkspaceTab.id)}
+                            />
+                          ) : activeWorkspaceTab.kind === "browser" ? (
+                            <BrowserTabView
+                              initialUrl={activeWorkspaceTab.url}
+                              onMetaChange={(meta) => {
+                                store.updateWorkspaceTab(activeWorkspaceTab.id, {
+                                  title: meta.title || "新标签页",
+                                  url: meta.url || activeWorkspaceTab.url
+                                });
+                              }}
                             />
                           ) : null}
                         </div>

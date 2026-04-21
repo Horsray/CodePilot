@@ -11,6 +11,8 @@ import type { IPty } from 'node-pty';
 import { appendTerminalOutput } from './terminal-output-store';
 
 // node-pty is native; lazy-load it inside the Node runtime.
+import * as ptyModule from 'node-pty';
+
 let pty: typeof import('node-pty') | null = null;
 let ptyLoadError: Error | null = null;
 
@@ -18,8 +20,7 @@ function getPty() {
   if (ptyLoadError) return null;
   if (!pty) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      pty = require('node-pty');
+      pty = ptyModule;
     } catch (err) {
       ptyLoadError = err instanceof Error ? err : new Error(String(err));
       console.error('[pty-manager] Failed to load node-pty:', ptyLoadError);
@@ -121,8 +122,16 @@ export function createPtySession(id: string, cwd: string, cols = 120, rows = 30)
     }
   }
 
-  // Fallback to child_process.spawn (limited functionality)
-  const proc = spawn(shell, shellArgs, {
+  let fallbackShell = shell;
+  let fallbackArgs = shellArgs;
+  let usePty = false;
+
+  // Only use script fallback if we can spawn it inside another PTY (not helpful here because script needs a real PTY on its own stdio to work)
+  // Instead, we just spawn bash directly. It will not have a TTY so prompt won't show by default,
+  // but we can force it to act interactive by passing -i
+  fallbackArgs = ['-i'];
+
+  const proc = spawn(fallbackShell, fallbackArgs, {
     cwd: cwd || os.homedir(),
     env: env as NodeJS.ProcessEnv,
     stdio: ['pipe', 'pipe', 'pipe'],

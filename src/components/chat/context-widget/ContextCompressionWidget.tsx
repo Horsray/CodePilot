@@ -174,7 +174,7 @@ export function ContextCompressionWidget({
   }
 
   return (
-    <div className={cn("shrink-0", detailsExpanded ? "pt-4 pb-3" : "py-4")}>
+    <div className={cn("shrink-0 py-4")}>
       {/* Header */}
         <div className="flex items-center justify-between mb-3">
           <div 

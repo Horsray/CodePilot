@@ -3,9 +3,6 @@ import pkg from "./package.json" with { type: "json" };
 
 const nextConfig: NextConfig = {
   output: 'standalone',
-  // 中文注释：禁用 Turbopack，使用 Webpack 构建
-  // Turbopack 与自定义 webpack 配置不兼容
-  turbopack: {},
   // 中文注释：Webpack 配置 - 确保关键依赖正确打包，避免运行时 chunk 加载失败
   webpack: (config, { isServer }) => {
     // 修复 mermaid 相关包的代码分割问题

@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState, useEffect } from "react";
 import { usePanel } from "./usePanel";
+import { LocalUrlDetector } from "@/lib/url-detector";
 
 function resolveTerminalUrl(pathname: string): string {
   if (typeof window === "undefined") return `http://localhost:3000${pathname}`;
@@ -20,9 +21,13 @@ function resolveTerminalUrl(pathname: string): string {
  */
 export function useWebTerminal() {
   const { workingDirectory, sessionId } = usePanel();
+  const isElectron = typeof window !== "undefined" && !!(window as any).electronAPI?.terminal;
   const terminalId = `agent-terminal-${sessionId || "default"}`;
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
+  const [isElectronState] = useState(
+    () => typeof window !== "undefined" && !!(window as any).electronAPI?.terminal
+  );
   const [reconnectCount, setReconnectCount] = useState(0);
   const terminalIdRef = useRef<string>(terminalId);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -32,6 +37,10 @@ export function useWebTerminal() {
   const reconnectCountRef = useRef<number>(0);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const urlDetectorRef = useRef(new LocalUrlDetector());
+
+  const unsubDataRef = useRef<(() => void) | null>(null);
+  const unsubExitRef = useRef<(() => void) | null>(null);
 
   // Keep refs in sync
   useEffect(() => {
@@ -42,7 +51,45 @@ export function useWebTerminal() {
     reconnectCountRef.current = reconnectCount;
   }, [reconnectCount]);
 
-  const create = useCallback(async (cols: number, rows: number) => {
+  const create = useCallback(async (cols: number, rows: number, customId?: string) => {
+    const id = customId || terminalId;
+
+    if (isElectronState) {
+      const api = (window as any).electronAPI?.terminal;
+      if (!api) return;
+
+      if (terminalIdRef.current && terminalIdRef.current !== id) {
+        try { await api.kill(terminalIdRef.current); } catch {}
+      }
+
+      terminalIdRef.current = id;
+      setConnected(false);
+      setExited(false);
+      urlDetectorRef.current.reset();
+
+      unsubDataRef.current?.();
+      unsubExitRef.current?.();
+
+      unsubDataRef.current = api.onData((data: any) => {
+        if (data.id === id && data.data) {
+          urlDetectorRef.current.handleData(data.data);
+          onDataCallbackRef.current?.(data.data);
+        }
+      });
+
+      unsubExitRef.current = api.onExit((data: any) => {
+        if (data.id === id) {
+          setConnected(false);
+          setExited(true);
+          onExitCallbackRef.current?.(data.exitCode ?? 0);
+        }
+      });
+
+      await api.create({ id, cwd: workingDirectory || undefined, cols, rows });
+      setConnected(true);
+      return;
+    }
+
     const apiUrl = resolveTerminalUrl("/api/terminal");
 
     if (reconnectTimerRef.current) {
@@ -52,10 +99,10 @@ export function useWebTerminal() {
 
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
-    const id = terminalId;
     terminalIdRef.current = id;
     setConnected(false);
     setExited(false);
+    urlDetectorRef.current.reset();
 
     try {
       const res = await fetch(apiUrl, {
@@ -63,7 +110,7 @@ export function useWebTerminal() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "create",
-          id,
+          id: customId || terminalId,
           cwd: workingDirectory || undefined,
           cols,
           rows,
@@ -75,19 +122,24 @@ export function useWebTerminal() {
         throw new Error(data.error || "Failed to create terminal");
       }
 
-      const streamUrl = resolveTerminalUrl(`/api/terminal/stream?id=${encodeURIComponent(id)}`);
+      // If backend gave us an ID, use it
+      const responseData = await res.json().catch(() => ({ id }));
+      const actualId = responseData.id || id;
+      terminalIdRef.current = actualId;
+
+      const streamUrl = resolveTerminalUrl(`/api/terminal/stream?id=${encodeURIComponent(actualId)}`);
       const es = new EventSource(streamUrl);
       eventSourceRef.current = es;
 
       es.onopen = () => {
-        if (terminalIdRef.current === id) {
+        if (terminalIdRef.current === actualId) {
           setConnected(true);
           setReconnectCount(0);
         }
       };
 
       es.onmessage = (event) => {
-        if (terminalIdRef.current !== id) return;
+        if (terminalIdRef.current !== actualId) return;
         
         try {
           const message = JSON.parse(event.data);
@@ -98,6 +150,7 @@ export function useWebTerminal() {
           }
 
           if (message.type === "output") {
+            urlDetectorRef.current.handleData(message.data);
             onDataCallbackRef.current?.(message.data);
             return;
           }
@@ -117,7 +170,7 @@ export function useWebTerminal() {
       };
 
       es.onerror = () => {
-        if (terminalIdRef.current !== id) return;
+        if (terminalIdRef.current !== actualId) return;
         setConnected(false);
         es.close();
         
@@ -126,7 +179,7 @@ export function useWebTerminal() {
           const delay = Math.min(1000 * Math.pow(2, reconnectCountRef.current), 10000);
           reconnectTimerRef.current = setTimeout(() => {
             setReconnectCount(c => c + 1);
-            void create(cols, rows);
+            void create(cols, rows, customId);
           }, delay);
         }
       };
@@ -137,10 +190,16 @@ export function useWebTerminal() {
       setExited(true);
       throw err instanceof Error ? new Error(message, { cause: err }) : new Error(message);
     }
-  }, [terminalId, workingDirectory]);
+  }, [terminalId, workingDirectory, isElectronState]);
 
   const write = useCallback(async (data: string) => {
     if (!terminalIdRef.current) return;
+
+    if (isElectronState) {
+      const api = (window as any).electronAPI?.terminal;
+      if (api) api.write(terminalIdRef.current, data);
+      return;
+    }
     
     try {
       await fetch(resolveTerminalUrl("/api/terminal"), {
@@ -153,10 +212,17 @@ export function useWebTerminal() {
         }),
       });
     } catch { /* ignore */ }
-  }, []);
+  }, [isElectronState]);
 
   const resize = useCallback(async (cols: number, rows: number) => {
     if (!terminalIdRef.current) return;
+
+    if (isElectronState) {
+      const api = (window as any).electronAPI?.terminal;
+      if (api) await api.resize(terminalIdRef.current, cols, rows);
+      return;
+    }
+
     try {
       await fetch(resolveTerminalUrl("/api/terminal"), {
         method: "POST",
@@ -169,10 +235,21 @@ export function useWebTerminal() {
         }),
       });
     } catch { /* ignore */ }
-  }, []);
+  }, [isElectronState]);
 
   const kill = useCallback(async () => {
     if (!terminalIdRef.current) return;
+
+    if (isElectronState) {
+      const api = (window as any).electronAPI?.terminal;
+      if (api) {
+        try { await api.kill(terminalIdRef.current); } catch {}
+      }
+      terminalIdRef.current = "";
+      setConnected(false);
+      return;
+    }
+
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
     try {
@@ -184,7 +261,7 @@ export function useWebTerminal() {
     } catch { /* ignore */ }
     terminalIdRef.current = "";
     setConnected(false);
-  }, []);
+  }, [isElectronState]);
 
   const setOnData = useCallback((cb: (data: string) => void) => {
     onDataCallbackRef.current = cb;
@@ -196,6 +273,9 @@ export function useWebTerminal() {
 
   useEffect(() => {
     cleanupRef.current = () => {
+      unsubDataRef.current?.();
+      unsubExitRef.current?.();
+
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
     };
@@ -208,6 +288,7 @@ export function useWebTerminal() {
   return {
     connected,
     exited,
+    isElectron: isElectronState,
     create,
     write,
     resize,

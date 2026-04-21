@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
       const url = `${GEO_API}?name=${encodeURIComponent(name)}&count=5&language=zh`;
       const res = await fetch(url, { next: { revalidate: 3600 } });
       const data = await res.json();
-      return NextResponse.json(data);
+      return NextResponse.json(data.results || []);
 
     } else if (action === 'weather') {
       // 天气查询
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
       const lon = searchParams.get('lon');
       if (!lat || !lon) return NextResponse.json({ error: 'Missing lat/lon' }, { status: 400 });
 
-      const url = `${WEATHER_API}?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=3`;
+      const url = `${WEATHER_API}?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&current_weather=true&timezone=auto&forecast_days=3`;
       const res = await fetch(url, { next: { revalidate: 1800 } });
       const data = await res.json();
       return NextResponse.json(data);

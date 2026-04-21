@@ -24,6 +24,9 @@ import { execFileSync, spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import net from 'net';
 import os from 'os';
+import { TerminalManager } from './terminal-manager';
+
+const terminalManager = new TerminalManager();
 
 /**
  * Return a copy of process.env without __NEXT_PRIVATE_* variables.
@@ -861,6 +864,35 @@ app.whenReady().then(async () => {
     const iconPath = getIconPath();
     app.dock.setIcon(nativeImage.createFromPath(iconPath));
   }
+
+  // --- Terminal IPC handlers ---
+  ipcMain.handle('terminal:create', (e, opts) => {
+    terminalManager.create(opts.id, opts);
+  });
+
+  ipcMain.handle('terminal:write', (e, id, data) => {
+    terminalManager.write(id, data);
+  });
+
+  ipcMain.handle('terminal:resize', (e, id, cols, rows) => {
+    terminalManager.resize(id, cols, rows);
+  });
+
+  ipcMain.handle('terminal:kill', (e, id) => {
+    terminalManager.kill(id);
+  });
+
+  terminalManager.setOnData((id, data) => {
+    BrowserWindow.getAllWindows().forEach((w) => {
+      w.webContents.send('terminal:data', { id, data });
+    });
+  });
+
+  terminalManager.setOnExit((id, exitCode) => {
+    BrowserWindow.getAllWindows().forEach((w) => {
+      w.webContents.send('terminal:exit', { id, exitCode });
+    });
+  });
 
   // --- Install wizard IPC handlers ---
 

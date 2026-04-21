@@ -109,7 +109,13 @@ export class TerminalManager {
       console.error('[terminal-manager] node-pty spawn failed, fallback to child_process.spawn:', err);
     }
 
-    const child = spawn(shell, shellArgs, {
+    let fallbackShell = shell;
+    let fallbackArgs = shellArgs;
+    
+    // For non-PTY fallback, just use -i to force interactive shell
+    fallbackArgs = ['-i'];
+
+    const child = spawn(fallbackShell, fallbackArgs, {
       cwd: resolvedCwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],

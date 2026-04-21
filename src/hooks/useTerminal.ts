@@ -6,7 +6,7 @@ import { usePanel } from "./usePanel";
 export function useTerminal() {
   const { workingDirectory, sessionId, terminalOpen } = usePanel();
   const [isElectron] = useState(
-    () => typeof window !== "undefined" && !!window.electronAPI?.terminal
+    () => typeof window !== "undefined" && !!(window as any).electronAPI?.terminal
   );
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
@@ -16,7 +16,7 @@ export function useTerminal() {
   const onDataCallbackRef = useRef<((data: string) => void) | null>(null);
 
   const create = useCallback(async (cols: number, rows: number) => {
-    const api = window.electronAPI?.terminal;
+    const api = (window as any).electronAPI?.terminal;
     if (!api || !workingDirectory) return;
 
     // Kill previous terminal for this session
@@ -36,13 +36,13 @@ export function useTerminal() {
     unsubDataRef.current?.();
     unsubExitRef.current?.();
 
-    unsubDataRef.current = api.onData((data) => {
+    unsubDataRef.current = api.onData((data: any) => {
       if (data.id === id) {
         onDataCallbackRef.current?.(data.data);
       }
     });
 
-    unsubExitRef.current = api.onExit((data) => {
+    unsubExitRef.current = api.onExit((data: any) => {
       if (data.id === id) {
         setConnected(false);
         setExited(true);
@@ -54,19 +54,19 @@ export function useTerminal() {
   }, [workingDirectory, sessionId]);
 
   const write = useCallback((data: string) => {
-    const api = window.electronAPI?.terminal;
+    const api = (window as any).electronAPI?.terminal;
     if (!api || !terminalIdRef.current) return;
     api.write(terminalIdRef.current, data);
   }, []);
 
   const resize = useCallback(async (cols: number, rows: number) => {
-    const api = window.electronAPI?.terminal;
+    const api = (window as any).electronAPI?.terminal;
     if (!api || !terminalIdRef.current) return;
     await api.resize(terminalIdRef.current, cols, rows);
   }, []);
 
   const kill = useCallback(async () => {
-    const api = window.electronAPI?.terminal;
+    const api = (window as any).electronAPI?.terminal;
     if (!api || !terminalIdRef.current) return;
     try {
       await api.kill(terminalIdRef.current);
@@ -86,8 +86,8 @@ export function useTerminal() {
     return () => {
       unsubDataRef.current?.();
       unsubExitRef.current?.();
-      if (terminalIdRef.current && window.electronAPI?.terminal) {
-        window.electronAPI.terminal.kill(terminalIdRef.current).catch(() => {});
+      if (terminalIdRef.current && (window as any).electronAPI?.terminal) {
+        (window as any).electronAPI.terminal.kill(terminalIdRef.current).catch(() => {});
       }
     };
   }, []);

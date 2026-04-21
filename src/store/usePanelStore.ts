@@ -26,6 +26,9 @@ interface PanelStore {
   activeWorkspaceTabId: string | null;
   setActiveWorkspaceTabId: (id: string | null) => void;
   openPreviewTab: (path: string, defaultViewMode: (path: string) => PreviewViewMode) => void;
+  openBrowserTab: (url: string, title?: string) => void;
+  openTerminalTab: (terminalId?: string, title?: string) => void;
+  updateWorkspaceTab: (id: string, updates: Partial<WorkspaceTab>) => void;
   closeWorkspaceTab: (id: string) => void;
   currentWorktreeLabel: string;
   setCurrentWorktreeLabel: (label: string) => void;
@@ -50,7 +53,7 @@ interface PanelStore {
 }
 
 export const usePanelStore = create<PanelStore>((set, get) => ({
-  fileTreeOpen: true,
+  fileTreeOpen: false,
   setFileTreeOpen: (open) => set({ fileTreeOpen: open }),
   gitPanelOpen: false,
   setGitPanelOpen: (open) => set({ gitPanelOpen: open }),
@@ -58,7 +61,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   setPreviewOpen: (open) => set({ previewOpen: open }),
   terminalOpen: false,
   setTerminalOpen: (open) => set({ terminalOpen: open }),
-  dashboardPanelOpen: false,
+  dashboardPanelOpen: true,
   setDashboardPanelOpen: (open) => set({ dashboardPanelOpen: open }),
   assistantPanelOpen: false,
   setAssistantPanelOpen: (open) => set({ assistantPanelOpen: open }),
@@ -91,6 +94,52 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       });
     }
     if (!previewOpen) setPreviewOpen(true);
+  },
+  openBrowserTab: (url, title) => {
+    const { workspaceTabs, previewOpen, setPreviewOpen } = get();
+    // Try to find an existing browser tab, or create a new one
+    const existingTab = workspaceTabs.find((t) => t.kind === "browser");
+    if (existingTab) {
+      // Update existing tab url and title
+      const newTabs = workspaceTabs.map(t => 
+        t.id === existingTab.id ? { ...t, url, title: title || t.title } : t
+      );
+      set({ workspaceTabs: newTabs, activeWorkspaceTabId: existingTab.id });
+    } else {
+      const newTab: WorkspaceTab = {
+        id: `browser-${Date.now()}`,
+        kind: "browser",
+        title: title || "新标签页",
+        closable: true,
+        url: url,
+      };
+      set({
+        workspaceTabs: [...workspaceTabs, newTab],
+        activeWorkspaceTabId: newTab.id,
+      });
+    }
+    if (!previewOpen) setPreviewOpen(true);
+  },
+  openTerminalTab: (terminalId, title) => {
+    const { workspaceTabs, previewOpen, setPreviewOpen } = get();
+    const newTab: WorkspaceTab = {
+      id: terminalId ? `terminal-${terminalId}` : `terminal-${Date.now()}`,
+      kind: "terminal",
+      title: title || "Terminal",
+      closable: true,
+      terminalId,
+    };
+    set({
+      workspaceTabs: [...workspaceTabs, newTab],
+      activeWorkspaceTabId: newTab.id,
+    });
+    if (!previewOpen) setPreviewOpen(true);
+  },
+  updateWorkspaceTab: (id, updates) => {
+    const { workspaceTabs } = get();
+    set({
+      workspaceTabs: workspaceTabs.map(t => t.id === id ? { ...t, ...updates } : t)
+    });
   },
   closeWorkspaceTab: (id) => {
     const { workspaceTabs, activeWorkspaceTabId } = get();

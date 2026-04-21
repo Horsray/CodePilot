@@ -30,6 +30,9 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { usePanelStore } from "@/store/usePanelStore";
+
+const LOCAL_URL_REGEX = /(https?:\/\/(?:localhost|127\.0\.0\.1):\d+)/i;
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -336,13 +339,34 @@ const safeCode: typeof _codePlugin = {
 const streamdownPlugins = { cjk, code: safeCode, math, mermaid };
 
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
+  ({ className, components, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
       plugins={streamdownPlugins}
+      components={{
+        a: ({ node, href, children, ...aProps }: any) => {
+          return (
+            <a
+              href={href}
+              {...aProps}
+              onClick={(e) => {
+                if (href && LOCAL_URL_REGEX.test(href)) {
+                  e.preventDefault();
+                  usePanelStore.getState().openBrowserTab(href, "本地预览");
+                } else if (aProps.onClick) {
+                  aProps.onClick(e);
+                }
+              }}
+            >
+              {children}
+            </a>
+          );
+        },
+        ...components,
+      }}
       {...props}
     />
   ),

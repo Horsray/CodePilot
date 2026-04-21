@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { Terminal } from '@/components/ui/icon';
+import { Terminal, Toolbox } from '@/components/ui/icon';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import type { CliToolItem } from '@/types';
@@ -86,7 +86,7 @@ export function CliToolsPopover({
                 onClick={() => onCliSelect(tool)}
                 onMouseEnter={() => onSetSelectedIndex(idx)}
               >
-                <Terminal size={16} className="shrink-0 text-muted-foreground" />
+                <Toolbox size={16} className="shrink-0 text-muted-foreground" />
                 <span className="font-medium text-xs truncate">{tool.name}</span>
                 {tool.version && (
                   <span className="text-[10px] text-muted-foreground shrink-0">v{tool.version}</span>
@@ -110,7 +110,7 @@ export function CliToolsPopover({
         {/* Footer: manage CLI tools */}
         <CommandListFooter>
           <CommandListFooterAction onClick={() => { onClosePopover(); window.location.href = '/cli-tools'; }}>
-            <Terminal size={14} />
+            <Toolbox size={14} />
             {t('cliTools.manageCli' as TranslationKey)}
           </CommandListFooterAction>
         </CommandListFooter>

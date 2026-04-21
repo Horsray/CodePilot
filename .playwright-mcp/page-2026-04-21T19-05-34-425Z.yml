@@ -1,0 +1,301 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - img "CodePilot" [ref=e6]
+      - generic [ref=e7]:
+        - button "新对话" [ref=e8]:
+          - img
+          - text: 新对话
+        - button "搜索会话..." [ref=e9]:
+          - img
+          - generic [ref=e10]: 搜索会话...
+        - button "内置浏览器" [ref=e11]:
+          - img
+          - generic [ref=e12]: 内置浏览器
+      - generic [ref=e14]:
+        - link "Skills" [ref=e15] [cursor=pointer]:
+          - /url: /skills
+          - button "Skills" [ref=e16]:
+            - img
+            - text: Skills
+        - link "MCP" [ref=e17] [cursor=pointer]:
+          - /url: /mcp
+          - button "MCP" [ref=e18]:
+            - img
+            - text: MCP
+        - link "CLI 工具" [ref=e19] [cursor=pointer]:
+          - /url: /cli-tools
+          - button "CLI 工具" [ref=e20]:
+            - img
+            - text: CLI 工具
+        - link "素材库" [ref=e21] [cursor=pointer]:
+          - /url: /gallery
+          - button "素材库" [ref=e22]:
+            - img
+            - text: 素材库
+        - link "知识库" [ref=e23] [cursor=pointer]:
+          - /url: /knowledge-base
+          - button "知识库" [ref=e24]:
+            - img
+            - text: 知识库
+        - link "定时任务 10" [ref=e25] [cursor=pointer]:
+          - /url: /scheduled-tasks
+          - button "定时任务 10" [ref=e26]:
+            - img
+            - text: 定时任务
+            - generic [ref=e27]: "10"
+        - link "远程桥接" [ref=e28] [cursor=pointer]:
+          - /url: /bridge
+          - button "远程桥接" [ref=e29]:
+            - img
+            - text: 远程桥接
+      - generic [ref=e31]:
+        - generic [ref=e32]: 对话列表
+        - button "新建项目" [ref=e34]:
+          - img
+          - text: 新建项目
+      - generic [ref=e38]:
+        - generic [ref=e40] [cursor=pointer]:
+          - generic [ref=e41]:
+            - generic [ref=e42]:
+              - generic [ref=e43]: 绘影科技智能体
+              - img [ref=e44]
+            - generic [ref=e46]: / agentHelper
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+        - generic [ref=e47]:
+          - generic [ref=e49] [cursor=pointer]:
+            - img [ref=e50]
+            - img [ref=e52]
+            - generic [ref=e54]: CodePilot
+            - generic:
+              - button:
+                - img
+              - button:
+                - img
+          - generic [ref=e57]:
+            - generic [ref=e58]:
+              - generic [ref=e59]:
+                - link "帮我把右上角的文件树按钮的图标，更换成截图里的样子，能做吗" [ref=e60] [cursor=pointer]:
+                  - /url: /chat/eb9a4b52d8ef4782deaa70c5a4957a36
+                  - generic [ref=e62]: 帮我把右上角的文件树按钮的图标，更换成截图里的样子，能做吗
+                - generic [ref=e64]: 1分钟
+              - button:
+                - img
+            - generic [ref=e66]:
+              - generic [ref=e67]:
+                - link "找下项目里维护模型上下文长度的文件 我新增了一个模型：Qwen3.6-35B-A3B-bf16 原生..." [ref=e68] [cursor=pointer]:
+                  - /url: /chat/c4ebc528f3efbdee1f5febfa108cba11
+                  - generic [ref=e70]: 找下项目里维护模型上下文长度的文件 我新增了一个模型：Qwen3.6-35B-A3B-bf16 原生...
+                - generic [ref=e72]: 2小时
+              - button:
+                - img
+            - generic [ref=e74]:
+              - generic [ref=e75]:
+                - link "看到桌面上的这个图标文件了吗/Users/horsray/Desktop/hueying-agent..." [ref=e76] [cursor=pointer]:
+                  - /url: /chat/540d567bafe040352f01f67919da548f
+                  - generic [ref=e78]: 看到桌面上的这个图标文件了吗/Users/horsray/Desktop/hueying-agent...
+                - generic [ref=e80]: 5小时
+              - button:
+                - img
+            - generic [ref=e82]:
+              - generic [ref=e83]:
+                - link "现在开始测试计划任务功能吧，以后默认的接收消息通知的session用ac9c035bf0e089e1..." [ref=e84] [cursor=pointer]:
+                  - /url: /chat/de7f026fccaab3ae957ea217a6900a5b
+                  - generic [ref=e86]: 现在开始测试计划任务功能吧，以后默认的接收消息通知的session用ac9c035bf0e089e1...
+                - generic [ref=e88]: 8小时
+              - button:
+                - img
+            - generic [ref=e90]:
+              - generic [ref=e91]:
+                - link "帮我把左上角区域的新对话和搜索两个按钮的样式，变成官方主仓库的样式" [ref=e92] [cursor=pointer]:
+                  - /url: /chat/e71c8a88275213617859d034aa052006
+                  - generic [ref=e94]: 帮我把左上角区域的新对话和搜索两个按钮的样式，变成官方主仓库的样式
+                - generic [ref=e96]: 9小时
+              - button:
+                - img
+            - generic [ref=e98]:
+              - generic [ref=e99]:
+                - link "看看本项目的情况，为什么我布置任务以后，ai几乎不会制定规划和步骤，总是自己一个人完成，经常忘记上下..." [ref=e100] [cursor=pointer]:
+                  - /url: /chat/f71814f3334a3437c3673dcd1bdd6450
+                  - generic [ref=e102]: 看看本项目的情况，为什么我布置任务以后，ai几乎不会制定规划和步骤，总是自己一个人完成，经常忘记上下...
+                - generic [ref=e104]: 1天
+              - button:
+                - img
+            - generic [ref=e106]:
+              - generic [ref=e107]:
+                - link "服务商olmx，模型是被写死了吗？为什么我改了也没用，总有个qwen3.5 35b，怎么回事" [ref=e108] [cursor=pointer]:
+                  - /url: /chat/20ff71314ab156936423cef2e36246d0
+                  - generic [ref=e110]: 服务商olmx，模型是被写死了吗？为什么我改了也没用，总有个qwen3.5 35b，怎么回事
+                - generic [ref=e112]: 1天
+              - button:
+                - img
+            - generic [ref=e114]:
+              - generic [ref=e115]:
+                - link "New Chat" [ref=e116] [cursor=pointer]:
+                  - /url: /chat/6839b792237acfb60d33b28a113a1cc5
+                  - generic [ref=e118]: New Chat
+                - generic [ref=e120]: 1天
+              - button:
+                - img
+            - generic [ref=e122]:
+              - generic [ref=e123]:
+                - link "我这个右下角的上下文统计功能，好像只能统计窗口大小为1m的模型？还是有什么过滤规则，我用qwen3...." [ref=e124] [cursor=pointer]:
+                  - /url: /chat/fda02fd8f174dca7b74f3dad86dd7480
+                  - generic [ref=e126]: 我这个右下角的上下文统计功能，好像只能统计窗口大小为1m的模型？还是有什么过滤规则，我用qwen3....
+                - generic [ref=e128]: 1天
+              - button:
+                - img
+            - generic [ref=e130]:
+              - generic [ref=e131]:
+                - link "我这个右下角的上下文统计功能，好像只能统计窗口大小为1m的模型？还是有什么过滤规则，我用qwen3...." [ref=e132] [cursor=pointer]:
+                  - /url: /chat/00a9f3d3df56874acd26b7b1e644ee92
+                  - generic [ref=e134]: 我这个右下角的上下文统计功能，好像只能统计窗口大小为1m的模型？还是有什么过滤规则，我用qwen3....
+                - generic [ref=e136]: 1天
+              - button:
+                - img
+            - button "展开更多（6 条）" [ref=e138]
+        - generic [ref=e139]:
+          - generic [ref=e141] [cursor=pointer]:
+            - img [ref=e142]
+            - img [ref=e144]
+            - generic [ref=e146]: No Project
+          - generic [ref=e149]:
+            - generic [ref=e150]:
+              - generic [ref=e151]:
+                - link "test-session" [ref=e152] [cursor=pointer]:
+                  - /url: /chat/78379bd124276922dd49e4a2d63e128a
+                  - generic [ref=e154]: test-session
+                - generic [ref=e156]: 9分钟
+              - button:
+                - img
+            - generic [ref=e158]:
+              - generic [ref=e159]:
+                - link "test-session" [ref=e160] [cursor=pointer]:
+                  - /url: /chat/786f1d39dba1af75f29646e4d943be1c
+                  - generic [ref=e162]: test-session
+                - generic [ref=e164]: 29分钟
+              - button:
+                - img
+            - generic [ref=e166]:
+              - generic [ref=e167]:
+                - link "test-session" [ref=e168] [cursor=pointer]:
+                  - /url: /chat/912f7f3744f0cfbaab6b2c0fdb242ebe
+                  - generic [ref=e170]: test-session
+                - generic [ref=e172]: 35分钟
+              - button:
+                - img
+            - generic [ref=e174]:
+              - generic [ref=e175]:
+                - link "test-session" [ref=e176] [cursor=pointer]:
+                  - /url: /chat/36bd47174a33479b9677ed3605938662
+                  - generic [ref=e178]: test-session
+                - generic [ref=e180]: 55分钟
+              - button:
+                - img
+            - generic [ref=e182]:
+              - generic [ref=e183]:
+                - link "test-session" [ref=e184] [cursor=pointer]:
+                  - /url: /chat/a71e6dc795baea32c514f93c33514bd0
+                  - generic [ref=e186]: test-session
+                - generic [ref=e188]: 1小时
+              - button:
+                - img
+            - generic [ref=e190]:
+              - generic [ref=e191]:
+                - link "test-session" [ref=e192] [cursor=pointer]:
+                  - /url: /chat/e6ef4b9d1eed8b7e8a8ee7ce529301fb
+                  - generic [ref=e194]: test-session
+                - generic [ref=e196]: 1小时
+              - button:
+                - img
+            - generic [ref=e198]:
+              - generic [ref=e199]:
+                - link "test-session" [ref=e200] [cursor=pointer]:
+                  - /url: /chat/a029193b4c56ce9be7552f0e5833113f
+                  - generic [ref=e202]: test-session
+                - generic [ref=e204]: 1小时
+              - button:
+                - img
+            - generic [ref=e206]:
+              - generic [ref=e207]:
+                - link "test-session" [ref=e208] [cursor=pointer]:
+                  - /url: /chat/2afd16c9176875d82729820095e8d131
+                  - generic [ref=e210]: test-session
+                - generic [ref=e212]: 2小时
+              - button:
+                - img
+            - generic [ref=e214]:
+              - generic [ref=e215]:
+                - link "test-session" [ref=e216] [cursor=pointer]:
+                  - /url: /chat/6fe712cafc5d2c2545f7fed352bfab4c
+                  - generic [ref=e218]: test-session
+                - generic [ref=e220]: 2小时
+              - button:
+                - img
+        - generic [ref=e222]:
+          - generic [ref=e224] [cursor=pointer]:
+            - img [ref=e225]
+            - img [ref=e227]
+            - generic [ref=e229]: bridge-workspace
+            - generic:
+              - button:
+                - img
+              - button:
+                - img
+          - generic [ref=e233]:
+            - generic [ref=e234]:
+              - link "微信智能体" [ref=e235] [cursor=pointer]:
+                - /url: /chat/ac9c035bf0e089e163fb32849017f030
+                - generic [ref=e237]: 微信智能体
+              - generic [ref=e239]: 1小时
+            - button:
+              - img
+        - generic [ref=e243] [cursor=pointer]:
+          - img [ref=e244]
+          - img [ref=e246]
+          - generic [ref=e248]: Ps-plugins
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+      - link "设置" [ref=e252] [cursor=pointer]:
+        - /url: /settings
+        - button "设置" [ref=e253]:
+          - img
+          - text: 设置
+    - generic [ref=e256]:
+      - generic [ref=e257]:
+        - generic [ref=e259]:
+          - button "test-session" [ref=e260]:
+            - generic [ref=e261]: test-session
+          - button [ref=e262]:
+            - img
+        - generic [ref=e263]:
+          - button "Git" [ref=e264]:
+            - img
+            - generic [ref=e265]: Git
+          - button "文件树" [ref=e266]:
+            - img
+            - generic [ref=e267]: 文件树
+          - button "看板" [ref=e268]:
+            - img
+            - generic [ref=e269]: 看板
+      - generic [ref=e270]:
+        - main [ref=e272]:
+          - img [ref=e275]
+        - generic [ref=e282]:
+          - generic [ref=e284]:
+            - generic [ref=e285]: 待办
+            - generic [ref=e286]: 加载任务中...
+          - generic [ref=e288]: 加载中...
+  - generic [ref=e289]:
+    - heading "Global Search" [level=2] [ref=e290]
+    - paragraph [ref=e291]: Search across sessions, messages, and files
+  - button "Open Next.js Dev Tools" [ref=e297] [cursor=pointer]:
+    - img [ref=e298]
+  - alert [ref=e301]

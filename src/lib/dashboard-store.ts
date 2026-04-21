@@ -26,6 +26,84 @@ export function getDashboardPath(workDir: string): string {
   return path.join(workDir, DASHBOARD_DIR, DASHBOARD_FILE);
 }
 
+// --- Global Widget Registry ---
+import os from 'os';
+export function getGlobalDashboardDir(): string {
+  return path.join(process.env.CLAUDE_GUI_DATA_DIR || path.join(os.homedir(), '.codepilot'), 'dashboard');
+}
+
+export function getGlobalDashboardPath(): string {
+  return path.join(getGlobalDashboardDir(), 'global-widgets.json');
+}
+
+export interface GlobalWidgetRegistry {
+  version: 1;
+  widgets: (DashboardWidget & { isGlobal?: boolean })[];
+}
+
+function emptyGlobalRegistry(): GlobalWidgetRegistry {
+  return { version: 1, widgets: [] };
+}
+
+export function readGlobalRegistry(): GlobalWidgetRegistry {
+  const filePath = getGlobalDashboardPath();
+  if (!fs.existsSync(filePath)) return emptyGlobalRegistry();
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    return JSON.parse(raw) as GlobalWidgetRegistry;
+  } catch {
+    return emptyGlobalRegistry();
+  }
+}
+
+export function writeGlobalRegistry(registry: GlobalWidgetRegistry): void {
+  const dir = getGlobalDashboardDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const filePath = getGlobalDashboardPath();
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(registry, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
+}
+
+export function upsertGlobalWidget(widget: DashboardWidget): void {
+  const registry = readGlobalRegistry();
+  const idx = registry.widgets.findIndex(w => w.id === widget.id);
+  if (idx !== -1) {
+    // Preserve isGlobal state if it exists
+    const isGlobal = registry.widgets[idx].isGlobal;
+    registry.widgets[idx] = { ...widget, isGlobal };
+  } else {
+    registry.widgets.push({ ...widget, isGlobal: false });
+  }
+  writeGlobalRegistry(registry);
+}
+
+export function toggleGlobalWidget(widgetId: string, isGlobal: boolean): void {
+  const registry = readGlobalRegistry();
+  const idx = registry.widgets.findIndex(w => w.id === widgetId);
+  if (idx !== -1) {
+    registry.widgets[idx].isGlobal = isGlobal;
+    writeGlobalRegistry(registry);
+  }
+}
+
+export function removeGlobalWidget(widgetId: string): void {
+  const registry = readGlobalRegistry();
+  registry.widgets = registry.widgets.filter(w => w.id !== widgetId);
+  writeGlobalRegistry(registry);
+}
+
+export function reorderGlobalWidgets(widgetIds: string[]): void {
+  const registry = readGlobalRegistry();
+  const byId = new Map(registry.widgets.map(w => [w.id, w]));
+  const ordered = widgetIds.filter(id => byId.has(id)).map(id => byId.get(id)!);
+  const remaining = registry.widgets.filter(w => !widgetIds.includes(w.id));
+  registry.widgets = [...ordered, ...remaining];
+  writeGlobalRegistry(registry);
+}
+
+// --- End Global Registry ---
+
 export function readDashboard(workDir: string): DashboardConfig {
   const filePath = getDashboardPath(workDir);
   if (!fs.existsSync(filePath)) return emptyConfig();
@@ -54,6 +132,7 @@ export function addWidget(workDir: string, widget: DashboardWidget): DashboardCo
   const config = readDashboard(workDir);
   config.widgets.push(widget);
   writeDashboard(workDir, config);
+  upsertGlobalWidget(widget);
   return config;
 }
 
@@ -61,6 +140,8 @@ export function removeWidget(workDir: string, widgetId: string): DashboardConfig
   const config = readDashboard(workDir);
   config.widgets = config.widgets.filter(w => w.id !== widgetId);
   writeDashboard(workDir, config);
+  // Do not remove from global registry when removed from a specific project.
+  // The user might still want to toggle it globally in the Settings panel.
   return config;
 }
 
@@ -74,6 +155,7 @@ export function updateWidget(
   if (idx !== -1) {
     config.widgets[idx] = { ...config.widgets[idx], ...updates };
     writeDashboard(workDir, config);
+    upsertGlobalWidget(config.widgets[idx]);
   }
   return config;
 }

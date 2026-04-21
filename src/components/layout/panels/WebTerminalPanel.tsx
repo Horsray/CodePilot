@@ -12,14 +12,14 @@ import type { Terminal } from "@xterm/xterm";
 /**
  * WebTerminalPanel — wraps XtermTerminal with the web-based PTY backend.
  */
-export function WebTerminalPanel() {
+export function WebTerminalPanel({ terminalId, onClose }: { terminalId?: string; onClose?: () => void }) {
   const { workingDirectory, sessionId } = usePanel();
-  const terminalIdentity = `${sessionId || 'default'}:${workingDirectory || 'workspace-default'}`;
+  const terminalIdentity = terminalId || `${sessionId || 'default'}:${workingDirectory || 'workspace-default'}`;
 
-  return <WebTerminalSession key={terminalIdentity} />;
+  return <WebTerminalSession key={terminalIdentity} terminalId={terminalId} />;
 }
 
-function WebTerminalSession() {
+function WebTerminalSession({ terminalId }: { terminalId?: string }) {
   const { t } = useTranslation();
   const terminal = useWebTerminal();
   const xtermRef = useRef<Terminal | null>(null);
@@ -30,14 +30,14 @@ function WebTerminalSession() {
 
   const handleData = useCallback(
     (data: string) => {
-      terminal.write(data);
+      void terminal.write(data);
     },
     [terminal]
   );
 
   const handleResize = useCallback(
     (cols: number, rows: number) => {
-      terminal.resize(cols, rows);
+      void terminal.resize(cols, rows);
     },
     [terminal]
   );
@@ -51,12 +51,22 @@ function WebTerminalSession() {
 
       // Subscribe to PTY output → write to xterm
       terminal.setOnData((data: string) => {
-        term.write(data);
+        if (xtermRef.current) {
+          xtermRef.current.write(data);
+        }
+      });
+
+      terminal.setOnExit((code: number) => {
+        if (xtermRef.current) {
+          xtermRef.current.write(`\r\n[Process exited with code ${code}]\r\n`);
+        }
       });
 
       // Create PTY session with current terminal dimensions
       try {
-        await terminal.create(term.cols, term.rows);
+        const id = terminalId || "default";
+        
+        await terminal.create(term.cols, term.rows, id);
       } catch (err) {
         setError(t('terminal.terminalError', { error: err instanceof Error ? err.message : 'Unknown error' }));
       }
@@ -80,12 +90,20 @@ function WebTerminalSession() {
     setError(null);
   }, [terminal.connected]);
 
+  useEffect(() => {
+    // If we're not in electron, the backend might use fallback spawn which needs a push to show prompt
+    if (!terminal.isElectron && terminal.connected) {
+      setTimeout(() => {
+        void terminal.write('\n');
+      }, 500);
+    }
+  }, [terminal.connected, terminal.isElectron]);
+
   const handleRetry = useCallback(() => {
     setError(null);
     setConnectionAttempted(false);
     setReady(false);
     void terminal.kill();
-    // Re-initialize terminal
     if (xtermRef.current) {
       xtermRef.current.dispose();
       xtermRef.current = null;
@@ -94,7 +112,7 @@ function WebTerminalSession() {
   }, [terminal]);
 
   return (
-    <div className="h-full w-full relative">
+    <div className="h-full w-full relative min-h-[100px]">
       <XtermTerminal
         key={terminalKey}
         onData={handleData}
@@ -102,12 +120,12 @@ function WebTerminalSession() {
         onReady={handleReady}
       />
       {!ready && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a2e]">
+        <div className="absolute inset-0 flex items-center justify-center bg-background">
           <SpinnerGap size={20} className="animate-spin text-muted-foreground" />
         </div>
       )}
       {error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1a1a2e] p-4">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-background p-4">
           <div className="text-red-400 mb-2">⚠️ {t('terminal.terminalErrorTitle')}</div>
           <div className="text-sm text-gray-400 mb-4 text-center max-w-md">
             {error}

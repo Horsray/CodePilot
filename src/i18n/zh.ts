@@ -116,6 +116,11 @@ const zh: Record<TranslationKey, string> = {
   'settings.claudeCli': 'Claude Code',
   'settings.assistant': '助手工作区',
   'settings.rules': '上下文规则',
+  'settings.widgets': '小组件管理',
+  'widgets.title': '小组件管理',
+  'widgets.description': '管理您生成的所有小组件，设置是否常驻看板，并调整它们的顺序。',
+  'widgets.empty': '暂无小组件。',
+  'widgets.globalToggle': '常驻全局看板',
   'rules.title': '上下文规则',
   'rules.description': '管理智能体的全局和项目特定指令。',
   'rules.personal': '个人规则 (全局)',
@@ -1411,7 +1416,7 @@ const zh: Record<TranslationKey, string> = {
 
   // ── Dashboard ─────────────────────────────────────────────────
   'dashboard.title': '看板',
-  'dashboard.empty': '还没有固定的组件。在聊天中固定生成式 UI 组件来构建你的看板。',
+  'dashboard.empty': '可在对话中要求智能体生成组件',
   'dashboard.exportFailed': '导出失败',
   'dashboard.refresh': '刷新全部',
   'dashboard.refreshing': '刷新中...',
