@@ -153,7 +153,20 @@ export class TerminalManager {
       (terminal.process as IPty).write(data);
       return;
     }
-    (terminal.process as ChildProcessWithoutNullStreams).stdin.write(data);
+    
+    // Fallback: manually echo typed characters because a raw pipe shell won't echo them.
+    let echoData = data;
+    let writeData = data;
+    
+    if (data === '\r') {
+      echoData = '\r\n'; // Echo newline
+      writeData = '\n';  // Send LF to shell
+    } else if (data === '\x7f' || data === '\b') {
+      echoData = '\b \b'; // Visually erase character
+    }
+    
+    this.onData?.(id, echoData);
+    (terminal.process as ChildProcessWithoutNullStreams).stdin.write(writeData);
   }
 
   resize(id: string, cols: number, rows: number): void {

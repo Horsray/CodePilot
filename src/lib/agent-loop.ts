@@ -259,9 +259,56 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           }
 
           // Augment system prompt with tool-specific context snippets
-          const effectiveSystemPrompt = toolSystemPrompts.length > 0 && systemPrompt
+          let effectiveSystemPrompt = toolSystemPrompts.length > 0 && systemPrompt
             ? systemPrompt + '\n\n' + toolSystemPrompts.join('\n\n')
             : systemPrompt;
+
+          // Inject MCP discovery prompt for dormant servers (Native path).
+          // Same logic as SDK path in claude-client.ts — makes the AI aware
+          // of unloaded MCP servers so it can activate them via codepilot_mcp_activate.
+          if (workingDirectory && step === 1) {
+            try {
+              const { loadAllMcpServers } = await import('@/lib/mcp-loader');
+              const { buildMcpToolSet } = await import('@/lib/mcp-tool-adapter');
+              const allServers = loadAllMcpServers(workingDirectory);
+              if (allServers) {
+                const loadedToolNames = new Set(Object.keys(tools));
+                const loadedServerNames = new Set<string>();
+                for (const name of Object.keys(allServers)) {
+                  for (const toolName of loadedToolNames) {
+                    if (toolName.startsWith(`mcp__${name}__`) || toolName.startsWith(`mcp__${name}-`)) {
+                      loadedServerNames.add(name);
+                      break;
+                    }
+                  }
+                }
+                const dormantServers = Object.entries(allServers)
+                  .filter(([name]) => !loadedServerNames.has(name))
+                  .map(([name, config]) => {
+                    const target = config.command || config.url || '';
+                    return `- **${name}**: ${target}`;
+                  });
+                if (dormantServers.length > 0) {
+                  effectiveSystemPrompt = (effectiveSystemPrompt || '') + `
+
+<available_mcp_servers>
+The user has installed the following external MCP servers (global and project-level), but they are currently UNLOADED to save memory and startup time:
+${dormantServers.join('\n')}
+
+**CRITICAL RULE**: If the user's request requires any capability from an unloaded MCP server, you MUST:
+1. Call the \`codepilot_mcp_activate\` tool with the exact server name (e.g., "github", "fetch", "minimax_vision")
+2. Wait for the activation result
+3. Then use the newly available tools to complete the request
+
+DO NOT say "I don't have access to..." or "I cannot...". DO NOT ask the user for permission to load the server. Just activate it and proceed.
+Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ serverName: "github" }), then use the github tools.
+</available_mcp_servers>`;
+                }
+              }
+            } catch (e) {
+              console.warn('[agent-loop] Failed to inject MCP discovery prompt:', e instanceof Error ? e.message : e);
+            }
+          }
 
           // Build provider options (Anthropic-specific).
           // Shared sanitizer applies Opus 4.7 migration guards (manual

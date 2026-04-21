@@ -754,6 +754,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'Skill',
             'Agent',
             'TodoWrite',
+            'AskUserQuestion',
+            'mcp__codepilot-ask-user__AskUserQuestion',
             'webfetch__fetch_fetch_readable',
             'webfetch__fetch_fetch_markdown',
             'context7_resolve-library-id',
@@ -870,9 +872,13 @@ if (claudePath) {
 The user has installed the following external MCP servers (global and project-level), but they are currently UNLOADED to save memory and startup time:
 ${dormantServers.join('\n')}
 
-If the user's request requires any of these capabilities (e.g. database access, web search, image recognition), DO NOT say you cannot do it.
-Instead, explain that you have an unloaded MCP server that can help, and ask the user if you should proceed. 
-Once you or the user mention the exact server name (e.g., "${dormantServers[0]?.split('**')[1] || 'server_name'}") in the chat, it will be automatically loaded in the next turn!
+**CRITICAL RULE**: If the user's request requires any capability from an unloaded MCP server, you MUST:
+1. Call the \`codepilot_mcp_activate\` tool with the exact server name (e.g., "github", "fetch", "minimax_vision")
+2. Wait for the activation result
+3. Then use the newly available tools to complete the request
+
+DO NOT say "I don't have access to..." or "I cannot...". DO NOT ask the user for permission to load the server. Just activate it and proceed.
+Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ serverName: "github" }), then use the github tools.
 </available_mcp_servers>`;
 
               if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
@@ -934,6 +940,19 @@ Once you or the user mention the exact server name (e.g., "${dormantServers[0]?.
           };
           if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + BROWSER_SYSTEM_PROMPT;
+          }
+        }
+
+        // AskUserQuestion MCP: globally available — lets the AI ask structured questions.
+        // Without this, the AI has no way to present interactive choices to the user.
+        {
+          const { createAskUserQuestionMcpServer, ASK_USER_QUESTION_MCP_SYSTEM_PROMPT } = await import('@/lib/ask-user-question-mcp');
+          queryOptions.mcpServers = {
+            ...(queryOptions.mcpServers || {}),
+            'codepilot-ask-user': createAskUserQuestionMcpServer(),
+          };
+          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + ASK_USER_QUESTION_MCP_SYSTEM_PROMPT;
           }
         }
 

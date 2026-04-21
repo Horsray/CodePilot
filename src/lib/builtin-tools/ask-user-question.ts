@@ -37,8 +37,19 @@ export const ASK_USER_QUESTION_SYSTEM_PROMPT = `## User Interaction
 
 When you need clarification or input from the user, use the AskUserQuestion tool.
 It presents structured multiple-choice options to the user and returns their selections.
-Use this when you need the user to choose between alternatives, confirm preferences,
-or provide input that's better expressed as a selection than free text.`;
+
+**When to use AskUserQuestion (IMPORTANT — do NOT skip these):**
+- When there are multiple valid approaches and the user should choose (e.g., "Which UI framework?" or "React or Vue?")
+- When you need to confirm the user's preference before proceeding (e.g., "Which color scheme?" or "API-first or UI-first?")
+- When the task is ambiguous and you need the user to disambiguate (e.g., "Do you want a CLI tool or a web app?")
+- When you need the user to pick between trade-offs (e.g., "Simple but limited vs. flexible but complex?")
+
+**When NOT to use AskUserQuestion:**
+- For simple yes/no questions — just proceed and the user will correct you if needed
+- When the answer is obvious from context — just do the right thing
+- For questions about implementation details the user doesn't care about — make a reasonable default choice
+
+Always prefer asking over guessing when the choice significantly affects the outcome.`;
 
 const QuestionSchema = z.object({
   /** Short header label shown above the question (e.g. "Project Setup") */

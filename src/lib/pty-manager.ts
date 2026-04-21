@@ -393,7 +393,19 @@ export function writePtySession(id: string, data: string): boolean {
   if (session.mode === 'pty') {
     (session.process as IPty).write(data);
   } else {
-    (session.process as ChildProcessWithoutNullStreams).stdin.write(data);
+    // Fallback: manually echo typed characters because a raw pipe shell won't echo them.
+    let echoData = data;
+    let writeData = data;
+    
+    if (data === '\r') {
+      echoData = '\r\n'; // Echo newline
+      writeData = '\n';  // Send LF to shell
+    } else if (data === '\x7f' || data === '\b') {
+      echoData = '\b \b'; // Visually erase character
+    }
+    
+    appendTerminalOutput(id, echoData);
+    (session.process as ChildProcessWithoutNullStreams).stdin.write(writeData);
   }
   return true;
 }
