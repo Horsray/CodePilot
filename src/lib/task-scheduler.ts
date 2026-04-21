@@ -18,6 +18,21 @@ const BACKOFF_DELAYS = [30000, 60000, 300000, 900000]; // 30s, 1m, 5m, 15m
 const MAX_CONSECUTIVE_ERRORS = 10;
 const RECURRING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// ── 本地时间格式化工具函数 ──────────────────────────────────────
+/**
+ * 将 Date 对象格式化为本地时间字符串 YYYY-MM-DD HH:mm:ss
+ * 不使用 UTC，时区使用系统本地时间
+ */
+function formatLocalDateTime(date: Date): string {
+  const y = date.getFullYear();
+  const mo = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const h = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  const s = String(date.getSeconds()).padStart(2, '0');
+  return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
+}
+
 // ── Session-only tasks (in-memory, not persisted) ────────────────
 const SESSION_TASKS_KEY = '__codepilot_session_tasks__';
 const LAST_COMPACTION_KEY = '__codepilot_last_compaction__';
@@ -58,11 +73,12 @@ export function ensureSchedulerRunning(): void {
   const intervalId = setInterval(async () => {
     try {
       const now = new Date();
+      const nowLocalStr = formatLocalDateTime(now);
       const { getDueTasks } = await import('./db');
-      const dueTasks = getDueTasks();
+      const dueTasks = getDueTasks(nowLocalStr);
 
       if (dueTasks.length > 0) {
-        console.log(`[scheduler] Found ${dueTasks.length} due tasks at ${now.toISOString()}`);
+        console.log(`[scheduler] Found ${dueTasks.length} due tasks at local time ${nowLocalStr}`);
       }
 
       // [Phase 3: Nightly Compaction]
@@ -189,7 +205,8 @@ If there is nothing valuable to extract, return an empty array []. DO NOT wrap i
       // Check session-only tasks too
       const sessionTasks = getSessionTasks();
       for (const [id, task] of sessionTasks) {
-        if (task.status === 'active' && new Date(task.next_run) <= new Date()) {
+        const taskNextRun = parseLocalDateTime(task.next_run);
+        if (task.status === 'active' && taskNextRun <= now) {
           // Execute and handle errors in-memory (session tasks aren't in SQLite)
           try {
             await executeDueTask(task, true);
@@ -208,7 +225,7 @@ If there is nothing valuable to extract, return an empty array []. DO NOT wrap i
 
             // Exponential backoff: push next_run forward
             const backoffMs = BACKOFF_DELAYS[Math.min(task.consecutive_errors - 1, BACKOFF_DELAYS.length - 1)];
-            task.next_run = new Date(Date.now() + backoffMs).toISOString();
+            task.next_run = formatLocalDateTime(new Date(Date.now() + backoffMs));
             continue; // Skip normal next_run advancement
           }
 
@@ -217,16 +234,15 @@ If there is nothing valuable to extract, return an empty array []. DO NOT wrap i
             sessionTasks.delete(id);
           } else {
             // Recurring session tasks: advance next_run in memory
-            const now = new Date();
             if (task.schedule_type === 'interval') {
               const ms = parseInterval(task.schedule_value);
               let nextRun = new Date(now.getTime() + ms);
               while (nextRun <= now) nextRun = new Date(nextRun.getTime() + ms);
-              task.next_run = nextRun.toISOString();
+              task.next_run = formatLocalDateTime(nextRun);
             } else if (task.schedule_type === 'cron') {
               const cronNext = getNextCronTime(task.schedule_value);
               if (cronNext) {
-                task.next_run = cronNext.toISOString();
+                task.next_run = formatLocalDateTime(cronNext);
               } else {
                 // No valid next occurrence — pause this session task
                 task.status = 'paused' as ScheduledTask['status'];
@@ -234,7 +250,7 @@ If there is nothing valuable to extract, return an empty array []. DO NOT wrap i
                 continue;
               }
             }
-            task.last_run = now.toISOString();
+            task.last_run = formatLocalDateTime(now);
           }
         }
       }
@@ -291,54 +307,21 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     }
 
     // Resolve provider using session's configuration (or fallback to global)
+    // Use explicit providerId to avoid inactive provider fallback issue
     const { resolveProvider } = await import('./provider-resolver');
-    const { generateTextViaSdk } = await import('./claude-client');
-    const { selectOnDemandMcpServerNames, toSdkMcpConfig } = await import('./claude-client');
-    const { loadAllMcpServers } = await import('./mcp-loader');
 
-    const resolved = resolveProvider({ sessionProviderId: providerId, sessionModel: model });
+    const resolved = resolveProvider({
+      providerId: targetSessionId ? providerId : undefined,
+      sessionProviderId: providerId,
+      sessionModel: model
+    });
+
+    console.log(`[scheduler] Provider resolved: ${resolved.provider?.name || 'none'}, hasCredentials: ${resolved.hasCredentials}, providerId: ${providerId}`);
     if (!resolved.hasCredentials) {
       throw new Error('No API credentials configured');
     }
 
     console.log(`[scheduler] Executing task ${task.id} with provider ${resolved.provider?.id}, model ${resolved.upstreamModel || resolved.model}`);
-
-    // Auto-detect MCP servers based on task prompt + tool authorization
-    const onDemandMcpNames = selectOnDemandMcpServerNames(task.prompt);
-
-    // Apply tool authorization: add explicitly authorized tools
-    if (task.tool_authorization) {
-      if (task.tool_authorization.type === 'full_access') {
-        // Load all available MCP servers
-        const allServers = loadAllMcpServers();
-        if (allServers) {
-          for (const name of Object.keys(allServers)) {
-            onDemandMcpNames.add(name);
-          }
-        }
-      } else if (task.tool_authorization.type === 'web_search') {
-        onDemandMcpNames.add('WebSearch');
-        onDemandMcpNames.add('bailian-web-search');
-        onDemandMcpNames.add('fetch');
-      } else if (task.tool_authorization.type === 'cli_tools') {
-        onDemandMcpNames.add('cli-tools');
-      } else if (task.tool_authorization.type === 'mcp' && task.tool_authorization.tool_ids) {
-        for (const id of task.tool_authorization.tool_ids) {
-          onDemandMcpNames.add(id);
-        }
-      }
-    }
-
-    // Get MCP server configs for the selected servers
-    const mcpServerConfigs: Record<string, import('@/types').MCPServerConfig> = {};
-    const allServers = loadAllMcpServers();
-    if (allServers) {
-      for (const name of onDemandMcpNames) {
-        if (allServers[name]) {
-          mcpServerConfigs[name] = allServers[name];
-        }
-      }
-    }
 
     // Build system prompt with task context and current system time
     const systemTime = new Date().toLocaleString('zh-CN', {
@@ -352,14 +335,16 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     });
     const system = `You are executing a scheduled task. Be concise and direct.\nTask name: ${task.name}\nCurrent system time (Shanghai): ${systemTime}`;
 
-    // Execute via SDK path with MCP tools support
-    const result = await generateTextViaSdk({
+    // Execute via Native path (AI SDK) with MCP tools support
+    // Use Native runtime instead of SDK to avoid shadow HOME issues with DB providers
+    console.log(`[scheduler] About to execute task ${task.id} with providerId=${resolved.provider?.id}, model=${resolved.upstreamModel || resolved.model}`);
+    const { generateTextFromProvider } = await import('./text-generator');
+    const result = await generateTextFromProvider({
       providerId: resolved.provider?.id || '',
-      model: resolved.upstreamModel || resolved.model || 'sonnet',
+      model: resolved.upstreamModel || resolved.model || 'MiniMax-M2.7',
       system,
       prompt: task.prompt,
-      sessionId: targetSessionId,
-      mcpServers: Object.keys(mcpServerConfigs).length > 0 ? toSdkMcpConfig(mcpServerConfigs) : undefined,
+      maxTokens: 4096,
     });
 
     // Success — update SQLite (skip for session tasks)
@@ -526,6 +511,7 @@ function getJitter(taskId: string, intervalMs: number): number {
 async function computeNextRun(task: ScheduledTask): Promise<void> {
   const { updateScheduledTask } = await import('@/lib/db');
   const now = new Date();
+  const nowLocalStr = formatLocalDateTime(now);
 
   switch (task.schedule_type) {
     case 'once':
@@ -534,20 +520,22 @@ async function computeNextRun(task: ScheduledTask): Promise<void> {
 
     case 'interval': {
       const ms = parseInterval(task.schedule_value);
-      const lastRun = new Date(task.last_run || now.toISOString());
+      const lastRunStr = task.last_run || nowLocalStr;
+      // 解析本地时间字符串为 Date 对象进行计算
+      const lastRun = parseLocalDateTime(lastRunStr);
       let nextRun = new Date(lastRun.getTime() + ms);
       // Anchor-based: skip past missed runs
       while (nextRun <= now) nextRun = new Date(nextRun.getTime() + ms);
       // Apply deterministic jitter to avoid thundering-herd
       nextRun = new Date(nextRun.getTime() + getJitter(task.id, ms));
-      updateScheduledTask(task.id, { next_run: nextRun.toISOString() });
+      updateScheduledTask(task.id, { next_run: formatLocalDateTime(nextRun) });
       break;
     }
 
     case 'cron': {
       const nextRun = getNextCronTime(task.schedule_value);
       if (nextRun) {
-        updateScheduledTask(task.id, { next_run: nextRun.toISOString() });
+        updateScheduledTask(task.id, { next_run: formatLocalDateTime(nextRun) });
       } else {
         // No valid next occurrence within 4 years — pause the task
         updateScheduledTask(task.id, { status: 'paused', last_error: 'No valid cron match within 4 years' });
@@ -556,6 +544,21 @@ async function computeNextRun(task: ScheduledTask): Promise<void> {
       break;
     }
   }
+}
+
+/**
+ * 解析本地时间字符串 YYYY-MM-DD HH:mm:ss 或 ISO 格式为 Date 对象
+ */
+function parseLocalDateTime(dateStr: string): Date {
+  // 如果是 ISO 格式，先转为本地时间
+  if (dateStr.includes('T')) {
+    return new Date(dateStr);
+  }
+  // YYYY-MM-DD HH:mm:ss 格式
+  const [datePart, timePart] = dateStr.split(' ');
+  const [y, mo, d] = datePart.split('-').map(Number);
+  const [h, mi, s] = timePart.split(':').map(Number || 0);
+  return new Date(y, mo - 1, d, h, mi, s);
 }
 
 /**

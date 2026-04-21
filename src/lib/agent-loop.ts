@@ -575,7 +575,53 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
           // streamText returns the full message list including our input + model response.
           // Use response.messages which contains properly typed ModelMessage[].
           const responseData = await result.response;
-          messages = [...messages, ...responseData.messages] as ModelMessage[];
+          
+          // Truncate massive tool results immediately to prevent OOM
+          // This ensures that even if a tool returns a massive object, it won't crash
+          // JSON.stringify in the next step or in the DB serialization.
+          const safeResponseMessages = responseData.messages.map(msg => {
+            if (msg.role === 'tool' && Array.isArray(msg.content)) {
+              return {
+                ...msg,
+                content: msg.content.map(part => {
+                  if (part.type === 'tool-result') {
+                    // Handle both AI SDK 3.x/4.x formats (result vs output)
+                    const dataToMeasure = ('result' in part) ? part.result : ('output' in part ? part.output : null);
+                    if (dataToMeasure) {
+                      try {
+                        const jsonStr = JSON.stringify(dataToMeasure);
+                        if (jsonStr.length > 200000) { // ~200KB limit per tool result
+                          const marker = {
+                            _omc_truncated: true,
+                            original_length: jsonStr.length,
+                            message: 'Tool result was too large (>200KB) and has been truncated to prevent memory exhaustion and context window overflow.',
+                            partial_data: jsonStr.slice(0, 2000) + '... (truncated)'
+                          };
+                          
+                          return {
+                            ...part,
+                            ...('result' in part ? { result: marker } : {}),
+                            ...('output' in part ? { output: { type: 'json', value: marker } } : {})
+                          };
+                        }
+                      } catch (e) {
+                        // If JSON.stringify fails (e.g. circular ref), replace it entirely
+                        return {
+                          ...part,
+                          ...('result' in part ? { result: 'Error: Could not serialize tool result (circular structure or too large).' } : {}),
+                          ...('output' in part ? { output: { type: 'text', value: 'Error: Could not serialize tool result.' } } : {})
+                        };
+                      }
+                    }
+                  }
+                  return part;
+                })
+              };
+            }
+            return msg;
+          });
+          
+          messages = [...messages, ...safeResponseMessages] as ModelMessage[];
         }
 
         // 6a. Emit skill-nudge if the run was complex enough to warrant saving as a Skill.
