@@ -4,8 +4,8 @@ import { cn } from '@/lib/utils';
 import { useImageGen } from '@/hooks/useImageGen';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
-import { Button } from '@/components/ui/button';
-import { PaintBrush } from '@/components/ui/icon';
+import { PromptInputButton } from '@/components/ai-elements/prompt-input';
+import { Image } from '@/components/ui/icon';
 import {
   Tooltip,
   TooltipContent,
@@ -23,20 +23,14 @@ export function ImageGenToggle() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
+        <PromptInputButton
           onClick={handleToggle}
           className={cn(
-            'rounded-md px-2.5 h-7 text-xs font-medium border transition-all',
-            state.enabled
-              ? 'bg-primary/15 text-primary border-primary/30'
-              : 'text-muted-foreground border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50'
+            state.enabled ? 'text-primary' : 'text-muted-foreground'
           )}
         >
-          <PaintBrush size={12} />
-          {t('composer.designAgent' as TranslationKey)}
-        </Button>
+          <Image size={16} />
+        </PromptInputButton>
       </TooltipTrigger>
       <TooltipContent>
         {t('composer.designAgentTooltip' as TranslationKey)}

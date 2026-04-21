@@ -36,6 +36,8 @@ import { useCliToolsFetch } from '@/hooks/useCliToolsFetch';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { resolveKeyAction, cycleIndex, resolveDirectSlash, dispatchBadge, buildCliAppend, parseMentionRefs, dedupeMentionsByPath } from '@/lib/message-input-logic';
 import { QuickActions } from './QuickActions';
+import { ImageGenToggle } from './ImageGenToggle';
+import { RuntimeBadge } from './RuntimeBadge';
 
 const MAX_MENTION_FILE_BYTES = 256 * 1024; // 256KB per @file mention
 const MAX_MENTION_FILE_COUNT = 6;
@@ -852,6 +854,12 @@ export function MessageInput({
             )}
             {/* File attachment capsules */}
             <FileAttachmentsCapsules />
+
+            {/* Agent Engine Badge - Moved to top right of input box */}
+            <div className="absolute top-2 right-2 z-10">
+              <RuntimeBadge providerId={currentProviderIdValue} />
+            </div>
+
             <PromptInputTextarea
               ref={textareaRef}
               placeholder={badges.length > 0 ? "Add details (optional), then press Enter..." : cliBadge ? "Describe what you want to do..." : "Message Claude..."}
@@ -860,7 +868,7 @@ export function MessageInput({
               onKeyDown={handleKeyDown}
               onFocus={handleAssistantFocus}
               disabled={disabled}
-              className="min-h-10"
+              className="min-h-10 pr-[120px]"
             />
             <PromptInputFooter>
               <PromptInputTools>
@@ -899,6 +907,9 @@ export function MessageInput({
                     {t('cliTools.selectTool' as TranslationKey)}
                   </TooltipContent>
                 </Tooltip>
+
+                {/* Design Agent Toggle */}
+                <ImageGenToggle />
 
                 {/* Model selector */}
                 <ModelSelectorDropdown

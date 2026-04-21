@@ -173,6 +173,25 @@ export async function POST(request: NextRequest) {
         // Emit context_compressed BEFORE the text event so the SSE consumer
         // (useSSEStream) updates hasSummary via the dedicated dispatch path
         // before the text arrives and the stream terminates.
+        let contextUsageFrame = '';
+        try {
+          const { getContextWindow } = await import('@/lib/model-context');
+          const { roughTokenEstimate } = await import('@/lib/context-estimator');
+          const modelForWindow = model || session.model || 'sonnet';
+          const maxTokens = (getContextWindow(modelForWindow, { context1m: context_1m }) || 200000);
+          const totalTokens = roughTokenEstimate(result.summary || '');
+          contextUsageFrame = `data: ${JSON.stringify({
+            type: 'context_usage',
+            data: JSON.stringify({
+              totalTokens,
+              maxTokens,
+              rawMaxTokens: maxTokens,
+              percentage: maxTokens ? totalTokens / maxTokens : 0,
+              model: modelForWindow,
+              capturedAt: Date.now(),
+            }),
+          })}\n\n`;
+        } catch { /* best effort */ }
         const compressedStatusFrame = `data: ${JSON.stringify({
           type: 'status',
           data: JSON.stringify(buildContextCompressedStatus({
@@ -180,7 +199,8 @@ export async function POST(request: NextRequest) {
             tokensSaved: result.estimatedTokensSaved,
           })),
         })}\n\n`;
-        const sseData = compressedStatusFrame
+        const sseData = contextUsageFrame
+          + compressedStatusFrame
           + `data: ${JSON.stringify({ type: 'text', data: msg })}\n\n`
           + `data: ${JSON.stringify({ type: 'done' })}\n\n`;
         return new Response(sseData, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
@@ -358,7 +378,10 @@ export async function POST(request: NextRequest) {
       if (isSearchIntent) {
         const isNative = predictNativeRuntime(effectiveProviderId);
         const agentParam = isNative ? 'agent="explore"' : 'subagent_type="explore"';
-        const routePrompt = `\n\n<system-reminder>\nUser intent implies codebase search or exploration. You MUST IMMEDIATELY invoke the 'Agent' tool with ${agentParam} (and description/prompt) to gather information before answering. Do not attempt to read/grep files manually first.\n</system-reminder>`;
+        const toolHint = isNative
+          ? `Use Read/Glob/Grep for codebase exploration.`
+          : `Glob/Grep may be unavailable. Prefer mcp__filesystem__search_files (and mcp__filesystem__read_file) for codebase exploration.`;
+        const routePrompt = `\n\n<system-reminder>\nUser intent implies codebase search or exploration. You MUST IMMEDIATELY invoke the 'Agent' tool with ${agentParam} (and description/prompt) to gather information before answering. ${toolHint} Do not attempt to read/grep files manually first.\n</system-reminder>`;
         finalSystemPromptAppend = finalSystemPromptAppend ? finalSystemPromptAppend + routePrompt : routePrompt;
       }
     }

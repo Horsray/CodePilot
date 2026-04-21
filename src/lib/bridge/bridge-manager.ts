@@ -194,6 +194,30 @@ async function deliverResponse(
   }, { sessionId });
 }
 
+/**
+ * Deliver a message to all IM channels bound to a specific CodePilot session.
+ * Used for server-initiated spontaneous messages (e.g. Scheduled Tasks).
+ */
+export async function deliverToSession(sessionId: string, text: string): Promise<void> {
+  const state = getState();
+  if (!state.running) return;
+
+  const bindings = router.listBindings();
+  for (const b of bindings) {
+    if (b.codepilotSessionId === sessionId && b.active) {
+      const adapter = state.adapters.get(b.channelType);
+      if (adapter && adapter.isRunning()) {
+        const address: ChannelAddress = { channelType: b.channelType as typeof b.channelType, chatId: b.chatId };
+        try {
+          await deliverResponse(adapter, address, text, sessionId);
+        } catch (err) {
+          console.error(`[bridge-manager] Failed to deliver spontaneous message to ${b.channelType}:${b.chatId}`, err);
+        }
+      }
+    }
+  }
+}
+
 interface AdapterMeta {
   lastMessageAt: string | null;
   lastError: string | null;

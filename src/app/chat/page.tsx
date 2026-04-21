@@ -6,6 +6,7 @@ import type { Message, SSEEvent, SessionResponse, TokenUsage, PermissionRequestE
 import { MessageList } from '@/components/chat/MessageList';
 import { MessageInput } from '@/components/chat/MessageInput';
 import { ChatComposerActionBar } from '@/components/chat/ChatComposerActionBar';
+import { CaretRight, CaretDown } from '@/components/ui/icon';
 import { ModeIndicator } from '@/components/chat/ModeIndicator';
 import { ChatPermissionSelector } from '@/components/chat/ChatPermissionSelector';
 import { ImageGenToggle } from '@/components/chat/ImageGenToggle';
@@ -228,7 +229,7 @@ export default function NewChatPage() {
     const params = new URLSearchParams(window.location.search);
     return params.get('prefill') || '';
   }, []);
-  const { setPendingApprovalSessionId } = usePanel();
+  const { setPendingApprovalSessionId, bottomPanelOpen, setBottomPanelOpen, setBottomPanelTab } = usePanel();
   const { t } = useTranslation();
   const { isElectron, openNativePicker } = useNativeFolderPicker();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1141,12 +1142,24 @@ export default function NewChatPage() {
         initialValue={prefillText}
       />
       <ChatComposerActionBar
-        left={<><ModeIndicator mode={mode} onModeChange={setMode} disabled={isStreaming} /><ImageGenToggle /></>}
+        left={<ModeIndicator mode={mode} onModeChange={setMode} disabled={isStreaming} />}
         center={
-          <ChatPermissionSelector
-            permissionProfile={permissionProfile}
-            onPermissionChange={setPermissionProfile}
-          />
+          <div className="flex items-center">
+            <ChatPermissionSelector
+              permissionProfile={permissionProfile}
+              onPermissionChange={setPermissionProfile}
+            />
+            <button
+              onClick={() => {
+                setBottomPanelTab('console');
+                setBottomPanelOpen(!bottomPanelOpen);
+              }}
+              className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors ml-3 border-l border-border/40 pl-3 h-4"
+            >
+              {bottomPanelOpen ? <CaretDown size={14} /> : <CaretRight size={14} />}
+              <span>控制台日志</span>
+            </button>
+          </div>
         }
       />
       <FolderPicker

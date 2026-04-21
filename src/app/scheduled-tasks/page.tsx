@@ -72,31 +72,32 @@ function groupTasks(tasks: ScheduledTask[]): TaskGroup[] {
   const map = new Map<string, TaskGroup>();
 
   for (const task of tasks) {
-    if (task.group_id && task.group_name) {
-      const key = `group-${task.group_id}`;
-      const existing = map.get(key);
-      if (existing) {
-        existing.count += 1;
-        existing.tasks.push(task);
-      } else {
-        map.set(key, {
-          key,
-          name: task.group_name,
-          isGrouped: true,
-          count: 1,
-          tasks: [task],
-          description: task.prompt.slice(0, 100) + (task.prompt.length > 100 ? "…" : ""),
-        });
-      }
+    // Group by group_id or fallback to task name for auto-collapsing similar tasks
+    const groupId = task.group_id || `name-${task.name}`;
+    const groupName = task.group_name || task.name;
+    
+    const key = `group-${groupId}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.count += 1;
+      existing.tasks.push(task);
     } else {
-      const key = `single-${task.id}`;
       map.set(key, {
         key,
-        name: task.name,
-        isGrouped: false,
+        name: groupName,
+        isGrouped: true,
         count: 1,
         tasks: [task],
+        description: task.prompt.slice(0, 100) + (task.prompt.length > 100 ? "…" : ""),
       });
+    }
+  }
+
+  // If a group only has 1 task and no explicit group_id, mark it as not grouped
+  for (const group of map.values()) {
+    if (group.count === 1 && !group.tasks[0].group_id) {
+      group.isGrouped = false;
+      group.key = `single-${group.tasks[0].id}`;
     }
   }
 
@@ -104,6 +105,14 @@ function groupTasks(tasks: ScheduledTask[]): TaskGroup[] {
 }
 
 // ── Task card ────────────────────────────────────────────────
+// 通知渠道配置
+const channelConfig: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
+  toast: { label: "Toast", icon: <BellSimple size={12} />, color: "text-blue-500" },
+  system: { label: "系统通知", icon: <Desktop size={12} />, color: "text-purple-500" },
+  telegram: { label: "Telegram", icon: <TelegramLogo size={12} />, color: "text-cyan-500" },
+  session: { label: "写入对话", icon: <ChatCircle size={12} />, color: "text-green-500" },
+};
+
 function TaskCard({
   task,
   onPause,
@@ -210,38 +219,20 @@ function TaskCard({
         </div>
       </div>
 
-      {/* 任务简介（折叠组时显示） */}
-      {description && (
-        <div className="mx-4 mb-2 px-3 py-1.5 rounded-lg bg-muted/20 border border-border/30">
-          <p className="text-[11px] text-muted-foreground/80 leading-relaxed">{description}</p>
-        </div>
-      )}
-
-      {/* Error / result summary */}
-      {task.last_status === "error" && task.last_error && (
-        <div className="mx-4 mb-3 px-3 py-2 rounded-lg bg-red-500/5 border border-red-500/20">
-          <p className="text-[11px] text-red-400 font-medium flex items-center gap-1.5">
-            <WarningCircle size={12} />
-            {t('scheduledTasks.lastError')}: {task.last_error.slice(0, 120)}{task.last_error.length > 120 ? "…" : ""}
-          </p>
-          {task.consecutive_errors > 0 && (
-            <p className="text-[10px] text-red-400/60 mt-0.5">
-              {t('scheduledTasks.consecutiveErrors')}: {task.consecutive_errors}
-            </p>
+      {/* Task Content (Only show if not expanded to save space) */}
+          {!expanded && (
+            <>
+              {/* 任务简介 */}
+              {description && (
+                <div className="mx-4 mb-2 px-3 py-1.5 rounded-lg bg-muted/20 border border-border/30">
+                  <p className="text-[11px] text-muted-foreground/80 leading-relaxed line-clamp-2">{description}</p>
+                </div>
+              )}
+            </>
           )}
-        </div>
-      )}
 
-      {task.last_status === "success" && task.last_result && (
-        <div className="mx-4 mb-3 px-3 py-2 rounded-lg bg-green-500/5 border border-green-500/20">
-          <p className="text-[11px] text-green-400/80 line-clamp-2">
-            {task.last_result.slice(0, 200)}{task.last_result.length > 200 ? "…" : ""}
-          </p>
-        </div>
-      )}
-
-      {/* Last run info */}
-      <div className="mx-4 mb-3 flex items-center gap-4 text-[10px] text-muted-foreground/60">
+          {/* Last run info (Always visible) */}
+          <div className={cn("mx-4 mb-3 flex items-center gap-4 text-[10px] text-muted-foreground/60 flex-wrap", expanded && "mt-2")}>
         {task.last_run && (
           <span>{t('scheduledTasks.lastRun')}: {new Date(task.last_run).toLocaleString("zh-CN")}</span>
         )}
@@ -255,6 +246,27 @@ function TaskCard({
             {task.last_status}
           </span>
         )}
+        {/* 通知渠道与工具授权展示 */}
+        <div className="flex items-center gap-2 ml-auto">
+          {task.tool_authorization && task.tool_authorization.type !== "none" && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-muted/30 border border-border/40 text-muted-foreground" title={`工具授权: ${task.tool_authorization.type}`}>
+              <Lightning size={10} className="text-amber-500" />
+              {task.tool_authorization.type === "full_access" ? "所有工具" : `${task.tool_authorization.tool_ids?.length || 0}个工具`}
+            </span>
+          )}
+          {task.notification_channels && task.notification_channels.length > 0 && (
+            <div className="flex items-center gap-1">
+              {task.notification_channels.map(ch => {
+                const cfg = channelConfig[ch as keyof typeof channelConfig];
+                return cfg ? (
+                  <span key={ch} className={cn("p-0.5 rounded bg-muted/20 border border-border/30", cfg.color)} title={`接收通知: ${cfg.label}`}>
+                    {cfg.icon}
+                  </span>
+                ) : null;
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -342,10 +354,10 @@ function TaskGroupCard({
         </div>
       </div>
 
-      {/* 简介 */}
-      {group.description && (
+      {/* 简介 (折叠时显示) */}
+      {!expanded && group.description && (
         <div className="mx-4 mb-2 px-3 py-1.5 rounded-lg bg-muted/20 border border-border/30">
-          <p className="text-[11px] text-muted-foreground/80 leading-relaxed">{group.description}</p>
+          <p className="text-[11px] text-muted-foreground/80 leading-relaxed line-clamp-2">{group.description}</p>
         </div>
       )}
 
@@ -354,7 +366,7 @@ function TaskGroupCard({
         <div className="border-t border-border/30 divide-y divide-border/30">
           {group.tasks.map((task) => (
             <div key={task.id} className="px-4 py-2 flex items-center gap-3 hover:bg-muted/10">
-              <div className={cn("flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium",
+              <div className={cn("flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium shrink-0",
                 task.last_status === "error" ? "bg-red-500/10 text-red-400" :
                 task.last_status === "success" ? "bg-green-500/10 text-green-400" :
                 task.status === "active" ? "bg-green-500/10 text-green-500" :
@@ -368,7 +380,7 @@ function TaskGroupCard({
                  <Circle size={9} />}
                 {task.last_status || task.status}
               </div>
-              <span className="text-xs text-muted-foreground flex-1 truncate">{task.name}</span>
+              <span className="text-xs text-muted-foreground flex-1 truncate" title={task.name}>{task.name}</span>
               <span className="text-[10px] text-muted-foreground/60 shrink-0">
                 {task.schedule_type === "once" ? t('scheduledTasks.scheduleOnce') :
                  task.schedule_type === "interval" ? task.schedule_value :
@@ -421,10 +433,10 @@ function CreateTaskDialog({
 
   // 高级选项
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [notificationChannels, setNotificationChannels] = useState<NotificationChannelType[]>(["toast", "system"]);
+  const [notificationChannels, setNotificationChannels] = useState<NotificationChannelType[]>(["toast", "system", "telegram", "session"]);
   const [sessionBindingMode, setSessionBindingMode] = useState<"none" | "specify">("none");
   const [selectedSessionId, setSelectedSessionId] = useState("");
-  const [toolAuthType, setToolAuthType] = useState<ToolAuthType>("none");
+  const [toolAuthType, setToolAuthType] = useState<ToolAuthType>("full_access");
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
   const [activeHoursStart, setActiveHoursStart] = useState("");
   const [activeHoursEnd, setActiveHoursEnd] = useState("");
@@ -547,10 +559,10 @@ function CreateTaskDialog({
       setNotifyOnComplete(true);
       setWorkingDirectory("");
       setShowAdvanced(false);
-      setNotificationChannels(["toast", "system"]);
+      setNotificationChannels(["toast", "system", "telegram", "session"]);
       setSessionBindingMode("none");
       setSelectedSessionId("");
-      setToolAuthType("none");
+      setToolAuthType("full_access");
       setSelectedTools([]);
       setActiveHoursStart("");
       setActiveHoursEnd("");
@@ -927,14 +939,14 @@ function LogPanel({ taskId, taskName }: { taskId: string; taskName: string }) {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-background overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/50 bg-muted/10 shrink-0">
         <Clock size={14} className="text-primary" />
         <span className="text-xs font-semibold">{t('scheduledTasks.executionLogs')}</span>
         <span className="text-[10px] text-muted-foreground/60">— {taskName}</span>
         <span className="ml-auto text-[10px] text-muted-foreground/60">{logs.length} 条记录</span>
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto p-4">
         {loading ? (
           <div className="flex items-center justify-center h-20">
             <SpinnerGap size={16} className="animate-spin text-muted-foreground" />
@@ -945,37 +957,39 @@ function LogPanel({ taskId, taskName }: { taskId: string; taskName: string }) {
             <p className="text-xs">{t('scheduledTasks.noLogs')}</p>
           </div>
         ) : (
-          <div className="divide-y divide-border/30">
+          <div className="space-y-4">
             {logs.map((log) => (
-              <div key={log.id} className="px-4 py-3">
-                <div className="flex items-center justify-between mb-1">
+              <div key={log.id} className="p-3 rounded-xl border border-border/50 bg-background shadow-sm hover:shadow-md transition-shadow">
+                <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     {log.status === "success" ? (
-                      <span className="text-[10px] text-green-500 font-bold flex items-center gap-1">
-                        <CheckCircle size={11} /> {t('scheduledTasks.logSuccess')}
+                      <span className="text-[11px] text-green-500 font-bold flex items-center gap-1">
+                        <CheckCircle size={12} /> {t('scheduledTasks.logSuccess')}
                       </span>
                     ) : (
-                      <span className="text-[10px] text-red-500 font-bold flex items-center gap-1">
-                        <XCircle size={11} /> {t('scheduledTasks.logFailed')}
+                      <span className="text-[11px] text-red-500 font-bold flex items-center gap-1">
+                        <XCircle size={12} /> {t('scheduledTasks.logFailed')}
                       </span>
                     )}
                     <span className="text-[10px] text-muted-foreground/60">
                       {new Date(log.created_at).toLocaleString("zh-CN")}
                     </span>
                   </div>
-                  <span className="text-[10px] text-muted-foreground/60">
+                  <span className="text-[10px] text-muted-foreground/60 font-mono">
                     {formatDuration(log.duration_ms)}
                   </span>
                 </div>
                 {log.error && (
-                  <div className="mt-1 px-2 py-1.5 rounded-lg bg-red-500/5 border border-red-500/20">
-                    <p className="text-[10px] text-red-400 whitespace-pre-wrap break-all">{log.error}</p>
+                  <div className="mt-2 px-3 py-2 rounded-lg bg-red-500/5 border border-red-500/20">
+                    <p className="text-[11px] text-red-400 font-mono whitespace-pre-wrap break-words">{log.error}</p>
                   </div>
                 )}
                 {log.result && (
-                  <p className="mt-1 text-[10px] text-muted-foreground/80 whitespace-pre-wrap break-all line-clamp-3">
-                    {log.result}
-                  </p>
+                  <div className="mt-2">
+                    <p className="text-[11px] text-muted-foreground/90 whitespace-pre-wrap break-words leading-relaxed">
+                      {log.result}
+                    </p>
+                  </div>
                 )}
               </div>
             ))}
@@ -1099,13 +1113,18 @@ export default function ScheduledTasksPage() {
               <ArrowClockwise size={14} className={loading ? "animate-spin" : ""} />
             </Button>
             <Button
-              size="sm"
-              onClick={() => setShowCreate(true)}
-              className="h-9 gap-2 bg-primary hover:bg-primary/90 text-primary-foreground shadow-md"
-            >
-              <Plus size={14} />
-              {t('scheduledTasks.addTask')}
-            </Button>
+            size="sm"
+            onClick={() => setShowCreate(true)}
+            className="h-9 gap-2 bg-primary hover:bg-primary/90 text-primary-foreground shadow-md relative"
+          >
+            <Plus size={14} />
+            {t('scheduledTasks.addTask')}
+            {stats.active > 0 && (
+              <span className="absolute -top-2 -right-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow border-2 border-background">
+                {stats.active > 99 ? '99+' : stats.active}
+              </span>
+            )}
+          </Button>
           </div>
         </div>
 
@@ -1172,7 +1191,7 @@ export default function ScheduledTasksPage() {
               </p>
             </div>
           ) : (
-            <div className="space-y-3 max-w-3xl">
+            <div className="space-y-3 w-full">
               {taskGroups.map((group) =>
                 group.isGrouped ? (
                   <TaskGroupCard
@@ -1204,11 +1223,12 @@ export default function ScheduledTasksPage() {
 
         {/* Log panel（仅对单条任务展开时显示，分组不显示日志面板） */}
         {expandedId && !expandedId.startsWith("group-") && (
-          <div className="w-[380px] shrink-0 border-l border-border/50 overflow-hidden flex flex-col">
+          <div className="w-[450px] shrink-0 border-l border-border/50 bg-muted/5 overflow-hidden flex flex-col">
             {(() => {
-              const task = tasks.find((t) => t.id === expandedId);
+              const actualId = expandedId.startsWith("single-") ? expandedId.replace("single-", "") : expandedId;
+              const task = tasks.find((t) => t.id === actualId);
               if (!task) return null;
-              return <LogPanel taskId={expandedId} taskName={task.name} />;
+              return <LogPanel taskId={actualId} taskName={task.name} />;
             })()}
           </div>
         )}

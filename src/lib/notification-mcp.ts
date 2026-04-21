@@ -35,7 +35,13 @@ export const NOTIFICATION_MCP_SYSTEM_PROMPT = `## 通知与定时任务
 - 任务完成需要告知用户 → 用 codepilot_notify
 - 用户问"有哪些定时任务" → 用 codepilot_list_tasks
 - 用户说"孵化"、"领养"、"hatch" → 用 codepilot_hatch_buddy
-- 用户给伙伴起名字 → 用 codepilot_hatch_buddy(buddyName: 名字)`;
+- 用户给伙伴起名字 → 用 codepilot_hatch_buddy(buddyName: 名字)
+
+创建定时任务（codepilot_schedule_task）的重要规则：
+1. 默认工具授权：必须将 tool_authorization 设为 { "type": "full_access" } 以确保任务能使用所需工具。
+2. 默认通知渠道：必须将 notification_channels 设为 ["toast", "system", "telegram", "session"] 以确保用户能收到通知，并保持 notify_on_complete 为 true。
+3. 时间核对：创建前，请先向用户核对任务的名称、执行内容、执行时间、通知渠道等信息。
+4. 时区注意：所有的 "once" 时间（schedule_value）必须使用北京时间（UTC+8）的本地时间格式（YYYY-MM-DD HH:mm:ss）。请根据当前的系统时间计算出正确的北京时间，绝对不要使用 UTC 时间，否则会导致任务在错误的时间执行。`;
 
 export function createNotificationMcpServer() {
   return createSdkMcpServer({
@@ -66,17 +72,22 @@ export function createNotificationMcpServer() {
       // Tool 2: Schedule a task
       tool(
         'codepilot_schedule_task',
-        'Create a scheduled task. Supports cron expressions (e.g. "0 9 * * *" for daily 9am), fixed intervals (e.g. "30m", "2h"), or one-time timestamps (ISO format). The task prompt will be executed by AI when triggered.',
+        'Create a scheduled task. Supports cron expressions (e.g. "0 9 * * *" for daily 9am), fixed intervals (e.g. "30m", "2h"), or one-time timestamps (local time YYYY-MM-DD HH:mm:ss, e.g. "2026-03-31 15:00:00"). Use Beijing Time (UTC+8).',
         {
           name: z.string().describe('Task name (e.g. "Drink water reminder")'),
           prompt: z.string().describe('The instruction to execute when triggered'),
           schedule_type: z.enum(['cron', 'interval', 'once']).describe('Schedule type'),
-          schedule_value: z.string().describe('cron: "0 9 * * *", interval: "30m"/"2h", once: ISO timestamp like "2026-03-31T15:00:00"'),
+          schedule_value: z.string().describe('cron: "0 9 * * *", interval: "30m"/"2h", once: local time like "2026-03-31 15:00:00"'),
           priority: z.enum(['low', 'normal', 'urgent']).optional().default('normal'),
           notify_on_complete: z.boolean().optional().default(true),
+          notification_channels: z.array(z.enum(['toast', 'system', 'telegram', 'session'])).optional().default(['toast', 'system', 'telegram', 'session']),
+          tool_authorization: z.object({
+            type: z.enum(['none', 'full_access', 'mcp']),
+            tool_ids: z.array(z.string()).optional()
+          }).optional().default({ type: 'full_access' }),
           durable: z.boolean().optional().default(true).describe('true=persists across restart, false=session-only'),
         },
-        async ({ name, prompt, schedule_type, schedule_value, priority, notify_on_complete, durable }) => {
+        async ({ name, prompt, schedule_type, schedule_value, priority, notify_on_complete, notification_channels, tool_authorization, durable }) => {
           try {
             // Session-only tasks: stored in memory, not persisted to DB
             if (!durable) {
@@ -87,20 +98,34 @@ export function createNotificationMcpServer() {
 
               let next_run: string;
               if (schedule_type === 'once') {
-                next_run = schedule_value; // ISO timestamp
+                next_run = schedule_value; // local timestamp
               } else if (schedule_type === 'interval') {
                 const { parseInterval } = await import('@/lib/task-scheduler');
-                next_run = new Date(now.getTime() + parseInterval(schedule_value)).toISOString();
+                const future = new Date(now.getTime() + parseInterval(schedule_value));
+                // format local time
+                const y = future.getFullYear();
+                const mo = String(future.getMonth() + 1).padStart(2, '0');
+                const d = String(future.getDate()).padStart(2, '0');
+                const h = String(future.getHours()).padStart(2, '0');
+                const mi = String(future.getMinutes()).padStart(2, '0');
+                const s = String(future.getSeconds()).padStart(2, '0');
+                next_run = `${y}-${mo}-${d} ${h}:${mi}:${s}`;
               } else {
                 const { getNextCronTime } = await import('@/lib/task-scheduler');
                 const cronNext = getNextCronTime(schedule_value);
                 if (!cronNext) {
                   return { content: [{ type: 'text' as const, text: `Cron expression "${schedule_value}" has no valid occurrence within 4 years. Task not created.` }] };
                 }
-                next_run = cronNext.toISOString();
+                const y = cronNext.getFullYear();
+                const mo = String(cronNext.getMonth() + 1).padStart(2, '0');
+                const d = String(cronNext.getDate()).padStart(2, '0');
+                const h = String(cronNext.getHours()).padStart(2, '0');
+                const mi = String(cronNext.getMinutes()).padStart(2, '0');
+                const s = String(cronNext.getSeconds()).padStart(2, '0');
+                next_run = `${y}-${mo}-${d} ${h}:${mi}:${s}`;
               }
 
-              const task = {
+              const task: any = {
                 id,
                 name,
                 prompt,
@@ -111,6 +136,8 @@ export function createNotificationMcpServer() {
                 status: 'active' as const,
                 priority: priority || 'normal',
                 notify_on_complete: notify_on_complete ? 1 : 0,
+                notification_channels,
+                tool_authorization,
                 permanent: 0,
                 created_at: now.toISOString(),
                 updated_at: now.toISOString(),
@@ -122,7 +149,12 @@ export function createNotificationMcpServer() {
             const res = await fetch(`${getBaseUrl()}/api/tasks/schedule`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name, prompt, schedule_type, schedule_value, priority, notify_on_complete: notify_on_complete ? 1 : 0 }),
+              body: JSON.stringify({ 
+                name, prompt, schedule_type, schedule_value, priority, 
+                notify_on_complete: notify_on_complete ? 1 : 0,
+                notification_channels,
+                tool_authorization
+              }),
             });
             if (!res.ok) {
               const err = await res.json().catch(() => ({}));

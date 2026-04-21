@@ -13,7 +13,6 @@ import { ChatPermissionSelector } from './ChatPermissionSelector';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { RuntimeBadge } from './RuntimeBadge';
 import { CaretRight, CaretDown } from '@/components/ui/icon';
-import { ImageGenToggle } from './ImageGenToggle';
 import { Button } from '@/components/ui/button';
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -1099,10 +1098,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       />
       <ChatComposerActionBar
         left={
-          <>
-            <ModeIndicator mode={mode} onModeChange={handleModeChange} disabled={isStreaming} />
-            <ImageGenToggle />
-          </>
+          <ModeIndicator mode={mode} onModeChange={handleModeChange} disabled={isStreaming} />
         }
         center={
           <div className="flex items-center">
@@ -1124,18 +1120,15 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           </div>
         }
         right={
-          <div className="flex items-center gap-1">
-            <RuntimeBadge providerId={currentProviderId} />
-            <ContextUsageIndicator
-              messages={messages}
-              modelName={currentModel}
-              context1m={context1m}
-              hasSummary={hasSummary}
-              contextWindow={currentModelMeta.contextWindow}
-              upstreamModelId={currentModelMeta.upstreamModelId}
-              contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
-            />
-          </div>
+          <ContextUsageIndicator
+            messages={messages}
+            modelName={currentModel}
+            context1m={context1m}
+            hasSummary={hasSummary}
+            contextWindow={currentModelMeta.contextWindow}
+            upstreamModelId={currentModelMeta.upstreamModelId}
+            contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
+          />
         }
       />
     </div>

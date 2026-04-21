@@ -105,7 +105,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [globalContextMenuOpen, setGlobalContextMenuOpen] = useState(false);
   const [globalContextMenuPosition, setGlobalContextMenuPosition] = useState({ x: 0, y: 0 });
-
+  const [activeTaskCount, setActiveTaskCount] = useState(0);
 
   // Reload assistant summary when sessions change (e.g. after onboarding/rename)
   useEffect(() => {
@@ -114,6 +114,23 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       .then(data => setAssistantSummary(data))
       .catch(() => {});
   }, [sessions.length]);
+
+  // Poll for active scheduled tasks count
+  useEffect(() => {
+    const fetchActiveTasks = async () => {
+      try {
+        const res = await fetch('/api/tasks/list?status=active');
+        if (res.ok) {
+          const data = await res.json();
+          setActiveTaskCount(data.tasks?.length || 0);
+        }
+      } catch { /* ignore */ }
+    };
+    
+    fetchActiveTasks();
+    const interval = setInterval(fetchActiveTasks, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   /** Read current model + provider_id from localStorage for new session creation */
   const getCurrentModelAndProvider = useCallback(() => {
@@ -692,7 +709,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
                 <Button
                   variant="ghost"
                   size="sm"
-                  className={`w-full justify-start gap-2 h-8 text-xs ${
+                  className={`w-full justify-start gap-2 h-8 text-xs relative ${
                     isActive
                       ? "bg-accent text-accent-foreground font-medium"
                       : "text-muted-foreground hover:text-foreground"
@@ -700,6 +717,11 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
                 >
                   <item.icon size={14} weight={isActive ? "fill" : "regular"} />
                   {item.label}
+                  {item.href === "/scheduled-tasks" && activeTaskCount > 0 && (
+                    <span className="absolute right-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white shadow-sm">
+                      {activeTaskCount > 99 ? '99+' : activeTaskCount}
+                    </span>
+                  )}
                 </Button>
               </Link>
             );

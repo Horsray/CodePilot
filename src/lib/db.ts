@@ -3020,11 +3020,28 @@ export function listScheduledTasks(opts?: { status?: string }): ScheduledTask[] 
   return rows.map(parseTaskFromDb);
 }
 
-export function getDueTasks(): ScheduledTask[] {
+export function getDueTasks(nowLocalStr?: string): ScheduledTask[] {
   const db = getDb();
-  const nowISO = new Date().toISOString();
-  const rows = db.prepare("SELECT * FROM scheduled_tasks WHERE next_run <= ? AND status = 'active' AND (last_status IS NULL OR last_status != 'running')").all(nowISO) as Record<string, unknown>[];
+  // 使用本地时间字符串比较，避免 UTC/本地时间混乱问题
+  // nowLocalStr 格式: "YYYY-MM-DD HH:mm:ss"
+  const nowStr = nowLocalStr || formatNowLocal();
+  const rows = db.prepare("SELECT * FROM scheduled_tasks WHERE next_run <= ? AND status = 'active' AND (last_status IS NULL OR last_status != 'running')").all(nowStr) as Record<string, unknown>[];
   return rows.map(parseTaskFromDb);
+}
+
+/**
+ * 获取当前本地时间字符串，格式：YYYY-MM-DD HH:mm:ss
+ * 不使用 UTC，确保与数据库中存储的 next_run 格式一致
+ */
+function formatNowLocal(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const mo = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const h = String(now.getHours()).padStart(2, '0');
+  const mi = String(now.getMinutes()).padStart(2, '0');
+  const s = String(now.getSeconds()).padStart(2, '0');
+  return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
 }
 
 export function updateScheduledTask(id: string, updates: Partial<ScheduledTask>): void {

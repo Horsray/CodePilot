@@ -149,6 +149,9 @@ export function selectOnDemandMcpServerNames(
   if (/filesystem|文件系统.*mcp/i.test(text)) {
     add('filesystem');
   }
+  if (/(搜索|查找|检索|找一下|搜一下|grep|glob|ripgrep|rg)\b/i.test(text) || /\/src\/|src\/|\.tsx?\b|\.jsx?\b|\*\*\/\*|\*\.\w{1,6}\b/.test(text)) {
+    add('filesystem');
+  }
 
   return selected;
 }

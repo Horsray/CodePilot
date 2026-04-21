@@ -3,6 +3,29 @@ import pkg from "./package.json" with { type: "json" };
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // 中文注释：Webpack 配置 - 确保关键依赖正确打包，避免运行时 chunk 加载失败
+  webpack: (config, { isServer }) => {
+    // 修复 mermaid 相关包的代码分割问题
+    // 错误：ENOENT: no such file or directory, open '.../vendor-chunks/mermaid.js'
+    // 原因：Next.js standalone 模式下某些动态导入的 chunk 未被正确包含
+    config.optimization = {
+      ...config.optimization,
+      splitChunks: {
+        ...config.optimization?.splitChunks,
+        cacheGroups: {
+          ...config.optimization?.splitChunks?.cacheGroups,
+          // 将 mermaid 相关包打包到主 bundle，避免单独的 chunk 丢失
+          mermaid: {
+            test: /[\\/]node_modules[\\/](mermaid|@streamdown[\\/]mermaid)[\\/]/,
+            name: 'mermaid-bundle',
+            chunks: 'all',
+            enforce: true,
+          },
+        },
+      },
+    };
+    return config;
+  },
   // serverExternalPackages: keep these in node_modules at runtime instead of bundling.
   // - better-sqlite3 / zlib-sync: native modules, can't be bundled
   // - node-pty: native module for terminal support

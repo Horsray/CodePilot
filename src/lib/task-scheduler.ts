@@ -316,13 +316,6 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
       sessionModel: model
     });
 
-    console.log(`[scheduler] Provider resolved: ${resolved.provider?.name || 'none'}, hasCredentials: ${resolved.hasCredentials}, providerId: ${providerId}`);
-    if (!resolved.hasCredentials) {
-      throw new Error('No API credentials configured');
-    }
-
-    console.log(`[scheduler] Executing task ${task.id} with provider ${resolved.provider?.id}, model ${resolved.upstreamModel || resolved.model}`);
-
     // Build system prompt with task context and current system time
     const systemTime = new Date().toLocaleString('zh-CN', {
       timeZone: 'Asia/Shanghai',
@@ -335,17 +328,94 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     });
     const system = `You are executing a scheduled task. Be concise and direct.\nTask name: ${task.name}\nCurrent system time (Shanghai): ${systemTime}`;
 
-    // Execute via Native path (AI SDK) with MCP tools support
-    // Use Native runtime instead of SDK to avoid shadow HOME issues with DB providers
-    console.log(`[scheduler] About to execute task ${task.id} with providerId=${resolved.provider?.id}, model=${resolved.upstreamModel || resolved.model}`);
-    const { generateTextFromProvider } = await import('./text-generator');
-    const result = await generateTextFromProvider({
-      providerId: resolved.provider?.id || '',
-      model: resolved.upstreamModel || resolved.model || 'MiniMax-M2.7',
-      system,
-      prompt: task.prompt,
-      maxTokens: 4096,
-    });
+    let result = '';
+
+    if (task.tool_authorization) {
+      // Execute via Native path (AI SDK) with MCP tools support
+      const { runAgentLoop } = await import('./agent-loop');
+      let toolsOverride: any = undefined;
+      
+      if (task.tool_authorization.type === 'mcp' && task.tool_authorization.tool_ids) {
+        const { assembleTools } = await import('./agent-tools');
+        const all = assembleTools({ workingDirectory: task.working_directory || process.cwd() });
+        toolsOverride = {};
+        for (const id of task.tool_authorization.tool_ids) {
+          if (all.tools[id]) toolsOverride[id] = all.tools[id];
+        }
+      }
+
+      const stream = runAgentLoop({
+        prompt: task.prompt,
+        sessionId: targetSessionId || task.id,
+        providerId: resolved.provider?.id,
+        sessionProviderId: providerId,
+        model: resolved.upstreamModel || resolved.model || 'MiniMax-M2.7',
+        systemPrompt: system,
+        workingDirectory: task.working_directory || process.cwd(),
+        bypassPermissions: true, // Scheduled tasks run unattended, must bypass permissions
+        autoTrigger: true,
+        tools: toolsOverride,
+      });
+
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let executionLog = `### 任务目标\n${task.prompt}\n\n### 执行过程\n`;
+      let hasToolCalls = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === 'text') {
+                result += data.data;
+              } else if (data.type === 'tool_use') {
+                const tu = JSON.parse(data.data);
+                hasToolCalls = true;
+                executionLog += `- 🛠️ 调用工具：\`${tu.name}\`\n`;
+              } else if (data.type === 'tool_result') {
+                const tr = JSON.parse(data.data);
+                executionLog += `  - 结果：${tr.is_error ? '❌ 失败' : '✅ 成功'}\n`;
+              } else if (data.type === 'error') {
+                executionLog += `- ❌ 发生错误：${data.data}\n`;
+              }
+            } catch {}
+          }
+        }
+      }
+      
+      // Flush the remaining decoder buffer
+      buffer += decoder.decode();
+      const finalLines = buffer.split('\n');
+      for (const line of finalLines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'text') result += data.data;
+          } catch {}
+        }
+      }
+
+      executionLog += `\n### 最终输出\n${result || '(无文本输出)'}`;
+      result = executionLog;
+    } else {
+      // Execute without tools (lightweight text generation)
+      const { generateTextFromProvider } = await import('./text-generator');
+      const rawResult = await generateTextFromProvider({
+        providerId: resolved.provider?.id || '',
+        model: resolved.upstreamModel || resolved.model || 'MiniMax-M2.7',
+        system,
+        prompt: task.prompt,
+        maxTokens: 4096,
+      });
+      result = `### 任务目标\n${task.prompt}\n\n### 最终输出\n${rawResult}`;
+    }
 
     // Success — update SQLite (skip for session tasks)
     if (!isSessionTask) {
@@ -365,8 +435,8 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     }
 
     // Notify on completion via all configured channels
+    const channels = task.notification_channels || ['toast'];
     if (task.notify_on_complete) {
-      const channels = task.notification_channels || ['toast'];
       await sendMultiChannelNotification(
         channels,
         `✅ ${task.name}`,
@@ -375,38 +445,50 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
       );
     }
 
-    // Insert result as assistant message in the task's session (or latest assistant session)
-    try {
-      const { addMessage } = await import('@/lib/db');
-      const workspacePath = getSetting('assistant_workspace_path');
-      let msgTargetSessionId = targetSessionId;
+    // Insert result as assistant message only if the 'session' channel is selected
+    if (channels.includes('session')) {
+      try {
+        const { addMessage, getSetting, getLatestSessionByWorkingDirectory, getAllSessions } = await import('@/lib/db');
+        const workspacePath = getSetting('assistant_workspace_path');
+        let msgTargetSessionId = targetSessionId;
 
-      if (!msgTargetSessionId && workspacePath) {
-        const session = (await import('@/lib/db')).getLatestSessionByWorkingDirectory(workspacePath);
-        if (session) msgTargetSessionId = session.id;
-      }
+        if (!msgTargetSessionId && workspacePath) {
+          const session = getLatestSessionByWorkingDirectory(workspacePath);
+          if (session) msgTargetSessionId = session.id;
+        }
 
-      // Fallback: if still no session, use the most recent session overall
-      if (!msgTargetSessionId) {
-        const sessions = getAllSessions();
-        if (sessions.length > 0) msgTargetSessionId = sessions[0].id;
-      }
+        // Fallback: if still no session, use the most recent session overall
+        if (!msgTargetSessionId) {
+          const sessions = getAllSessions();
+          if (sessions.length > 0) msgTargetSessionId = sessions[0].id;
+        }
 
-      if (msgTargetSessionId) {
-        // Load buddy info for personalized notification
-        let buddyPrefix = '📋';
-        try {
-          const { loadState } = await import('@/lib/assistant-workspace');
-          if (workspacePath) {
-            const st = loadState(workspacePath);
-            if (st.buddy) {
-              buddyPrefix = `${st.buddy.emoji} ${st.buddy.buddyName || ''}`.trim();
+        if (msgTargetSessionId) {
+          // Load buddy info for personalized notification
+          let buddyPrefix = '📋';
+          try {
+            const { loadState } = await import('@/lib/assistant-workspace');
+            if (workspacePath) {
+              const st = loadState(workspacePath);
+              if (st.buddy) {
+                buddyPrefix = `${st.buddy.emoji} ${st.buddy.buddyName || ''}`.trim();
+              }
             }
-          }
-        } catch {}
-        addMessage(msgTargetSessionId, 'assistant', `${buddyPrefix} **${task.name}**\n\n${result}`);
-      }
-    } catch { /* best effort */ }
+          } catch {}
+          
+          // Build structured final message for the session and bridge
+          const header = `**⏰ 定时任务执行完毕**\n- **任务名称**：${task.name}\n- **计划时间**：${task.next_run}\n- **执行耗时**：${(Date.now() - startTime) / 1000}s\n\n---\n\n`;
+          const finalMessage = `${buddyPrefix} ${header}${result}`;
+          addMessage(msgTargetSessionId, 'assistant', finalMessage);
+          
+          // Forward message to any active bridge channels bound to this session
+          try {
+            const { deliverToSession } = await import('@/lib/bridge/bridge-manager');
+            await deliverToSession(msgTargetSessionId, finalMessage);
+          } catch { /* best effort */ }
+        }
+      } catch (err) { console.error('Failed to write session message', err); }
+    }
 
     console.log(`[scheduler] Task ${task.id} (${task.name}) completed`);
   } catch (err) {
@@ -445,8 +527,8 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     applyBackoff(task.id, errors);
 
     // Notify on failure via all configured channels
+    const channels = task.notification_channels || ['toast'];
     if (task.notify_on_complete) {
-      const channels = task.notification_channels || ['toast'];
       await sendMultiChannelNotification(
         channels,
         `❌ ${task.name}`,
@@ -455,41 +537,50 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
       );
     }
 
-    // Insert error as assistant message in the task's session
-    try {
-      const { addMessage, getSetting } = await import('@/lib/db');
-      const workspacePath = getSetting('assistant_workspace_path');
-      let msgTargetSessionId = task.session_id;
-      if (task.session_binding?.session_id) {
-        msgTargetSessionId = task.session_binding.session_id;
-      }
+    // Insert error as assistant message only if the 'session' channel is selected
+    if (channels.includes('session')) {
+      try {
+        const { addMessage, getSetting } = await import('@/lib/db');
+        const workspacePath = getSetting('assistant_workspace_path');
+        let msgTargetSessionId = task.session_id;
+        if (task.session_binding?.session_id) {
+          msgTargetSessionId = task.session_binding.session_id;
+        }
 
-      if (!msgTargetSessionId && workspacePath) {
-        const session = (await import('@/lib/db')).getLatestSessionByWorkingDirectory(workspacePath);
-        if (session) msgTargetSessionId = session.id;
-      }
+        if (!msgTargetSessionId && workspacePath) {
+          const session = (await import('@/lib/db')).getLatestSessionByWorkingDirectory(workspacePath);
+          if (session) msgTargetSessionId = session.id;
+        }
 
-      // Fallback: if still no session, use the most recent session overall
-      if (!msgTargetSessionId) {
-        const sessions = getAllSessions();
-        if (sessions.length > 0) msgTargetSessionId = sessions[0].id;
-      }
+        // Fallback: if still no session, use the most recent session overall
+        if (!msgTargetSessionId) {
+          const sessions = getAllSessions();
+          if (sessions.length > 0) msgTargetSessionId = sessions[0].id;
+        }
 
-      if (msgTargetSessionId) {
-        // Load buddy info for personalized error notification
-        let buddyPrefix = '❌';
-        try {
-          const { loadState } = await import('@/lib/assistant-workspace');
-          if (workspacePath) {
-            const st = loadState(workspacePath);
-            if (st.buddy) {
-              buddyPrefix = `${st.buddy.emoji} ${st.buddy.buddyName || ''}`.trim();
+        if (msgTargetSessionId) {
+          // Load buddy info for personalized error notification
+          let buddyPrefix = '❌';
+          try {
+            const { loadState } = await import('@/lib/assistant-workspace');
+            if (workspacePath) {
+              const st = loadState(workspacePath);
+              if (st.buddy) {
+                buddyPrefix = `${st.buddy.emoji} ${st.buddy.buddyName || ''}`.trim();
+              }
             }
-          }
-        } catch {}
-        addMessage(msgTargetSessionId, 'assistant', `${buddyPrefix} ❌ **${task.name}** (定时任务失败)\n\n${errorMsg}`);
-      }
-    } catch { /* best effort */ }
+          } catch {}
+          const finalErrorMsg = `${buddyPrefix} ❌ **${task.name}** (定时任务失败)\n\n${errorMsg}`;
+          addMessage(msgTargetSessionId, 'assistant', finalErrorMsg);
+          
+          // Forward message to any active bridge channels bound to this session
+          try {
+            const { deliverToSession } = await import('@/lib/bridge/bridge-manager');
+            await deliverToSession(msgTargetSessionId, finalErrorMsg);
+          } catch { /* best effort */ }
+        }
+      } catch { /* best effort */ }
+    }
 
     console.error(`[scheduler] Task ${task.id} (${task.name}) error (${errors}x):`, errorMsg);
   }
@@ -673,6 +764,10 @@ async function handleMissedTasks(): Promise<void> {
       }
       if (targetSessionId) {
         addMessage(targetSessionId, 'assistant', message);
+        try {
+          const { deliverToSession } = await import('@/lib/bridge/bridge-manager');
+          await deliverToSession(targetSessionId, message);
+        } catch { /* best effort */ }
       }
     } catch { /* best effort */ }
 
