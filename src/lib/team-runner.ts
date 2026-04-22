@@ -1,7 +1,8 @@
-import { getAgent } from './agent-registry';
+import { getAgent, getSubAgents } from './agent-registry';
 import { runAgentLoop } from './agent-loop';
 import { assembleTools } from './agent-tools';
 import type { ToolSet } from 'ai';
+import { resolveAgentModel } from './agent-routing';
 
 export interface TeamRunnerOptions {
   goal: string;
@@ -13,6 +14,17 @@ export interface TeamRunnerOptions {
   parentSessionId?: string;
   emitSSE?: (event: { type: string; data: string }) => void;
   abortSignal?: AbortSignal;
+}
+
+interface DAGTask {
+  id: string;
+  role: string;
+  desc: string;
+  dependsOn: string[];
+}
+
+interface TeamDAG {
+  tasks: DAGTask[];
 }
 
 function filterTools(allTools: ToolSet, allowedTools?: string[], disallowedTools?: string[]): ToolSet {
@@ -43,229 +55,396 @@ function emitTeamEvent(type: string, data: Record<string, unknown>) {
   }
 }
 
+/**
+ * executeAgentTask - 单个智能体任务执行器
+ * 功能：运行单个智能体完成指定任务，收集日志、工具结果，并通过 SSE 汇报进度
+ * 用法：由并行调度器（runTeamPipeline）调用，处理 DAG 中的单个节点任务
+ */
+async function executeAgentTask(
+  task: DAGTask,
+  options: TeamRunnerOptions,
+  accumulatedContext: string
+): Promise<{ report: string; errorEvent: string | null; role: string }> {
+  const { workingDirectory, emitSSE, abortSignal } = options;
+  const agentDef = getAgent(task.role);
+  if (!agentDef) {
+    return { report: `Error: Agent ${task.role} not found.`, errorEvent: 'Agent not found', role: task.role };
+  }
+
+  const { providerId: finalProviderId, model: finalModel } = resolveAgentModel(
+    agentDef,
+    options.providerId,
+    options.parentModel
+  );
+
+  emitTeamEvent('team_agent_start', {
+    id: task.id,
+    agent: task.role,
+    desc: task.desc,
+    model: finalModel,
+    startedAt: Date.now(),
+  });
+
+  const subAgentId = `team-${task.role}-${Date.now()}`;
+  const prompt = `Your role is ${task.role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${accumulatedContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
+
+  const permissionContext = (options.parentSessionId && options.emitSSE && options.permissionMode)
+    ? {
+        sessionId: options.parentSessionId,
+        permissionMode: (options.permissionMode || 'trust') as import('./permission-checker').PermissionMode,
+        emitSSE: options.emitSSE,
+        abortSignal: options.abortSignal,
+      }
+    : undefined;
+
+  const { tools: allTools } = assembleTools({
+    workingDirectory,
+    providerId: finalProviderId,
+    sessionProviderId: options.sessionProviderId,
+    model: finalModel,
+    permissionContext,
+  });
+
+  const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
+  const systemPrompt = agentDef.prompt
+    ? `${agentDef.prompt}\n\nWorking directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do not just output your internal thoughts.`
+    : `You are a helpful sub-agent in a team. Working directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do not just output your internal thoughts.`;
+
+  if (emitSSE) {
+    emitSSE({
+      type: 'subagent_start',
+      data: JSON.stringify({
+        id: subAgentId,
+        name: task.role,
+        displayName: agentDef.displayName || task.role,
+        prompt: task.desc,
+      }),
+    });
+    emitSSE({ type: 'tool_output', data: `[subagent:${task.role}] ${task.desc}\n` });
+  }
+
+  const stream = runAgentLoop({
+    prompt,
+    sessionId: subAgentId,
+    providerId: finalProviderId,
+    sessionProviderId: options.sessionProviderId,
+    model: finalModel,
+    systemPrompt,
+    workingDirectory,
+    tools: subTools,
+    maxSteps: agentDef.maxSteps || 30,
+    permissionMode: options.permissionMode,
+  });
+
+  const reader = stream.getReader();
+  const textParts: string[] = [];
+  const thinkingParts: string[] = [];
+  const toolResults: Array<{ content: string; isError: boolean }> = [];
+  let errorEvent: string | null = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      if (value) {
+        const lines = value.split('\n');
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'permission_request' && emitSSE) {
+              emitSSE(event);
+            } else {
+              if (event.type === 'text') {
+                textParts.push(event.data);
+              } else if (event.type === 'thinking') {
+                thinkingParts.push(event.data);
+              } else if (event.type === 'error') {
+                try {
+                  const errData = JSON.parse(event.data);
+                  errorEvent = errData.userMessage || event.data;
+                } catch {
+                  errorEvent = event.data;
+                }
+              } else if (event.type === 'tool_result') {
+                try {
+                  const res = JSON.parse(event.data);
+                  let content = res.content;
+                  if (content == null || content === 'null') {
+                    content = '';
+                  } else {
+                    content = String(content);
+                  }
+                  toolResults.push({
+                    content: content.slice(0, 2000),
+                    isError: !!res.is_error,
+                  });
+                } catch { }
+              } else if (event.type === 'tool_use') {
+                try {
+                  const toolData = JSON.parse(event.data);
+                  emitTeamEvent('team_agent_update', {
+                    id: task.id,
+                    agent: task.role,
+                    status: 'running',
+                    progress: `执行工具: ${toolData.name}`,
+                  });
+                } catch { }
+              }
+              if (emitSSE) {
+                let progressMsg = '';
+                if (event.type === 'text') progressMsg = '正在思考与输出...';
+                else if (event.type === 'tool_use') progressMsg = `执行工具...`;
+                else if (event.type === 'thinking') progressMsg = '正在思考...';
+                
+                if (progressMsg) {
+                  emitSSE({
+                    type: 'subagent_progress',
+                    data: JSON.stringify({ id: subAgentId, detail: progressMsg })
+                  });
+                }
+              }
+            }
+          } catch { }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  let report: string;
+  if (textParts.length > 0) {
+    report = textParts.join('');
+  } else if (errorEvent) {
+    report = `**执行出错：** ${errorEvent}`;
+  } else if (thinkingParts.length > 0 || toolResults.length > 0) {
+    const parts: string[] = [];
+    if (thinkingParts.length > 0) {
+      const thinkingText = thinkingParts.join('').trim();
+      if (thinkingText) {
+        parts.push('**思考过程：**\n' + thinkingText.slice(0, 3000));
+      }
+    }
+    if (toolResults.length > 0) {
+      parts.push(`**执行了 ${toolResults.length} 个工具：**`);
+      for (const tr of toolResults.slice(0, 10)) {
+        const preview = tr.content.slice(0, 500).replace(/\n/g, ' ');
+        parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 500 ? '...' : ''}`);
+      }
+    }
+    report = parts.join('\n\n');
+  } else {
+    report = '(No report provided)';
+  }
+
+  emitTeamEvent('team_agent_done', {
+    id: task.id,
+    agent: task.role,
+    status: errorEvent ? 'error' : 'completed',
+    report,
+    error: errorEvent || undefined,
+    completedAt: Date.now(),
+  });
+
+  if (emitSSE) {
+    emitSSE({
+      type: 'subagent_complete',
+      data: JSON.stringify({
+        id: subAgentId,
+        report,
+        error: errorEvent || undefined,
+      }),
+    });
+    emitSSE({ type: 'tool_output', data: `[+] done\n\n` });
+  }
+
+  return { report, errorEvent, role: task.role };
+}
+
+/**
+ * generateTeamDAG - 动态 DAG 计划生成器
+ * 功能：调用 planner 根据系统可用智能体列表和用户目标生成包含执行依赖树的 DAG JSON
+ * 用法：在执行管线前调用，替换固定的串行编排数组
+ */
+async function generateTeamDAG(options: TeamRunnerOptions): Promise<TeamDAG> {
+  const subAgents = getSubAgents();
+  const subAgentsList = subAgents.map(a => `- ${a.id}: ${a.description}`).join('\n');
+
+  const plannerPrompt = `You are the Orchestrator. The user's goal is: ${options.goal}
+
+Available agents:
+${subAgentsList}
+
+Create a task execution DAG (Directed Acyclic Graph) to accomplish this goal.
+You must output a valid JSON block containing the execution plan. The JSON should match this schema:
+{
+  "tasks": [
+    {
+      "id": "task1",
+      "role": "agent_id",
+      "desc": "detailed description of the task",
+      "dependsOn": ["task_id_1"]
+    }
+  ]
+}
+Make sure to include a verifier or qa-tester step at the end.
+Only output the JSON block, no other text.`;
+
+  if (options.emitSSE) {
+    options.emitSSE({ type: 'text', data: `\n\n🚀 **启动 OMC Team 管线**\n正在规划任务有向无环图 (DAG)...\n` });
+  }
+
+  const { report, errorEvent } = await executeAgentTask({
+    id: 'planner-init',
+    role: 'planner',
+    desc: '规划任务 DAG',
+    dependsOn: []
+  }, options, plannerPrompt);
+
+  if (errorEvent) {
+    throw new Error(`Failed to generate DAG: ${errorEvent}`);
+  }
+
+  const jsonMatch = report.match(/```json\n([\s\S]*?)\n```/) || report.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    // Fallback to default pipeline if planner fails to output JSON
+    return {
+      tasks: [
+        { id: 't1', role: 'search', desc: '探索代码库并收集相关上下文', dependsOn: [] },
+        { id: 't2', role: 'executor', desc: '执行代码修改', dependsOn: ['t1'] },
+        { id: 't3', role: 'verifier', desc: '验证修改结果并进行复核', dependsOn: ['t2'] }
+      ]
+    };
+  }
+
+  try {
+    const dag = JSON.parse(jsonMatch[1] || jsonMatch[0]) as TeamDAG;
+    if (!dag.tasks || !Array.isArray(dag.tasks)) throw new Error('Invalid DAG format');
+    return dag;
+  } catch (e) {
+    return {
+      tasks: [
+        { id: 't1', role: 'search', desc: '探索代码库并收集相关上下文', dependsOn: [] },
+        { id: 't2', role: 'executor', desc: '执行代码修改', dependsOn: ['t1'] },
+        { id: 't3', role: 'verifier', desc: '验证修改结果并进行复核', dependsOn: ['t2'] }
+      ]
+    };
+  }
+}
+
+/**
+ * runTeamPipeline - 多智能体团队调度引擎主入口
+ * 功能：接收用户的团队目标，触发 DAG 计划生成，随后以并发方式和反馈闭环（失败重试）调度各个子智能体
+ * 用法：OMC Team 模式下，供 /team 指令调用执行完整的任务链路
+ */
 export async function runTeamPipeline(options: TeamRunnerOptions): Promise<string> {
-  const { goal, workingDirectory, emitSSE, abortSignal } = options;
+  const { goal, emitSSE, abortSignal } = options;
+  let accumulatedContext = `Team Goal: ${goal}\n\n`;
 
-  // 定义pipeline
-  const pipeline = [
-    { role: 'search', desc: '探索代码库并收集相关上下文' },
-    { role: 'planner', desc: '制定技术方案和修改计划' },
-    { role: 'executor', desc: '执行代码修改' },
-    { role: 'verifier', desc: '验证修改结果并进行复核' }
-  ];
-
-  // 发射team_start事件供TeamLeaderWidget使用
+  // Phase 1: Generate DAG
+  const dag = await generateTeamDAG(options);
+  
   emitTeamEvent('team_start', {
     goal,
-    agents: pipeline.map(p => p.role),
+    agents: dag.tasks,
     startedAt: Date.now(),
   });
 
   if (emitSSE) {
-    // 隐藏主 Agent 发送的额外文本
-    // emitSSE({ type: 'text', data: `\n\n🚀 **启动 OMC Team 管线**\n目标：_${goal}_\n\n` });
+    emitSSE({ type: 'text', data: `✅ **任务 DAG 规划完成**\n包含 ${dag.tasks.length} 个任务节点，即将开始并发执行...\n\n` });
   }
 
-  let accumulatedContext = `Team Goal: ${goal}\n\n`;
+  // Phase 2 & 4: Execute DAG with Parallel Execution and Verification Loop
+  const pendingTasks = [...dag.tasks];
+  const runningTasks = new Map<string, Promise<void>>();
+  const completedTasks = new Set<string>();
+  const taskReports = new Map<string, string>();
+  let retries = 0;
+  const MAX_RETRIES = 3;
 
-  for (const step of pipeline) {
-    if (abortSignal?.aborted) break;
+  while ((pendingTasks.length > 0 || runningTasks.size > 0) && !abortSignal?.aborted) {
+    // Find ready tasks
+    const readyTasks = pendingTasks.filter(t => 
+      !t.dependsOn || t.dependsOn.length === 0 || t.dependsOn.every(dep => completedTasks.has(dep))
+    );
 
-    const agentDef = getAgent(step.role);
-    if (!agentDef) continue;
+    // Start ready tasks
+    for (const task of readyTasks) {
+      // Remove from pending
+      const idx = pendingTasks.indexOf(task);
+      if (idx > -1) pendingTasks.splice(idx, 1);
 
-    const model = agentDef.model || options.parentModel;
-
-    // 发射team_agent_start事件
-    emitTeamEvent('team_agent_start', {
-      agent: step.role,
-      desc: step.desc,
-      model,
-      startedAt: Date.now(),
-    });
-
-    const subAgentId = `team-${step.role}-${Date.now()}`;
-
-    const prompt = `Your role is ${step.role}. Your task is: ${step.desc}.\n\nOverall Team Goal: ${goal}\n\nContext from previous steps:\n${accumulatedContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
-
-    const permissionContext = (options.parentSessionId && options.emitSSE && options.permissionMode)
-      ? {
-          sessionId: options.parentSessionId,
-          permissionMode: (options.permissionMode || 'trust') as import('./permission-checker').PermissionMode,
-          emitSSE: options.emitSSE,
-          abortSignal: options.abortSignal,
-        }
-      : undefined;
-
-    const { tools: allTools } = assembleTools({
-      workingDirectory,
-      providerId: options.providerId,
-      sessionProviderId: options.sessionProviderId,
-      model: options.parentModel,
-      permissionContext,
-    });
-
-    const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
-    const systemPrompt = agentDef.prompt
-      ? `${agentDef.prompt}\n\nWorking directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do not just output your internal thoughts.`
-      : `You are a helpful sub-agent in a team. Working directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do not just output your internal thoughts.`;
-
-    if (emitSSE) {
-      emitSSE({
-        type: 'subagent_start',
-        data: JSON.stringify({
-          id: subAgentId,
-          name: step.role,
-          displayName: agentDef.displayName || step.role,
-          prompt: step.desc,
-        }),
-      });
-      // Legacy support for older frontends if needed, or just standard tool output
-      emitSSE({ type: 'tool_output', data: `[subagent:${step.role}] ${step.desc}\n` });
-    }
-
-    const stream = runAgentLoop({
-      prompt,
-      sessionId: subAgentId,
-      providerId: options.providerId,
-      sessionProviderId: options.sessionProviderId,
-      model,
-      systemPrompt,
-      workingDirectory,
-      tools: subTools,
-      maxSteps: agentDef.maxSteps || 30,
-      permissionMode: options.permissionMode,
-    });
-
-    const reader = stream.getReader();
-    const textParts: string[] = [];
-    const thinkingParts: string[] = [];
-    const toolResults: Array<{ content: string; isError: boolean }> = [];
-    let errorEvent: string | null = null;
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        if (value) {
-          const lines = value.split('\n');
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const event = JSON.parse(line.slice(6));
-              if (event.type === 'permission_request' && emitSSE) {
-                emitSSE(event);
-              } else {
-                if (event.type === 'text') {
-                  textParts.push(event.data);
-                } else if (event.type === 'thinking') {
-                  thinkingParts.push(event.data);
-                } else if (event.type === 'error') {
-                  try {
-                    const errData = JSON.parse(event.data);
-                    errorEvent = errData.userMessage || event.data;
-                  } catch {
-                    errorEvent = event.data;
-                  }
-                } else if (event.type === 'tool_result') {
-                  try {
-                    const res = JSON.parse(event.data);
-                    // Handle null/undefined content, or the string "null" from JSON.stringify(null)
-                    let content = res.content;
-                    if (content == null || content === 'null') {
-                      content = '';
-                    } else {
-                      content = String(content);
-                    }
-                    toolResults.push({
-                      content: content.slice(0, 2000),
-                      isError: !!res.is_error,
-                    });
-                  } catch { }
-                } else if (event.type === 'tool_use') {
-                  // 发射tool_use进度事件
-                  try {
-                    const toolData = JSON.parse(event.data);
-                    emitTeamEvent('team_agent_update', {
-                      agent: step.role,
-                      status: 'running',
-                      progress: `执行工具: ${toolData.name}`,
-                    });
-                  } catch { }
-                }
-                if (emitSSE) {
-                  let progressMsg = '';
-                  if (event.type === 'text') progressMsg = '正在思考与输出...';
-                  else if (event.type === 'tool_use') progressMsg = `执行工具...`;
-                  else if (event.type === 'thinking') progressMsg = '正在思考...';
-                  
-                  if (progressMsg) {
-                    emitSSE({
-                      type: 'subagent_progress',
-                      data: JSON.stringify({ id: subAgentId, detail: progressMsg })
-                    });
-                  }
-                }
-              }
-            } catch { }
+      // Build context from dependencies
+      let taskContext = accumulatedContext;
+      if (task.dependsOn && task.dependsOn.length > 0) {
+        taskContext += `\n\n--- Context from Dependencies ---\n`;
+        for (const depId of task.dependsOn) {
+          if (taskReports.has(depId)) {
+            taskContext += `[From Task ${depId}]:\n${taskReports.get(depId)}\n\n`;
           }
         }
       }
-    } finally {
-      reader.releaseLock();
-    }
 
-    let report: string;
-    if (textParts.length > 0) {
-      report = textParts.join('');
-    } else if (errorEvent) {
-      report = `**执行出错：** ${errorEvent}`;
-    } else if (thinkingParts.length > 0 || toolResults.length > 0) {
-      const parts: string[] = [];
-      if (thinkingParts.length > 0) {
-        const thinkingText = thinkingParts.join('').trim();
-        if (thinkingText) {
-          parts.push('**思考过程：**\n' + thinkingText.slice(0, 3000));
+      // Execute task
+      const taskPromise = executeAgentTask(task, options, taskContext).then(({ report, errorEvent, role }) => {
+        const fullReport = errorEvent ? `**Error**: ${errorEvent}` : report;
+        taskReports.set(task.id, fullReport);
+        completedTasks.add(task.id);
+        accumulatedContext += `\n\n--- Report from ${role} (${task.id}) ---\n${fullReport}\n`;
+
+        // Phase 4: Verification Loop
+        if ((role === 'verifier' || role === 'qa-tester') && !errorEvent) {
+          const isFailed = fullReport.toLowerCase().includes('status: fail') || fullReport.toLowerCase().includes('fail') || fullReport.toLowerCase().includes('❌');
+          if (isFailed && retries < MAX_RETRIES) {
+            retries++;
+            if (emitSSE) {
+              emitSSE({ type: 'text', data: `\n\n⚠️ **验证失败**\n触发自动重试闭环 (Retry ${retries}/${MAX_RETRIES})...\n` });
+            }
+            
+            const debugId = `debug-${retries}`;
+            const execId = `exec-${retries}`;
+            const verifyId = `verify-${retries}`;
+            
+            pendingTasks.push({
+              id: debugId,
+              role: 'debugger',
+              desc: `分析验证失败的原因。前一次验证报告：\n${fullReport}`,
+              dependsOn: [task.id]
+            });
+            pendingTasks.push({
+              id: execId,
+              role: 'executor',
+              desc: `根据 Debugger 的分析结果修复代码。`,
+              dependsOn: [debugId]
+            });
+            pendingTasks.push({
+              id: verifyId,
+              role: role,
+              desc: `重新运行验证步骤。`,
+              dependsOn: [execId]
+            });
+          }
         }
-      }
-      if (toolResults.length > 0) {
-        parts.push(`**执行了 ${toolResults.length} 个工具：**`);
-        for (const tr of toolResults.slice(0, 10)) {
-          const preview = tr.content.slice(0, 500).replace(/\n/g, ' ');
-          parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 500 ? '...' : ''}`);
-        }
-      }
-      report = parts.join('\n\n');
-    } else {
-      report = '(No report provided)';
-    }
-    accumulatedContext += `\n\n--- Report from ${step.role} ---\n${report}\n`;
-
-    // 发射team_agent_done事件
-    emitTeamEvent('team_agent_done', {
-      agent: step.role,
-      status: errorEvent ? 'error' : 'completed',
-      report,
-      error: errorEvent || undefined,
-      completedAt: Date.now(),
-    });
-
-    if (emitSSE) {
-      emitSSE({
-        type: 'subagent_complete',
-        data: JSON.stringify({
-          id: subAgentId,
-          report,
-          error: errorEvent || undefined,
-        }),
       });
-      // Also emit tool_output for legacy or standard tool parsing
-      emitSSE({ type: 'tool_output', data: `[+] done\n\n` });
+
+      runningTasks.set(task.id, taskPromise);
+    }
+
+    // Wait for at least one running task to finish before checking again
+    if (runningTasks.size > 0) {
+      await Promise.race(runningTasks.values());
+      // Clean up finished tasks from runningTasks
+      for (const [id, promise] of runningTasks.entries()) {
+        // A little trick to check if promise is resolved: we remove it since it's already in completedTasks
+        if (completedTasks.has(id)) {
+          runningTasks.delete(id);
+        }
+      }
     }
   }
 
-  // 发射team_done事件
   emitTeamEvent('team_done', {
     summary: 'OMC Team 管线全部执行完毕',
     completedAt: Date.now(),

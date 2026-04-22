@@ -817,7 +817,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
 
         {/* Render SubAgentTimeline for historical messages if subAgents exist (before text content) */}
         {!isUser && subAgents && subAgents.length > 0 && (
-          <div className="w-full mt-2 mb-2">
+          <div className="w-full mt-2 mb-2 relative z-10">
             <SubAgentTimeline subAgents={subAgents} />
           </div>
         )}
@@ -865,6 +865,8 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
             <AssistantContent displayText={displayText} messageId={message.id} sessionId={sessionId} />
           )
         )}
+
+
 
         {!isUser && taskCompletionInfo && (
           <div className="flex items-center gap-2 mt-3 mb-2 text-[12px] text-muted-foreground">

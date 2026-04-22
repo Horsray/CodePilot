@@ -116,13 +116,16 @@ function truncatePath(path: string, maxLen = 50): string {
 }
 
 export const AGENT_META: Record<string, { icon: React.ElementType, color: string, bg: string, label: string }> = {
-  search: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '搜索者 (Search)' },
-  explorer: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者 (Explorer)' },
-  planner: { icon: ListChecks, color: 'text-purple-500', bg: 'bg-purple-500/10', label: '规划者 (Planner)' },
-  executor: { icon: Wrench, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '执行者 (Executor)' },
-  verifier: { icon: ShieldCheck, color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: '验证者 (Verifier)' },
-  analyst: { icon: Brain, color: 'text-indigo-500', bg: 'bg-indigo-500/10', label: '分析者 (Analyst)' },
-  general: { icon: Robot, color: 'text-slate-500', bg: 'bg-slate-500/10', label: '通用助手 (General)' }
+  search: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '搜索者' },
+  explorer: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者' },
+  planner: { icon: ListChecks, color: 'text-purple-500', bg: 'bg-purple-500/10', label: '规划者' },
+  executor: { icon: Wrench, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '执行者' },
+  verifier: { icon: ShieldCheck, color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: '验证者' },
+  analyst: { icon: Brain, color: 'text-indigo-500', bg: 'bg-indigo-500/10', label: '分析者' },
+  tester: { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: '测试者' },
+  qa: { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: '质量保证' },
+  debugger: { icon: Wrench, color: 'text-yellow-500', bg: 'bg-yellow-500/10', label: '调试者' },
+  general: { icon: Robot, color: 'text-slate-500', bg: 'bg-slate-500/10', label: '通用助手' }
 };
 
 function TeamAgentTimelines({ outputText, isRunning }: { outputText: string, isRunning: boolean }) {

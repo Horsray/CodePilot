@@ -576,9 +576,12 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           prompt: data.prompt,
           status: 'running',
           startedAt: Date.now(),
+          model: data.model,
         };
-        stream.subAgents = [...stream.subAgents, agent];
+        const updated = [...stream.subAgents, agent];
+        stream.subAgents = updated;
         emit(stream, 'snapshot-updated');
+        window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updated } }));
         // Dispatch window event for sub-agent timeline UI
         window.dispatchEvent(new CustomEvent('subagent-start', { detail: { sessionId: params.sessionId, ...data } }));
       },
@@ -589,25 +592,27 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           const updated = [...stream.subAgents];
           updated[idx] = { ...updated[idx], progress: data.detail };
           stream.subAgents = updated;
-          emit(stream, 'snapshot-updated');
-        }
-        window.dispatchEvent(new CustomEvent('subagent-progress', { detail: { sessionId: params.sessionId, ...data } }));
-      },
-      onSubAgentComplete: (data) => {
-        markActive();
-        const idx = stream.subAgents.findIndex(a => a.id === data.id);
-        if (idx >= 0) {
-          const updated = [...stream.subAgents];
-          updated[idx] = {
-            ...updated[idx],
-            status: data.error ? 'error' : 'completed',
-            report: data.report,
-            error: data.error,
-            completedAt: Date.now(),
-          };
-          stream.subAgents = updated;
-          emit(stream, 'snapshot-updated');
-        }
+        emit(stream, 'snapshot-updated');
+        window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updated } }));
+      }
+      window.dispatchEvent(new CustomEvent('subagent-progress', { detail: { sessionId: params.sessionId, ...data } }));
+    },
+    onSubAgentComplete: (data) => {
+      markActive();
+      const idx = stream.subAgents.findIndex(a => a.id === data.id);
+      if (idx >= 0) {
+        const updated = [...stream.subAgents];
+        updated[idx] = {
+          ...updated[idx],
+          status: data.error ? 'error' : 'completed',
+          report: data.report,
+          error: data.error,
+          completedAt: Date.now(),
+        };
+        stream.subAgents = updated;
+        emit(stream, 'snapshot-updated');
+        window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updated } }));
+      }
         window.dispatchEvent(new CustomEvent('subagent-complete', { detail: { sessionId: params.sessionId, ...data } }));
       },
     });
@@ -657,6 +662,14 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       if (hasSubAgents) {
         contentBlocks.push({ type: 'sub_agents', subAgents: stream.subAgents });
       }
+      messageContent = JSON.stringify(contentBlocks);
+    } else if (hasSubAgents) {
+      // Handles case where there are no tools and no thinking, but there are subagents
+      const contentBlocks: Array<Record<string, unknown>> = [];
+      if (finalAnswerText) {
+        contentBlocks.push({ type: 'text', text: finalAnswerText });
+      }
+      contentBlocks.push({ type: 'sub_agents', subAgents: stream.subAgents });
       messageContent = JSON.stringify(contentBlocks);
     }
 

@@ -20,6 +20,7 @@ interface TeamGoal {
 }
 
 interface AgentUpdate {
+  id: string;
   agent: string;
   status: 'pending' | 'running' | 'completed' | 'error';
   model?: string;
@@ -52,27 +53,35 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
         setIsComplete(false);
         // 解析pipeline agents
         if (detail.agents) {
-          setAgents(detail.agents.map((name: string) => ({
-            agent: name,
-            status: 'pending' as const,
-          })));
+          setAgents(detail.agents.map((agentInfo: any) => {
+            if (typeof agentInfo === 'string') {
+              return { id: agentInfo, agent: agentInfo, status: 'pending' as const };
+            }
+            return {
+              id: agentInfo.id,
+              agent: agentInfo.role,
+              status: 'pending' as const,
+            };
+          }));
         }
       }
     };
 
     const handleTeamAgentStart = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.agent) {
+      const agentId = detail?.id || detail?.agent;
+      if (agentId) {
         setAgents(prev => {
-          const existing = prev.find(a => a.agent === detail.agent);
+          const existing = prev.find(a => a.id === agentId);
           if (existing) {
             return prev.map(a =>
-              a.agent === detail.agent
+              a.id === agentId
                 ? { ...a, status: 'running' as const, model: detail.model, startedAt: Date.now() }
                 : a
             );
           }
           return [...prev, {
+            id: agentId,
             agent: detail.agent,
             status: 'running' as const,
             model: detail.model,
@@ -84,9 +93,10 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
 
     const handleTeamAgentUpdate = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.agent) {
+      const agentId = detail?.id || detail?.agent;
+      if (agentId) {
         setAgents(prev => prev.map(a =>
-          a.agent === detail.agent
+          a.id === agentId
             ? { ...a, progress: detail.progress, status: detail.status || a.status }
             : a
         ));
@@ -95,9 +105,10 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
 
     const handleTeamAgentDone = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.agent) {
+      const agentId = detail?.id || detail?.agent;
+      if (agentId) {
         setAgents(prev => prev.map(a =>
-          a.agent === detail.agent
+          a.id === agentId
             ? {
                 ...a,
                 status: detail.error ? 'error' as const : 'completed' as const,
@@ -240,7 +251,7 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
       <div className="p-3 space-y-2">
         {agents.map((agent, idx) => (
           <div
-            key={agent.agent}
+            key={agent.id}
             className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/30 border border-border/30 hover:border-border/50 transition-colors"
           >
             {/* 序号和状态图标 */}

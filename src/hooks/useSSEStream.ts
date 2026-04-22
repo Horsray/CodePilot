@@ -52,7 +52,7 @@ export interface SSECallbacks {
   onSkillNudge?: (data: SkillNudgeData) => void;
   onContextCompressed?: (data: { message: string; messagesCompressed: number; tokensSaved: number }) => void;
   /** 中文注释：功能名称「子Agent状态回调」，用法是在主Agent流中接收子Agent的生命周期事件。 */
-  onSubAgentStart?: (data: { id: string; name: string; displayName: string; prompt: string }) => void;
+  onSubAgentStart?: (data: { id: string; name: string; displayName: string; prompt: string; model?: string }) => void;
   onSubAgentProgress?: (data: { id: string; status: string; detail?: string }) => void;
   onSubAgentComplete?: (data: { id: string; report: string; error?: string }) => void;
   onInitMeta?: (meta: {

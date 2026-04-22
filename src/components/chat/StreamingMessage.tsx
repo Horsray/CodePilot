@@ -312,24 +312,39 @@ function StreamingStatusBar({ statusText, onForceStop, startedAt }: { statusText
 // ---------------------------------------------------------------------------
 // Component to subscribe to team events and show SubAgentTimeline during streaming
 // ---------------------------------------------------------------------------
-function SubAgentTimelineStreamAdapter() {
+function SubAgentTimelineStreamAdapter({ sessionId, isStreaming }: { sessionId?: string, isStreaming?: boolean }) {
   const [subAgents, setSubAgents] = useState<any[]>([]);
 
   useEffect(() => {
+    if (!sessionId) return;
     const handleSync = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.subAgents) {
+      if (detail?.sessionId === sessionId && detail?.subAgents) {
         setSubAgents(detail.subAgents);
       }
     };
+    
     window.addEventListener('subagents-sync', handleSync);
     return () => window.removeEventListener('subagents-sync', handleSync);
-  }, []);
+  }, [sessionId]);
 
+  // Also clear timeline on unmount if streaming is stopped
+  // We DO need to clear it when a new stream starts or when not streaming,
+  // but we must be careful not to cause a flash.
+  useEffect(() => {
+    if (!isStreaming) {
+      // Delay clearing to allow React to mount the MessageItem replacement first
+      const t = setTimeout(() => setSubAgents([]), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [isStreaming]);
+
+  // We should ONLY render if we are actively streaming. 
+  // Once stopped, the MessageItem will render the saved subAgents from the DB.
   if (subAgents.length === 0) return null;
 
   return (
-    <div className="w-full mt-2 mb-2">
+    <div className="w-full mt-2 mb-2 relative z-10">
       <SubAgentTimeline subAgents={subAgents} />
     </div>
   );
@@ -752,8 +767,8 @@ export function StreamingMessage({
         {/* Media from tool results — rendered outside tool group so images stay visible */}
         {mediaPreview}
 
-        {/* SubAgentTimeline for active team workflows during streaming */}
-        <SubAgentTimelineStreamAdapter />
+        {/* SubAgentTimeline for active team workflows during streaming (before text) */}
+        <SubAgentTimelineStreamAdapter sessionId={sessionId} isStreaming={isStreaming} />
 
         {/* Streaming text content rendered via Streamdown */}
         {renderedContent}

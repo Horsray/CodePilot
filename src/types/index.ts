@@ -594,6 +594,20 @@ export interface SkillResponse {
   skill: SkillDefinition;
 }
 
+export interface SubAgentInfo {
+  id: string;
+  name: string;
+  displayName: string;
+  prompt: string;
+  status: 'running' | 'completed' | 'error';
+  report?: string;
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+  progress?: string;
+  model?: string;
+}
+
 // ==========================================
 // SSE Event Types (streaming chat response)
 // ==========================================

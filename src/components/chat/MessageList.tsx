@@ -182,8 +182,6 @@ interface MessageListProps {
   hasSummary?: boolean;
   summaryBoundaryRowid?: number;
   isContextCompressing?: boolean;
-  /** Active sub-agents for nested timeline display */
-  subAgents?: SubAgentInfo[];
 }
 
 function getRewindTargetForMessage(messages: Message[], rewindPoints: RewindPoint[], message: Message): string | undefined {
@@ -255,7 +253,6 @@ export function MessageList({
   hasSummary,
   summaryBoundaryRowid,
   isContextCompressing,
-  subAgents = [],
 }: MessageListProps) {
   const { t } = useTranslation();
   // Scroll anchor: preserve position when older messages are prepended

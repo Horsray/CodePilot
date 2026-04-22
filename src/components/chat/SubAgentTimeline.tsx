@@ -5,21 +5,7 @@ import { SpinnerGap, CheckCircle, XCircle, Clock, Robot, CaretDown, CaretRight }
 import { cn } from '@/lib/utils';
 import { AGENT_META } from '../ai-elements/tool-actions-group';
 
-/**
- * SubAgentInfo - 子Agent状态信息接口
- */
-interface SubAgentInfo {
-  id: string;
-  name: string;
-  displayName: string;
-  prompt: string;
-  status: 'running' | 'completed' | 'error';
-  report?: string;
-  error?: string;
-  startedAt: number;
-  completedAt?: number;
-  progress?: string;
-}
+import { SubAgentInfo } from '@/types';
 
 /**
  * SubAgentTimeline - 子Agent嵌套时间线组件
@@ -100,60 +86,39 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
       case 'running':
         return <SpinnerGap size={14} className="animate-spin text-blue-500" />;
       case 'completed':
-        return <CheckCircle size={14} className="text-green-500" weight="fill" />;
+        return <CheckCircle size={14} weight="fill" className="text-emerald-500" />;
       case 'error':
-        return <XCircle size={14} className="text-red-500" weight="fill" />;
+        return <XCircle size={14} weight="fill" className="text-red-500" />;
     }
   };
 
+  // Add a fallback for names that might contain 'tester', 'qa', 'debugger' but aren't exact matches
+  const getAgentLabel = (name: string, displayName?: string) => {
+    const lowerName = name.toLowerCase();
+    if (AGENT_META[lowerName]) return AGENT_META[lowerName].label;
+    
+    if (lowerName.includes('test')) return '测试者';
+    if (lowerName.includes('qa')) return '质量保证';
+    if (lowerName.includes('debug')) return '调试者';
+    if (lowerName.includes('plan')) return '规划者';
+    if (lowerName.includes('search')) return '搜索者';
+    if (lowerName.includes('exec')) return '执行者';
+    
+    return displayName || name;
+  };
   const getStatusBadge = (status: SubAgentInfo['status']) => {
     switch (status) {
       case 'running':
-        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-500 border border-blue-500/30 w-5 h-5 flex items-center justify-center shrink-0"><SpinnerGap size={12} className="animate-spin" /></span>;
+        return <span className="flex items-center gap-1 text-[11px] text-blue-500/90 px-2.5 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 shadow-[0_0_8px_rgba(59,130,246,0.15)]"><SpinnerGap size={12} className="animate-spin" /> <span className="font-medium tracking-wide">运行中</span></span>;
       case 'completed':
-        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/20 text-green-500 border border-green-500/30 w-5 h-5 flex items-center justify-center shrink-0"><CheckCircle size={12} weight="fill" /></span>;
+        return <span className="flex items-center gap-1 text-[11px] text-emerald-500/90 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20"><CheckCircle size={12} weight="fill" /> <span className="font-medium tracking-wide">已完成</span></span>;
       case 'error':
-        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/20 text-red-500 border border-red-500/30 w-5 h-5 flex items-center justify-center shrink-0"><XCircle size={12} weight="fill" /></span>;
+        return <span className="flex items-center gap-1 text-[11px] text-red-500/90 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/20"><XCircle size={12} weight="fill" /> <span className="font-medium tracking-wide">异常</span></span>;
     }
   };
 
-  // 并行显示：所有agent卡片同时可见，不互相覆盖
   return (
     <div className="mt-3 space-y-2 w-full max-w-full">
-      {/* 子Agent状态汇总 - 精致的头部 */}
-      <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-muted/40 border border-border/30">
-        <div className="flex items-center gap-1.5">
-          <Robot size={14} className="text-primary" />
-          <span className="text-xs font-medium text-foreground">Team Leader ｜ 监控中 ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个</span>
-        </div>
-        <div className="flex-1" />
-        <div className="flex items-center gap-3 text-[11px]">
-          {runningCount > 0 && (
-            <span className="flex items-center gap-1 text-blue-500">
-              <SpinnerGap size={10} className="animate-spin" />
-              {runningCount} 运行中
-            </span>
-          )}
-          {completedCount > 0 && (
-            <span className="flex items-center gap-1 text-emerald-500">
-              <CheckCircle size={10} weight="fill" />
-              {completedCount} 完成
-            </span>
-          )}
-          {errorCount > 0 && (
-            <span className="flex items-center gap-1 text-red-500">
-              <XCircle size={10} weight="fill" />
-              {errorCount} 错误
-            </span>
-          )}
-        </div>
-        {runningCount > 0 && (
-          <span className="text-[10px] text-muted-foreground/60">
-            等待全部完成...
-          </span>
-        )}
-      </div>
-
       {/* 子Agent卡片列表 - 网格布局，支持并行显示 */}
       <div className="grid gap-2">
         {subAgents.map((agent) => {
@@ -183,8 +148,11 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                 })()}
 
                 {/* Agent名称 */}
-                <span className="font-medium text-xs text-foreground/90 shrink-0">
-                  {AGENT_META[agent.name.toLowerCase()]?.label || agent.displayName || agent.name}
+                <span className="font-medium text-xs text-foreground/90 shrink-0 flex items-center gap-1">
+                  {AGENT_META[agent.name.toLowerCase()]?.label?.replace(/\s*\([^)]*\)/g, '') || agent.displayName || agent.name}
+                  {agent.model && (
+                    <span className="text-[10px] text-muted-foreground/60 font-mono tracking-tighter">({agent.model.split('/').pop()?.split('-')[0] || agent.model})</span>
+                  )}
                 </span>
                 
                 <span className="text-muted-foreground/40 mx-1 shrink-0">|</span>
@@ -193,14 +161,12 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                   {agent.prompt}
                 </span>
 
-                {/* 时长 */}
-                <span className="flex items-center gap-1 text-[10px] text-muted-foreground/60 ml-auto mr-2 shrink-0">
-                  <Clock size={10} />
-                  {formatDuration(agent.startedAt, agent.completedAt)}
-                </span>
-
                 {/* 状态标签 */}
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 ml-auto">
+                  <span className="flex items-center gap-1 text-[10px] text-muted-foreground/60 mr-2 shrink-0 font-mono">
+                    <Clock size={10} />
+                    {formatDuration(agent.startedAt, agent.completedAt)}
+                  </span>
                   {getStatusBadge(agent.status)}
                 </div>
               </div>
@@ -221,20 +187,12 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                   {agent.status === 'running' && currentProgress && (
                     <div className="flex items-center gap-2 text-[11px] text-blue-500/80">
                       <SpinnerGap size={10} className="animate-spin" />
-                      <span>{currentProgress}</span>
+                      <span className="italic">{currentProgress}</span>
                     </div>
                   )}
 
-                  {/* 错误信息 */}
-                  {agent.status === 'error' && agent.error && (
-                    <div className="text-[11px] text-red-500/80 p-2 rounded bg-red-500/10 border border-red-500/20">
-                      <span className="font-medium">错误：</span>
-                      {agent.error}
-                    </div>
-                  )}
-
-                  {/* 完成报告摘要 */}
-                  {agent.status === 'completed' && agent.report && (
+                  {/* 报告输出 */}
+                  {(agent.status === 'completed' || agent.status === 'error') && agent.report && (
                     <div className="text-[11px] text-muted-foreground/70 p-2 rounded bg-muted/30 border border-border/20 max-h-64 overflow-y-auto">
                       <span className="font-medium text-muted-foreground/60">报告：</span>
                       <pre className="whitespace-pre-wrap break-words mt-1 font-mono text-[10px]">
@@ -242,12 +200,41 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                       </pre>
                     </div>
                   )}
-                </div>
+                  </div>
                 </div>
               </div>
             </div>
           );
         })}
+      </div>
+
+      {/* 子Agent状态汇总 - 放在最后面跟随光标 */}
+      <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-muted/40 border border-border/30">
+        <div className="flex items-center gap-1.5">
+          <Robot size={14} className="text-primary" />
+          <span className="text-xs font-medium text-foreground">Team Leader ｜ 监控中 ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个</span>
+        </div>
+        <div className="flex-1" />
+        <div className="flex items-center gap-3 text-[11px]">
+          {runningCount > 0 && (
+            <span className="flex items-center gap-1 text-blue-500">
+              <SpinnerGap size={10} className="animate-spin" />
+              {runningCount} 运行中
+            </span>
+          )}
+          {completedCount > 0 && (
+            <span className="flex items-center gap-1 text-emerald-500">
+              <CheckCircle size={10} weight="fill" />
+              {completedCount} 完成
+            </span>
+          )}
+          {errorCount > 0 && (
+            <span className="flex items-center gap-1 text-red-500">
+              <XCircle size={10} weight="fill" />
+              {errorCount} 错误
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
