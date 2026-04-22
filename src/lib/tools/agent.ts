@@ -37,7 +37,7 @@ export function createAgentTool(ctx: {
       'Launch a sub-agent to handle a complex, multi-step task autonomously. ' +
       'The sub-agent has its own context and tool access. ' +
       `Available agents: ${subAgentIds.join(', ')}. ` +
-      'Use "explore" for quick codebase searches, "general" for multi-step tasks.',
+      'Use "explore" or "search" for codebase research/retrieval, "analyst" for deep logic/architecture analysis, "planner" to break down tasks, "executor" for heavy multi-file edits, and "general" for other multi-step tasks. Trust the sub-agent for its specialized scope.',
     inputSchema: z.object({
       prompt: z.string().describe('The task for the sub-agent to perform'),
       agent: z.string().optional().describe(`Agent type: ${subAgentIds.join(' | ')} (default: general)`),

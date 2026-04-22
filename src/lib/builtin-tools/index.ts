@@ -110,7 +110,7 @@ function getToolGroups(options: { workspacePath?: string }): BuiltinToolGroup[] 
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { createMemorySearchTools, MEMORY_SEARCH_SYSTEM_PROMPT } = require('./memory-search');
       groups.push({
-        name: 'codepilot-memory',
+        name: 'codepilot-memory-search',
         systemPrompt: MEMORY_SEARCH_SYSTEM_PROMPT,
         condition: 'workspace',
         tools: createMemorySearchTools(options.workspacePath),

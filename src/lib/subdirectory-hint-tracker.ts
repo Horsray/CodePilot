@@ -71,6 +71,8 @@ const MAX_ANCESTOR_WALK = 5;
 export class SubdirectoryHintTracker {
   private readonly workingDir: string;
   private readonly loadedDirs: Set<string>;
+  /** Cache of loaded hints per directory to support dumpKnownHints(). */
+  private readonly hintsCache: Map<string, string>;
 
   constructor(workingDir?: string) {
     const base = workingDir ?? process.cwd();
@@ -83,6 +85,7 @@ export class SubdirectoryHintTracker {
       this.workingDir = base;
     }
     this.loadedDirs = new Set<string>();
+    this.hintsCache = new Map<string, string>();
     // Pre-mark the working dir as loaded — startup context already covers it.
     this.loadedDirs.add(this.workingDir);
   }
@@ -109,6 +112,25 @@ export class SubdirectoryHintTracker {
     return '\n\n' + allHints.join('\n\n');
   }
 
+  /**
+   * Dump all known (already-loaded) hints as a single formatted string.
+   * Used by agent-system-prompt.ts to inject previously discovered hints
+   * into the system prompt when the agent resumes a session.
+   *
+   * @returns Combined hint text from all cached directories, or null if no hints.
+   */
+  dumpKnownHints(): string | null {
+    if (this.hintsCache.size === 0) return null;
+
+    const allHints: string[] = [];
+    for (const [, hintText] of this.hintsCache) {
+      if (hintText) allHints.push(hintText);
+    }
+
+    if (allHints.length === 0) return null;
+    return '\n\n' + allHints.join('\n\n');
+  }
+
   /** Extract directory paths from tool call arguments. */
   private extractDirectories(toolName: string, args: Record<string, unknown>): string[] {
     const candidates = new Set<string>();
@@ -123,7 +145,7 @@ export class SubdirectoryHintTracker {
 
     // 2. Shell commands — extract path-like tokens.
     if (COMMAND_TOOLS.has(toolName)) {
-      const cmd = args.command;
+      const cmd = args.command || args.cmd;
       if (typeof cmd === 'string') {
         this.extractPathsFromCommand(cmd, candidates);
       }
@@ -208,6 +230,11 @@ export class SubdirectoryHintTracker {
    * marked before reading (so failed reads don't cause retries).
    */
   private loadHintsForDirectory(directory: string): string | null {
+    // Return cached hint if already loaded.
+    if (this.hintsCache.has(directory)) {
+      return this.hintsCache.get(directory) ?? null;
+    }
+
     // Mark loaded BEFORE reading so failures don't cause repeated attempts.
     this.loadedDirs.add(directory);
 
@@ -246,7 +273,9 @@ export class SubdirectoryHintTracker {
 
     if (!foundHint) return null;
 
-    return `[Subdirectory context discovered: ${foundHint.relPath}]\n${foundHint.content}`;
+    const hintText = `[Subdirectory context discovered: ${foundHint.relPath}]\n${foundHint.content}`;
+    this.hintsCache.set(directory, hintText);
+    return hintText;
   }
 
   /**

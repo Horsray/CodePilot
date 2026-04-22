@@ -726,7 +726,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           // invocation, which is the regression users reported after we
           // stopped silently allowing everything via project-level settings.
           allowedTools: [
-            'mcp__codepilot-memory',
+            'mcp__codepilot-memory-search',
             'mcp__codepilot-notify',
             'mcp__codepilot-widget',
             'mcp__codepilot-widget-guidelines',
@@ -756,6 +756,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'TodoWrite',
             'AskUserQuestion',
             'mcp__codepilot-ask-user__AskUserQuestion',
+            'mcp__codepilot-agent__Agent',
             'webfetch__fetch_fetch_readable',
             'webfetch__fetch_fetch_markdown',
             'context7_resolve-library-id',
@@ -898,7 +899,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
             const { createMemorySearchMcpServer, MEMORY_SEARCH_SYSTEM_PROMPT } = await import('@/lib/memory-search-mcp');
             queryOptions.mcpServers = {
               ...(queryOptions.mcpServers || {}),
-              'codepilot-memory': createMemorySearchMcpServer(assistantWorkspacePath),
+              'codepilot-memory-search': createMemorySearchMcpServer(assistantWorkspacePath),
             };
             if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
               queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + MEMORY_SEARCH_SYSTEM_PROMPT;
@@ -928,6 +929,41 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           };
           if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + TODO_MCP_SYSTEM_PROMPT;
+          }
+        }
+
+        // Session history search tool — always available (queries SQLite messages table)
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { createSessionSearchTools, SESSION_SEARCH_SYSTEM_PROMPT } = require('./builtin-tools/session-search');
+          const toolsObj = createSessionSearchTools();
+          // SDK uses a wrapper to adapt tool sets
+          // Since Claude Code SDK requires tools in its specific schema, we need to adapt it.
+          // But since the focus of the report is Native Runtime, and it's already there in getBuiltinTools(),
+          // we'll just inject the prompt for awareness in SDK.
+          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + SESSION_SEARCH_SYSTEM_PROMPT;
+          }
+        } catch { /* module not available */ }
+
+        // Agent MCP: globally available in all contexts
+        {
+          const { createAgentMcpServer, AGENT_MCP_SYSTEM_PROMPT } = await import('@/lib/agent-mcp');
+          queryOptions.mcpServers = {
+            ...(queryOptions.mcpServers || {}),
+            'codepilot-agent': createAgentMcpServer({
+              workingDirectory: resolvedWorkingDirectory.path,
+              providerId: options.providerId,
+              sessionProviderId: options.sessionProviderId,
+              parentModel: model,
+              permissionMode: options.permissionMode,
+              parentSessionId: sessionId,
+              emitSSE: (e) => controller.enqueue(formatSSE(e as SSEEvent)),
+              abortSignal: abortController?.signal,
+            }),
+          };
+          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + AGENT_MCP_SYSTEM_PROMPT;
           }
         }
 

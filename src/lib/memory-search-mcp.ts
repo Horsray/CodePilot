@@ -48,7 +48,7 @@ export const MEMORY_SEARCH_SYSTEM_PROMPT = `## 记忆检索
 
 export function createMemorySearchMcpServer(workspacePath: string) {
   return createSdkMcpServer({
-    name: 'codepilot-memory',
+    name: 'codepilot-memory-search',
     version: '1.0.0',
     tools: [
       tool(

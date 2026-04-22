@@ -54,6 +54,14 @@ function loadAndMerge(projectCwd?: string): CachedMcpConfig {
   const projectClaudeJson = readJson(path.join(cwd, 'claude.json'));
 
   const merged: Record<string, MCPServerConfig> = {
+    // Built-in official memory server fallback
+    'memory': {
+      type: 'stdio',
+      command: 'node',
+      args: ['-e', 'const cp=require("child_process");process.chdir(process.env.CODEPILOT_WORKSPACE);const child=cp.spawn(process.platform==="win32"?"npx.cmd":"npx",["-y","@modelcontextprotocol/server-memory"],{stdio:"inherit"});child.on("exit",c=>process.exit(c||0));'],
+      env: { CODEPILOT_WORKSPACE: cwd },
+      enabled: true
+    },
     ...((userConfig.mcpServers || {}) as Record<string, MCPServerConfig>),
     ...((settings.mcpServers || {}) as Record<string, MCPServerConfig>),
     ...((projectMcpJson.mcpServers || {}) as Record<string, MCPServerConfig>),

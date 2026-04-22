@@ -25,8 +25,8 @@ export interface AgentRunStats {
  * Threshold constants — chosen to avoid nudging on trivial interactions
  * while still catching moderately complex multi-step workflows.
  */
-export const SKILL_NUDGE_STEP_THRESHOLD = 8;
-export const SKILL_NUDGE_DISTINCT_TOOL_THRESHOLD = 3;
+export const SKILL_NUDGE_STEP_THRESHOLD = 5;
+export const SKILL_NUDGE_DISTINCT_TOOL_THRESHOLD = 2;
 
 /**
  * Decide whether to suggest saving the current run as a Skill.

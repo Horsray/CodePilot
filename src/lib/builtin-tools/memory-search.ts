@@ -116,5 +116,72 @@ export function createMemorySearchTools(workspacePath: string) {
         }
       },
     }),
+
+    codepilot_kb_search: tool({
+      description: 'Search the Unified Knowledge Graph (Project Architecture + Dynamic Memory). Returns matching entities and their observations.',
+      inputSchema: z.object({
+        query: z.string().describe('Concept, file, or architectural component to search for'),
+      }),
+      execute: async ({ query }) => {
+        try {
+          const { memoryClient } = await import('@/lib/memory-client');
+          const { knowledgeGraphProvider } = await import('@/lib/knowledge-graph-provider');
+          
+          const memoryResults: any = await memoryClient.searchNodes(query);
+          const graphData = await knowledgeGraphProvider.getGraph(workspacePath);
+          const q = query.toLowerCase();
+          const graphNodes = (graphData.nodes || [])
+            .filter((n: any) => 
+              n.label?.toLowerCase().includes(q) || 
+              n.description?.toLowerCase().includes(q) ||
+              n.id?.toLowerCase().includes(q)
+            )
+            .slice(0, 10);
+
+          if (!memoryResults?.entities?.length && graphNodes.length === 0) {
+            return `No knowledge found for "${query}".`;
+          }
+
+          let responseText = `## Unified Knowledge Search Results for "${query}"\n\n`;
+
+          if (memoryResults?.entities?.length) {
+            responseText += `### Dynamic Memory Entities:\n`;
+            responseText += memoryResults.entities.map((e: any) => 
+              `- **${e.name}** (${e.entityType})\n  Observations: ${e.observations.join('; ')}`
+            ).join('\n') + '\n\n';
+          }
+
+          if (graphNodes.length > 0) {
+            responseText += `### Structural Graph Nodes:\n`;
+            responseText += graphNodes.map((n: any) => 
+              `- **${n.label || n.id}** [${n.level || 'FILE'}]\n  ${n.description || '(no description)'}\n  Path: ${n.id}`
+            ).join('\n') + '\n';
+          }
+
+          return responseText;
+        } catch (e) {
+          return 'Failed to search unified knowledge base.';
+        }
+      }
+    }),
+
+    codepilot_kb_query: tool({
+      description: 'Run a deep graph query using graphify. Best for complex dependency tracing and architectural analysis.',
+      inputSchema: z.object({
+        question: z.string().describe('The architectural question to ask the knowledge graph'),
+        mode: z.enum(['bfs', 'dfs']).optional().default('bfs').describe('BFS for broad context, DFS for deep dependency tracing'),
+      }),
+      execute: async ({ question, mode }) => {
+        try {
+          const { exec } = await import('child_process');
+          const { promisify } = await import('util');
+          const execAsync = promisify(exec);
+          const { stdout } = await execAsync(`graphify query "${question.replace(/"/g, '\\"')}" ${mode === 'dfs' ? '--dfs' : ''}`, { cwd: workspacePath });
+          return stdout || 'No results from graph query.';
+        } catch (e) {
+          return 'Graph query failed: ' + String(e);
+        }
+      }
+    }),
   };
 }

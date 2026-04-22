@@ -230,6 +230,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const streamingToolOutput = streamSnapshot?.streamingToolOutput ?? '';
   const streamingThinkingContent = streamSnapshot?.streamingThinkingContent ?? '';
   const referencedContexts = streamSnapshot?.referencedContexts;
+  const toolFiles = streamSnapshot?.toolFiles ?? [];
   const statusText = streamSnapshot?.statusText;
   const pendingPermission = streamSnapshot?.pendingPermission ?? null;
   const permissionResolved = streamSnapshot?.permissionResolved ?? null;
@@ -1050,6 +1051,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         hasSummary={hasSummary}
         contextWindow={currentModelMeta.contextWindow}
         upstreamModelId={currentModelMeta.upstreamModelId}
+        toolFiles={toolFiles}
         onCompress={() => {
           sendMessage('/compact', undefined, undefined, '压缩上下文');
           // Add a temporary streaming assistant message to show the indicator immediately
@@ -1135,28 +1137,21 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
               permissionProfile={permissionProfile}
               onPermissionChange={setPermissionProfile}
             />
-            <button
-              onClick={() => {
-                setBottomPanelTab('console');
-                setBottomPanelOpen(!bottomPanelOpen);
-              }}
-              className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors ml-3 border-l border-border/40 pl-3 h-4"
-            >
-              {bottomPanelOpen ? <CaretDown size={14} /> : <CaretRight size={14} />}
-              <span>控制台日志</span>
-            </button>
           </div>
         }
         right={
-          <ContextUsageIndicator
-            messages={messages}
-            modelName={currentModel}
-            context1m={context1m}
-            hasSummary={hasSummary}
-            contextWindow={currentModelMeta.contextWindow}
-            upstreamModelId={currentModelMeta.upstreamModelId}
-            contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
-          />
+          <div className="flex items-center gap-3">
+            <RuntimeBadge providerId={currentProviderId} />
+            <ContextUsageIndicator
+              messages={messages}
+              modelName={currentModel}
+              context1m={context1m}
+              hasSummary={hasSummary}
+              contextWindow={currentModelMeta.contextWindow}
+              upstreamModelId={currentModelMeta.upstreamModelId}
+              contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
+            />
+          </div>
         }
       />
     </div>

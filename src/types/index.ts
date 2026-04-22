@@ -597,6 +597,7 @@ export type SSEEventType =
   | 'keep_alive'         // SDK keep-alive heartbeat (resets idle timer)
   | 'rewind_point'       // SDK user message with rewind checkpoint
   | 'referenced_contexts' // List of files referenced in system prompt
+  | 'tool_files'         // List of files read/written by tool calls
   | 'rate_limit'         // SDK 0.2.111 subscription rate-limit telemetry
   | 'context_usage'      // SDK 0.2.111 post-turn context usage snapshot
   | 'terminal_mirror'    // AI Bash tool command/output mirror to terminal panel
@@ -1110,6 +1111,8 @@ export interface SessionStreamSnapshot {
   error: string | null;
   /** Files referenced in the system prompt for this turn */
   referencedContexts?: string[];
+  /** Files read/written by tool calls during this session (for context stats) */
+  toolFiles?: string[];
   /** Final message content built at stream completion for ChatView to consume */
   finalMessageContent: string | null;
   /**

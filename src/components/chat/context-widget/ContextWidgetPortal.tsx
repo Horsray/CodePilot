@@ -10,6 +10,7 @@ interface ContextWidgetPortalProps {
   hasSummary?: boolean;
   contextWindow?: number;
   upstreamModelId?: string;
+  toolFiles?: string[];
   onCompress?: () => void;
 }
 

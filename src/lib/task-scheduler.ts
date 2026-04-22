@@ -87,8 +87,8 @@ export function ensureSchedulerRunning(): void {
       const todayStr = now.toISOString().split('T')[0];
       const lastCompaction = (globalThis as Record<string, unknown>)[LAST_COMPACTION_KEY];
       
-      // If it's exactly 3:00 AM and we haven't run compaction today
-      if (currentHour === 3 && currentMinute === 0 && lastCompaction !== todayStr) {
+      // If it's past 3:00 AM and we haven't run compaction today
+      if (currentHour >= 3 && lastCompaction !== todayStr) {
         (globalThis as Record<string, unknown>)[LAST_COMPACTION_KEY] = todayStr;
         
         // Run nightly compaction asynchronously
@@ -172,6 +172,12 @@ If there is nothing valuable to extract, return an empty array []. DO NOT wrap i
               const rawJson = result.replace(/^```json/i, '').replace(/```$/i, '').trim();
               const entities = JSON.parse(rawJson);
               if (Array.isArray(entities) && entities.length > 0) {
+                const mcpLoader = await import('./mcp-loader');
+                const mcpConnectionManager = await import('./mcp-connection-manager');
+                const memoryConfig = mcpLoader.loadAllMcpServers(workspacePath)?.['memory'];
+                if (memoryConfig) {
+                  await mcpConnectionManager.connectServer('memory', memoryConfig);
+                }
                 const { memoryClient } = await import('./memory-client');
                 await memoryClient.createEntities(entities);
                 console.log(`[Nightly Compaction] Successfully extracted and saved ${entities.length} entities to MCP Memory.`);

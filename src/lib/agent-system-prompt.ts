@@ -96,15 +96,15 @@ When you encounter an obstacle, do not use destructive actions as a shortcut to 
 
 const TOOLS_SECTION = `# Using your tools
 
-- **Agent Delegation (CRITICAL)**: You have access to the \`Agent\` tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent (e.g., "explore" for codebase exploration, or a custom agent like "web search"), you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using the \`Agent\` tool.
-- **Use SearchHistory Proactively**: When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`SearchHistory\` tool before guessing from memory.
+- **Agent Delegation (CRITICAL)**: You have access to the \`Agent\` (or \`mcp__codepilot-agent__Agent\`) tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent (e.g., "explore" for codebase exploration, or a custom agent like "web search"), you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
+- **Use Session Search Proactively**: When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`codepilot_session_search\` tool before guessing from memory.
 - Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.
   - To read files use Read instead of cat, head, tail, or sed
   - To edit files use Edit instead of sed or awk
   - To create files use Write instead of cat with heredoc or echo redirection
   - To search for files use Glob instead of find or ls
   - To search the content of files, use Grep instead of grep or rg
-  - To search local chat history, use SearchHistory instead of guessing what happened in earlier sessions
+  - To search local chat history, use codepilot_session_search instead of guessing what happened in earlier sessions
 - Reserve using the Bash exclusively for system commands and terminal operations.
 - Maximize efficiency by calling independent tools in parallel. Use sequential calls only when there is a strict data dependency.`;
 
@@ -285,32 +285,24 @@ const PROJECT_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/set
 const MAX_FILE_SIZE = 50 * 1024; // 50KB per file
 
 /**
- * Discover Knowledge Base instructions (graphify-out/GRAPH_REPORT.md).
+ * Discover Knowledge Base instructions (graphify-out/graph.json).
  */
 function discoverKnowledgeBaseInstructions(cwd: string): { content: string, files: string[] } | null {
-  const kbReportFile = path.join(cwd, 'graphify-out', 'GRAPH_REPORT.md');
   const kbGraphJson = path.join(cwd, 'graphify-out', 'graph.json');
   
-  if (fs.existsSync(kbReportFile)) {
+  if (fs.existsSync(kbGraphJson)) {
     try {
-      const content = fs.readFileSync(kbReportFile, 'utf-8');
-      const hasJson = fs.existsSync(kbGraphJson);
-
       let instruction = `## Unified Knowledge Base (graphify + MCP Memory)\n\n`;
       instruction += `A structured knowledge graph exists for this project. It is synchronized between 'graphify-out/' and the dynamic MCP Memory server.\n`;
       instruction += `### Usage Guidelines:\n`;
       instruction += `1. **Integrated Search**: Use 'codepilot_kb_search' to find nodes in the unified graph. It searches both structural extraction and dynamic observations.\n`;
       instruction += `2. **Deep Graph Analysis**: Use 'codepilot_kb_query' for complex architectural questions. It uses graphify's BFS/DFS engines to trace dependencies.\n`;
       instruction += `3. **Dynamic Learning**: Use 'codepilot_memory_store' to save new architectural insights, user preferences, or project facts into the long-term graph.\n`;
-      instruction += `4. **Macro View**: Read 'graphify-out/GRAPH_REPORT.md' to understand the high-level community clusters and "God Nodes".\n`;
-      if (hasJson) {
-        instruction += `5. **Low-level Access**: For direct node/edge inspection, you can still read 'graphify-out/graph.json'.\n`;
-      }
-      instruction += `\n### Knowledge Report Content:\n\n${content}`;
+      instruction += `4. **Low-level Access**: For direct node/edge inspection, you can still read 'graphify-out/graph.json'.\n`;
 
       return {
         content: instruction,
-        files: ['graphify-out/GRAPH_REPORT.md'],
+        files: ['graphify-out/graph.json'],
       };
     } catch {
       return null;
@@ -387,6 +379,29 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
     if (isTraeRules && options.syncProjectRules === false) continue;
 
     addSource(sources, seen, path.join(cwd, filename), 'project', filename);
+  }
+
+  // 3.5. Progressive Subdirectory Hints (Hermes P1)
+  // These are appended dynamically during tool calls by agent-loop, but we also
+  // inject them here so the agent sees any previously discovered hints in the
+  // system prompt when it resumes.
+  if (options.workingDirectory) {
+    try {
+      const { SubdirectoryHintTracker } = require('./subdirectory-hint-tracker');
+      const tracker = (globalThis as any).__subdirTracker as import('./subdirectory-hint-tracker').SubdirectoryHintTracker;
+      if (tracker) {
+        const hints = tracker.dumpKnownHints();
+        if (hints) {
+          sources.push({
+            level: 'workspace',
+            filename: 'Subdirectory Hints (Auto-discovered)',
+            content: hints,
+          });
+        }
+      }
+    } catch (e) {
+      // Ignore errors if tracker not yet loaded
+    }
   }
 
   // 4. Parent directory (monorepo root)

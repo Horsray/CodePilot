@@ -466,6 +466,17 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.snapshot = { ...stream.snapshot, referencedContexts: files };
         emit(stream, 'snapshot-updated');
       },
+      onToolFiles: (files) => {
+        markActive();
+        // Merge tool files with existing toolFiles, avoiding duplicates
+        const existing = stream.snapshot.toolFiles || [];
+        const merged = [...existing];
+        files.forEach(f => {
+          if (!merged.includes(f)) merged.push(f);
+        });
+        stream.snapshot = { ...stream.snapshot, toolFiles: merged };
+        emit(stream, 'snapshot-updated');
+      },
       onStatusPayload: (payload) => {
         markActive();
         stream.snapshot = { ...stream.snapshot, statusPayload: payload };

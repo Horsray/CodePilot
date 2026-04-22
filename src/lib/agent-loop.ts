@@ -232,6 +232,7 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         let lastToolNames: string[] = []; // for doom loop detection
         let doomLoopCounter = 0; // tracks consecutive identical tool calls
         const distinctTools = new Set<string>(); // for skill-nudge heuristic
+        const toolFilesAccumulator = new Set<string>(); // collects file paths from tool calls
         let messages = historyMessages;
 
         while (step < maxSteps) {
@@ -256,6 +257,48 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
             });
             tools = assembled.tools;
             toolSystemPrompts = assembled.systemPrompts;
+          }
+
+          // Context Compression / Summarization (Hermes P2 feature)
+          if (workingDirectory && messages.length > 20) {
+            try {
+              const { compressConversation } = await import('./context-compressor');
+              // Take the oldest 10 messages (excluding the system prompt and the latest 10)
+              const toCompress = messages.slice(0, 10).map(m => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+              }));
+              
+              const result = await compressConversation({
+                sessionId,
+                messages: toCompress,
+                providerId: sessionProviderId,
+                sessionModel,
+              });
+              
+              if (result.summary) {
+                console.log(`[agent-loop] Compressed context: ${result.messagesCompressed} messages summarized.`);
+                // Replace the compressed messages with the summary
+                const summaryMessage = {
+                  role: 'system' as const,
+                  content: `[Previous Context Summary]: ${result.summary}`
+                };
+                messages = [summaryMessage, ...messages.slice(10)];
+                
+                // Notify frontend
+                controller.enqueue(formatSSE({
+                  type: 'status',
+                  data: JSON.stringify({
+                    notification: true,
+                    subtype: 'context_compressed',
+                    message: `已自动压缩 ${result.messagesCompressed} 条早期对话记录，节省上下文空间。`,
+                    stats: { messagesCompressed: result.messagesCompressed, tokensSaved: result.estimatedTokensSaved }
+                  }),
+                }));
+              }
+            } catch (e) {
+              console.error('[agent-loop] Failed to compress context:', e);
+            }
           }
 
           // Augment system prompt with tool-specific context snippets
@@ -511,6 +554,68 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           let hasContent = false; // tracks whether any actual content was produced
           const stepToolCalls: string[] = [];
 
+          // Extract file paths from tool calls
+          function extractFilePaths(toolName: string, input: unknown): string[] {
+            const files: string[] = [];
+            if (!input || typeof input !== 'object') return files;
+            const inp = input as Record<string, unknown>;
+
+            // Read tools
+            if (/^Read$|^ReadFile$|^read_file$|^read$|^ReadMultipleFiles$|^read_text_file$/i.test(toolName)) {
+              if (inp.file_path && typeof inp.file_path === 'string') files.push(inp.file_path);
+              if (inp.path && typeof inp.path === 'string') files.push(inp.path);
+              if (inp.files && Array.isArray(inp.files)) {
+                inp.files.forEach((f: unknown) => {
+                  if (typeof f === 'string') files.push(f);
+                  else if (f && typeof f === 'object' && (f as Record<string, unknown>).path) {
+                    const p = (f as Record<string, unknown>).path;
+                    if (typeof p === 'string') files.push(p);
+                  }
+                });
+              }
+            }
+            // Glob/Search tools
+            else if (/^Glob$|^GlobFiles$|^search_files$|^find_files$|^Find$/i.test(toolName)) {
+              if (inp.pattern && typeof inp.pattern === 'string') files.push(inp.pattern);
+              if (inp.glob && typeof inp.glob === 'string') files.push(inp.glob);
+              if (inp.path && typeof inp.path === 'string') files.push(inp.path);
+            }
+            // Grep/Search tools
+            else if (/^Grep$|^SearchCodebase$|^search$|^grep$/i.test(toolName)) {
+              if (inp.pattern && typeof inp.pattern === 'string') files.push(inp.pattern);
+              if (inp.query && typeof inp.query === 'string') files.push(inp.query);
+              if (inp.path && typeof inp.path === 'string') files.push(inp.path);
+            }
+            // Write tools
+            else if (/^Write$|^WriteFile$|^write_file$|^create_file$/i.test(toolName)) {
+              if (inp.file_path && typeof inp.file_path === 'string') files.push(inp.file_path);
+              if (inp.path && typeof inp.path === 'string') files.push(inp.path);
+            }
+            // Edit tools
+            else if (/^Edit$|^Patch$|^replace_in_file$/i.test(toolName)) {
+              if (inp.file_path && typeof inp.file_path === 'string') files.push(inp.file_path);
+              if (inp.path && typeof inp.path === 'string') files.push(inp.path);
+            }
+            // Bash with cd/ls/read etc.
+            else if (/^Bash$|^shell$|^Execute$|^run$/i.test(toolName)) {
+              if (inp.command && typeof inp.command === 'string') {
+                // Try to extract file paths from common patterns
+                const cmd = inp.command;
+                const filePattern = /(?:^|\s)([a-zA-Z0-9\/\-_.]+(?:\.[a-zA-Z0-9]+)?)(?:\s|$)/g;
+                let match;
+                while ((match = filePattern.exec(cmd)) !== null) {
+                  const candidate = match[1];
+                  // Skip obvious commands/keywords
+                  if (!/^(cd|ls|grep|find|cat|head|tail|awk|sed|rm|mkdir|chmod|chown|pwd|mv|cp|touch)$/i.test(candidate)) {
+                    files.push(candidate);
+                  }
+                }
+              }
+            }
+
+            return files;
+          }
+
           for await (const event of result.fullStream) {
             switch (event.type) {
               case 'text-delta':
@@ -536,14 +641,46 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                     input: event.input,
                   }),
                 }));
+                // Collect file paths for context stats
+                const extracted = extractFilePaths(event.toolName, event.input);
+                extracted.forEach(f => toolFilesAccumulator.add(f));
                 break;
 
               case 'tool-result':
+                // Progressive Subdirectory Hint Discovery
+                let hintContent = '';
+                try {
+                  if (workingDirectory) {
+                    const { SubdirectoryHintTracker } = await import('./subdirectory-hint-tracker');
+                    // Store tracker in closure to persist across turns in the same agent loop
+                    if (!(globalThis as any).__subdirTracker) {
+                      (globalThis as any).__subdirTracker = new SubdirectoryHintTracker(workingDirectory);
+                    }
+                    const tracker = (globalThis as any).__subdirTracker as import('./subdirectory-hint-tracker').SubdirectoryHintTracker;
+                    
+                    // Reconstruct tool args since they are not in the tool-result event
+                    // We parse them out from the stepToolCalls we saved during 'tool-call'
+                    const callMatch = stepToolCalls.find(c => c.startsWith(`${(event as any).toolName}:`));
+                    if (callMatch) {
+                      const args = JSON.parse(callMatch.slice((event as any).toolName.length + 1));
+                      const hints = tracker.checkToolCall((event as any).toolName, args);
+                      if (hints) hintContent = hints;
+                    }
+                  }
+                } catch (e) {
+                  console.error('[agent-loop] Failed to discover subdirectory hints:', e);
+                }
+
+                let resultContent = typeof (event as any).output === 'string' ? (event as any).output : typeof (event as any).result === 'string' ? (event as any).result : JSON.stringify((event as any).output ?? (event as any).result);
+                if (hintContent) {
+                  resultContent += hintContent;
+                }
+
                 controller.enqueue(formatSSE({
                   type: 'tool_result',
                   data: JSON.stringify({
                     tool_use_id: event.toolCallId,
-                    content: typeof (event as any).output === 'string' ? (event as any).output : typeof (event as any).result === 'string' ? (event as any).result : JSON.stringify((event as any).output ?? (event as any).result),
+                    content: resultContent,
                     is_error: false,
                   }),
                 }));
@@ -672,25 +809,83 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
         }
 
         // 6a. Emit skill-nudge if the run was complex enough to warrant saving as a Skill.
-        // Heuristic: >= 8 agent steps AND >= 3 distinct tools used. See skill-nudge.ts.
-        //
-        // Event shape is designed to be consumed by BOTH web and bridge:
-        //   - Web SSE parser (useSSEStream.ts): `notification: true` + `message`
-        //     routes through the status/notification branch so the message
-        //     shows in the status bar.
-        //   - Bridge parser (conversation-engine.ts): `subtype: 'skill_nudge'`
-        //     routes through a dedicated handler that appends the nudge to
-        //     the assistant message as a separated text block.
-        //   - Future dedicated UI: `subtype: 'skill_nudge'` + full `payload`
-        //     provides structured data for a rich nudge card.
+        // Heuristic: >= 5 agent steps AND >= 2 distinct tools used. See skill-nudge.ts.
         if (shouldSuggestSkill({ step, distinctTools })) {
           controller.enqueue(formatSSE({
             type: 'status',
             data: JSON.stringify(buildSkillNudgeStatusEvent({ step, distinctTools })),
           }));
+
+          // Trigger automatic skill creation via background agent instead of just a nudge
+          if (workingDirectory) {
+            try {
+              const { generateTextFromProvider } = await import('./text-generator');
+              const { resolveProvider } = await import('./provider-resolver');
+              const resolved = resolveProvider({ sessionProviderId: providerId, sessionModel: modelId });
+              
+              if (resolved.hasCredentials) {
+                console.log(`[agent-loop] Auto-creating skill for successful workflow (${step} steps, ${distinctTools.size} tools)...`);
+                
+                // Extract last N messages to summarize the workflow
+                const recentHistory = messages.slice(-20).map(m => {
+                  if (m.role === 'user') return `User: ${m.content}`;
+                  if (m.role === 'assistant') {
+                    if (typeof m.content === 'string') return `Assistant: ${m.content}`;
+                    return `Assistant used tools: ${JSON.stringify(m.content)}`;
+                  }
+                  return '';
+                }).filter(Boolean).join('\n\n');
+
+                const result = await generateTextFromProvider({
+                  providerId: resolved.provider?.id || '',
+                  model: resolved.upstreamModel || resolved.model || 'haiku',
+                  system: `You are an AI skill extraction agent. Analyze the provided chat history of a successful workflow and generate a reusable skill definition.
+Format your output STRICTLY as a JSON object with these keys:
+{
+  "name": "lowercase-with-dashes-name",
+  "description": "Short 1-sentence description",
+  "whenToUse": "When the user asks to...",
+  "content": "Markdown content with exact steps, commands, or code snippets"
+}
+DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
+                  prompt: `Chat History:\n\n${recentHistory}`,
+                  maxTokens: 2000,
+                });
+
+                const rawJson = result.replace(/^```json/i, '').replace(/```$/i, '').trim();
+                const skillDef = JSON.parse(rawJson);
+                
+                if (skillDef.name && skillDef.content) {
+                  const { createSkillCreateTool } = await import('./builtin-tools/skill-create');
+                  const tool = createSkillCreateTool(workingDirectory);
+                  await tool.execute!(skillDef, { toolCallId: 'auto-skill', messages: [] });
+                  console.log(`[agent-loop] Auto-created skill: ${skillDef.name}`);
+                  
+                  controller.enqueue(formatSSE({
+                    type: 'status',
+                    data: JSON.stringify({
+                      notification: true,
+                      message: `已自动将此工作流提炼并保存为技能：${skillDef.name}`,
+                      subtype: 'skill_nudge'
+                    }),
+                  }));
+                }
+              }
+            } catch (err) {
+              console.error('[agent-loop] Auto-skill creation failed:', err);
+            }
+          }
         }
 
-        // 6. Emit result event
+        // 6. Emit tool_files event with collected file paths from tool calls
+        if (toolFilesAccumulator.size > 0) {
+          controller.enqueue(formatSSE({
+            type: 'tool_files',
+            data: JSON.stringify({ files: Array.from(toolFilesAccumulator) }),
+          }));
+        }
+
+        // 7. Emit result event
         controller.enqueue(formatSSE({
           type: 'result',
           data: JSON.stringify({

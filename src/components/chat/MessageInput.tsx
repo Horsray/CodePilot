@@ -855,11 +855,6 @@ export function MessageInput({
             {/* File attachment capsules */}
             <FileAttachmentsCapsules />
 
-            {/* Agent Engine Badge - Moved to top right of input box */}
-            <div className="absolute top-2 right-2 z-10">
-              <RuntimeBadge providerId={currentProviderIdValue} />
-            </div>
-
             <PromptInputTextarea
               ref={textareaRef}
               placeholder={badges.length > 0 ? "Add details (optional), then press Enter..." : cliBadge ? "Describe what you want to do..." : "Message Claude..."}
@@ -868,7 +863,7 @@ export function MessageInput({
               onKeyDown={handleKeyDown}
               onFocus={handleAssistantFocus}
               disabled={disabled}
-              className="min-h-10 pr-[120px]"
+              className="min-h-10"
             />
             <PromptInputFooter>
               <PromptInputTools>

@@ -15,6 +15,7 @@ interface ContextCompressionWidgetProps {
   hasSummary?: boolean;
   contextWindow?: number;
   upstreamModelId?: string;
+  toolFiles?: string[];
   onCompress?: () => void;
 }
 
@@ -25,6 +26,7 @@ export function ContextCompressionWidget({
   hasSummary,
   contextWindow,
   upstreamModelId,
+  toolFiles,
   onCompress,
 }: ContextCompressionWidgetProps) {
   const usage = useContextUsage(messages, modelName, {
@@ -109,13 +111,21 @@ export function ContextCompressionWidget({
       if (msg.content) othersCount++;
     });
 
+    // Add tool files from SSE events (AI actual file reads)
+    toolFiles?.forEach(f => {
+      if (!filesMap.has(f)) {
+        const name = f.split('/').pop() || f;
+        filesMap.set(f, { path: f, name });
+      }
+    });
+
     return {
       rules: Array.from(rulesMap.values()),
       files: Array.from(filesMap.values()),
       web: Array.from(webSet).map(url => ({ path: url, name: url })),
       othersCount,
     };
-  }, [messages]);
+  }, [messages, toolFiles]);
 
   const totalPercentage = Math.min(100, Math.round(usage.ratio * 100));
   
