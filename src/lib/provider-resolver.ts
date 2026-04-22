@@ -594,6 +594,17 @@ export function toAiSdkConfig(
         processEnvInjections,
       };
 
+    case 'openai-image':
+      return {
+        sdkType: 'openai',
+        apiKey: provider?.api_key || undefined,
+        authToken: undefined,
+        baseUrl: provider?.base_url || undefined,
+        modelId,
+        headers,
+        processEnvInjections,
+      };
+
     default: {
       const auth = resolveAnthropicAuth();
       return {

@@ -542,6 +542,9 @@ const en = {
   'imageGen.retryButton': 'Retry',
   'imageGen.generatingStatus': 'Generating...',
   'imageGen.stopButton': 'Stop',
+  'imageGen.noActiveProvider': 'No image provider set',
+  'imageGen.activeProviderStale': 'Image provider unavailable',
+  'imageGen.activeProviderStaleHint': 'The active image provider is missing its key or was changed. Open Settings to reconfigure.',
 
   // ── Batch Image Generation ─────────────────────────────────
   'batchImageGen.toggle': 'Batch Generate',

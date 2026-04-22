@@ -24,7 +24,8 @@ export type Protocol =
   | 'bedrock'             // AWS Bedrock (env-based auth, CLAUDE_CODE_USE_BEDROCK)
   | 'vertex'              // Google Vertex AI (env-based auth, CLAUDE_CODE_USE_VERTEX)
   | 'google'              // Google Generative AI (Gemini text)
-  | 'gemini-image';       // Google Gemini image generation
+  | 'gemini-image'        // Google Gemini image generation
+  | 'openai-image';       // OpenAI GPT Image generation
 
 /**
  * How the provider authenticates: which env var to inject the API key into.
@@ -151,7 +152,7 @@ export const PresetSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   descriptionZh: z.string(),
-  protocol: z.enum(['anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image']),
+  protocol: z.enum(['anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image', 'openai-image']),
   authStyle: z.enum(['api_key', 'auth_token', 'env_only', 'custom_header']),
   baseUrl: z.string(),
   defaultEnvOverrides: z.record(z.string(), z.string()),
@@ -757,6 +758,75 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
+  // ── Google Gemini (Image) Third-party ──
+  // Same protocol & SDK as the official preset; only the base URL differs so
+  // users can route through a compatible proxy (e.g. custom relay, CN mirror).
+  {
+    key: 'gemini-image-thirdparty',
+    name: 'Gemini Image Third-party',
+    description: 'Nano Banana via compatible proxy — provide URL and Key',
+    descriptionZh: 'Nano Banana 兼容第三方 API — 填写地址和密钥',
+    protocol: 'gemini-image',
+    authStyle: 'api_key',
+    baseUrl: '',
+    defaultEnvOverrides: { GEMINI_API_KEY: '' },
+    defaultModels: [
+      { modelId: 'gemini-3.1-flash-image-preview', displayName: 'Nano Banana 2' },
+      { modelId: 'gemini-3-pro-image-preview', displayName: 'Nano Banana Pro' },
+      { modelId: 'gemini-2.5-flash-image', displayName: 'Nano Banana' },
+    ],
+    fields: ['name', 'api_key', 'base_url'],
+    category: 'media',
+    iconKey: 'google',
+  },
+
+  // ── OpenAI (Image) ──
+  {
+    key: 'openai-image',
+    name: 'OpenAI (Image)',
+    description: 'GPT Image 2 — AI image generation by OpenAI',
+    descriptionZh: 'GPT Image 2 — OpenAI AI 图片生成',
+    protocol: 'openai-image',
+    authStyle: 'api_key',
+    baseUrl: 'https://api.openai.com/v1',
+    defaultEnvOverrides: { OPENAI_API_KEY: '' },
+    defaultModels: [
+      { modelId: 'gpt-image-2', displayName: 'GPT Image 2' },
+      { modelId: 'gpt-image-1.5', displayName: 'GPT Image 1.5' },
+      { modelId: 'gpt-image-1', displayName: 'GPT Image 1' },
+      { modelId: 'gpt-image-1-mini', displayName: 'GPT Image 1 Mini' },
+    ],
+    fields: ['api_key'],
+    category: 'media',
+    iconKey: 'openai',
+    meta: {
+      apiKeyUrl: 'https://platform.openai.com/api-keys',
+      docsUrl: 'https://platform.openai.com/docs/guides/image-generation',
+      billingModel: 'pay_as_you_go',
+    },
+  },
+
+  // ── OpenAI (Image) Third-party ──
+  {
+    key: 'openai-image-thirdparty',
+    name: 'OpenAI Image Third-party',
+    description: 'GPT Image via compatible proxy — provide URL and Key',
+    descriptionZh: 'GPT Image 兼容第三方 API — 填写地址和密钥',
+    protocol: 'openai-image',
+    authStyle: 'api_key',
+    baseUrl: '',
+    defaultEnvOverrides: { OPENAI_API_KEY: '' },
+    defaultModels: [
+      { modelId: 'gpt-image-2', displayName: 'GPT Image 2' },
+      { modelId: 'gpt-image-1.5', displayName: 'GPT Image 1.5' },
+      { modelId: 'gpt-image-1', displayName: 'GPT Image 1' },
+      { modelId: 'gpt-image-1-mini', displayName: 'GPT Image 1 Mini' },
+    ],
+    fields: ['name', 'api_key', 'base_url'],
+    category: 'media',
+    iconKey: 'openai',
+  },
+
 ];
 
 // ── Runtime preset validation (fails fast on invalid presets) ───
@@ -786,6 +856,7 @@ export const VALID_PROTOCOLS = new Set<Protocol>([
   'vertex',
   'google',
   'gemini-image',
+  'openai-image',
 ]);
 
 /** Type guard for raw protocol strings coming from API bodies or legacy DB. */
@@ -826,6 +897,7 @@ export function inferProtocolFromLegacy(
   if (providerType === 'bedrock') return 'bedrock';
   if (providerType === 'vertex') return 'vertex';
   if (providerType === 'gemini-image') return 'gemini-image';
+  if (providerType === 'openai-image') return 'openai-image';
 
   // For 'custom' type, check if the base_url matches a known Anthropic-compatible vendor
   if (providerType === 'custom') {
@@ -879,9 +951,18 @@ export function inferAuthStyleFromLegacy(
  * providers that share the same host (e.g. dashscope OpenAI-compatible vs Bailian Anthropic).
  */
 export function findPresetForLegacy(baseUrl: string, providerType: string, protocol?: Protocol): VendorPreset | undefined {
-  // Exact base_url match (most specific)
+  // Exact base_url match (most specific). When a protocol is supplied, the
+  // match must agree with it — otherwise an openai-compatible chat provider
+  // configured with https://api.openai.com/v1 would land on the openai-image
+  // preset and inherit the GPT Image catalog for chat model selection.
+  // Fuzzy match (below) already applies this guard; the exact branch must
+  // too, now that multiple presets share the same canonical URL.
   if (baseUrl) {
-    const match = VENDOR_PRESETS.find(p => p.baseUrl === baseUrl);
+    const match = VENDOR_PRESETS.find(p => {
+      if (p.baseUrl !== baseUrl) return false;
+      if (protocol && p.protocol !== protocol) return false;
+      return true;
+    });
     if (match) return match;
 
     // Fuzzy match: legacy entries may have old URLs (e.g. minimaxi.com/anthropic
@@ -902,7 +983,17 @@ export function findPresetForLegacy(baseUrl: string, providerType: string, proto
   if (providerType === 'bedrock') return VENDOR_PRESETS.find(p => p.key === 'bedrock');
   if (providerType === 'vertex') return VENDOR_PRESETS.find(p => p.key === 'vertex');
   if (providerType === 'openrouter') return VENDOR_PRESETS.find(p => p.key === 'openrouter');
-  if (providerType === 'gemini-image') return VENDOR_PRESETS.find(p => p.key === 'gemini-image');
+  // Media provider fallbacks: prefer the third-party preset when baseUrl was
+  // provided but didn't match the official host (the exact-match branch above
+  // already returned the official preset when baseUrl === official).
+  if (providerType === 'gemini-image') {
+    if (baseUrl) return VENDOR_PRESETS.find(p => p.key === 'gemini-image-thirdparty');
+    return VENDOR_PRESETS.find(p => p.key === 'gemini-image');
+  }
+  if (providerType === 'openai-image') {
+    if (baseUrl) return VENDOR_PRESETS.find(p => p.key === 'openai-image-thirdparty');
+    return VENDOR_PRESETS.find(p => p.key === 'openai-image');
+  }
   if (providerType === 'anthropic' && baseUrl === 'https://api.anthropic.com') {
     return VENDOR_PRESETS.find(p => p.key === 'anthropic-official');
   }
@@ -926,8 +1017,13 @@ export function getDefaultModelsForProvider(
   baseUrl: string,
   providerType?: string,
 ): CatalogModel[] {
-  // Try to find a preset by exact base_url
-  const preset = VENDOR_PRESETS.find(p => p.baseUrl && p.baseUrl === baseUrl);
+  // Try to find a preset by exact base_url. Protocol must agree — otherwise
+  // an openai-compatible chat provider configured with
+  // https://api.openai.com/v1 would match the openai-image preset and
+  // inherit the GPT Image catalog for chat model selection.
+  const preset = VENDOR_PRESETS.find(
+    p => p.baseUrl && p.baseUrl === baseUrl && p.protocol === protocol,
+  );
   if (preset) {
     // Preset matched — return its models even if empty (e.g. Volcengine
     // requires users to specify their own model names, so defaultModels is []).
@@ -971,6 +1067,18 @@ export function getDefaultModelsForProvider(
   }
   if (protocol === 'anthropic' || protocol === 'openrouter') {
     return ANTHROPIC_DEFAULT_MODELS;
+  }
+  // Media protocols: a third-party provider pointing at a custom proxy URL
+  // won't match an exact or fuzzy host, so fall back to the third-party
+  // preset's default catalog to surface the standard GPT Image / Nano Banana
+  // model list in the settings UI.
+  if (protocol === 'gemini-image') {
+    const p = VENDOR_PRESETS.find(x => x.key === 'gemini-image-thirdparty');
+    return p?.defaultModels ?? [];
+  }
+  if (protocol === 'openai-image') {
+    const p = VENDOR_PRESETS.find(x => x.key === 'openai-image-thirdparty');
+    return p?.defaultModels ?? [];
   }
 
   return [];

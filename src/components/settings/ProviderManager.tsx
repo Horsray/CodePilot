@@ -22,6 +22,8 @@ import {
   QUICK_PRESETS,
   GEMINI_IMAGE_MODELS,
   getGeminiImageModel,
+  OPENAI_IMAGE_MODELS,
+  getOpenAIImageModel,
   getProviderIcon,
   findMatchingPreset,
   type QuickPreset,
@@ -79,6 +81,18 @@ export function ProviderManager() {
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [globalDefaultProvider, setGlobalDefaultProvider] = useState('');
 
+  // Active media-generation provider id. Persisted server-side in the
+  // `active_image_provider_id` setting. Used by the image-generator to break
+  // ties when multiple media providers are configured (e.g. both Gemini +
+  // OpenAI); without this, the generator would silently prefer Gemini and
+  // the "OpenAI Image" setup would appear inert to the user.
+  const [activeImageProviderId, setActiveImageProviderId] = useState<string>('');
+  // `stale=true` means the stored id no longer resolves to a usable media
+  // provider (row deleted, type changed, or api_key cleared). In that case
+  // we render the "active" row with a muted/warning badge rather than the
+  // normal green one so users notice the mismatch.
+  const [activeImageProviderStale, setActiveImageProviderStale] = useState<boolean>(false);
+
   const fetchProviders = useCallback(async () => {
     try {
       setError(null);
@@ -95,6 +109,27 @@ export function ProviderManager() {
   }, []);
 
   useEffect(() => { fetchProviders(); }, [fetchProviders]);
+
+  // Fetch active-image-provider id (which media provider wins when both are configured)
+  const fetchActiveImageProvider = useCallback(() => {
+    fetch('/api/providers/active-image')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        setActiveImageProviderId(data.providerId || '');
+        setActiveImageProviderStale(!!data.stale);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { fetchActiveImageProvider(); }, [fetchActiveImageProvider]);
+  // Also refresh when providers change (e.g. user clears the api_key of the
+  // active row — the badge must flip to the stale variant without requiring
+  // a full page reload).
+  useEffect(() => {
+    const handler = () => fetchActiveImageProvider();
+    window.addEventListener('provider-changed', handler);
+    return () => window.removeEventListener('provider-changed', handler);
+  }, [fetchActiveImageProvider]);
 
   // Fetch OpenAI OAuth status
   useEffect(() => {
@@ -203,10 +238,42 @@ export function ProviderManager() {
     }
   };
 
+  const setActiveImageProvider = useCallback(async (providerId: string) => {
+    // Persist the user's pick server-side. On success the server confirms
+    // non-stale; on failure (typically: no api_key) we revert the optimistic
+    // state and surface the error. Without this revert a row with an empty
+    // key would flip green in the UI while /api/media/generate silently
+    // picks a different provider.
+    const previousId = activeImageProviderId;
+    const previousStale = activeImageProviderStale;
+    setActiveImageProviderId(providerId);
+    setActiveImageProviderStale(false);
+    try {
+      const res = await fetch('/api/providers/active-image', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId }),
+      });
+      if (!res.ok) {
+        setActiveImageProviderId(previousId);
+        setActiveImageProviderStale(previousStale);
+        const body = await res.json().catch(() => ({}));
+        setError(body?.error || 'Failed to set active image provider');
+      } else {
+        // Clear any prior error surfaced from this action.
+        setError(null);
+      }
+    } catch {
+      setActiveImageProviderId(previousId);
+      setActiveImageProviderStale(previousStale);
+    }
+  }, [activeImageProviderId, activeImageProviderStale]);
+
   const handleImageModelChange = useCallback(async (provider: ApiProvider, model: string) => {
     try {
       const env = JSON.parse(provider.extra_env || '{}');
-      env.GEMINI_IMAGE_MODEL = model;
+      const key = provider.provider_type === 'openai-image' ? 'OPENAI_IMAGE_MODEL' : 'GEMINI_IMAGE_MODEL';
+      env[key] = model;
       const newExtraEnv = JSON.stringify(env);
       const res = await fetch(`/api/providers/${provider.id}`, {
         method: 'PUT',
@@ -226,7 +293,11 @@ export function ProviderManager() {
         window.dispatchEvent(new Event('provider-changed'));
       }
     } catch { /* ignore */ }
-  }, []);
+    // Picking a model on a provider is a strong signal that this is the one
+    // the user wants to use; mark it active automatically so /api/media/generate
+    // picks the right family without a separate click.
+    setActiveImageProvider(provider.id);
+  }, [setActiveImageProvider]);
 
   const handleOpenAILogin = async () => {
     setOpenaiLoggingIn(true);
@@ -409,6 +480,40 @@ export function ProviderManager() {
         <div className="rounded-lg border border-border/50 p-4 space-y-2">
           <h3 className="text-sm font-medium mb-1">{t('provider.connectedProviders')}</h3>
 
+          {/* Orphaned-active-image safety net. The stored active id can be
+              stale for three reasons:
+                1. The row was deleted — no match in `providers`.
+                2. The row still exists but its provider_type was edited
+                   away from gemini-image/openai-image — matches a row, but
+                   that row is no longer a media provider, so the per-row
+                   capsule/badge doesn't render on it.
+                3. The row's api_key was cleared — per-row badge handles this.
+              Cases 1 and 2 both leave the setting invisible without this
+              banner, so the condition here is "no usable media row matches"
+              rather than "no row matches". */}
+          {activeImageProviderStale && activeImageProviderId && !providers.some(
+            p => p.id === activeImageProviderId
+              && (p.provider_type === 'gemini-image' || p.provider_type === 'openai-image'),
+          ) && (
+            <div className="mb-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2 flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  {isZh
+                    ? '当前“图片生成默认”指向的服务商已不可用（被删除或类型已变更），图片生成会回退到其他服务商'
+                    : 'The provider currently marked as the image-generation default is unavailable (deleted or type changed). Image generation will fall back to another provider.'}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="h-6 text-[11px] text-amber-700 dark:text-amber-400 shrink-0"
+                onClick={() => setActiveImageProvider('')}
+              >
+                {isZh ? '清除' : 'Clear'}
+              </Button>
+            </div>
+          )}
+
           {/* Claude Code — settings link */}
           <div className="border-b border-border/30 pb-2">
             <div className="flex items-center gap-3 py-2.5 px-1">
@@ -524,36 +629,79 @@ export function ProviderManager() {
                   </div>
                 </div>
                 {/* Provider options — thinking/1M for Anthropic-official only */}
-                {provider.provider_type !== 'gemini-image' && provider.base_url === 'https://api.anthropic.com' && (
+                {provider.provider_type !== 'gemini-image' && provider.provider_type !== 'openai-image' && provider.base_url === 'https://api.anthropic.com' && (
                   <ProviderOptionsSection
                     providerId={provider.id}
                     showThinkingOptions
                   />
                 )}
-                {/* Gemini Image model selector — capsule buttons */}
-                {provider.provider_type === 'gemini-image' && (
-                  <div className="ml-[34px] mt-2 flex items-center gap-1.5">
-                    <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型' : 'Model'}:</span>
-                    {GEMINI_IMAGE_MODELS.map((m) => {
-                      const isActive = getGeminiImageModel(provider) === m.value;
-                      return (
-                        <Button
-                          key={m.value}
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleImageModelChange(provider, m.value)}
-                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium border h-auto ${
-                            isActive
-                              ? 'bg-primary/10 text-primary border-primary/30'
-                              : 'text-muted-foreground border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50'
-                          }`}
-                        >
-                          {m.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* Media-provider model selector — capsule buttons */}
+                {(provider.provider_type === 'gemini-image' || provider.provider_type === 'openai-image') && (() => {
+                  const isOpenAI = provider.provider_type === 'openai-image';
+                  const models = isOpenAI ? OPENAI_IMAGE_MODELS : GEMINI_IMAGE_MODELS;
+                  const current = isOpenAI ? getOpenAIImageModel(provider) : getGeminiImageModel(provider);
+                  const isActiveProvider = activeImageProviderId === provider.id;
+                  return (
+                    <>
+                      <div className="ml-[34px] mt-2 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型' : 'Model'}:</span>
+                        {models.map((m) => {
+                          const isActive = current === m.value;
+                          return (
+                            <Button
+                              key={m.value}
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleImageModelChange(provider, m.value)}
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium border h-auto ${
+                                isActive
+                                  ? 'bg-primary/10 text-primary border-primary/30'
+                                  : 'text-muted-foreground border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50'
+                              }`}
+                            >
+                              {m.label}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                      <div className="ml-[34px] mt-1.5 flex items-center gap-2">
+                        {isActiveProvider ? (
+                          activeImageProviderStale ? (
+                            // Stale: badge flagged because the stored id no longer
+                            // resolves to a usable row (key cleared). Tell the
+                            // user and offer a 1-click fix.
+                            <>
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-amber-600 border-amber-500/50 dark:text-amber-400">
+                                {isZh ? '已失效（缺少密钥）' : 'Inactive (missing API key)'}
+                              </Badge>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                className="h-6 text-[11px] text-muted-foreground"
+                                onClick={() => setActiveImageProvider('')}
+                              >
+                                {isZh ? '清除' : 'Clear'}
+                              </Button>
+                            </>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-status-success-foreground border-status-success-border">
+                              {isZh ? '用于图片生成' : 'Used for image generation'}
+                            </Badge>
+                          )
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            className="h-6 text-[11px] text-muted-foreground"
+                            onClick={() => setActiveImageProvider(provider.id)}
+                          >
+                            {isZh ? '设为图片生成默认' : 'Use for image generation'}
+                          </Button>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             ))
           ) : (

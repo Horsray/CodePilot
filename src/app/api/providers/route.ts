@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json<ErrorResponse>(
         {
           error: `Unknown protocol '${body.protocol}'. Supported protocols: ${[...[...new Set([
-            'anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image',
+            'anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image', 'openai-image',
           ])]].join(', ')}.`,
           code: 'INVALID_PROTOCOL',
         },
@@ -102,6 +102,28 @@ export async function POST(request: NextRequest) {
         {
           error: 'Anthropic-protocol providers must specify a base URL (use https://api.anthropic.com for the official API, or your third-party endpoint)',
           code: 'ANTHROPIC_BASE_URL_REQUIRED',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Third-party media providers (openai-image, gemini-image) have the same
+    // ambiguity: the official preset fills baseUrl client-side, but the
+    // third-party preset ships empty and relies on the user to type a URL.
+    // If that field is left blank, provider-resolver falls back to the
+    // official endpoint — so a "third-party" row silently generates against
+    // api.openai.com / generativelanguage.googleapis.com. Mirror the
+    // Anthropic guard so the wrong service can't be saved.
+    if (
+      (effectiveProtocol === 'openai-image' || effectiveProtocol === 'gemini-image')
+      && !body.base_url?.trim()
+    ) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: effectiveProtocol === 'openai-image'
+            ? 'OpenAI Image providers must specify a base URL (use https://api.openai.com/v1 for the official API, or your third-party endpoint)'
+            : 'Gemini Image providers must specify a base URL (use https://generativelanguage.googleapis.com/v1beta for the official API, or your third-party endpoint)',
+          code: 'MEDIA_BASE_URL_REQUIRED',
         },
         { status: 400 }
       );

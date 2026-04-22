@@ -539,6 +539,9 @@ const zh: Record<TranslationKey, string> = {
   'imageGen.retryButton': '重试',
   'imageGen.generatingStatus': '正在生成...',
   'imageGen.stopButton': '停止',
+  'imageGen.noActiveProvider': '未设置图片生成服务商',
+  'imageGen.activeProviderStale': '图片生成服务商不可用',
+  'imageGen.activeProviderStaleHint': '当前默认图片服务商缺少密钥或类型已变更，请前往设置页调整',
 
   // ── Batch Image Generation ─────────────────────────────────
   'batchImageGen.toggle': '批量生图',

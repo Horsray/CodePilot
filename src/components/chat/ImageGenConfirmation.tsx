@@ -5,11 +5,21 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ImageGenCard } from './ImageGenCard';
+import { PaintBrush } from '@/components/ui/icon';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePanel } from '@/hooks/usePanel';
 import type { TranslationKey } from '@/i18n';
 import type { ReferenceImage } from '@/types';
 import type { ImageGenResult } from '@/hooks/useImageGen';
+
+/** What the active-image endpoint returns when a usable media provider is set. */
+interface ActiveImageInfo {
+  providerName?: string;
+  providerType?: 'gemini-image' | 'openai-image';
+  model?: string;
+  modelLabel?: string;
+  stale: boolean;
+}
 
 const ASPECT_RATIOS = [
   '1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '21:9',
@@ -56,7 +66,31 @@ export function ImageGenConfirmation({
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<ImageGenResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Which provider + model the backend will use. We surface this in the card
+  // header so the user can see whether Gemini / GPT Image (official or
+  // third-party) is about to run before clicking Generate. Populated from
+  // /api/providers/active-image and refreshed on `provider-changed`.
+  const [activeInfo, setActiveInfo] = useState<ActiveImageInfo | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/providers/active-image')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!cancelled && data) setActiveInfo(data);
+        })
+        .catch(() => {});
+    };
+    load();
+    const handler = () => load();
+    window.addEventListener('provider-changed', handler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('provider-changed', handler);
+    };
+  }, []);
 
 
   const handleStop = useCallback(() => {
@@ -102,10 +136,14 @@ export function ImageGenConfirmation({
       }
 
       const data = await res.json();
-      const genResult: ImageGenResult = {
+      const genResult: ImageGenResult & { model?: string } = {
         id: data.id,
         text: data.text,
         images: data.images || [],
+        // The generate endpoint echoes the resolved model id — carry it into
+        // the completed card so the badge reflects the *actual* model that
+        // ran (may differ from activeInfo if the user toggled mid-request).
+        model: data.model,
       };
 
       if (genResult.images.length > 0) {
@@ -187,6 +225,14 @@ export function ImageGenConfirmation({
 
   // ── Completed: show result only ──
   if (status === 'completed' && result && result.images.length > 0) {
+    // Prefer the model the backend actually ran; fall back to the label we
+    // fetched for the active provider if the generate endpoint didn't echo
+    // the model (older clients) or if the user's active provider has a
+    // friendlier label than the raw id (e.g. "GPT Image 2" vs "gpt-image-2").
+    const resultModel = (result as ImageGenResult & { model?: string }).model;
+    const displayModel = resultModel && activeInfo?.model === resultModel && activeInfo?.modelLabel
+      ? activeInfo.modelLabel
+      : resultModel || activeInfo?.modelLabel;
     return (
       <div className="my-2">
         <ImageGenCard
@@ -194,6 +240,7 @@ export function ImageGenConfirmation({
           prompt={prompt}
           aspectRatio={aspectRatio}
           imageSize={resolution}
+          model={displayModel}
           onRegenerate={handleRegenerate}
           referenceImages={referenceImages?.filter(r => r.data).map(r => ({ mimeType: r.mimeType, data: r.data! }))}
         />
@@ -205,8 +252,46 @@ export function ImageGenConfirmation({
   return (
     <div className="rounded-lg border border-border/50 bg-card overflow-hidden my-2">
       {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/30 bg-muted/30">
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-border/30 bg-muted/30">
         <span className="text-sm font-medium">{t('imageGen.confirmTitle' as TranslationKey)}</span>
+        {/* Active-model badge. Three possible states:
+              • Healthy active provider → show `<ModelLabel> · <ProviderName>`
+              • Stored active is stale (key cleared / type changed / deleted)
+                → muted warning chip pointing the user at Settings
+              • No active set at all (fresh install) → muted hint
+            The endpoint already computes the modelLabel + stale flag; we
+            just map them to the three UI variants here. */}
+        {activeInfo && !activeInfo.stale && activeInfo.modelLabel ? (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground max-w-[55%] min-w-0"
+            title={`${activeInfo.modelLabel} · ${activeInfo.providerName ?? ''}`}
+          >
+            <PaintBrush size={12} className="shrink-0" />
+            <span className="truncate">
+              <span className="text-foreground/80">{activeInfo.modelLabel}</span>
+              {activeInfo.providerName ? (
+                <span className="ml-1 text-muted-foreground/80">· {activeInfo.providerName}</span>
+              ) : null}
+            </span>
+          </span>
+        ) : activeInfo?.stale ? (
+          <a
+            href="/settings#providers"
+            className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 hover:underline"
+            title={t('imageGen.activeProviderStaleHint' as TranslationKey)}
+          >
+            <PaintBrush size={12} className="shrink-0" />
+            <span>{t('imageGen.activeProviderStale' as TranslationKey)}</span>
+          </a>
+        ) : activeInfo ? (
+          <a
+            href="/settings#providers"
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+          >
+            <PaintBrush size={12} className="shrink-0" />
+            <span>{t('imageGen.noActiveProvider' as TranslationKey)}</span>
+          </a>
+        ) : null}
       </div>
 
       <div className="p-4 space-y-3">

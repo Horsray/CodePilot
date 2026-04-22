@@ -80,8 +80,8 @@ function deduplicateModels(models: ModelEntry[]): ModelEntry[] {
 }
 
 /** Media-only provider protocols — skip in chat model selector */
-const MEDIA_PROTOCOLS = new Set<string>(['gemini-image']);
-const MEDIA_PROVIDER_TYPES = new Set(['gemini-image']);
+const MEDIA_PROTOCOLS = new Set<string>(['gemini-image', 'openai-image']);
+const MEDIA_PROVIDER_TYPES = new Set(['gemini-image', 'openai-image']);
 
 export async function GET() {
   try {
