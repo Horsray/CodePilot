@@ -225,7 +225,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n, input) => {
       const inp = input as Record<string, unknown> | undefined;
-      return n.toLowerCase() === 'agent' && (inp?.agent === 'explore' || inp?.subagent_type === 'explore');
+      return (n.toLowerCase() === 'agent' || n.toLowerCase().includes('__agent')) && (inp?.agent === 'explore' || inp?.subagent_type === 'explore');
     },
     icon: MagnifyingGlass,
     label: 'Search Agent',
@@ -306,7 +306,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n, input) => {
       const inp = input as Record<string, unknown> | undefined;
-      return n.toLowerCase() === 'agent' && inp?.agent !== 'explore' && inp?.subagent_type !== 'explore';
+      return (n.toLowerCase() === 'agent' || n.toLowerCase().includes('__agent')) && inp?.agent !== 'explore' && inp?.subagent_type !== 'explore';
     },
     icon: Lightning,
     label: '智能体',
@@ -1061,7 +1061,7 @@ function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash
   if (['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(n)) return 'create';
   if (['glob', 'grep', 'search', 'find_files', 'search_files', 'websearch', 'web_search'].some(x => n.includes(x))) return 'search';
   if (['bash', 'execute', 'run', 'shell', 'execute_command', 'computer'].includes(n)) return 'bash';
-  if (n === 'agent') return 'agent';
+  if (n.toLowerCase() === 'agent' || n.toLowerCase().includes('__agent')) return 'agent';
   return 'other';
 }
 

@@ -108,8 +108,8 @@ export function createAgentMcpServer(ctx: {
           const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
           const model = agentDef.model || ctx.parentModel;
           const systemPrompt = agentDef.prompt
-            ? `${agentDef.prompt}\n\nWorking directory: ${ctx.workingDirectory}`
-            : `You are a helpful sub-agent. Working directory: ${ctx.workingDirectory}`;
+            ? `${agentDef.prompt}\n\nWorking directory: ${ctx.workingDirectory}\n\nIMPORTANT RULE: You are a sub-agent. Your text responses are the ONLY output sent back to the parent agent. You MUST provide a clear, final summary of your findings, answers, or completed actions before you finish. Do not just output your internal thoughts.`
+            : `You are a helpful sub-agent. Working directory: ${ctx.workingDirectory}\n\nIMPORTANT RULE: You are a sub-agent. Your text responses are the ONLY output sent back to the parent agent. You MUST provide a clear, final summary of your findings, answers, or completed actions before you finish. Do not just output your internal thoughts.`;
 
           const stream = runAgentLoop({
             prompt,
