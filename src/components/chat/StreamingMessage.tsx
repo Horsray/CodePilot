@@ -319,13 +319,33 @@ function SubAgentTimelineStreamAdapter({ sessionId, isStreaming }: { sessionId?:
     if (!sessionId) return;
     const handleSync = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.sessionId === sessionId && detail?.subAgents) {
-        setSubAgents(detail.subAgents);
+      if (detail?.id) {
+        setSubAgents(prev => {
+          if (detail.error) {
+            // Error explicitly marks completion
+            return prev.map(a => a.id === detail.id ? { ...a, status: 'error', error: detail.error, report: detail.report, completedAt: Date.now() } : a);
+          } else if (detail.report) {
+            // Report marks successful completion
+            return prev.map(a => a.id === detail.id ? { ...a, status: 'completed', report: detail.report, completedAt: Date.now() } : a);
+          } else {
+            // It's a start event
+            if (prev.some(a => a.id === detail.id)) return prev;
+            return [...prev, {
+              id: detail.id,
+              name: detail.name,
+              displayName: detail.displayName,
+              prompt: detail.prompt,
+              model: detail.model,
+              status: 'running',
+              startedAt: Date.now()
+            }];
+          }
+        });
       }
     };
     
-    window.addEventListener('subagents-sync', handleSync);
-    return () => window.removeEventListener('subagents-sync', handleSync);
+    window.addEventListener('subagent-event', handleSync);
+    return () => window.removeEventListener('subagent-event', handleSync);
   }, [sessionId]);
 
   // Also clear timeline on unmount if streaming is stopped

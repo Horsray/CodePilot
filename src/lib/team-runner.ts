@@ -79,8 +79,9 @@ async function executeAgentTask(
 
   emitTeamEvent('team_agent_start', {
     id: task.id,
-    agent: task.role,
-    desc: task.desc,
+    name: task.role,
+    displayName: agentDef.displayName || task.role,
+    prompt: task.desc,
     model: finalModel,
     startedAt: Date.now(),
   });
@@ -118,6 +119,7 @@ async function executeAgentTask(
         name: task.role,
         displayName: agentDef.displayName || task.role,
         prompt: task.desc,
+        model: finalModel,
       }),
     });
     emitSSE({ type: 'tool_output', data: `[subagent:${task.role}] ${task.desc}\n` });
@@ -186,7 +188,7 @@ async function executeAgentTask(
                   const toolData = JSON.parse(event.data);
                   emitTeamEvent('team_agent_update', {
                     id: task.id,
-                    agent: task.role,
+                    name: task.role,
                     status: 'running',
                     progress: `执行工具: ${toolData.name}`,
                   });
@@ -241,7 +243,10 @@ async function executeAgentTask(
 
   emitTeamEvent('team_agent_done', {
     id: task.id,
-    agent: task.role,
+    name: task.role,
+    displayName: agentDef.displayName || task.role,
+    prompt: task.desc,
+    model: finalModel,
     status: errorEvent ? 'error' : 'completed',
     report,
     error: errorEvent || undefined,

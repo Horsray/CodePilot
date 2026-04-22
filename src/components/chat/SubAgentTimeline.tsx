@@ -20,6 +20,7 @@ import { SubAgentInfo } from '@/types';
  */
 export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [userInteractedAgents, setUserInteractedAgents] = useState<Set<string>>(new Set());
   const [agentProgress, setAgentProgress] = useState<Record<string, string>>({});
 
   // 监听子Agent进度更新事件
@@ -38,20 +39,31 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
     return () => window.removeEventListener('subagent-progress', handleProgress);
   }, []);
 
-  // 当有新的子Agent启动时，自动展开；完成时不要自动折叠
+  // 自动展开/收起逻辑：
+  // - 新Agent启动时，自动展开
+  // - Agent完成时，如果用户没有手动操作过展开/收起，则自动收起
+  // - 只要用户手动点击过展开/收起（进入了 userInteractedAgents），就不再干预它的状态
   useEffect(() => {
     setExpandedAgents(prev => {
       const next = new Set(prev);
       let changed = false;
       subAgents.forEach(agent => {
+        // 如果用户手动干预过，则不自动处理
+        if (userInteractedAgents.has(agent.id)) {
+          return;
+        }
+
         if (agent.status === 'running' && !next.has(agent.id)) {
           next.add(agent.id);
+          changed = true;
+        } else if ((agent.status === 'completed' || agent.status === 'error') && next.has(agent.id)) {
+          next.delete(agent.id);
           changed = true;
         }
       });
       return changed ? next : prev;
     });
-  }, [subAgents]);
+  }, [subAgents, userInteractedAgents]);
 
   const toggleExpand = (agentId: string) => {
     setExpandedAgents(prev => {
@@ -61,6 +73,12 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
       } else {
         next.add(agentId);
       }
+      return next;
+    });
+    // 记录用户的点击行为
+    setUserInteractedAgents(prev => {
+      const next = new Set(prev);
+      next.add(agentId);
       return next;
     });
   };
@@ -149,9 +167,9 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
 
                 {/* Agent名称 */}
                 <span className="font-medium text-xs text-foreground/90 shrink-0 flex items-center gap-1">
-                  {AGENT_META[agent.name.toLowerCase()]?.label?.replace(/\s*\([^)]*\)/g, '') || agent.displayName || agent.name}
+                  {getAgentLabel(agent.name, agent.displayName)}
                   {agent.model && (
-                    <span className="text-[10px] text-muted-foreground/60 font-mono tracking-tighter">({agent.model.split('/').pop()?.split('-')[0] || agent.model})</span>
+                    <span className="text-[10px] text-muted-foreground/60 font-mono tracking-tighter ml-1">({agent.model.split('/').pop()?.split('-').slice(0, 2).join('-') || agent.model})</span>
                   )}
                 </span>
                 

@@ -82,7 +82,7 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
           }
           return [...prev, {
             id: agentId,
-            agent: detail.agent,
+            agent: detail.name || detail.agent,
             status: 'running' as const,
             model: detail.model,
             startedAt: Date.now(),
@@ -261,6 +261,15 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
                 {agent.agent}
               </span>
             </div>
+
+            {/* 模型标识 */}
+            {agent.model && (
+              <div className="shrink-0 flex items-center justify-center px-1.5 py-0.5 rounded-md bg-primary/5 border border-primary/10">
+                <span className="text-[9px] font-mono text-primary/70 truncate max-w-[80px]" title={agent.model}>
+                  {agent.model.split('/').pop()?.split('-').slice(0, 2).join('-') || agent.model}
+                </span>
+              </div>
+            )}
 
             {/* 进度/报告 */}
             <div className="flex-1 min-w-0">

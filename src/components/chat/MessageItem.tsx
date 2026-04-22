@@ -740,12 +740,19 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     minute: '2-digit',
   });
 
-  // Extract subAgents from content blocks if present
   const subAgents = useMemo(() => {
     if (isUser) return null;
-    const subAgentsBlock = contentBlocks.find(b => b.type === 'sub_agents');
-    return subAgentsBlock ? (subAgentsBlock as any).subAgents : null;
-  }, [contentBlocks, isUser]);
+    try {
+      const parsed = JSON.parse(message.content);
+      if (Array.isArray(parsed)) {
+        const subAgentsBlock = parsed.find(b => b.type === 'sub_agents');
+        return subAgentsBlock ? subAgentsBlock.subAgents : null;
+      }
+    } catch {
+      // not JSON
+    }
+    return null;
+  }, [message.content, isUser]);
 
   const showAssistantAvatar = !isUser && isAssistantProject;
   const buddyInfo = isAssistantProject ? (globalThis as Record<string, unknown>).__codepilot_buddy_info__ as { emoji?: string; species?: string; rarity?: string } | undefined : undefined;
