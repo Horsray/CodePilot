@@ -754,6 +754,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'Skill',
             'Agent',
             'TodoWrite',
+            'mcp__codepilot-todo__TodoWrite',
             'AskUserQuestion',
             'mcp__codepilot-ask-user__AskUserQuestion',
             'mcp__codepilot-agent__Agent',
@@ -980,7 +981,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
               parentModel: model,
               permissionMode: options.permissionMode,
               parentSessionId: sessionId,
-              emitSSE: (e) => controller.enqueue(formatSSE(e as SSEEvent)),
+              emitSSE: (e) => controller.enqueue(formatSSE(e as any)),
               abortSignal: abortController?.signal,
             }),
           };

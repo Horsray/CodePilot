@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { Terminal, Toolbox } from '@/components/ui/icon';
+import { Toolbox } from '@/components/ui/icon';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import type { CliToolItem } from '@/types';

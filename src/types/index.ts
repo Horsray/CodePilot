@@ -274,7 +274,7 @@ export interface ApiProvider {
   name: string;
   provider_type: string; // legacy: 'anthropic' | 'openrouter' | 'bedrock' | 'vertex' | 'custom'
   /** Wire protocol — new field, takes precedence over provider_type for dispatch */
-  protocol: string; // 'anthropic' | 'openai-compatible' | 'openrouter' | 'bedrock' | 'vertex' | 'google' | 'gemini-image'
+  protocol: string; // 'anthropic' | 'openai-compatible' | 'openrouter' | 'bedrock' | 'vertex' | 'google' | 'gemini-image' | 'multi_head'
   base_url: string;
   api_key: string;
   is_active: number; // SQLite boolean: 0 or 1

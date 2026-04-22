@@ -160,13 +160,6 @@ function TaskCard({
     }
   };
 
-  const formatDuration = (ms: number | undefined) => {
-    if (!ms) return "-";
-    if (ms < 1000) return `${ms}ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-    return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
-  };
-
   const scheduleLabel: Record<string, string> = {
     once: t('scheduledTasks.scheduleOnce'),
     interval: t('scheduledTasks.scheduleInterval'),
@@ -473,7 +466,7 @@ function CreateTaskDialog({
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   // 可用的 MCP 服务器列表
   const [mcpServers, setMcpServers] = useState<McpServerItem[]>([]);
-  const [loadingData, setLoadingData] = useState(false);
+  const [, setLoadingData] = useState(false);
 
   // 加载会话和 MCP 服务器列表
   useEffect(() => {
@@ -1036,7 +1029,7 @@ export default function ScheduledTasksPage() {
   const [filter, setFilter] = useState<FilterStatus>("all");
   const [showCreate, setShowCreate] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [, setDeletingId] = useState<string | null>(null);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);

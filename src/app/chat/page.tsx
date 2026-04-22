@@ -9,7 +9,6 @@ import { ChatComposerActionBar } from '@/components/chat/ChatComposerActionBar';
 import { CaretRight, CaretDown } from '@/components/ui/icon';
 import { ModeIndicator } from '@/components/chat/ModeIndicator';
 import { ChatPermissionSelector } from '@/components/chat/ChatPermissionSelector';
-import { ImageGenToggle } from '@/components/chat/ImageGenToggle';
 import { PermissionPrompt } from '@/components/chat/PermissionPrompt';
 import { ChatEmptyState } from '@/components/chat/ChatEmptyState';
 import { OnboardingWizard } from '@/components/assistant/OnboardingWizard';
@@ -235,7 +234,6 @@ export default function NewChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingThinkingContent, setStreamingThinkingContent] = useState('');
-  const [referencedContexts, setReferencedContexts] = useState<string[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolUses, setToolUses] = useState<ToolUseInfo[]>([]);
   const [toolResults, setToolResults] = useState<ToolResultInfo[]>([]);
@@ -789,14 +787,6 @@ export default function NewChatPage() {
                   break;
                 }
                 case 'referenced_contexts': {
-                  try {
-                    const data = JSON.parse(event.data);
-                    if (data.files) {
-                      setReferencedContexts(data.files);
-                    }
-                  } catch (e) {
-                    console.error('Failed to parse referenced_contexts:', e);
-                  }
                   break;
                 }
                 case 'tool_use': {

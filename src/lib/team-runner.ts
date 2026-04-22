@@ -1,9 +1,10 @@
-import type { ToolSet } from 'ai';
 import { getAgent } from './agent-registry';
 import { runAgentLoop } from './agent-loop';
 import { assembleTools } from './agent-tools';
+import type { ToolSet } from 'ai';
 
-export type TeamRunnerContext = {
+export interface TeamRunnerOptions {
+  goal: string;
   workingDirectory: string;
   providerId?: string;
   sessionProviderId?: string;
@@ -12,13 +13,9 @@ export type TeamRunnerContext = {
   parentSessionId?: string;
   emitSSE?: (event: { type: string; data: string }) => void;
   abortSignal?: AbortSignal;
-};
+}
 
-function filterTools(
-  allTools: ToolSet,
-  allowedTools?: string[],
-  disallowedTools?: string[],
-): ToolSet {
+function filterTools(allTools: ToolSet, allowedTools?: string[], disallowedTools?: string[]): ToolSet {
   if (allowedTools && allowedTools.length > 0) {
     const filtered: ToolSet = {};
     for (const name of allowedTools) {
@@ -37,175 +34,126 @@ function filterTools(
   return allTools;
 }
 
-function getToolSummary(name: string, input: unknown): string {
-  const inp = input as Record<string, unknown> | undefined;
-  if (!inp) return name;
-  const lower = name.toLowerCase();
-  if (['bash', 'execute', 'run', 'shell', 'execute_command'].includes(lower)) {
-    const cmd = (inp.command || inp.cmd || '') as string;
-    return cmd ? (cmd.length > 80 ? cmd.slice(0, 77) + '...' : cmd) : 'bash';
+export async function runTeamPipeline(options: TeamRunnerOptions): Promise<string> {
+  const { goal, workingDirectory, emitSSE, abortSignal } = options;
+  
+  if (emitSSE) {
+    emitSSE({ type: 'text', data: `\n\n🚀 **启动 OMC Team 管线**\n目标：_${goal}_\n\n` });
   }
-  const filePath = (inp.file_path || inp.path || inp.filePath || '') as string;
-  if (['read', 'readfile', 'read_file', 'read_multiple_files', 'read_text_file'].includes(lower)) {
-    return filePath ? `Read ${filePath}` : 'Read';
-  }
-  if (['write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'apply_patch'].includes(lower) || lower.endsWith('__edit_file') || lower.endsWith('__write_file')) {
-    return filePath ? `Edit ${filePath}` : 'Edit';
-  }
-  if (['glob', 'grep', 'searchcodebase', 'find_files', 'search_files', 'websearch', 'web_search'].some(k => lower.includes(k))) {
-    const pattern = (inp.pattern || inp.query || inp.glob || '') as string;
-    return pattern ? `${name} "${pattern.length > 60 ? pattern.slice(0, 57) + '...' : pattern}"` : name;
-  }
-  return name;
-}
 
-async function runSubAgent(params: {
-  agentId: string;
-  prompt: string;
-  ctx: TeamRunnerContext;
-}): Promise<string> {
-  const { agentId, prompt, ctx } = params;
-  const agentDef = getAgent(agentId);
-  if (!agentDef) return `Error: Unknown agent "${agentId}".`;
+  const pipeline = [
+    { role: 'search', desc: '探索代码库并收集相关上下文' },
+    { role: 'planner', desc: '制定技术方案和修改计划' },
+    { role: 'executor', desc: '执行代码修改' },
+    { role: 'verifier', desc: '验证修改结果并进行复核' }
+  ];
 
-  const permissionContext = (ctx.parentSessionId && ctx.emitSSE && ctx.permissionMode)
-    ? {
-        sessionId: ctx.parentSessionId,
-        permissionMode: (ctx.permissionMode || 'trust') as import('./permission-checker').PermissionMode,
-        emitSSE: ctx.emitSSE,
-        abortSignal: ctx.abortSignal,
-      }
-    : undefined;
+  let accumulatedContext = `Team Goal: ${goal}\n\n`;
 
-  const { tools: allTools } = assembleTools({
-    workingDirectory: ctx.workingDirectory,
-    providerId: ctx.providerId,
-    sessionProviderId: ctx.sessionProviderId,
-    model: ctx.parentModel,
-    permissionContext,
-  });
+  for (const step of pipeline) {
+    if (abortSignal?.aborted) break;
 
-  const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
-  const model = agentDef.model || ctx.parentModel;
+    const agentDef = getAgent(step.role);
+    if (!agentDef) continue;
 
-  const systemPrompt = (agentDef.prompt || `You are a helpful sub-agent.`) +
-    `\n\nWorking directory: ${ctx.workingDirectory}\n\nIMPORTANT RULE: You are a sub-agent. Your text responses are the ONLY output sent back to the parent agent. You MUST provide a clear, final summary of your findings, answers, or completed actions before you finish. Do not just output your internal thoughts. Use tools instead of guessing.`;
+    if (emitSSE) {
+      emitSSE({ type: 'tool_output', data: `[team:${step.role}] start` });
+      emitSSE({ type: 'text', data: `\n---\n### 👨‍💻 正在派遣 [${step.role}] 智能体\n> 任务：${step.desc}\n\n` });
+    }
 
-  ctx.emitSSE?.({ type: 'tool_output', data: `[team:${agentId}] start` });
+    const prompt = `Your role is ${step.role}. Your task is: ${step.desc}.\n\nOverall Team Goal: ${goal}\n\nContext from previous steps:\n${accumulatedContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
 
-  const stream = runAgentLoop({
-    prompt,
-    sessionId: `team-${agentId}-${Date.now()}`,
-    providerId: ctx.providerId,
-    sessionProviderId: ctx.sessionProviderId,
-    model,
-    systemPrompt,
-    workingDirectory: ctx.workingDirectory,
-    tools: subTools,
-    maxSteps: agentDef.maxSteps || 30,
-    permissionMode: ctx.permissionMode,
-  });
+    const permissionContext = (options.parentSessionId && options.emitSSE && options.permissionMode)
+      ? {
+          sessionId: options.parentSessionId,
+          permissionMode: (options.permissionMode || 'trust') as import('./permission-checker').PermissionMode,
+          emitSSE: options.emitSSE,
+          abortSignal: options.abortSignal,
+        }
+      : undefined;
 
-  const reader = stream.getReader();
-  const textParts: string[] = [];
+    const { tools: allTools } = assembleTools({
+      workingDirectory,
+      providerId: options.providerId,
+      sessionProviderId: options.sessionProviderId,
+      model: options.parentModel,
+      permissionContext,
+    });
 
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      const lines = value.split('\n');
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const event = JSON.parse(line.slice(6));
-          if (event.type === 'text') {
-            textParts.push(event.data);
-          } else if (event.type === 'permission_request') {
-            ctx.emitSSE?.(event);
-          } else if (event.type === 'tool_use') {
+    const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
+    const model = agentDef.model || options.parentModel;
+    const systemPrompt = agentDef.prompt
+      ? `${agentDef.prompt}\n\nWorking directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do NOT just output your internal thoughts.`
+      : `You are a helpful sub-agent in a team. Working directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do NOT just output your internal thoughts.`;
+
+    const stream = runAgentLoop({
+      prompt,
+      sessionId: `team-${step.role}-${Date.now()}`,
+      providerId: options.providerId,
+      sessionProviderId: options.sessionProviderId,
+      model,
+      systemPrompt,
+      workingDirectory,
+      tools: subTools,
+      maxSteps: agentDef.maxSteps || 30,
+      permissionMode: options.permissionMode,
+    });
+
+    const reader = stream.getReader();
+    const textParts: string[] = [];
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (value) {
+          const lines = value.split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
             try {
-              const t = JSON.parse(event.data);
-              const summary = getToolSummary(t.name, t.input);
-              ctx.emitSSE?.({ type: 'tool_output', data: `[team:${agentId}] > ${summary}` });
-            } catch { }
-          } else if (event.type === 'tool_result') {
-            try {
-              const r = JSON.parse(event.data);
-              const status = r.is_error ? 'x' : '+';
-              ctx.emitSSE?.({ type: 'tool_output', data: `[team:${agentId}] [${status}] done` });
+              const event = JSON.parse(line.slice(6));
+              if (event.type === 'text') {
+                textParts.push(event.data);
+                // Also stream the agent's thought process to the main UI!
+                if (emitSSE) {
+                  emitSSE({ type: 'text', data: event.data });
+                }
+              } else if (event.type === 'permission_request' && emitSSE) {
+                emitSSE(event);
+              } else if (event.type === 'tool_use' && emitSSE) {
+                try {
+                  const t = JSON.parse(event.data);
+                  const cmd = t.input?.command || t.input?.pattern || t.input?.file_path || t.name;
+                  emitSSE({ type: 'tool_output', data: `[team:${step.role}] > ${t.name}: ${cmd}` });
+                } catch { }
+              } else if (event.type === 'tool_result' && emitSSE) {
+                try {
+                  const res = JSON.parse(event.data);
+                  const status = res.is_error ? '[x]' : '[+]';
+                  emitSSE({ type: 'tool_output', data: `[team:${step.role}] ${status} done` });
+                } catch { }
+              }
             } catch { }
           }
-        } catch { }
+        }
       }
+    } finally {
+      reader.releaseLock();
     }
-  } finally {
-    reader.releaseLock();
+
+    const report = textParts.join('') || '(No report provided)';
+    accumulatedContext += `\n\n--- Report from ${step.role} ---\n${report}\n`;
+
+    if (emitSSE) {
+      emitSSE({ type: 'tool_output', data: `[team:${step.role}] done` });
+      emitSSE({ type: 'text', data: `\n\n✅ **[${step.role}] 任务完成**\n\n` });
+    }
   }
 
-  ctx.emitSSE?.({ type: 'tool_output', data: `[team:${agentId}] done` });
-  return textParts.join('') || `(Sub-agent "${agentId}" produced no text output)`;
+  if (emitSSE) {
+    emitSSE({ type: 'text', data: `\n\n🎉 **OMC Team 管线全部执行完毕**\n请查阅上方各智能体的执行报告。` });
+  }
+
+  return accumulatedContext;
 }
-
-export async function runTeamPipeline(params: { goal: string; ctx: TeamRunnerContext }): Promise<string> {
-  const { goal, ctx } = params;
-  const cleanedGoal = goal.trim();
-
-  ctx.emitSSE?.({ type: 'tool_output', data: `[team] goal: ${cleanedGoal}` });
-
-  const [explore, search] = await Promise.all([
-    runSubAgent({
-      agentId: 'explore',
-      prompt: `Task: Explore the codebase for: ${cleanedGoal}\nReturn:\n- Key file paths (absolute or repo-relative)\n- 1-2 bullets per file why it matters\n- Any important entry points / exports`,
-      ctx,
-    }),
-    runSubAgent({
-      agentId: 'search',
-      prompt: `Task: Deep search the codebase for: ${cleanedGoal}\nReturn:\n- Best search keywords\n- Matched file list\n- For top 3 matches, include the most relevant line ranges and why`,
-      ctx,
-    }),
-  ]);
-
-  const plan = await runSubAgent({
-    agentId: 'planner',
-    prompt: `Goal: ${cleanedGoal}\n\nContext from explore:\n${explore}\n\nContext from search:\n${search}\n\nCreate a concise implementation plan with ordered steps and what to verify at the end.`,
-    ctx,
-  });
-
-  const execution = await runSubAgent({
-    agentId: 'executor',
-    prompt: `Goal: ${cleanedGoal}\n\nPlan:\n${plan}\n\nContext:\n- Explore findings:\n${explore}\n\n- Search findings:\n${search}\n\nExecute the plan. Make required code changes. Run checks if needed. Provide a final summary of changes and where they are.`,
-    ctx,
-  });
-
-  const verification = await runSubAgent({
-    agentId: 'verifier',
-    prompt: `Verify the work for goal: ${cleanedGoal}\n\nExecutor report:\n${execution}\n\nDo:\n- Identify which files changed and sanity check key logic\n- Suggest commands/tests to run (and run them if you can)\n- Report pass/fail with concrete evidence`,
-    ctx,
-  });
-
-  const out = [
-    `# Team Result`,
-    ``,
-    `## Goal`,
-    cleanedGoal,
-    ``,
-    `## Explore`,
-    explore.trim(),
-    ``,
-    `## Search`,
-    search.trim(),
-    ``,
-    `## Plan`,
-    plan.trim(),
-    ``,
-    `## Execution`,
-    execution.trim(),
-    ``,
-    `## Verification`,
-    verification.trim(),
-  ].join('\n');
-
-  return out;
-}
-

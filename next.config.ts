@@ -3,6 +3,8 @@ import pkg from "./package.json" with { type: "json" };
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Next.js 16 默认启用了 Turbopack，如果提供了 webpack 配置，需要显式加上 webpack: true 或 turbopack: {} 来消解警告
+  turbopack: {},
   // 中文注释：Webpack 配置 - 确保关键依赖正确打包，避免运行时 chunk 加载失败
   webpack: (config, { isServer }) => {
     // 修复 mermaid 相关包的代码分割问题

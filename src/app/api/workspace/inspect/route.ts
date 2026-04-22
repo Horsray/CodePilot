@@ -5,7 +5,6 @@ import path from 'path';
 type WorkspaceStatus = 'empty' | 'normal_directory' | 'existing_workspace' | 'partial_workspace' | 'invalid';
 
 const ASSISTANT_FILES = ['soul.md', 'Soul.md', 'SOUL.md', 'user.md', 'User.md', 'USER.md', 'PROFILE.md', 'memory.md', 'Memory.md', 'MEMORY.md', 'claude.md', 'Claude.md', 'CLAUDE.md', 'AGENTS.md'];
-const CORE_FILE_KEYS = ['soul', 'user', 'memory', 'claude'] as const;
 
 function countExistingCoreFiles(dir: string): number {
   const found = new Set<string>();

@@ -1,8 +1,6 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
-import { useTranslation } from "@/hooks/useTranslation";
-import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
 import type { Message, TokenUsage, FileAttachment, MediaBlock } from '@/types';
 import {
@@ -13,7 +11,7 @@ import {
 import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
 import { Button } from "@/components/ui/button";
-import { Copy, Check, CheckCircle, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise, Book } from "@/components/ui/icon";
+import { Copy, Check, CheckCircle, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise } from "@/components/ui/icon";
 import { FileAttachmentDisplay } from './FileAttachmentDisplay';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { ImageGenCard } from './ImageGenCard';
@@ -537,45 +535,6 @@ const COLLAPSE_HEIGHT = 300;
 // ---------------------------------------------------------------------------
 // Diff summary — shows modified files after assistant turn
 // ---------------------------------------------------------------------------
-
-function DiffSummary({ files }: { files: Array<{ path: string; name: string }> }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mt-1">
-      <button
-        type="button"
-        onClick={() => setOpen(prev => !prev)}
-        className="flex items-center gap-1.5 text-[11px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-      >
-        <CaretRight
-          size={10}
-          className={cn("shrink-0 transition-transform duration-200", open && "rotate-90")}
-        />
-        <span>Modified {files.length} file{files.length > 1 ? 's' : ''}</span>
-      </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{ overflow: 'hidden' }}
-          >
-            <div className="ml-3 mt-0.5 space-y-0.5">
-              {files.map(f => (
-                <div key={f.path} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground/40">
-                  <NotePencil size={10} className="shrink-0" />
-                  <span className="truncate" title={f.path}>{f.name}</span>
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;

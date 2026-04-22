@@ -24,7 +24,8 @@ export type Protocol =
   | 'bedrock'             // AWS Bedrock (env-based auth, CLAUDE_CODE_USE_BEDROCK)
   | 'vertex'              // Google Vertex AI (env-based auth, CLAUDE_CODE_USE_VERTEX)
   | 'google'              // Google Generative AI (Gemini text)
-  | 'gemini-image';       // Google Gemini image generation
+  | 'gemini-image'        // Google Gemini image generation
+  | 'multi_head';
 
 /**
  * How the provider authenticates: which env var to inject the API key into.
@@ -161,7 +162,7 @@ export const PresetSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   descriptionZh: z.string(),
-  protocol: z.enum(['anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image']),
+  protocol: z.enum(['anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image', 'multi_head']),
   authStyle: z.enum(['api_key', 'auth_token', 'env_only', 'custom_header']),
   baseUrl: z.string(),
   defaultEnvOverrides: z.record(z.string(), z.string()),
@@ -843,6 +844,33 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
+  // ── Multi-Head Router ──
+  {
+    key: 'multi-head-router',
+    name: 'Multi-Head Router (多头路由)',
+    description: 'Dispatch agents to different providers based on their capability tier.',
+    descriptionZh: '将不同级别的 Agent 分发给不同的服务商模型（如规划用 Opus，干活用 Sonnet，搜索用 Haiku）。',
+    protocol: 'multi_head',
+    authStyle: 'env_only', // It delegates auth to the child providers
+    baseUrl: '',
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: 'orchestrator', displayName: 'Default (Orchestrator)', role: 'default' },
+    ],
+    defaultRoleModels: {
+      default: '',
+      sonnet: '',
+      opus: '',
+      haiku: '',
+    },
+    fields: ['name', 'model_mapping'],
+    iconKey: 'server',
+    meta: {
+      billingModel: 'self_hosted',
+      notes: ['将角色映射为 providerId:modelId 的格式（如 anthropic:claude-3-5-sonnet）'],
+    },
+  },
+
   // ── Google Gemini (Image) ──
   {
     key: 'gemini-image',
@@ -917,6 +945,7 @@ export const VALID_PROTOCOLS = new Set<Protocol>([
   'vertex',
   'google',
   'gemini-image',
+  'multi_head',
 ]);
 
 /** Type guard for raw protocol strings coming from API bodies or legacy DB. */

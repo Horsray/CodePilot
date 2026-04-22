@@ -6,7 +6,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { execSync } from 'child_process';
 import { unlinkSync, existsSync } from 'fs';
-import path from 'path';
 
 export async function POST(request: NextRequest) {
   try {

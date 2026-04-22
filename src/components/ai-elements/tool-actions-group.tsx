@@ -5,19 +5,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import type { Icon } from '@phosphor-icons/react';
 import { TerminalWindow } from '@phosphor-icons/react';
 import {
-  File,
   NotePencil,
   MagnifyingGlass,
   Wrench,
   SpinnerGap,
   CheckCircle,
   XCircle,
-  CaretRight,
   Brain,
-  Image as ImageIcon,
   Lightning,
-  GitDiff,
-  Eye,
   Eyeglasses,
   ArrowSquareOut,
   Code,
@@ -34,7 +29,6 @@ function canPreview(filename: string): boolean {
   const ext = '.' + filename.split('.').pop()?.toLowerCase();
   return RENDERABLE_EXTENSIONS.has(ext);
 }
-import { Shimmer } from '@/components/ai-elements/shimmer';
 import { useStickToBottomContext } from 'use-stick-to-bottom';
 import { Streamdown } from 'streamdown';
 import { cjk } from '@streamdown/cjk';
@@ -140,7 +134,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
         statusMap.set(agentId, cur);
       }
 
-      const order = ['explore', 'search', 'planner', 'executor', 'verifier'];
+      const order = ['search', 'planner', 'executor', 'verifier'];
 
       return (
         <div className="px-3 py-3 border-l-2 ml-3 border-blue-500/20 space-y-3">
@@ -319,7 +313,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
       const isRunning = tool.result === undefined;
       if (!isRunning) {
         return (
-          <div className="px-3 py-3 border-l-2 ml-3 border-blue-500/20">
+          <div className="px-3 py-3 border-l-2 ml-3 border-blue-500/20 bg-background/50 rounded-r-md mt-1">
             {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
               <div className="mb-3">
                 <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">任务详情 (Input)</h5>
@@ -350,32 +344,53 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
 
       // Parse progress lines into structured items
       const lines = (outputText || '').split('\n').filter(Boolean);
-      // Only show last 8 lines to avoid clutter
-      const visible = lines.slice(-8);
+      // Show more lines for sub-agent transparency
+      const visible = lines.slice(-15);
 
       return (
-        <div className="mt-1 ml-4 border-l-2 border-border/30 pl-2 space-y-0.5">
+        <div className="mt-2 ml-3 border-l-2 border-blue-500/30 pl-3 py-1 space-y-1 bg-background/30 rounded-r-md">
           {visible.map((line, i) => {
             const isActive = line.startsWith('>');
             const isDone = line.startsWith('[+]');
             const isError = line.startsWith('[x]');
             const isHeader = line.startsWith('[subagent:');
+            
+            // Highlight tool calls from the sub-agent
+            if (isActive) {
+              return (
+                <div key={i} className="text-[11px] font-mono truncate text-blue-500/70 bg-blue-500/5 px-1 py-0.5 rounded flex items-center">
+                  <SpinnerGap size={10} className="inline-block mr-1.5 animate-spin shrink-0" />
+                  {line.replace(/^>\s*/, '')}
+                </div>
+              );
+            }
+            if (isDone) {
+              return (
+                <div key={i} className="text-[11px] font-mono truncate text-emerald-500/70 flex items-center">
+                  <CheckCircle size={10} className="inline-block mr-1.5 shrink-0" />
+                  {line.replace(/^\[\+\]\s*/, '')}
+                </div>
+              );
+            }
+            if (isError) {
+              return (
+                <div key={i} className="text-[11px] font-mono truncate text-red-500/70 flex items-center">
+                  <XCircle size={10} className="inline-block mr-1.5 shrink-0" />
+                  {line.replace(/^\[x\]\s*/, '')}
+                </div>
+              );
+            }
+            
+            // Regular thought process or summary
             return (
               <div
                 key={i}
                 className={cn(
-                  "text-[11px] font-mono truncate",
-                  isHeader ? "text-muted-foreground/70" :
-                  isActive ? "text-muted-foreground/60" :
-                  isDone ? "text-green-500/60" :
-                  isError ? "text-red-500/60" :
-                  "text-muted-foreground/50"
+                  "text-[11px] font-mono whitespace-pre-wrap break-all",
+                  isHeader ? "text-muted-foreground/70 font-bold mb-2" : "text-muted-foreground/60"
                 )}
               >
-                {isActive && <SpinnerGap size={10} className="inline-block mr-1 animate-spin align-text-bottom" />}
-                {isDone && <CheckCircle size={10} className="inline-block mr-1 align-text-bottom" />}
-                {isError && <XCircle size={10} className="inline-block mr-1 align-text-bottom" />}
-                {line.replace(/^\[subagent:\w+\]\s*/, '').replace(/^>\s*/, '').replace(/^\[[+x]\]\s*/, '')}
+                {line.replace(/^\[subagent:\w+\]\s*/, '')}
               </div>
             );
           })}
@@ -395,13 +410,13 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
       const agentType = (inp?.agent || inp?.subagent_type || 'general') as string;
       const prompt = (inp?.prompt || inp?.description || inp?.query || '') as string;
       const short = prompt.length > 50 ? prompt.slice(0, 47) + '...' : prompt;
-      return `executor: ${short}`;
+      return `${agentType}: ${short}`;
     },
     renderDetail: (tool, streamingOutput) => {
       const isRunning = tool.result === undefined;
       if (!isRunning) {
         return (
-          <div className="px-3 py-3 border-l-2 ml-3 border-blue-500/20">
+          <div className="px-3 py-3 border-l-2 ml-3 border-purple-500/20 bg-background/50 rounded-r-md mt-1">
             {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
               <div className="mb-3">
                 <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">任务详情 (Input)</h5>
@@ -432,32 +447,53 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
 
       // Parse progress lines into structured items
       const lines = (outputText || '').split('\n').filter(Boolean);
-      // Only show last 8 lines to avoid clutter
-      const visible = lines.slice(-8);
+      // Show more lines for sub-agent transparency
+      const visible = lines.slice(-15);
 
       return (
-        <div className="mt-1 ml-4 border-l-2 border-border/30 pl-2 space-y-0.5">
+        <div className="mt-2 ml-3 border-l-2 border-purple-500/30 pl-3 py-1 space-y-1 bg-background/30 rounded-r-md">
           {visible.map((line, i) => {
             const isActive = line.startsWith('>');
             const isDone = line.startsWith('[+]');
             const isError = line.startsWith('[x]');
             const isHeader = line.startsWith('[subagent:');
+            
+            // Highlight tool calls from the sub-agent
+            if (isActive) {
+              return (
+                <div key={i} className="text-[11px] font-mono truncate text-purple-500/70 bg-purple-500/5 px-1 py-0.5 rounded flex items-center">
+                  <SpinnerGap size={10} className="inline-block mr-1.5 animate-spin shrink-0" />
+                  {line.replace(/^>\s*/, '')}
+                </div>
+              );
+            }
+            if (isDone) {
+              return (
+                <div key={i} className="text-[11px] font-mono truncate text-emerald-500/70 flex items-center">
+                  <CheckCircle size={10} className="inline-block mr-1.5 shrink-0" />
+                  {line.replace(/^\[\+\]\s*/, '')}
+                </div>
+              );
+            }
+            if (isError) {
+              return (
+                <div key={i} className="text-[11px] font-mono truncate text-red-500/70 flex items-center">
+                  <XCircle size={10} className="inline-block mr-1.5 shrink-0" />
+                  {line.replace(/^\[x\]\s*/, '')}
+                </div>
+              );
+            }
+            
+            // Regular thought process or summary
             return (
               <div
                 key={i}
                 className={cn(
-                  "text-[11px] font-mono truncate",
-                  isHeader ? "text-muted-foreground/70" :
-                  isActive ? "text-muted-foreground/60" :
-                  isDone ? "text-green-500/60" :
-                  isError ? "text-red-500/60" :
-                  "text-muted-foreground/50"
+                  "text-[11px] font-mono whitespace-pre-wrap break-all",
+                  isHeader ? "text-muted-foreground/70 font-bold mb-2" : "text-muted-foreground/60"
                 )}
               >
-                {isActive && <SpinnerGap size={10} className="inline-block mr-1 animate-spin align-text-bottom" />}
-                {isDone && <CheckCircle size={10} className="inline-block mr-1 align-text-bottom" />}
-                {isError && <XCircle size={10} className="inline-block mr-1 align-text-bottom" />}
-                {line.replace(/^\[subagent:\w+\]\s*/, '').replace(/^>\s*/, '').replace(/^\[[+x]\]\s*/, '')}
+                {line.replace(/^\[subagent:\w+\]\s*/, '')}
               </div>
             );
           })}
@@ -505,61 +541,9 @@ function getStatus(tool: ToolAction): ToolStatus {
   return tool.isError ? 'error' : 'success';
 }
 
-function StatusDot({ status }: { status: ToolStatus }) {
-  return (
-    <AnimatePresence mode="wait">
-      {status === 'running' && (
-        <motion.span
-          key="running"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
-          className="inline-flex"
-        >
-          <SpinnerGap size={14} className="shrink-0 animate-spin text-muted-foreground/50" />
-        </motion.span>
-      )}
-      {status === 'success' && (
-        <motion.span
-          key="success"
-          initial={{ scale: 0.5, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-          className="inline-flex"
-        >
-          <CheckCircle size={14} className="shrink-0 text-green-500" />
-        </motion.span>
-      )}
-      {status === 'error' && (
-        <motion.span
-          key="error"
-          initial={{ scale: 0.5, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-          className="inline-flex"
-        >
-          <XCircle size={14} className="shrink-0 text-red-500" />
-        </motion.span>
-      )}
-    </AnimatePresence>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Context tool grouping — auto-group 3+ consecutive read/search tools
+// Action tool detection — tools that perform writes/changes
 // ---------------------------------------------------------------------------
-
-const CONTEXT_TOOLS = new Set([
-  'read', 'readfile', 'read_file',
-  'glob', 'grep',
-  'ls', 'list', 'list_files',
-  'search', 'find_files', 'search_files',
-]);
-
-function isContextTool(name: string): boolean {
-  return CONTEXT_TOOLS.has(name.toLowerCase());
-}
 
 function isActionTool(name: string): boolean {
   const n = name.toLowerCase();
@@ -691,7 +675,6 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
   const [expanded, setExpanded] = useState(false);
   const hasRunning = tools.some((t) => t.result === undefined);
   const hasError = tools.some((t) => t.isError);
-  const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
 
   return (
     <div className="my-1.5 overflow-hidden">
@@ -747,7 +730,7 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
 function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
   // Always expanded during streaming, collapsed when done
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
-  const [hovered, setHovered] = useState(false);
+  const [, setHovered] = useState(false);
   const { stopScroll } = useStickToBottomContext();
 
   const isExpanded = userExpanded !== null ? userExpanded : Boolean(isStreaming);
@@ -848,8 +831,8 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
   const summary = MCP_TOOL_NAME_MAP[tool.name] ? baseSummary.replace(tool.name, MCP_TOOL_NAME_MAP[tool.name]) : baseSummary;
   const filePath = getFilePath(tool.input);
   const status = getStatus(tool);
-  const hasDetail = renderer.icon === TerminalWindow || renderer.icon === Lightning || renderer.icon === MagnifyingGlass;
-  const detailVisible = hasDetail && renderer.renderDetail && (status === 'running' || !!streamingToolOutput || !!tool.result);
+  const hasDetail = !!renderer.renderDetail;
+  const detailVisible = hasDetail && (status === 'running' || !!streamingToolOutput || !!tool.result);
   const [internalExpanded, setInternalExpanded] = useState(status === 'running');
   const [showRaw, setShowRaw] = useState(false);
 
@@ -949,7 +932,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
   );
 }
 
-function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rewindId }: { tool: ToolAction; isStreaming?: boolean; streamingToolOutput?: string; sessionId?: string; rewindId?: string }) {
+function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { tool: ToolAction; isStreaming?: boolean; streamingToolOutput?: string; sessionId?: string; rewindId?: string }) {
   const k = toolKind2(tool.name);
   const status = getStatus(tool);
   
@@ -959,7 +942,8 @@ function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rew
 
   React.useEffect(() => {
     // Special side-effect for opening browser panel when the tool completes
-    if (tool.name === 'codepilot_open_browser' && prevStatusRef.current === 'running' && status === 'success') {
+    const isBrowserTool = tool.name === 'codepilot_open_browser' || tool.name.endsWith('__codepilot_open_browser');
+    if (isBrowserTool && prevStatusRef.current === 'running' && status === 'success') {
       const input = tool.input as { url?: string; title?: string } | undefined;
       if (input?.url) {
         window.dispatchEvent(new CustomEvent('action:open-browser-panel', {
@@ -1042,8 +1026,10 @@ function ActionToolCard({ tool, isStreaming, streamingToolOutput, sessionId, rew
   
   if (k === 'agent') {
     return (
-      <div className="bg-muted/30 my-1.5 border border-blue-500/30 rounded-[6px] overflow-hidden">
-        <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
+      <div className="my-2 ml-4 border-l-[2px] border-border/50 pl-4 py-1">
+        <div className="border border-blue-500/30 bg-muted/20 rounded-[8px] overflow-hidden shadow-sm">
+          <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
+        </div>
       </div>
     );
   }
@@ -1135,14 +1121,13 @@ function extractDiffFromMcpFilesystemEditInput(input: unknown): { oldText: strin
 }
 function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'agent' | 'other' {
   const n = name.toLowerCase();
-  if (n === 'team' || n.includes('__team')) return 'agent';
   if (['read', 'readfile', 'read_file', 'read_text_file', 'read_multiple_files'].includes(n)) return 'read';
   if (['edit', 'notebookedit', 'notebook_edit', 'apply_patch'].includes(n) || n.endsWith('__edit_file')) return 'write';
   if (n.endsWith('__write_file')) return 'create';
   if (['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(n)) return 'create';
   if (['glob', 'grep', 'search', 'find_files', 'search_files', 'websearch', 'web_search'].some(x => n.includes(x))) return 'search';
-  if (['bash', 'execute', 'run', 'shell', 'execute_command', 'computer'].includes(n)) return 'bash';
   if (n.toLowerCase() === 'agent' || n.toLowerCase().includes('__agent')) return 'agent';
+  if (['bash', 'execute', 'run', 'shell', 'execute_command', 'computer'].includes(n)) return 'bash';
   return 'other';
 }
 
@@ -1183,7 +1168,7 @@ export function extractDiff(t: ToolAction): DiffInfo | null {
 // Completion summary — fork-specific export
 // ---------------------------------------------------------------------------
 
-function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionId?: string; rewindId?: string }) {
+function FileReviewRow({ diff }: { diff: DiffInfo; sessionId?: string; rewindId?: string }) {
   const [open, setOpen] = useState(false);
   const { stopScroll } = useStickToBottomContext();
   const { openPreviewTab } = usePanel();
@@ -1270,7 +1255,7 @@ function FileReviewRow({ diff, sessionId, rewindId }: { diff: DiffInfo; sessionI
 }
 
 export function CompletionBar({
-  changedFiles, errCount, sessionId, rewindId,
+  changedFiles, sessionId, rewindId,
 }: {
   changedFiles: { tool: ToolAction; diff: DiffInfo }[];
   errCount: number;

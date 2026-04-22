@@ -74,7 +74,7 @@ export interface ResolveOptions {
   /** Session's stored model */
   sessionModel?: string;
   /** Use case — affects which role model to pick */
-  useCase?: 'default' | 'reasoning' | 'small';
+  useCase?: 'default' | 'reasoning' | 'small' | 'sonnet' | 'opus' | 'haiku';
 }
 
 /**
@@ -792,6 +792,32 @@ function buildResolution(
   // If a use case is specified, check role models for that use case
   if (opts.useCase && opts.useCase !== 'default' && roleModels[opts.useCase]) {
     model = roleModels[opts.useCase];
+  }
+
+  // Handle Multi-Head Router Logic
+  if (protocol === 'multi_head') {
+    // If the UI requested the placeholder 'orchestrator', or if the model doesn't look like a valid mapping,
+    // fallback to the default (Orchestrator) model configured in settings.
+    if (!model || model === 'orchestrator' || !model.includes(':')) {
+      model = roleModels.default;
+    }
+    
+    // The "model" at this point is a mapped string like "providerId:modelId"
+    // e.g. "anthropic:claude-3-5-sonnet"
+    if (model && model.includes(':')) {
+      const [targetProviderId, ...targetModelParts] = model.split(':');
+      const targetModelId = targetModelParts.join(':');
+      
+      // Prevent infinite recursion by removing providerId and setting explicitly
+      const newOpts: ResolveOptions = {
+        providerId: targetProviderId,
+        model: targetModelId,
+      };
+      
+      return resolveProvider(newOpts);
+    } else {
+      console.warn('[provider-resolver] multi_head provider requested but no valid provider:model mapping found for model:', model);
+    }
   }
 
   // Find display name and upstream model ID from catalog

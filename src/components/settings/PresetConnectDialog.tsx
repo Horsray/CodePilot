@@ -8,7 +8,9 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -24,7 +26,7 @@ import { SpinnerGap, CaretDown, CaretUp, ArrowSquareOut, CheckCircle, XCircle, W
 import type { ProviderFormData } from "./ProviderForm";
 import type { QuickPreset } from "./provider-presets";
 import { QUICK_PRESETS } from "./provider-presets";
-import type { ApiProvider } from "@/types";
+import type { ApiProvider, ProviderModelGroup } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
 
@@ -92,6 +94,7 @@ export function PresetConnectDialog({
   const [mapOpus, setMapOpus] = useState("");
   const [mapHaiku, setMapHaiku] = useState("");
   const [modelNamesText, setModelNamesText] = useState("");
+  const [providerGroups, setProviderGroups] = useState<ProviderModelGroup[]>([]);
   const [mediaProtocol, setMediaProtocol] = useState<"custom-image" | "openai-images">("custom-image");
   const [mediaEndpoint, setMediaEndpoint] = useState("");
   const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
@@ -355,6 +358,17 @@ export function PresetConnectDialog({
     };
   }, [open, preset, isEdit]);
 
+  useEffect(() => {
+    if (open && preset?.protocol === 'multi_head') {
+      fetch('/api/providers/models')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data?.groups) setProviderGroups(data.groups);
+        })
+        .catch(() => {});
+    }
+  }, [open, preset]);
+
   if (!preset) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -447,7 +461,7 @@ export function PresetConnectDialog({
     // Model mapping (sonnet/opus/haiku → actual API model IDs)
     // Merge into existing roleModels to preserve roles not shown in this preset.
     // If the preset exposes these fields and user cleared them all, remove those keys.
-    if (preset.fields.includes("model_mapping")) {
+    if (preset.fields.includes("model_mapping") || preset.protocol === 'multi_head') {
       const hasAny = mapSonnet.trim() || mapOpus.trim() || mapHaiku.trim();
       if (hasAny) {
         // If user fills any, all 3 are required
@@ -476,7 +490,7 @@ export function PresetConnectDialog({
 
     // Inject model name into role_models_json — merge, don't replace.
     // If the preset exposes model_names and user cleared it, remove the default key.
-    if (preset.fields.includes("model_names")) {
+    if (preset.fields.includes("model_names") || preset.protocol === 'multi_head') {
       const existing = (() => { try { return JSON.parse(roleModelsJson); } catch { return {}; } })();
       if (modelName.trim()) {
         roleModelsJson = JSON.stringify({ ...existing, default: modelName.trim() });
@@ -536,6 +550,33 @@ export function PresetConnectDialog({
     } finally {
       setSaving(false);
     }
+  };
+
+  const renderModelSelect = (val: string, onChange: (v: string) => void, placeholder: string) => {
+    return (
+      <Select value={val} onValueChange={onChange}>
+        <SelectTrigger className="h-8 text-sm font-mono w-full min-w-0 max-w-[260px]">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent className="max-h-[300px] w-[300px]">
+          {providerGroups.map((group) => (
+            <SelectGroup key={group.provider_id}>
+              <SelectLabel className="text-[11px] text-muted-foreground bg-muted/50 py-1 font-semibold tracking-wide">
+                {group.provider_name}
+              </SelectLabel>
+              {group.models.map((m) => {
+                const fullVal = `${group.provider_id}:${m.value}`;
+                return (
+                  <SelectItem key={fullVal} value={fullVal} className="text-xs font-mono truncate">
+                    {m.label || m.value}
+                  </SelectItem>
+                );
+              })}
+            </SelectGroup>
+          ))}
+        </SelectContent>
+      </Select>
+    );
   };
 
   return (
@@ -602,6 +643,33 @@ export function PresetConnectDialog({
                 placeholder={preset.name}
                 className="text-sm"
               />
+            </div>
+          )}
+
+          {/* Model mapping (always visible for multi_head) */}
+          {preset.protocol === 'multi_head' && (
+            <div className="space-y-4 border-b border-border/50 pb-4 mb-4">
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">
+                  {isZh ? '多头路由映射' : 'Multi-Head Routing Mapping'}
+                </Label>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  {isZh ? '请从下方下拉列表中，选择您已经配置好的其他服务商模型。' : 'Please select models from your configured providers using the dropdowns below.'}
+                </p>
+                <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-3 items-center">
+                  <span className="text-xs font-medium text-foreground text-right">Orchestrator</span>
+                  {renderModelSelect(modelName, setModelName, "Select Orchestrator...")}
+                  
+                  <span className="text-xs text-muted-foreground text-right">Opus (Architect)</span>
+                  {renderModelSelect(mapOpus, setMapOpus, "Select Opus...")}
+                  
+                  <span className="text-xs text-muted-foreground text-right">Sonnet (Executor)</span>
+                  {renderModelSelect(mapSonnet, setMapSonnet, "Select Sonnet...")}
+                  
+                  <span className="text-xs text-muted-foreground text-right">Haiku (Search)</span>
+                  {renderModelSelect(mapHaiku, setMapHaiku, "Select Haiku...")}
+                </div>
+              </div>
             </div>
           )}
 
@@ -811,7 +879,7 @@ export function PresetConnectDialog({
               {showAdvanced && (
                 <div className="space-y-4 border-t border-border/50 pt-3">
                   {/* Model mapping (sonnet/opus/haiku → API model IDs) */}
-                  {preset.fields.includes("model_mapping") && (
+                  {preset.fields.includes("model_mapping") && preset.protocol !== 'multi_head' && (
                     <div className="space-y-2">
                       <Label className="text-xs text-muted-foreground">
                         {isZh ? '协作模型映射' : 'Collaboration Model Mapping'}
@@ -826,7 +894,7 @@ export function PresetConnectDialog({
                               : 'Map model names if the provider uses different IDs (e.g. claude-sonnet-4-6). Leave empty to use defaults (sonnet / opus / haiku).')}
                       </p>
                       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 items-center">
-                        {/* oLMX: 默认模型 ANTHROPIC_MODEL */}
+                        {/* oLMX: 默认模型 */}
                         {preset.key === 'olmx' && (
                           <>
                             <span className="text-xs text-muted-foreground text-right">默认模型</span>

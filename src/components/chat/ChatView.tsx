@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup } from '@/types';
 import { MessageList } from './MessageList';
@@ -12,7 +12,6 @@ import { ModeIndicator } from './ModeIndicator';
 import { ChatPermissionSelector } from './ChatPermissionSelector';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { RuntimeBadge } from './RuntimeBadge';
-import { CaretRight, CaretDown } from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -68,7 +67,7 @@ interface ChatViewProps {
 const MAX_MESSAGES_IN_MEMORY = 300;
 
 export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialHasSummary, initialSummaryBoundaryRowid }: ChatViewProps) {
-  const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setDashboardPanelOpen, setFileTreeOpen, setIsAssistantWorkspace, bottomPanelOpen, setBottomPanelOpen, setBottomPanelTab } = usePanel();
+  const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setIsAssistantWorkspace } = usePanel();
   const { t } = useTranslation();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -866,8 +865,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
   // Listen for chat retry events from timeline or error messages
   useEffect(() => {
-    const handler = (e: Event) => {
-      const { stepId, messageId } = (e as CustomEvent).detail || {};
+    const handler = (_e: Event) => {
       if (!sendMessageRef.current) return;
       // The user wants to retry a failed step or message.
       // We send a simple "继续" prompt to trigger the model to look at the

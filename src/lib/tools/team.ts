@@ -1,39 +1,19 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { runTeamPipeline } from '../team-runner';
+import { runTeamPipeline, TeamRunnerOptions } from '../team-runner';
 
-export function createTeamTool(ctx: {
-  workingDirectory: string;
-  providerId?: string;
-  sessionProviderId?: string;
-  parentModel?: string;
-  permissionMode?: string;
-  parentSessionId?: string;
-  emitSSE?: (event: { type: string; data: string }) => void;
-  abortSignal?: AbortSignal;
-}) {
+export function createTeamTool(ctx: Omit<TeamRunnerOptions, 'goal'>) {
   return tool({
-    description:
-      'Run a multi-agent team pipeline (explore + search + plan + execute + verify) for complex tasks. ' +
-      'Prefer this when the user explicitly asks for multi-agent collaboration or uses /team.',
+    description: 'Launch an OMC-style multi-agent team orchestration pipeline (search -> planner -> executor -> verifier). Use this when the user explicitly requests "/team" or complex multi-step orchestration.',
     inputSchema: z.object({
-      goal: z.string().describe('The user goal / task to accomplish'),
+      goal: z.string().describe('The overall goal for the team to accomplish'),
     }),
     execute: async ({ goal }) => {
-      return runTeamPipeline({
+      const result = await runTeamPipeline({
+        ...ctx,
         goal,
-        ctx: {
-          workingDirectory: ctx.workingDirectory,
-          providerId: ctx.providerId,
-          sessionProviderId: ctx.sessionProviderId,
-          parentModel: ctx.parentModel,
-          permissionMode: ctx.permissionMode,
-          parentSessionId: ctx.parentSessionId,
-          emitSSE: ctx.emitSSE,
-          abortSignal: ctx.abortSignal,
-        },
       });
+      return result;
     },
   });
 }
-

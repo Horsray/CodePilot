@@ -198,7 +198,7 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
                 className="border-b border-border/10 max-h-[320px] overflow-y-auto bg-muted/5 scrollbar-thin"
               >
                 <div className="py-1 flex flex-col">
-                  {modifiedFiles.map((file, i) => (
+                  {modifiedFiles.map((file) => (
                     <FileRow 
                       key={file.path}
                       file={file} 

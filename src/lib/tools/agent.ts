@@ -69,8 +69,32 @@ export function createAgentTool(ctx: {
       });
       const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
 
-      // Use agent's model or inherit from parent
-      const model = agentDef.model || ctx.parentModel;
+      // Check for multi-head provider logic
+      let finalProviderId = ctx.providerId;
+      let finalModel = agentDef.model || ctx.parentModel;
+      
+      // Look up if current provider is 'multi_head'
+      const { resolveProvider } = await import('../provider-resolver');
+      const resolvedParent = resolveProvider({ providerId: ctx.providerId, model: ctx.parentModel });
+      if (resolvedParent.protocol === 'multi_head') {
+        // Map agent roles to use cases to fetch from multi_head's roleModels
+        let useCase: 'default' | 'reasoning' | 'small' | 'sonnet' | 'opus' | 'haiku' = 'default';
+        if (['architect', 'planner', 'critic', 'analyst', 'code-reviewer'].includes(agentDef.id)) {
+          useCase = 'opus';
+        } else if (['explore', 'search', 'writer', 'document-specialist'].includes(agentDef.id)) {
+          useCase = 'haiku';
+        } else {
+          // executor, debugger, verifier, etc.
+          useCase = 'sonnet';
+        }
+        
+        const mappedTarget = resolvedParent.roleModels[useCase] || resolvedParent.roleModels.default;
+        if (mappedTarget && mappedTarget.includes(':')) {
+          const [targetProviderId, ...targetModelParts] = mappedTarget.split(':');
+          finalProviderId = targetProviderId;
+          finalModel = targetModelParts.join(':');
+        }
+      }
 
       // Build system prompt
       const systemPrompt = agentDef.prompt
@@ -81,9 +105,9 @@ export function createAgentTool(ctx: {
       const stream = runAgentLoop({
         prompt,
         sessionId: `sub-${Date.now()}`, // ephemeral session
-        providerId: ctx.providerId,
+        providerId: finalProviderId,
         sessionProviderId: ctx.sessionProviderId,
-        model,
+        model: finalModel,
         systemPrompt,
         workingDirectory: ctx.workingDirectory,
         tools: subTools,

@@ -3,7 +3,7 @@
 import { createContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { type Locale, type TranslationKey, translate } from '@/i18n';
 
-interface I18nContextValue {
+export interface I18nContextValue {
   locale: Locale;
   setLocale: (locale: Locale) => void;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSessionCheckpointStack, clearCheckpoints, restoreCheckpoint, getOriginalContent } from '@/lib/file-checkpoint';
+import { getSessionCheckpointStack, clearCheckpoints, restoreCheckpoint } from '@/lib/file-checkpoint';
 import { getSession, getDb } from '@/lib/db';
 import fs from 'fs';
 import path from 'path';
-import { calculateLineDiff, computeDiff } from '@/lib/diff-utils';
+import { computeDiff } from '@/lib/diff-utils';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);

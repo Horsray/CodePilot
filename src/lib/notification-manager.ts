@@ -12,7 +12,7 @@
 
 // ── Server-side notification queue (survives HMR via globalThis) ────
 
-interface QueuedNotification {
+export interface QueuedNotification {
   id: string;
   title: string;
   body: string;

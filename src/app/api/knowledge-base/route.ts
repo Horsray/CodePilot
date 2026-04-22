@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(req: Request) {
   try {
-    const { action, target, fileName, content } = await req.json();
+    const { action, fileName, content } = await req.json();
     const workspacePath = getSetting(SETTING_KEYS.ASSISTANT_WORKSPACE_PATH);
     if (!workspacePath) return NextResponse.json({ error: 'Workspace path not configured' }, { status: 400 });
 

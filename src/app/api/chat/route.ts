@@ -7,7 +7,7 @@ import { extractCompletion } from '@/lib/onboarding-completion';
 import { loadCodePilotMcpServers, loadAllMcpServers } from '@/lib/mcp-loader';
 import { assembleContext } from '@/lib/context-assembler';
 import { buildContextCompressedStatus } from '@/lib/context-compressor';
-import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, FileAttachment, ClaudeStreamOptions, MediaBlock } from '@/types';
+import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, FileAttachment, MediaBlock } from '@/types';
 import { saveMediaToLibrary } from '@/lib/media-saver';
 import { wrapController } from '@/lib/safe-stream';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
@@ -20,7 +20,6 @@ ensureSchedulerRunning();
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -304,7 +303,6 @@ export async function POST(request: NextRequest) {
     // Plan mode takes precedence over full_access: if the user explicitly chose
     // Plan, they expect no tool execution regardless of permission profile.
     const bypassPermissions = session.permission_profile === 'full_access' && effectiveMode !== 'plan';
-    const systemPromptOverride: string | undefined = undefined;
 
     const abortController = new AbortController();
 
@@ -374,14 +372,33 @@ export async function POST(request: NextRequest) {
     // We can pass the agents configuration to Claude Code CLI!
     if (effectiveMode !== 'plan' && content) {
       // --- AUTO-ROUTING FOR TEAM MODE (/team) ---
-      // If the user explicitly requests team orchestration, force the Team tool.
       if (content.trim().startsWith('/team')) {
         const isNative = predictNativeRuntime(effectiveProviderId);
-        const teamHint = isNative
-          ? `Call the 'Team' tool immediately with { goal: <user request without /team> }.`
-          : `Call the 'Team' tool (mcp__codepilot-team__Team) immediately with { goal: <user request without /team> }.`;
+        const agentToolName = isNative ? 'Agent' : 'mcp__codepilot-agent__Agent';
+        const agentParam = isNative ? 'agent' : 'subagent_type';
         const cleaned = content.trim().replace(/^\/team\s*/i, '');
-        const routePrompt = `\n\n<system-reminder>\nUser explicitly requested TEAM orchestration via '/team'. You MUST IMMEDIATELY invoke the 'Team' tool with goal=${JSON.stringify(cleaned)}. ${teamHint} Do not start manual work first.\n</system-reminder>`;
+        const routePrompt = `\n\n<system-reminder>\nUser explicitly requested TEAM orchestration via '/team' for the goal: ${JSON.stringify(cleaned)}.
+YOU are the Chief Orchestrator (Team Leader). Do NOT attempt to do the manual coding or searching yourself.
+You MUST orchestrate the team by calling the '${agentToolName}' tool to delegate work to specialized sub-agents.
+
+TEAM ROSTER (Available ${agentParam}):
+- 'explore' / 'search': For codebase, web, or knowledge retrieval.
+- 'analyst' / 'architect': For deep logic analysis and system design.
+- 'planner': To break down tasks and propose execution plans.
+- 'executor': To write and edit code across files.
+- 'verifier' / 'debugger': To run tests, verify correctness, and fix issues.
+- 'code-reviewer' / 'security-reviewer': For code and security audits.
+- 'test-engineer' / 'qa-tester': For testing strategy and runtime validation.
+- 'designer' / 'writer': For UI/UX design and documentation.
+- 'document-specialist': For SDK/API documentation lookup.
+- 'git-master' / 'code-simplifier' / 'critic' / 'scientist': Specialized agents for git, refactoring, critique, and data analysis.
+- 'general': For other multi-step tasks.
+
+ORCHESTRATION RULES (CRITICAL):
+1. **Autonomous & Parallel Scheduling**: YOU decide the execution graph. You CAN and SHOULD dispatch multiple agents in PARALLEL in a single response if their tasks are independent (e.g., dispatching multiple 'search' agents concurrently to look at different parts of the codebase or web).
+2. **Centralized Todo Evaluation**: Sub-agents do NOT have permission to update the global Todo list. When the 'planner' agent proposes a plan, YOU (the Orchestrator) must evaluate its report. If the plan is sound, YOU must call the 'TodoWrite' (or 'mcp__codepilot-todo__TodoWrite') tool to update the global task board.
+3. **Continuous Management**: Wait for sub-agents to report back. Evaluate their findings. If an executor fails, dispatch a debugger. If a search is incomplete, dispatch another search.
+4. Keep the user informed of your overarching strategy and decisions between agent dispatches.\n</system-reminder>`;
         finalSystemPromptAppend = finalSystemPromptAppend ? finalSystemPromptAppend + routePrompt : routePrompt;
       }
 
@@ -410,8 +427,6 @@ export async function POST(request: NextRequest) {
     });
     const finalSystemPrompt = assembled.systemPrompt;
     const generativeUIEnabled = assembled.generativeUIEnabled;
-    const assistantProjectInstructions = assembled.assistantProjectInstructions;
-    const isAssistantProject = assembled.isAssistantProject;
     const referencedContexts = assembled.referencedContexts;
 
     // Load MCP servers for the predicted runtime:
@@ -429,8 +444,6 @@ export async function POST(request: NextRequest) {
     // Estimate next-turn context size and compress if over threshold.
     let activeSessionSummary = sessionSummaryData.summary || undefined;
     let fallbackTokenBudget: number | undefined;
-    let compressionOccurred = false;
-    let compressionStats: { messagesCompressed: number; tokensSaved: number } | null = null;
 
     // Stream handoff variables. Default to the resume path (use the stored SDK
     // session, full history). When auto-compression succeeds below, these get
@@ -598,6 +611,34 @@ export async function POST(request: NextRequest) {
               explore: {
                 description: 'Fast agent for codebase exploration. Read-only tools, quick searches.',
                 prompt: 'You are a fast codebase exploration agent. Search efficiently, report findings concisely. Do not modify any files.',
+              },
+              search: {
+                description: 'Deep codebase research and retrieval. Uses AI tools to find context.',
+                prompt: 'You are an expert codebase search agent. Find and summarize relevant context thoroughly. Do not modify any files.',
+              },
+              analyst: {
+                description: 'Deep logic and architecture analysis. Analyzes complex code flows.',
+                prompt: 'You are an architecture analyst. Analyze code flows and system design deeply. Provide structural insights. Do not modify files.',
+              },
+              planner: {
+                description: 'Task breakdown and planning agent. Creates structured plans.',
+                prompt: 'You are a technical planner. Break down complex requests into actionable todo lists. Do not implement the code yourself.',
+              },
+              executor: {
+                description: 'Heavy multi-file edit executor. Writes and edits code across files.',
+                prompt: 'You are a code executor. Implement the requested changes across the codebase. Focus on writing and editing files efficiently.',
+              },
+              verifier: {
+                description: 'Verification agent. Runs checks/tests and reviews changes for correctness.',
+                prompt: 'You are a code verifier. Validate correctness with evidence. Run tests if available. Report concrete pass/fail and risks. Do not modify files unless required to fix a verified issue.',
+              },
+              debugger: {
+                description: 'Root-cause analysis and failure diagnosis agent.',
+                prompt: 'You are a debugging expert. Trace errors to their root cause. Analyze logs, stack traces, and code to find the fix. Report your findings and suggested fix.',
+              },
+              architect: {
+                description: 'System design, architecture decisions, and long-horizon tradeoffs.',
+                prompt: 'You are a software architect. Design system architecture, evaluate trade-offs, and provide design recommendations. Do not write implementation code.',
               },
               general: {
                 description: 'General-purpose sub-agent for complex multi-step tasks.',
@@ -1073,12 +1114,7 @@ async function collectStreamResponse(
         const workspacePath = getSetting('assistant_workspace_path');
         const session = getSession(sessionId);
         if (workspacePath && session && session.working_directory === workspacePath) {
-          const { shouldExtractMemory, hasMemoryWritesInResponse, extractMemories } = await import('@/lib/memory-extractor');
-
-          const fullTextForMemory = contentBlocks
-            .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
-            .map((b) => b.text)
-            .join('');
+          const { shouldExtractMemory, hasMemoryWritesInResponse } = await import('@/lib/memory-extractor');
 
           // For memory-write detection, serialize ALL blocks (including tool_use/tool_result)
           // so that hasMemoryWritesInResponse can see memory file paths in tool calls.
@@ -1099,6 +1135,7 @@ async function collectStreamResponse(
             const recentForExtraction = recent.map(m => ({ role: m.role, content: m.content }));
 
             // Fire-and-forget: don't block the response
+            const { extractMemories } = await import('@/lib/memory-extractor');
             extractMemories(recentForExtraction, workspacePath).catch(() => {});
           }
         }

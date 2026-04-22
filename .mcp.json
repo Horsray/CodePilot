@@ -1,5 +1,15 @@
 {
   "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {
+        "MEMORY_FILE_PATH": "/Users/horsray/.codepilot/memory.jsonl"
+      }
+    },
     "chrome-devtools": {
       "type": "stdio",
       "command": "npx",

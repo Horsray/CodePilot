@@ -52,7 +52,10 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
     Grep: createGrepTool(ctx),
     Skill: createSkillTool(ctx.workingDirectory),
     TodoWrite: createTodoWriteTool(ctx),
-    Team: createTeamTool({
+    codepilot_skill_create: createSkillCreateTool(ctx.workingDirectory),
+    codepilot_mcp_activate: createMcpActivateTool(ctx.workingDirectory),
+    codepilot_open_browser: createBrowserTool(),
+    Agent: createAgentTool({
       workingDirectory: ctx.workingDirectory,
       providerId: ctx.providerId,
       sessionProviderId: ctx.sessionProviderId,
@@ -62,10 +65,7 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
       emitSSE: ctx.emitSSE,
       abortSignal: ctx.abortSignal,
     }),
-    codepilot_skill_create: createSkillCreateTool(ctx.workingDirectory),
-    codepilot_mcp_activate: createMcpActivateTool(ctx.workingDirectory),
-    codepilot_open_browser: createBrowserTool(),
-    Agent: createAgentTool({
+    Team: createTeamTool({
       workingDirectory: ctx.workingDirectory,
       providerId: ctx.providerId,
       sessionProviderId: ctx.sessionProviderId,

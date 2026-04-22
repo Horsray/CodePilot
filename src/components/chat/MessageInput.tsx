@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useCallback, useEffect, useMemo, type KeyboardEvent, type FormEvent } from 'react';
-import { Terminal, Toolbox, SpinnerGap, Sparkle, ArrowsCounterClockwise } from "@/components/ui/icon";
+import { Toolbox, SpinnerGap, Sparkle, ArrowsCounterClockwise } from "@/components/ui/icon";
 import { useTranslation } from '@/hooks/useTranslation';
 import { showToast } from '@/hooks/useToast';
 import type { TranslationKey } from '@/i18n';
@@ -37,7 +37,6 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { resolveKeyAction, cycleIndex, resolveDirectSlash, dispatchBadge, buildCliAppend, parseMentionRefs, dedupeMentionsByPath } from '@/lib/message-input-logic';
 import { QuickActions } from './QuickActions';
 import { ImageGenToggle } from './ImageGenToggle';
-import { RuntimeBadge } from './RuntimeBadge';
 
 const MAX_MENTION_FILE_BYTES = 256 * 1024; // 256KB per @file mention
 const MAX_MENTION_FILE_COUNT = 6;

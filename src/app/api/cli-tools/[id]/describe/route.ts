@@ -4,7 +4,6 @@ import { promisify } from 'util';
 import { CLI_TOOLS_CATALOG, EXTRA_WELL_KNOWN_BINS } from '@/lib/cli-tools-catalog';
 import { generateTextViaSdk } from '@/lib/claude-client';
 import { upsertCliToolDescription, getCustomCliTool } from '@/lib/db';
-import { detectAllCliTools } from '@/lib/cli-tools-detect';
 import { getExpandedPath } from '@/lib/platform';
 
 const execFileAsync = promisify(execFile);

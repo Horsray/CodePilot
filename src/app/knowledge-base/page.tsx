@@ -13,7 +13,6 @@ import {
   File, 
   Globe,
   Info,
-  CheckCircle,
   SpinnerGap,
   UploadSimple,
   TreeStructure,

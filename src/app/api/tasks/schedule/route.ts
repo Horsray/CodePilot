@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseInterval, getNextCronTime, ensureSchedulerRunning } from '@/lib/task-scheduler';
-import type { NotificationChannel, SessionBinding, ToolAuthorization } from '@/types';
 
 /**
  * 将 Date 对象格式化为本地时间字符串 YYYY-MM-DD HH:mm:ss

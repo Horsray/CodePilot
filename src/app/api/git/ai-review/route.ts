@@ -53,22 +53,6 @@ function generateFallbackMessage(diff: string): string {
   return '修改和重构了代码逻辑';
 }
 
-function generateFallbackReview(diff: string): string {
-  const lines = diff.split('\n').filter(l => l.startsWith('+'));
-  if (lines.length === 0) return 'No additions to review';
-
-  let concerns = 0;
-  for (const line of lines) {
-    if (line.includes('TODO') || line.includes('FIXME')) concerns++;
-    if (line.includes('console.log') || line.includes('debugger')) concerns++;
-  }
-
-  if (concerns > 0) {
-    return `Found ${concerns} potential issue(s) in the diff:\n- TODO/FIXME comments present\n- Console.log or debugger statements found`;
-  }
-  return 'No obvious issues found in the diff';
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();

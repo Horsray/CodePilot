@@ -9,7 +9,7 @@
 
 import { NextRequest } from 'next/server';
 import { processMessage } from '@/lib/bridge/conversation-engine';
-import { resolve, createBinding } from '@/lib/bridge/channel-router';
+import { resolve } from '@/lib/bridge/channel-router';
 import type { ChannelAddress } from '@/lib/bridge/types';
 import os from 'os';
 

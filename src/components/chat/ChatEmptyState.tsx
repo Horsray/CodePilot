@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
-import { FolderOpen, Brain, X } from '@/components/ui/icon';
+import { FolderOpen, X } from '@/components/ui/icon';
 import { useTranslation } from '@/hooks/useTranslation';
 import { EGG_IMAGE_URL } from '@/lib/buddy';
 

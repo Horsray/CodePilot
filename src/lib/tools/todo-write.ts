@@ -24,7 +24,10 @@ export function createTodoWriteTool(ctx: ToolContext) {
       'Plain text markdown plans will NOT be tracked. You MUST call this tool as your FIRST action ' +
       'for ANY user request that requires modifying code, executing commands, or involves 3+ steps. ' +
       'Keep exactly one task in_progress while work is active, update statuses as soon as evidence changes. ' +
-      'Status can be "pending", "in_progress", or "completed".',
+      'Status can be "pending", "in_progress", or "completed". ' +
+      'IMPORTANT: If you successfully complete a complex workflow (e.g., resolving a difficult bug, ' +
+      'configuring a new environment, creating a reusable script), you MUST call ' +
+      'codepilot_skill_create at the very end to save your successful steps as a reusable SKILL.md file.',
     inputSchema: z.object({
       todos: z.array(z.object({
         id: z.string().describe('Unique identifier for the task'),

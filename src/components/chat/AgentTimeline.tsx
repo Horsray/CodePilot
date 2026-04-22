@@ -1,23 +1,17 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Brain,
   CaretDown,
   CheckCircle,
   ClockCounterClockwise,
-  Code,
-  Eye,
   Gear,
-  GitDiff,
-  Link,
-  MagicWand,
   MagnifyingGlass,
   PencilSimple,
   SpinnerGap,
   TerminalWindow,
-  WarningCircle,
   XCircle,
   Play
 } from '@phosphor-icons/react';
@@ -41,62 +35,15 @@ interface AgentTimelineProps {
   onForceStop?: () => void;
 }
 
-type TimelineOverallStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
-function getStepIcon(status: TimelineStep['status']) {
-  if (status === 'running' || status === 'retrying') return <SpinnerGap size={13} className="animate-spin text-blue-500/70" />;
-  if (status === 'completed') return <CheckCircle size={13} weight="fill" className="text-emerald-500/70" />;
-  if (status === 'failed') return <XCircle size={13} weight="fill" className="text-red-500/70" />;
-  if (status === 'stopped') return <WarningCircle size={13} weight="fill" className="text-amber-500/70" />;
-  return <ClockCounterClockwise size={13} className="text-muted-foreground/60" />;
-}
 
-function getStepStatusLabel(status: TimelineStep['status']): string {
-  switch (status) {
-    case 'running': return '执行中';
-    case 'completed': return '已完成';
-    case 'failed': return '失败';
-    case 'retrying': return '重试中';
-    case 'stopped': return '已停止';
-    default: return '等待中';
-  }
-}
 
-function getOverallStatus(steps: TimelineStep[]): TimelineOverallStatus {
-  if (steps.some((step) => step.status === 'failed' || step.error)) return 'failed';
-  if (steps.some((step) => step.status === 'retrying' || step.status === 'stopped')) return 'stopped';
-  if (steps.some((step) => step.status === 'running')) return 'running';
-  return 'completed';
-}
 
-function getOverallTitle(steps: TimelineStep[], liveStatusText?: string): string {
-  const lastMeaningful = [...steps].reverse().find((step) => step.title?.trim() || step.output.trim() || step.toolCalls.length > 0);
-  if (lastMeaningful?.title?.trim()) return lastMeaningful.title;
-  if (liveStatusText?.trim()) return extractStatusMessage(liveStatusText);
-  return '执行过程';
-}
 
-function getOverallMeta(steps: TimelineStep[]): string {
-  const toolCount = steps.reduce((sum, step) => sum + step.toolCalls.length, 0);
-  const fileCount = steps.reduce((sum, step) => sum + step.fileChanges.length, 0);
-  const stepCount = steps.length;
-  const parts = [`${stepCount} 个步骤`];
-  if (toolCount > 0) parts.push(`${toolCount} 次工具调用`);
-  if (fileCount > 0) parts.push(`${fileCount} 个文件变更`);
-  return parts.join(' · ');
-}
 
-function getOverallStatusClass(status: TimelineOverallStatus): string {
-  if (status === 'failed') return 'bg-red-500/10 text-red-600 dark:text-red-400';
-  if (status === 'stopped') return 'bg-amber-500/10 text-amber-600 dark:text-amber-400';
-  if (status === 'running') return 'bg-blue-500/10 text-blue-600 dark:text-blue-400';
-  return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
-}
 
-function formatObject(value: unknown): string {
-  if (typeof value === 'string') return value;
-  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
-}
+
+
 
 function previewText(value: string, max = 280): string {
   if (!value) return '';
@@ -120,16 +67,7 @@ function extractStatusMessage(value?: string): string {
   }
 }
 
-function summarizeToolInput(toolName: string, input: unknown, compact?: boolean): string {
-  if (!input || typeof input !== 'object') return previewText(formatObject(input), compact ? 60 : 120);
-  const data = input as Record<string, unknown>;
-  const command = typeof data.command === 'string' ? data.command : '';
-  const path = typeof data.path === 'string' ? data.path : typeof data.file_path === 'string' ? data.file_path : '';
-  const pattern = typeof data.pattern === 'string' ? data.pattern : '';
-  const query = typeof data.query === 'string' ? data.query : '';
-  const inline = command || path || pattern || query || formatObject(input);
-  return previewText(inline, compact ? 72 : 140);
-}
+
 
 function formatResultText(raw: string, compact?: boolean): string {
   const text = raw.trim();
@@ -169,10 +107,7 @@ function isCommandToolName(name: string): boolean {
   return normalized === 'bash' || normalized === 'command' || normalized === 'shell' || normalized === 'runcommand';
 }
 
-function isContextToolName(name: string): boolean {
-  const normalized = name.toLowerCase();
-  return normalized === 'read' || normalized === 'readfile' || normalized === 'ls' || normalized === 'glob' || normalized === 'grep' || normalized === 'searchcodebase';
-}
+
 
 function getPrimaryTool(step: TimelineStep) {
   return step.toolCalls.find((tool) => tool.status === 'running') || step.toolCalls[0] || null;
@@ -185,17 +120,7 @@ function isReasoningDuplicateOfHeader(reasoningText: string, activityLabel: stri
   return normalizedFirst === normalizeText(activityLabel) || normalizedFirst === normalizeText(stepTitle);
 }
 
-function buildDependencyLabel(step: TimelineStep): string {
-  return step.dependencies.length > 0 ? '等待前置步骤完成后继续执行' : '依赖上一个操作结果继续推进';
-}
 
-function openFile(path: string): void {
-  fetch('/api/open-file', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  }).catch(() => {});
-}
 
 function DiffPreview({ change }: { change: TimelineFileChange }) {
   const [open, setOpen] = useState(false);
@@ -351,10 +276,7 @@ function getActivityInfo(step: TimelineStep) {
 function ActivityCard({
   step,
   compact,
-  isExpanded,
   liveStatusText,
-  sessionId,
-  onForceStop,
 }: {
   step: TimelineStep;
   compact?: boolean;
@@ -365,9 +287,7 @@ function ActivityCard({
 }) {
   const primaryTool = getPrimaryTool(step);
   const isCommandStep = Boolean(primaryTool && isCommandToolName(primaryTool.name));
-  const isContextStep = step.toolCalls.length > 0 && step.toolCalls.every((tool) => isContextToolName(tool.name));
   const [open, setOpen] = useState(step.status === 'running' || step.status === 'retrying' || step.status === 'failed' || step.error);
-  const [backgrounding, setBackgrounding] = useState(false);
   const activity = getActivityInfo(step);
   const reasoningText = cleanReasoningText(step.reasoning);
   const showReasoningDetail = Boolean(
@@ -390,11 +310,6 @@ function ActivityCard({
   );
   const showFileDetail = step.fileChanges.length > 0;
   const showErrorDetail = Boolean(step.error);
-  const isFirstThinkingStage = step.index === 1
-    && step.status === 'running'
-    && step.toolCalls.length === 0
-    && !step.output.trim()
-    && !reasoningText;
   const hasDetails = Boolean(
     step.dependencies.length > 0
     || showReasoningDetail
@@ -431,25 +346,9 @@ function ActivityCard({
   const runningStatusText = isCommandStep
     ? extractStatusMessage(liveStatusText || '') || '正在执行命令'
     : activity.subtitle;
-  const rowTone = isContextStep && step.status === 'completed'
-    ? 'bg-muted/10 text-muted-foreground/70 border-border/0'
-    : isCommandStep && step.status === 'running'
-      ? 'border-border/40 bg-background/90 shadow-sm'
-      : 'border-border/20 bg-background/40';
 
-  const handleBackground = async () => {
-    if (!sessionId || !primaryTool?.id) return;
-    setBackgrounding(true);
-    try {
-      await fetch('/api/chat/background', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, toolCallId: primaryTool.id }),
-      });
-    } finally {
-      setBackgrounding(false);
-    }
-  };
+
+
 
   return (
     <div className="my-1.5 border-b border-border/20 last:border-0 pb-1.5 bg-background overflow-hidden">
@@ -564,7 +463,6 @@ export function AgentTimeline({
   steps,
   compact = false,
   liveStatusText,
-  showSummaryCard = false,
   sessionId,
   onForceStop,
 }: AgentTimelineProps) {
