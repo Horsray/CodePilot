@@ -373,6 +373,18 @@ export async function POST(request: NextRequest) {
     // --- AUTO-ROUTING FOR SEARCH AGENT ---
     // We can pass the agents configuration to Claude Code CLI!
     if (effectiveMode !== 'plan' && content) {
+      // --- AUTO-ROUTING FOR TEAM MODE (/team) ---
+      // If the user explicitly requests team orchestration, force the Team tool.
+      if (content.trim().startsWith('/team')) {
+        const isNative = predictNativeRuntime(effectiveProviderId);
+        const teamHint = isNative
+          ? `Call the 'Team' tool immediately with { goal: <user request without /team> }.`
+          : `Call the 'Team' tool (mcp__codepilot-team__Team) immediately with { goal: <user request without /team> }.`;
+        const cleaned = content.trim().replace(/^\/team\s*/i, '');
+        const routePrompt = `\n\n<system-reminder>\nUser explicitly requested TEAM orchestration via '/team'. You MUST IMMEDIATELY invoke the 'Team' tool with goal=${JSON.stringify(cleaned)}. ${teamHint} Do not start manual work first.\n</system-reminder>`;
+        finalSystemPromptAppend = finalSystemPromptAppend ? finalSystemPromptAppend + routePrompt : routePrompt;
+      }
+
       const searchKeywords = ['查一下', '搜一下', '调研', '看看代码库', '分析代码', '查找', '检索', '看看怎么', '找一下'];
       const isSearchIntent = searchKeywords.some(k => content.includes(k));
       if (isSearchIntent) {

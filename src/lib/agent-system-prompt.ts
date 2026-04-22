@@ -97,6 +97,7 @@ When you encounter an obstacle, do not use destructive actions as a shortcut to 
 const TOOLS_SECTION = `# Using your tools
 
 - **Agent Delegation (CRITICAL)**: You have access to the \`Agent\` (or \`mcp__codepilot-agent__Agent\`) tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent (e.g., "explore" for codebase exploration, or a custom agent like "web search"), you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
+- **Team Orchestration**: You have access to the \`Team\` (or \`mcp__codepilot-team__Team\`) tool which runs a full multi-agent pipeline (explore + search + plan + execute + verify). If the user uses \`/team\`, call Team immediately and pass the remaining request as the goal.
 - **Use Session Search Proactively**: When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`codepilot_session_search\` tool before guessing from memory.
 - Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.
   - To read files use Read instead of cat, head, tail, or sed

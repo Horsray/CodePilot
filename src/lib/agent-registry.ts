@@ -76,6 +76,15 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
     prompt: 'You are a code executor. Implement the requested changes across the codebase. Focus on writing and editing files efficiently.',
   },
   {
+    id: 'verifier',
+    displayName: 'Verifier',
+    description: 'Verification agent. Runs checks/tests and reviews changes for correctness.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 25,
+    prompt: 'You are a verifier. Validate correctness with evidence. Run tests/commands if available. Report concrete pass/fail and risks. Do not modify files unless required to fix a verified issue.',
+  },
+  {
     id: 'general',
     displayName: 'General',
     description: 'General-purpose sub-agent for complex multi-step tasks.',

@@ -757,6 +757,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'AskUserQuestion',
             'mcp__codepilot-ask-user__AskUserQuestion',
             'mcp__codepilot-agent__Agent',
+            'mcp__codepilot-team__Team',
             'webfetch__fetch_fetch_readable',
             'webfetch__fetch_fetch_markdown',
             'context7_resolve-library-id',
@@ -964,6 +965,27 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           };
           if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + AGENT_MCP_SYSTEM_PROMPT;
+          }
+        }
+
+        // Team MCP: globally available in all contexts
+        {
+          const { createTeamMcpServer, TEAM_MCP_SYSTEM_PROMPT } = await import('@/lib/team-mcp');
+          queryOptions.mcpServers = {
+            ...(queryOptions.mcpServers || {}),
+            'codepilot-team': createTeamMcpServer({
+              workingDirectory: resolvedWorkingDirectory.path,
+              providerId: options.providerId,
+              sessionProviderId: options.sessionProviderId,
+              parentModel: model,
+              permissionMode: options.permissionMode,
+              parentSessionId: sessionId,
+              emitSSE: (e) => controller.enqueue(formatSSE(e as SSEEvent)),
+              abortSignal: abortController?.signal,
+            }),
+          };
+          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + TEAM_MCP_SYSTEM_PROMPT;
           }
         }
 
@@ -1784,8 +1806,9 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                       data: JSON.stringify(ssePayload),
                     }));
 
-                    // Deferred TodoWrite sync: only emit task_update after successful execution
-                    if (!block.is_error && pendingTodoWrites.has(block.tool_use_id)) {
+                                                            // Deferred TodoWrite sync: emit task_update after both success and error
+                    // (UI should reflect the attempted state even if tool failed)
+                    if (pendingTodoWrites.has(block.tool_use_id)) {
                       const todos = pendingTodoWrites.get(block.tool_use_id)!;
                       pendingTodoWrites.delete(block.tool_use_id);
                       controller.enqueue(formatSSE({

@@ -109,6 +109,86 @@ function truncatePath(path: string, maxLen = 50): string {
 
 const TOOL_REGISTRY: ToolRendererDef[] = [
   {
+    match: (n) => n.toLowerCase() === 'team' || n.toLowerCase().includes('__team'),
+    icon: Lightning,
+    label: 'Team',
+    getSummary: (input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      const goal = (inp?.goal || inp?.prompt || inp?.description || '') as string;
+      const short = goal.length > 60 ? goal.slice(0, 57) + '...' : goal;
+      return short || 'team';
+    },
+    renderDetail: (tool, streamingOutput) => {
+      const isRunning = tool.result === undefined;
+      const outputText = isRunning ? streamingOutput : tool.result;
+      if (!outputText) return null;
+
+      const lines = outputText.split('\n').filter(Boolean);
+      const visible = lines.slice(-16);
+      const statusMap = new Map<string, { status: 'running' | 'success' | 'error'; last?: string }>();
+
+      for (const line of lines) {
+        const m = line.match(/^\[team:([a-z0-9_-]+)\]\s+(.*)$/i);
+        if (!m) continue;
+        const agentId = m[1];
+        const rest = m[2];
+        const cur = statusMap.get(agentId) || { status: 'running' as const };
+        if (rest === 'start') cur.status = 'running';
+        else if (rest === 'done') cur.status = 'success';
+        else if (rest.startsWith('[x]')) cur.status = 'error';
+        cur.last = rest;
+        statusMap.set(agentId, cur);
+      }
+
+      const order = ['explore', 'search', 'planner', 'executor', 'verifier'];
+
+      return (
+        <div className="px-3 py-3 border-l-2 ml-3 border-blue-500/20 space-y-3">
+          <div className="grid grid-cols-1 gap-1">
+            {order.filter(id => statusMap.has(id)).map((id) => {
+              const st = statusMap.get(id)!;
+              return (
+                <div key={id} className="flex items-center gap-2 text-[12px]">
+                  {st.status === 'running' && <SpinnerGap size={12} className="animate-spin text-primary" />}
+                  {st.status === 'success' && <CheckCircle size={12} className="text-emerald-500" />}
+                  {st.status === 'error' && <XCircle size={12} className="text-red-500" />}
+                  <span className="font-mono text-muted-foreground/70 w-[80px]">{id}</span>
+                  <span className="font-mono text-muted-foreground/60 truncate">
+                    {(st.last || '').replace(/^>\s*/, '').replace(/^\[[+x]\]\s*/, '')}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {isRunning ? (
+            <div className="mt-1 ml-2 border-l-2 border-border/30 pl-2 space-y-0.5">
+              {visible.slice(-8).map((line, i) => (
+                <div key={i} className="text-[11px] font-mono truncate text-muted-foreground/60">
+                  {line}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {!isRunning && tool.result ? (
+            <div>
+              <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
+                {tool.isError ? '执行失败 (Error)' : '执行结果 (Result)'}
+              </h5>
+              <pre className={cn(
+                "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[420px] overflow-auto",
+                tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
+              )}>
+                {tool.result.length > 12000 ? tool.result.slice(0, 12000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
+              </pre>
+            </div>
+          ) : null}
+        </div>
+      );
+    },
+  },
+  {
     match: (n) => ['bash', 'execute', 'run', 'shell', 'execute_command'].includes(n.toLowerCase()),
     icon: TerminalWindow,
     label: '',
@@ -1055,6 +1135,7 @@ function extractDiffFromMcpFilesystemEditInput(input: unknown): { oldText: strin
 }
 function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'agent' | 'other' {
   const n = name.toLowerCase();
+  if (n === 'team' || n.includes('__team')) return 'agent';
   if (['read', 'readfile', 'read_file', 'read_text_file', 'read_multiple_files'].includes(n)) return 'read';
   if (['edit', 'notebookedit', 'notebook_edit', 'apply_patch'].includes(n) || n.endsWith('__edit_file')) return 'write';
   if (n.endsWith('__write_file')) return 'create';

@@ -234,6 +234,8 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         const distinctTools = new Set<string>(); // for skill-nudge heuristic
         const toolFilesAccumulator = new Set<string>(); // collects file paths from tool calls
         let messages = historyMessages;
+        // Track pending TodoWrite tool calls for deferred task_update emission (per-step to avoid carryover)
+        const stepPendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
 
         while (step < maxSteps) {
           step++;
@@ -644,6 +646,18 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 // Collect file paths for context stats
                 const extracted = extractFilePaths(event.toolName, event.input);
                 extracted.forEach(f => toolFilesAccumulator.add(f));
+
+                // Track TodoWrite tool calls for deferred task_update sync
+                if (event.toolName === 'TodoWrite' || event.toolName === 'mcp__codepilot-todo__TodoWrite') {
+                  try {
+                    const toolInput = event.input as { todos?: Array<{ content: string; status: string; activeForm?: string }> };
+                    if (toolInput?.todos && Array.isArray(toolInput.todos)) {
+                      stepPendingTodoWrites.set(event.toolCallId, toolInput.todos);
+                    }
+                  } catch (e) {
+                    console.warn('[agent-loop] Failed to parse TodoWrite input:', e);
+                  }
+                }
                 break;
 
               case 'tool-result':
@@ -684,9 +698,31 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                     is_error: false,
                   }),
                 }));
+
+                // Deferred TodoWrite sync: emit task_update after successful execution
+                if (stepPendingTodoWrites.has(event.toolCallId)) {
+                  const todos = stepPendingTodoWrites.get(event.toolCallId)!;
+                  stepPendingTodoWrites.delete(event.toolCallId);
+                  controller.enqueue(formatSSE({
+                    type: 'task_update',
+                    data: JSON.stringify({
+                      session_id: sessionId,
+                      todos: todos.map((t, i) => ({
+                        id: String(i),
+                        content: t.content,
+                        status: t.status,
+                        activeForm: t.activeForm || '',
+                      })),
+                    }),
+                  }));
+                }
                 break;
 
               case 'tool-error':
+                // Clear pending TodoWrite on error
+                if (stepPendingTodoWrites.has((event as any).toolCallId)) {
+                  stepPendingTodoWrites.delete((event as any).toolCallId);
+                }
                 controller.enqueue(formatSSE({
                   type: 'tool_result',
                   data: JSON.stringify({
