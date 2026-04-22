@@ -12,6 +12,7 @@ import {
 import type { ChatStatus } from 'ai';
 import { isSubmitEnabled } from '@/lib/message-input-logic';
 import type { MentionRef, CommandBadge as CommandBadgeType } from '@/types';
+import { isImageFile } from '@/types';
 
 /**
  * Submit button that's aware of file attachments. Must be rendered inside PromptInput.
@@ -147,7 +148,7 @@ export function FileAttachmentsCapsules() {
   return (
     <div className="flex w-full flex-wrap items-center gap-1.5 px-3 pt-2 pb-0 order-first">
       {attachments.files.map((file) => {
-        const isImage = file.mediaType?.startsWith('image/');
+        const isImage = file.mediaType?.startsWith('image/') || isImageFile(file.mediaType || file.filename || '');
         return (
           <span
             key={file.id}

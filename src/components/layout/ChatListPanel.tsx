@@ -24,12 +24,6 @@ import {
   Shapes,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { usePanel } from "@/hooks/usePanel";
 import { useSplit } from "@/hooks/useSplit";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -688,34 +682,26 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
           <Plus size={14} />
           {t('chatList.newConversation')}
         </Button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              className="h-8 w-8 shrink-0"
-              onClick={() => window.dispatchEvent(new CustomEvent('open-global-search'))}
-            >
-              <MagnifyingGlass size={14} />
-              <span className="sr-only">{t('chatList.searchSessions')}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{t('chatList.searchSessions')}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              className="h-8 w-8 shrink-0"
-              onClick={() => openBrowserTab('', '新标签页')}
-            >
-              <Globe size={14} />
-              <span className="sr-only">内置浏览器</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">内置浏览器</TooltipContent>
-        </Tooltip>
+        <Button
+          variant="outline"
+          size="icon-sm"
+          className="h-8 w-8 shrink-0"
+          onClick={() => window.dispatchEvent(new CustomEvent('open-global-search'))}
+          title={t('chatList.searchSessions')}
+        >
+          <MagnifyingGlass size={14} />
+          <span className="sr-only">{t('chatList.searchSessions')}</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="icon-sm"
+          className="h-8 w-8 shrink-0"
+          onClick={() => openBrowserTab('', '新标签页')}
+          title="内置浏览器"
+        >
+          <Globe size={14} />
+          <span className="sr-only">内置浏览器</span>
+        </Button>
       </div>
 
       {/* Feature nav items */}
@@ -785,8 +771,8 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
       </div>
 
       {/* Session list grouped by project */}
-      <ScrollArea 
-        className="flex-1 min-h-0 px-3 [&>[data-slot=scroll-area-viewport]>div]:!block"
+      <div
+        className="flex-1 min-h-0 overflow-y-auto px-3"
         onContextMenu={handleGlobalContextMenu}
       >
         <div className="flex flex-col pb-3">
@@ -939,7 +925,7 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
             })
           )}
         </div>
-      </ScrollArea>
+      </div>
       
       {/* Global Context Menu */}
       <DropdownMenu open={globalContextMenuOpen} onOpenChange={setGlobalContextMenuOpen}>

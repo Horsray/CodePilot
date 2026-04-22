@@ -363,7 +363,11 @@ export function PresetConnectDialog({
       fetch('/api/providers/models')
         .then(r => r.ok ? r.json() : null)
         .then(data => {
-          if (data?.groups) setProviderGroups(data.groups);
+          if (data?.groups) {
+            // Filter out multi_head providers themselves so we don't route to another router
+            const filteredGroups = data.groups.filter((g: any) => g.protocol !== 'multi_head');
+            setProviderGroups(filteredGroups);
+          }
         })
         .catch(() => {});
     }

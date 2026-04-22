@@ -23,6 +23,7 @@ import type {
   PermissionRequestEvent,
   FileAttachment,
   MentionRef,
+  SubAgentInfo,
 } from '@/types';
 
 // ==========================================
@@ -54,6 +55,8 @@ interface ActiveStream {
   isIdleTimeout: boolean;
   sendMessageFn: ((content: string, files?: FileAttachment[]) => void) | null;
   rewindPoints: Array<{ userMessageId: string }>;
+  /** Active sub-agents being tracked for nested timeline display */
+  subAgents: SubAgentInfo[];
 }
 
 export interface StartStreamParams {
@@ -134,6 +137,7 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     terminalReason: stream.snapshot.terminalReason,
     rateLimitInfo: stream.snapshot.rateLimitInfo,
     contextUsageSnapshot: stream.snapshot.contextUsageSnapshot,
+    subAgents: [...stream.subAgents],
   };
 }
 
@@ -239,6 +243,7 @@ export function startStream(params: StartStreamParams): void {
     isIdleTimeout: false,
     sendMessageFn: params.sendMessageFn ?? null,
     rewindPoints: [],
+    subAgents: [],
   };
 
   map.set(params.sessionId, stream);
@@ -561,6 +566,49 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       onInitMeta: (meta) => {
         markActive();
         params.onInitMeta?.(meta);
+      },
+      onSubAgentStart: (data) => {
+        markActive();
+        const agent: SubAgentInfo = {
+          id: data.id,
+          name: data.name,
+          displayName: data.displayName,
+          prompt: data.prompt,
+          status: 'running',
+          startedAt: Date.now(),
+        };
+        stream.subAgents = [...stream.subAgents, agent];
+        emit(stream, 'snapshot-updated');
+        // Dispatch window event for sub-agent timeline UI
+        window.dispatchEvent(new CustomEvent('subagent-start', { detail: { sessionId: params.sessionId, ...data } }));
+      },
+      onSubAgentProgress: (data) => {
+        markActive();
+        const idx = stream.subAgents.findIndex(a => a.id === data.id);
+        if (idx >= 0) {
+          const updated = [...stream.subAgents];
+          updated[idx] = { ...updated[idx], progress: data.detail };
+          stream.subAgents = updated;
+          emit(stream, 'snapshot-updated');
+        }
+        window.dispatchEvent(new CustomEvent('subagent-progress', { detail: { sessionId: params.sessionId, ...data } }));
+      },
+      onSubAgentComplete: (data) => {
+        markActive();
+        const idx = stream.subAgents.findIndex(a => a.id === data.id);
+        if (idx >= 0) {
+          const updated = [...stream.subAgents];
+          updated[idx] = {
+            ...updated[idx],
+            status: data.error ? 'error' : 'completed',
+            report: data.report,
+            error: data.error,
+            completedAt: Date.now(),
+          };
+          stream.subAgents = updated;
+          emit(stream, 'snapshot-updated');
+        }
+        window.dispatchEvent(new CustomEvent('subagent-complete', { detail: { sessionId: params.sessionId, ...data } }));
       },
     });
 
@@ -992,6 +1040,7 @@ export function seedSnapshotPatch(
     isIdleTimeout: false,
     sendMessageFn: null,
     rewindPoints: [],
+    subAgents: [],
     snapshot: {
       sessionId,
       phase: 'completed',

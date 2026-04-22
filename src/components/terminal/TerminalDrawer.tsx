@@ -9,9 +9,32 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { XtermTerminal } from "./XtermTerminal";
 import type { Terminal } from "@xterm/xterm";
 
-const DEFAULT_HEIGHT = 280;
-const MIN_HEIGHT = 140;
+const DEFAULT_HEIGHT = 260;
+const MIN_HEIGHT = 120;
 const MAX_HEIGHT = 600;
+
+// 中文注释：功能名称「终端镜像事件缓存」，用法是当终端面板未打开时，
+// 缓存 AI Bash 工具的镜像事件，等面板打开后回放到 xterm.js 中，
+// 确保用户不会错过 AI 执行的命令和输出。
+const mirrorBuffer: Array<{ action: string; command?: string; output?: string; exitCode?: number }> = [];
+let mirrorBufferActive = true;
+
+// 中文注释：功能名称「全局镜像事件监听」，用法是始终监听 terminal:mirror 事件，
+// 当终端面板未打开时将事件缓存到 mirrorBuffer 中。
+if (typeof window !== 'undefined') {
+  window.addEventListener('terminal:mirror', (e: Event) => {
+    const customEvent = e as CustomEvent;
+    const detail = customEvent.detail;
+    if (!detail) return;
+    if (mirrorBufferActive) {
+      mirrorBuffer.push(detail);
+      // 限制缓存大小，避免内存泄漏
+      if (mirrorBuffer.length > 500) {
+        mirrorBuffer.splice(0, mirrorBuffer.length - 500);
+      }
+    }
+  });
+}
 
 /**
  * TerminalDrawer — 统一终端面板，Electron 和 Web 都用 xterm.js 渲染。
@@ -19,6 +42,7 @@ const MAX_HEIGHT = 600;
  * Web 路径：useWebTerminal → HTTP/SSE → pty-manager → node-pty
  * 中文注释：功能名称「统一终端面板」，用法是提供完整的终端交互体验，
  * 支持用户手动输入、AI Bash 工具的命令/输出镜像显示、选区发送到对话。
+ * UI 风格对标 Trae IDE：干净清爽、紧凑布局、深色背景融合。
  */
 export function TerminalDrawer() {
   const { terminalOpen, setTerminalOpen } = usePanel();
@@ -48,7 +72,6 @@ export function TerminalDrawer() {
     document.addEventListener("mouseup", handleMouseUp);
   }, [height]);
 
-  // xterm.js 用户输入 → 写入 PTY
   const handleData = useCallback(
     (data: string) => {
       terminal.write(data);
@@ -56,7 +79,6 @@ export function TerminalDrawer() {
     [terminal]
   );
 
-  // xterm.js 尺寸变化 → 通知 PTY resize
   const handleResize = useCallback(
     (cols: number, rows: number) => {
       terminal.resize(cols, rows);
@@ -64,28 +86,25 @@ export function TerminalDrawer() {
     [terminal]
   );
 
-  // xterm.js 初始化完成 → 创建 PTY 会话 + 订阅输出
+  // 中文注释：功能名称「终端就绪回调」，用法是 xterm.js 初始化完成后创建 PTY 会话，
+  // 订阅 PTY 输出写入 xterm.js，注册退出和 AI 镜像事件监听，回放缓存事件。
   const handleReady = useCallback(
     async (term: Terminal) => {
       xtermRef.current = term;
       setReady(true);
 
-      // PTY 输出 → 写入 xterm.js
       terminal.setOnData((data: string) => {
         if (xtermRef.current) {
           xtermRef.current.write(data);
         }
       });
 
-      // PTY 退出 → 在 xterm.js 中显示退出码
-      // 中文注释：功能名称「终端退出显示」，用法是进程退出时在终端面板渲染退出提示。
       terminal.setOnExit((code: number) => {
         if (xtermRef.current) {
           xtermRef.current.write(`\r\n\x1b[90m[Process exited with code ${code}]\x1b[0m\r\n`);
         }
       });
 
-      // 创建 PTY 会话
       try {
         await terminal.create(term.cols, term.rows);
       } catch (err) {
@@ -95,11 +114,34 @@ export function TerminalDrawer() {
           );
         }
       }
+
+      // 中文注释：回放缓存的镜像事件，确保用户打开终端面板后能看到之前 AI 执行的命令
+      if (mirrorBuffer.length > 0 && xtermRef.current) {
+        xtermRef.current.write('\r\n\x1b[90m── AI 执行的命令 ──\x1b[0m\r\n');
+        for (const evt of mirrorBuffer) {
+          switch (evt.action) {
+            case 'command':
+              xtermRef.current.write(`\x1b[33m❯ ${evt.command}\x1b[0m\r\n`);
+              break;
+            case 'output':
+              if (evt.output) {
+                xtermRef.current.write(evt.output);
+              }
+              break;
+            case 'exit':
+              if (evt.exitCode !== 0) {
+                xtermRef.current.write(`\x1b[31m[Exit code: ${evt.exitCode}]\x1b[0m\r\n`);
+              }
+              break;
+          }
+        }
+        xtermRef.current.write('\x1b[90m── 回放结束 ──\x1b[0m\r\n\r\n');
+        mirrorBuffer.length = 0;
+      }
     },
     [terminal]
   );
 
-  // 监听 AI Bash 工具的终端镜像事件
   // 中文注释：功能名称「AI 命令镜像监听」，用法是接收 AI Bash 工具执行的命令和输出，
   // 在终端面板中以特殊样式显示，与用户手动输入的命令区分开来。
   useEffect(() => {
@@ -107,13 +149,13 @@ export function TerminalDrawer() {
 
     const handleMirror = (e: Event) => {
       const customEvent = e as CustomEvent;
-      const { action, command, output, exitCode, cwd } = customEvent.detail || {};
+      const { action, command, output, exitCode } = customEvent.detail || {};
       const term = xtermRef.current;
       if (!term) return;
 
       switch (action) {
         case 'command':
-          term.write(`\r\n\x1b[36m❯ AI: ${command}\x1b[0m\r\n`);
+          term.write(`\r\n\x1b[33m❯ ${command}\x1b[0m\r\n`);
           break;
         case 'output':
           if (output) {
@@ -132,9 +174,11 @@ export function TerminalDrawer() {
     return () => window.removeEventListener('terminal:mirror', handleMirror);
   }, [ready]);
 
-  // 终端面板关闭时清理
+  // 中文注释：功能名称「终端面板关闭清理」，用法是面板关闭时销毁 PTY 会话和 xterm 实例，
+  // 重置 key 以便下次打开时重新初始化。同时重新启用镜像缓存。
   useEffect(() => {
     if (!terminalOpen && ready) {
+      mirrorBufferActive = true;
       terminal.kill();
       setReady(false);
       if (xtermRef.current) {
@@ -145,7 +189,13 @@ export function TerminalDrawer() {
     }
   }, [terminalOpen, ready, terminal.kill]);
 
-  // 窗口焦点事件：聚焦终端
+  // 中文注释：终端面板打开时停止缓存，改为实时写入
+  useEffect(() => {
+    if (terminalOpen && ready) {
+      mirrorBufferActive = false;
+    }
+  }, [terminalOpen, ready]);
+
   useEffect(() => {
     const handleFocus = () => {
       if (xtermRef.current) {
@@ -165,10 +215,8 @@ export function TerminalDrawer() {
     const selection = term.getSelection();
     if (!selection.trim()) return;
 
-    // 用代码块格式包裹终端输出
     const content = `\`\`\`terminal\n${selection}\n\`\`\``;
 
-    // 通过已有的 append-chat-text 事件将内容注入到聊天输入框
     window.dispatchEvent(new CustomEvent('append-chat-text', {
       detail: { text: content },
     }));
@@ -176,23 +224,23 @@ export function TerminalDrawer() {
 
   if (!terminalOpen) return null;
 
-  // 非 Electron 环境暂不支持（Web 端用 BottomPanelContainer 的 WebTerminalPanel）
+  // 非 Electron 环境暂不支持
   if (!terminal.isElectron) {
     return (
-      <div className="shrink-0 border-t border-border/40 bg-background" style={{ height }}>
+      <div className="shrink-0 border-t border-border/30 bg-[#1e1e1e]" style={{ height }}>
         <div
-          className="h-1 cursor-row-resize hover:bg-primary/20 transition-colors"
+          className="h-[3px] cursor-row-resize hover:bg-primary/20 transition-colors"
           onMouseDown={handleMouseDown}
         />
-        <div className="flex items-center justify-between px-3 h-8 border-b border-border/40">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="flex items-center justify-between px-3 h-7 border-b border-border/20">
+          <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
             {t("terminal.title")}
           </span>
           <Button variant="ghost" size="icon-sm" onClick={() => setTerminalOpen(false)}>
-            <X size={12} />
+            <X size={11} />
           </Button>
         </div>
-        <div className="flex items-center justify-center h-[calc(100%-2.25rem-0.25rem)] text-sm text-muted-foreground">
+        <div className="flex items-center justify-center h-[calc(100%-1.75rem-0.75rem)] text-xs text-muted-foreground/50">
           {t("terminal.notAvailable")}
         </div>
       </div>
@@ -200,40 +248,38 @@ export function TerminalDrawer() {
   }
 
   return (
-    <div className="shrink-0 border-t border-border/40 bg-background" style={{ height }}>
-      {/* Resize handle */}
+    <div className="shrink-0 border-t border-border/30 bg-[#1e1e1e]" style={{ height }}>
+      {/* 中文注释：拖拽调整高度的手柄，3px 高度，hover 时显示主色调 */}
       <div
-        className="h-1 cursor-row-resize hover:bg-primary/20 transition-colors"
+        className="h-[3px] cursor-row-resize hover:bg-primary/20 transition-colors"
         onMouseDown={handleMouseDown}
       />
 
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 h-8 border-b border-border/40">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {/* 中文注释：终端标题栏，紧凑 7px 高度，左侧标题右侧操作按钮 */}
+      <div className="flex items-center justify-between px-3 h-7 border-b border-border/20">
+        <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground/60">
           {t("terminal.title")}
         </span>
-        <div className="flex items-center gap-1">
-          {/* 发送选区到对话 */}
+        <div className="flex items-center gap-0.5">
           <Button
             variant="ghost"
             size="icon-sm"
             onClick={handleSendToChat}
-            title="Send selection to chat"
+            title={t("terminal.sendToChat")}
           >
-            <ShareNetwork size={12} />
+            <ShareNetwork size={11} />
           </Button>
           <Button variant="ghost" size="icon-sm" onClick={() => setHeight(DEFAULT_HEIGHT)}>
-            <ArrowsInLineVertical size={12} />
+            <ArrowsInLineVertical size={11} />
           </Button>
           <Button variant="ghost" size="icon-sm" onClick={() => setTerminalOpen(false)}>
-            <X size={12} />
-            <span className="sr-only">{t("terminal.close")}</span>
+            <X size={11} />
           </Button>
         </div>
       </div>
 
-      {/* Terminal body — xterm.js */}
-      <div className="h-[calc(100%-2.25rem-0.25rem)] overflow-hidden relative">
+      {/* 中文注释：终端主体区域，xterm.js 渲染，背景色与终端主题一致 */}
+      <div className="h-[calc(100%-1.75rem-0.75rem)] overflow-hidden relative bg-[#1e1e1e]">
         <XtermTerminal
           key={terminalKey}
           onData={handleData}

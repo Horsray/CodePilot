@@ -46,7 +46,7 @@ export async function goToSettingsTab(page: Page, tab: string) {
 
 /** Wait until the page has finished its initial load. */
 export async function waitForPageReady(page: Page) {
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(300);
 }
 

@@ -1,33 +1,25 @@
 /**
  * 股票小组件主容器组件
- * 整合搜索、列表、数据刷新等功能
+ * 中文注释：功能名称「股票小组件」，用法是整合搜索、列表、数据刷新等功能。
  */
 'use client';
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { Stock, SearchResult } from '@/types/stock';
+import { StockData } from '@/types/stock';
 import { StockSearch } from './StockSearch';
 import { StockList } from './StockList';
 import { Button } from '@/components/ui/button';
-import { fetchStockData, fetchMultipleStocks, normalizeStockCode } from '@/services/stockApi';
-import { getStoredWatchlist, addToWatchlist, removeFromWatchlist } from '@/utils/storage';
+import { fetchStockData } from '@/services/stockApi';
 import { cn } from '@/lib/utils';
 
-// 默认股票列表
 const DEFAULT_STOCKS = ['sh600000', 'sh600036', 'sh601318', 'sz000001', 'sz002594'];
 
-interface StockWidgetProps {
-  /** 自定义类名 */
+interface StockWidgetContainerProps {
   className?: string;
-  /** 是否显示搜索框 */
   showSearch?: boolean;
-  /** 是否显示详细信息 */
   showDetails?: boolean;
-  /** 初始股票列表（用于自定义） */
   initialStocks?: string[];
-  /** 刷新间隔（毫秒），0表示不自动刷新 */
   refreshInterval?: number;
-  /** 自定义标题 */
   title?: string;
 }
 
@@ -38,24 +30,21 @@ export function StockWidget({
   initialStocks,
   refreshInterval = 30000,
   title = "股票行情"
-}: StockWidgetProps) {
-  const [stocks, setStocks] = useState<Stock[]>([]);
+}: StockWidgetContainerProps) {
+  const [stocks, setStocks] = useState<StockData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
 
+  // 中文注释：功能名称「加载股票数据」，用法是从 API 获取多只股票的实时行情。
   const loadStocks = useCallback(async () => {
-    let stockCodes = initialStocks || getStoredWatchlist().map(s => s.code);
-    
-    if (stockCodes.length === 0) {
-      stockCodes = DEFAULT_STOCKS;
-    }
+    const stockCodes = initialStocks || DEFAULT_STOCKS;
 
     try {
       setIsRefreshing(true);
-      const quotes = await fetchMultipleStocks(stockCodes);
+      const quotes = await fetchStockData(stockCodes);
       setStocks(quotes);
       setLastUpdate(new Date());
       setError(null);
@@ -79,28 +68,16 @@ export function StockWidget({
     }
   }, [refreshInterval, loadStocks]);
 
-  const handleAddStock = useCallback(async (stock: SearchResult) => {
+  // 中文注释：功能名称「添加股票」，用法是搜索并添加新股票到自选列表。
+  const handleAddStock = useCallback(async (stock: StockData) => {
     if (stocks.some(s => s.code === stock.code)) {
       return;
     }
-
-    try {
-      const normalizedCode = normalizeStockCode(stock.code);
-      const quote = await fetchStockData(normalizedCode);
-      setStocks(prev => [...prev, quote]);
-      addToWatchlist(stock.code);
-    } catch (err) {
-      console.error('Failed to add stock:', err);
-    }
+    setStocks(prev => [...prev, stock]);
   }, [stocks]);
 
   const handleRemoveStock = useCallback((code: string) => {
     setStocks(prev => prev.filter(s => s.code !== code));
-    removeFromWatchlist(code);
-  }, []);
-
-  const handleStockClick = useCallback((stock: Stock) => {
-    console.log('Stock clicked:', stock);
   }, []);
 
   const handleRefresh = () => {
@@ -114,7 +91,6 @@ export function StockWidget({
 
   return (
     <div className={cn("flex flex-col h-full", className)}>
-      {/* 标题栏 */}
       <div className="flex items-center justify-between pb-4 border-b">
         <h2 className="text-lg font-semibold">{title}</h2>
         <div className="flex items-center gap-2">
@@ -130,21 +106,18 @@ export function StockWidget({
         </div>
       </div>
 
-      {/* 搜索框 */}
       {showSearch && (
         <div className="py-4">
           <StockSearch onSelect={handleAddStock} placeholder="搜索并添加股票..." />
         </div>
       )}
 
-      {/* 加载状态 */}
       {isLoading && (
         <div className="flex items-center justify-center h-32">
           <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
         </div>
       )}
 
-      {/* 错误状态 */}
       {error && !isLoading && (
         <div className="flex flex-col items-center justify-center h-32 text-destructive">
           <AlertIcon className="h-8 w-8 mb-2" />
@@ -153,7 +126,6 @@ export function StockWidget({
         </div>
       )}
 
-      {/* 股票列表 */}
       {!isLoading && !error && (
         <div className="flex-1 overflow-auto">
           <StockList
@@ -161,8 +133,6 @@ export function StockWidget({
             removable={isEditMode}
             onRemove={handleRemoveStock}
             showDetails={showDetails}
-            onStockClick={handleStockClick}
-            emptyText="暂无自选股，请点击上方搜索添加"
           />
         </div>
       )}
@@ -170,7 +140,6 @@ export function StockWidget({
   );
 }
 
-// 图标组件
 function RefreshCwIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>

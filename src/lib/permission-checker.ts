@@ -40,11 +40,11 @@ const EXPLORE_RULES: PermissionRule[] = [
   { permission: 'Glob', pattern: '*', action: 'allow' },
   { permission: 'Grep', pattern: '*', action: 'allow' },
   { permission: 'TodoWrite', pattern: '*', action: 'allow' },
-  // Allow read-only MCP tools
-  { permission: 'mcp__*__read*', pattern: '*', action: 'allow' },
-  { permission: 'mcp__*__list*', pattern: '*', action: 'allow' },
-  { permission: 'mcp__*__get*', pattern: '*', action: 'allow' },
-  { permission: 'mcp__*__search*', pattern: '*', action: 'allow' },
+  // Allow all MCP tools in explore mode (read-only by default)
+  { permission: 'mcp__*', pattern: '*', action: 'allow' },
+  // Allow CodePilot MCP activation tools
+  { permission: 'codepilot_mcp_activate', pattern: '*', action: 'allow' },
+  { permission: 'codepilot_*', pattern: '*', action: 'allow' },
   { permission: 'Write', pattern: '*', action: 'deny' },
   { permission: 'Edit', pattern: '*', action: 'deny' },
   { permission: 'Bash', pattern: '*', action: 'deny' },
@@ -66,11 +66,11 @@ const NORMAL_RULES: PermissionRule[] = [
   { permission: 'Glob', pattern: '*', action: 'allow' },
   { permission: 'Grep', pattern: '*', action: 'allow' },
   { permission: 'TodoWrite', pattern: '*', action: 'allow' },
-  // Allow read-only MCP tools
-  { permission: 'mcp__*__read*', pattern: '*', action: 'allow' },
-  { permission: 'mcp__*__list*', pattern: '*', action: 'allow' },
-  { permission: 'mcp__*__get*', pattern: '*', action: 'allow' },
-  { permission: 'mcp__*__search*', pattern: '*', action: 'allow' },
+  // Allow all MCP tools in normal mode
+  { permission: 'mcp__*', pattern: '*', action: 'allow' },
+  // Allow CodePilot MCP activation and utility tools
+  { permission: 'codepilot_mcp_activate', pattern: '*', action: 'allow' },
+  { permission: 'codepilot_*', pattern: '*', action: 'allow' },
   { permission: 'Write', pattern: '*', action: 'allow' },
   { permission: 'Edit', pattern: '*', action: 'allow' },
   { permission: 'Bash', pattern: '*', action: 'ask' },

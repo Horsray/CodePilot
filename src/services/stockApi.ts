@@ -1,218 +1,211 @@
-import { StockData, StockApiResponse, SearchResult } from '../types/stock';
+/**
+ * 新浪财经股票 API 服务
+ * 数据来源: http://hq.sinajs.cn/list=<股票代码>
+ */
 
-// 新浪财经API基地址
-const SINA_API_BASE = 'https://hq.sinajs.cn/list=';
+import { StockData, StockTestResult, SearchResult, MarketType } from '../types/stock';
+import {
+  normalizeStockCode,
+  isValidStockCode,
+} from '../utils/stockUtils';
 
-// 判断股票交易市场
-function getMarket(code: string): 'sh' | 'sz' {
-  // 上海股票以600、601、603、688开头
-  if (/^(600|601|603|688)\d{3}$/.test(code)) {
-    return 'sh';
+export { normalizeStockCode, isValidStockCode };
+
+const SINA_STOCK_API = 'http://hq.sinajs.cn/list=';
+const SINA_REFERRER = 'http://finance.sina.com.cn';
+
+/**
+ * 获取单只或多只股票数据 (新浪财经)
+ * @param codes 股票代码或股票代码数组，如 'sh600519' 或 ['sh600519', 'sz000001']
+ */
+export async function fetchStockData(code: string): Promise<StockData>;
+export async function fetchStockData(codes: string[]): Promise<StockData[]>;
+export async function fetchStockData(codes: string | string[]): Promise<StockData | StockData[]> {
+  const codeList = Array.isArray(codes) ? codes : [codes];
+  if (codeList.length === 0) {
+    return Array.isArray(codes) ? [] : emptyStock('');
   }
-  // 深圳股票以000、001、002、003、300开头
-  if (/^(000|001|002|003|300)\d{3}$/.test(code)) {
-    return 'sz';
+
+  const normalizedCodes = codeList.map(normalizeStockCode);
+  const url = `${SINA_STOCK_API}${normalizedCodes.join(',')}`;
+
+  const response = await fetch(url, {
+    headers: {
+      'Referer': SINA_REFERRER,
+      'Accept': '*/*',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
   }
-  // 默认返回上海
+
+  const text = await response.text();
+  const stocks = parseSinaStockData(text);
+  return Array.isArray(codes) ? stocks : (stocks[0] || emptyStock(normalizedCodes[0]));
+}
+
+export async function fetchMultipleStocks(codes: string[]): Promise<StockData[]> {
+  return fetchStockData(codes);
+}
+
+export async function fetchStockDataWithRetry(code: string, retries = 2): Promise<StockData> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetchStockData(code);
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) break;
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('获取股票数据失败');
+}
+
+export async function searchStocks(query: string): Promise<SearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  if (isValidStockCode(trimmed)) {
+    const code = normalizeStockCode(trimmed);
+    try {
+      const stock = await fetchStockData(code);
+      return [{ code: stock.code || code, name: stock.name || code, market: getStockExchange(code) }];
+    } catch {
+      return [{ code, name: code, market: getStockExchange(code) }];
+    }
+  }
+
+  return [];
+}
+
+export function formatStockCode(code: string): string {
+  return normalizeStockCode(code);
+}
+
+export function getStockExchange(code: string): MarketType {
+  const normalized = normalizeStockCode(code);
+  if (normalized.startsWith('sz')) return 'sz';
+  if (normalized.startsWith('hk')) return 'hk';
+  if (normalized.startsWith('gb_')) return 'us';
   return 'sh';
 }
 
 /**
- * 获取股票数据
- * 使用新浪财经API
- * @param code 股票代码（如: 600001, 000001）
+ * 测试股票代码是否有效
+ * @param code 股票代码，如 '600519' 或 'sh600519'
+ * @returns 股票测试结果，包含名称和价格
+ * @throws 如果股票代码无效或查询失败
  */
-export async function fetchStockData(code: string): Promise<StockData> {
-  const market = getMarket(code);
-  const fullCode = `${market}${code}`;
-  
-  try {
-    // 使用fetch调用新浪财经API
-    const response = await fetch(`${SINA_API_BASE}${fullCode}`, {
-      headers: {
-        'Referer': 'https://finance.sina.com.cn',
-        'Accept': '*/*'
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
-    const text = await response.text();
-    
-    // 解析新浪财经返回的数据格式
-    // 格式: var hq_str_sh600001="name,open,yclose,price,high,low,buy,sell,volume,amount,time,date,...";
-    const match = text.match(/="([^"]+)"/);
-    
-    if (!match || !match[1]) {
-      throw new Error('无法解析股票数据');
-    }
-    
-    const parts = match[1].split(',');
-    
-    if (parts.length < 32) {
-      throw new Error('股票数据格式不正确');
-    }
-    
-    // 解析数据字段
-    const [
-      name,      // 0: 股票名称
-      open,      // 1: 开盘价
-      yclose,    // 2: 昨收价
-      price,     // 3: 当前价格
-      high,      // 4: 最高价
-      low,       // 5: 最低价
-      buy,       // 6: 买一价
-      sell,      // 7: 卖一价
-      volume,    // 8: 成交量（股）
-      amount,    // 9: 成交额（元）
-      b1vol,     // 10: 买一成交量
-      b1price,   // 11: 买一价格
-      b2vol,     // 12: 买二成交量
-      b2price,   // 13: 买二价格
-      b3vol,     // 14: 买三成交量
-      b3price,   // 15: 买三价格
-      b4vol,     // 16: 买四成交量
-      b4price,   // 17: 买四价格
-      b5vol,     // 18: 买五成交量
-      b5price,   // 19: 买五价格
-      s1vol,     // 20: 卖一成交量
-      s1price,   // 21: 卖一价格
-      s2vol,     // 22: 卖二成交量
-      s2price,   // 23: 卖二价格
-      s3vol,     // 24: 卖三成交量
-      s3price,   // 25: 卖三价格
-      s4vol,     // 26: 卖四成交量
-      s4price,   // 27: 卖四价格
-      s5vol,     // 28: 卖五成交量
-      s5price,   // 29: 卖五价格
-      date,      // 30: 日期
-      time,      // 31: 时间
-      _          // 32: 未知
-    ] = parts;
-    
-    const currentPrice = parseFloat(price) || 0;
-    const yesterdayClose = parseFloat(yclose) || 0;
-    const change = currentPrice - yesterdayClose;
-    const changePercent = yesterdayClose > 0 ? (change / yesterdayClose) * 100 : 0;
-    
-    return {
-      code: code,
-      name: name || '未知',
-      price: currentPrice,
-      change: parseFloat(change.toFixed(2)),
-      changePercent: parseFloat(changePercent.toFixed(2)),
-      open: parseFloat(open) || 0,
-      high: parseFloat(high) || 0,
-      low: parseFloat(low) || 0,
-      volume: parseInt(volume) || 0,
-      amount: parseFloat(amount) || 0,
-      time: `${date} ${time}`
-    };
-    
-  } catch (error) {
-    console.error('获取股票数据失败:', error);
-    throw error instanceof Error ? error : new Error('获取股票数据失败');
+export async function testStockCode(code: string): Promise<StockTestResult> {
+  const normalizedCode = normalizeStockCode(code);
+  const stocks = await fetchStockData([normalizedCode]);
+
+  if (stocks.length === 0) {
+    throw new Error('未找到该股票');
   }
+
+  const stock = stocks[0];
+  return {
+    name: stock.name,
+    price: stock.price,
+    code: normalizedCode,
+  };
 }
 
 /**
- * 批量获取股票数据
- * @param codes 股票代码数组
+ * 解析新浪财经返回的数据
+ * 返回格式: var hq_str_sh600519="贵州茅台,1800.00,1798.00,1805.00,1818.00,1785.00,1800.00,1800.00,32234,51726.56,100,1800.00,200,1799.00,1100,1798.00,300,1795.00,200,1792.00,2022-04-01,15:00:00,00";
  */
-export async function fetchMultipleStocks(codes: string[]): Promise<StockData[]> {
+function parseSinaStockData(data: string): StockData[] {
   const results: StockData[] = [];
   
-  for (const code of codes) {
+  // 按分号分割，每只股票一段
+  const stocks = data.split(';').filter(s => s.trim());
+
+  for (const stock of stocks) {
     try {
-      const data = await fetchStockData(code);
-      results.push(data);
+      const parsed = parseSingleStock(stock);
+      if (parsed) {
+        results.push(parsed);
+      }
     } catch (error) {
-      console.error(`获取股票 ${code} 数据失败:`, error);
+      console.warn('解析股票数据失败:', stock, error);
     }
   }
-  
+
   return results;
 }
 
 /**
- * 格式化股票代码（添加市场前缀）
- * @param code 股票代码
+ * 解析单只股票数据
  */
-export function formatStockCode(code: string): string {
-  const market = getMarket(code);
-  return `${market}${code}`;
-}
-
-/**
- * 获取股票对应的交易所
- * @param code 股票代码
- */
-export function getStockExchange(code: string): string {
-  return getMarket(code) === 'sh' ? '上海' : '深圳';
-}
-
-/**
- * 带重试的股票数据获取
- * @param code 股票代码
- * @param maxRetries 最大重试次数
- * @param delay 重试延迟(ms)
- */
-export async function fetchStockDataWithRetry(
-  code: string,
-  maxRetries: number = 3,
-  delay: number = 1000
-): Promise<StockData> {
-  let lastError: Error | null = null;
-  
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      return await fetchStockData(code);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error('获取股票数据失败');
-      if (i < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
+function parseSingleStock(stockData: string): StockData | null {
+  // 提取股票代码
+  const codeMatch = stockData.match(/hq_str_(\w+)="([^"]+)"/);
+  if (!codeMatch) {
+    return null;
   }
-  
-  throw lastError || new Error('获取股票数据失败');
-}
 
-/**
- * 搜索股票（通过名称或代码）
- * @param query 搜索关键词
- */
-export async function searchStocks(query: string): Promise<SearchResult[]> {
-  const searchCode = query.trim();
-  if (!searchCode) return [];
-  
-  try {
-    const data = await fetchStockData(searchCode);
-    return [{
-      code: data.code,
-      name: data.name,
-      market: data.market || getMarket(data.code)
-    }];
-  } catch {
-    return [];
+  const code = codeMatch[1];
+  const fields = codeMatch[2].split(',');
+
+  // 确保有足够的数据字段
+  if (fields.length < 32) {
+    return null;
   }
+
+  const name = fields[0];
+  const open = parseFloat(fields[1]) || 0;
+  const close = parseFloat(fields[2]) || 0;  // 昨日收盘价
+  const price = parseFloat(fields[3]) || 0;
+  const high = parseFloat(fields[4]) || 0;
+  const low = parseFloat(fields[5]) || 0;
+  const volume = parseInt(fields[8]) || 0;   // 成交量(股)
+  const amount = parseFloat(fields[9]) || 0;  // 成交额(元)
+  const date = fields[30] || '';
+  const time = fields[31] || '';
+
+  // 计算涨跌额和涨跌幅
+  const change = price - close;
+  const changePercent = close !== 0 ? (change / close) * 100 : 0;
+
+  return {
+    code,
+    name,
+    price,
+    change,
+    changePercent,
+    open,
+    close,
+    high,
+    low,
+    volume,
+    amount,
+    time,
+    date,
+    previousClose: close,
+    market: getStockExchange(code),
+  };
 }
 
-/**
- * 规范化股票代码（移除空格和特殊字符）
- * @param code 股票代码
- */
-export function normalizeStockCode(code: string): string {
-  return code.replace(/[\s\u4e00-\u9fa5]/g, '').replace(/^(sh|sz|sx)/i, '');
-}
-
-/**
- * 验证股票代码格式是否正确
- * @param code 股票代码
- */
-export function isValidStockCode(code: string): boolean {
-  const normalized = normalizeStockCode(code);
-  return /^(600|601|603|688|000|001|002|003|300)\d{3}$/.test(normalized);
+function emptyStock(code: string): StockData {
+  return {
+    code,
+    name: code,
+    price: 0,
+    change: 0,
+    changePercent: 0,
+    open: 0,
+    close: 0,
+    high: 0,
+    low: 0,
+    volume: 0,
+    amount: 0,
+    time: '',
+    date: '',
+    previousClose: 0,
+    market: getStockExchange(code),
+  };
 }

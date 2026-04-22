@@ -101,10 +101,13 @@ export function createAgentTool(ctx: {
         ? `${agentDef.prompt}\n\nWorking directory: ${ctx.workingDirectory}`
         : `You are a helpful sub-agent. Working directory: ${ctx.workingDirectory}`;
 
+      // 生成稳定的子Agent ID，用于UI追踪
+      const subAgentId = `subagent-${agentDef.id}-${Date.now()}`;
+
       // Run sub-agent loop and collect the full response
       const stream = runAgentLoop({
         prompt,
-        sessionId: `sub-${Date.now()}`, // ephemeral session
+        sessionId: subAgentId,
         providerId: finalProviderId,
         sessionProviderId: ctx.sessionProviderId,
         model: finalModel,
@@ -115,14 +118,26 @@ export function createAgentTool(ctx: {
         permissionMode: ctx.permissionMode, // inherit from parent
       });
 
-      // Emit subagent start event as tool_output so the parent UI can show progress
+      // Emit subagent start event for UI tracking
       if (ctx.emitSSE) {
+        ctx.emitSSE({
+          type: 'subagent_start',
+          data: JSON.stringify({
+            id: subAgentId,
+            name: agentDef.id,
+            displayName: agentDef.displayName,
+            prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
+          }),
+        });
         ctx.emitSSE({ type: 'tool_output', data: `[subagent:${agentDef.id}] ${prompt.length > 120 ? prompt.slice(0, 117) + '...' : prompt}` });
       }
 
       // Collect text from the stream
       const reader = stream.getReader();
       const textParts: string[] = [];
+      const thinkingParts: string[] = [];
+      const toolResults: Array<{ name: string; content: string; isError: boolean }> = [];
+      let errorEvent: string | null = null;
 
       try {
         while (true) {
@@ -138,6 +153,36 @@ export function createAgentTool(ctx: {
                 const event = JSON.parse(line.slice(6));
                 if (event.type === 'text') {
                   textParts.push(event.data);
+                } else if (event.type === 'thinking') {
+                  // 收集thinking作为后备输出
+                  thinkingParts.push(event.data);
+                } else if (event.type === 'error') {
+                  // 收集错误事件
+                  try {
+                    const errData = JSON.parse(event.data);
+                    errorEvent = errData.userMessage || event.data;
+                  } catch {
+                    errorEvent = event.data;
+                  }
+                } else if (event.type === 'tool_result') {
+                  // 收集工具结果用于生成fallback摘要
+                  try {
+                    const res = JSON.parse(event.data);
+                    const toolName = res.tool_use_id ? 'tool' : 'unknown';
+                    toolResults.push({
+                      name: toolName,
+                      content: String(res.content || '').slice(0, 2000),
+                      isError: !!res.is_error,
+                    });
+                  } catch { /* skip malformed */ }
+                  // 同时转发到父流
+                  if (ctx.emitSSE) {
+                    try {
+                      const res = JSON.parse(event.data);
+                      const status = res.is_error ? 'x' : '+';
+                      ctx.emitSSE({ type: 'tool_output', data: `[${status}] done` });
+                    } catch { /* skip malformed */ }
+                  }
                 } else if (event.type === 'permission_request' && ctx.emitSSE) {
                   // Forward permission requests to parent stream so the
                   // client can show the approval UI for sub-agent tool calls
@@ -149,13 +194,6 @@ export function createAgentTool(ctx: {
                     const toolRenderer = getToolSummary(tool.name, tool.input);
                     ctx.emitSSE({ type: 'tool_output', data: `> ${toolRenderer}` });
                   } catch { /* skip malformed */ }
-                } else if (event.type === 'tool_result' && ctx.emitSSE) {
-                  // Show tool completion
-                  try {
-                    const res = JSON.parse(event.data);
-                    const status = res.is_error ? 'x' : '+';
-                    ctx.emitSSE({ type: 'tool_output', data: `[${status}] done` });
-                  } catch { /* skip malformed */ }
                 }
               } catch { /* skip non-JSON lines */ }
             }
@@ -165,7 +203,45 @@ export function createAgentTool(ctx: {
         reader.releaseLock();
       }
 
-      return textParts.join('') || '(Sub-agent produced no text output)';
+      // 生成最终报告
+      let finalReport: string;
+      if (textParts.length > 0) {
+        finalReport = textParts.join('');
+      } else if (errorEvent) {
+        finalReport = `**子Agent执行出错：** ${errorEvent}`;
+      } else if (thinkingParts.length > 0 || toolResults.length > 0) {
+        const parts: string[] = [];
+        if (thinkingParts.length > 0) {
+          const thinkingText = thinkingParts.join('').trim();
+          if (thinkingText) {
+            parts.push('**思考过程：**\n' + thinkingText.slice(0, 3000));
+          }
+        }
+        if (toolResults.length > 0) {
+          parts.push(`**执行了 ${toolResults.length} 个工具：**`);
+          for (const tr of toolResults.slice(0, 10)) {
+            const preview = tr.content.slice(0, 500).replace(/\n/g, ' ');
+            parts.push(`- ${tr.name}: ${preview}${tr.content.length > 500 ? '...' : ''}`);
+          }
+        }
+        finalReport = parts.join('\n\n');
+      } else {
+        finalReport = '(Sub-agent produced no text output)';
+      }
+
+      // 发送子Agent完成事件
+      if (ctx.emitSSE) {
+        ctx.emitSSE({
+          type: 'subagent_complete',
+          data: JSON.stringify({
+            id: subAgentId,
+            report: finalReport,
+            error: errorEvent || undefined,
+          }),
+        });
+      }
+
+      return finalReport;
     },
   });
 }

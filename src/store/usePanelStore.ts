@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { PreviewViewMode, WorkspaceTab, BottomPanelTab } from "@/hooks/usePanel";
+import type { PreviewViewMode, WorkspaceTab, BottomPanelTab, OpenBrowserTabOptions } from "@/hooks/usePanel";
 
 interface PanelStore {
   fileTreeOpen: boolean;
@@ -26,7 +26,7 @@ interface PanelStore {
   activeWorkspaceTabId: string | null;
   setActiveWorkspaceTabId: (id: string | null) => void;
   openPreviewTab: (path: string, defaultViewMode: (path: string) => PreviewViewMode) => void;
-  openBrowserTab: (url: string, title?: string) => void;
+  openBrowserTab: (url: string, title?: string, options?: OpenBrowserTabOptions) => void;
   openTerminalTab: (terminalId?: string, title?: string) => void;
   updateWorkspaceTab: (id: string, updates: Partial<WorkspaceTab>) => void;
   closeWorkspaceTab: (id: string) => void;
@@ -95,16 +95,19 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
     }
     if (!previewOpen) setPreviewOpen(true);
   },
-  openBrowserTab: (url, title) => {
+  openBrowserTab: (url, title, options) => {
     const { workspaceTabs, previewOpen, setPreviewOpen } = get();
-    // Try to find an existing browser tab, or create a new one
-    const existingTab = workspaceTabs.find((t) => t.kind === "browser");
-    if (existingTab) {
-      // Update existing tab url and title
+    const shouldCreateTab = options?.newTab !== false;
+    const existingTab = shouldCreateTab
+      ? workspaceTabs.find((t) => t.kind === "browser" && url && t.url === url)
+      : workspaceTabs.find((t) => t.kind === "browser");
+    if (existingTab && !shouldCreateTab) {
       const newTabs = workspaceTabs.map(t => 
         t.id === existingTab.id ? { ...t, url, title: title || t.title } : t
       );
       set({ workspaceTabs: newTabs, activeWorkspaceTabId: existingTab.id });
+    } else if (existingTab) {
+      set({ activeWorkspaceTabId: existingTab.id });
     } else {
       const newTab: WorkspaceTab = {
         id: `browser-${Date.now()}`,
@@ -137,6 +140,10 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   },
   updateWorkspaceTab: (id, updates) => {
     const { workspaceTabs } = get();
+    const existingTab = workspaceTabs.find((t) => t.id === id);
+    if (existingTab && Object.entries(updates).every(([key, value]) => existingTab[key as keyof WorkspaceTab] === value)) {
+      return;
+    }
     set({
       workspaceTabs: workspaceTabs.map(t => t.id === id ? { ...t, ...updates } : t)
     });

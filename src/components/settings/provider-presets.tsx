@@ -156,6 +156,9 @@ export function getGeminiImageModel(provider: ApiProvider): string {
 // ---------------------------------------------------------------------------
 
 export function findMatchingPreset(provider: ApiProvider): QuickPreset | undefined {
+  if (provider.protocol === "multi_head") {
+    return QUICK_PRESETS.find(p => p.key === "multi-head-router");
+  }
   // Exact base_url match (most specific)
   if (provider.base_url) {
     const match = QUICK_PRESETS.find(p => p.base_url && p.base_url === provider.base_url);

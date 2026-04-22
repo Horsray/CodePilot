@@ -34,12 +34,14 @@ export function StockWidget({
   // 输入框引用
   const inputRef = useRef<HTMLInputElement>(null);
   
-  // 获取股票数据
-  const { data, loading, error, lastUpdate, refresh } = useStockData(
-    code,
-    autoRefresh,
-    refreshInterval
-  );
+  // 中文注释：功能名称「股票数据获取」，用法是使用 useStockData Hook 获取股票实时数据。
+  const { data, loading, error, refetch } = useStockData({
+    settings: {
+      stockCode: code,
+      refreshInterval: Math.max(5, Math.round(refreshInterval / 1000)),
+    },
+  });
+  const lastUpdate = useRef<Date | null>(null);
   
   // 当股票代码变化时，调用回调
   useEffect(() => {
@@ -278,11 +280,11 @@ export function StockWidget({
               color: '#ef4444'
             }}>
               <div style={{ fontSize: '24px', marginBottom: '4px' }}>⚠️</div>
-              <div style={{ fontSize: '12px' }}>{error}</div>
+              <div style={{ fontSize: '12px' }}>{error.message}</div>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  refresh();
+                  refetch();
                 }}
                 style={{
                   marginTop: '8px',
@@ -400,7 +402,7 @@ export function StockWidget({
                   color: '#d1d5db',
                   textAlign: 'right'
                 }}>
-                  {lastUpdate.toLocaleTimeString('zh-CN')}
+                  {new Date().toLocaleTimeString('zh-CN')}
                 </div>
               )}
             </div>

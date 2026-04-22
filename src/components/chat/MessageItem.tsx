@@ -767,17 +767,19 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           : <img src={EGG_IMAGE_URL} alt="egg" width={28} height={28} className="mt-0.5 shrink-0" />
       )}
       <div className="flex-1 min-w-0">
-    <AIMessage from={isUser ? 'user' : 'assistant'}>
-      <MessageContent>
-        {/* Referenced Contexts (Rule tags) */}
-        {!isUser && referencedFiles.length > 0 && (
-          <ReferencedContexts files={referencedFiles} isStreaming={false} />
-        )}
-
-        {/* File attachments for user messages */}
-        {isUser && files.length > 0 && (
+    <div className="flex flex-col gap-2 relative group w-full">
+      {/* File attachments for user messages (outside the bubble) */}
+      {isUser && files.length > 0 && (
+        <div className="flex justify-end pr-2.5">
           <FileAttachmentDisplay files={files} />
-        )}
+        </div>
+      )}
+      <AIMessage from={isUser ? 'user' : 'assistant'}>
+        <MessageContent>
+          {/* Referenced Contexts (Rule tags) */}
+          {!isUser && referencedFiles.length > 0 && (
+            <ReferencedContexts files={referencedFiles} isStreaming={false} />
+          )}
 
         {/* Render the timeline (tools and thoughts interleaved) */}
         {!isUser && (pairedTools.length > 0 || timelineSteps.length > 0) && (
@@ -886,6 +888,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
         {displayText && <CopyButton text={displayText} />}
       </div>
     </AIMessage>
+      </div>
       </div>
     </div>
   );

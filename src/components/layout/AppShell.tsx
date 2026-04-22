@@ -121,13 +121,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const handleOpenBrowser = (event: Event) => {
       const customEvent = event as CustomEvent;
-      const { url, title } = customEvent.detail || {};
+      const { url, title, newTab } = customEvent.detail || {};
       if (url) {
-        store.openBrowserTab(url, title);
+        store.openBrowserTab(url, title, { newTab: newTab !== false });
       }
     };
     window.addEventListener("action:open-browser-panel", handleOpenBrowser);
-    return () => window.removeEventListener("action:open-browser-panel", handleOpenBrowser);
+    window.addEventListener("browser-navigate", handleOpenBrowser);
+    return () => {
+      window.removeEventListener("action:open-browser-panel", handleOpenBrowser);
+      window.removeEventListener("browser-navigate", handleOpenBrowser);
+    };
   }, [store]);
 
   useEffect(() => {

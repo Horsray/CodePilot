@@ -53,7 +53,7 @@ function normalizeBrowserUrl(targetUrl: string): string {
 
 export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps) {
   const { t } = useTranslation();
-  const initialNormalizedUrl = normalizeBrowserUrl(initialUrl || "");
+  const initialNormalizedUrl = useMemo(() => normalizeBrowserUrl(initialUrl || ""), [initialUrl]);
   const [url, setUrl] = useState(initialNormalizedUrl);
   const [inputUrl, setInputUrl] = useState(initialNormalizedUrl);
   const [loading, setLoading] = useState(false);
@@ -64,6 +64,7 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
   const webviewRef = useRef<ElectronWebviewElement | null>(null);
   const historyRef = useRef<string[]>(initialNormalizedUrl ? [initialNormalizedUrl] : []);
   const historyIndexRef = useRef(initialNormalizedUrl ? 0 : -1);
+  const lastInitialUrlRef = useRef(initialNormalizedUrl);
   const isElectron = useMemo(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     () => typeof window !== "undefined" && !!(window as any).electronAPI?.versions?.electron,
@@ -240,17 +241,22 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
     }
   }, [initialNormalizedUrl, syncMeta]);
 
-  // Use a global event listener to handle external navigation requests
   useEffect(() => {
-    const handleGlobalNavigate = (event: Event) => {
-      const targetUrl = (event as CustomEvent).detail?.url;
-      if (targetUrl) {
-        navigate(targetUrl);
-      }
-    };
-    window.addEventListener("action:open-browser-panel", handleGlobalNavigate);
-    return () => window.removeEventListener("action:open-browser-panel", handleGlobalNavigate);
-  }, [navigate]);
+    if (initialNormalizedUrl === lastInitialUrlRef.current) return;
+    lastInitialUrlRef.current = initialNormalizedUrl;
+    setUrl(initialNormalizedUrl);
+    setInputUrl(initialNormalizedUrl);
+    setLoading(Boolean(initialNormalizedUrl));
+    if (initialNormalizedUrl) {
+      syncHistoryState(initialNormalizedUrl, "replace");
+      syncMeta(initialNormalizedUrl);
+    } else {
+      historyRef.current = [];
+      historyIndexRef.current = -1;
+      setCanGoBack(false);
+      setCanGoForward(false);
+    }
+  }, [initialNormalizedUrl, syncHistoryState, syncMeta]);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -351,7 +357,6 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
                 }}
                 src={url}
                 className="w-full h-full border-0 bg-background"
-                allowpopups
                 partition="persist:codepilot-browser"
               />
             ) : (

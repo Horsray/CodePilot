@@ -1,56 +1,117 @@
-// 股票数据类型定义
+/**
+ * 股票相关类型定义
+ */
+
+/**
+ * 股票数据接口
+ */
 export interface StockData {
-  code: string;       // 股票代码
-  name: string;       // 股票名称
-  price: number;      // 当前价格
-  change: number;     // 涨跌额
+  code: string;           // 股票代码
+  name: string;          // 股票名称
+  price: number;         // 当前价格
+  change: number;         // 涨跌额
   changePercent: number;  // 涨跌幅百分比
-  open?: number;       // 开盘价
-  high?: number;       // 最高价
-  low?: number;        // 最低价
-  volume?: number;     // 成交量
-  amount?: number;     // 成交额
-  time?: string;       // 更新时间
-  market?: string;    // 市场标识 (sh/sz/hk/us)
-  previousClose?: number;  // 昨收价
+  open: number;           // 开盘价
+  close: number;         // 昨日收盘价
+  high: number;          // 最高价
+  low: number;           // 最低价
+  volume: number;        // 成交量(股)
+  amount: number;        // 成交额(元)
+  time: string;          // 更新时间
+  date: string;          // 更新日期
+  previousClose?: number; // 兼容旧版 StockWidget 字段
+  market?: MarketType;    // 交易所/市场
 }
 
-// 股票类型别名（与 StockData 相同，用于组件兼容性）
-export type Stock = StockData;
-
-// 股票趋势类型
+export type MarketType = 'sh' | 'sz' | 'hk' | 'us';
 export type StockTrend = 'up' | 'down' | 'flat';
 
-// 股票市场类型
-export type MarketType = 'sh' | 'sz' | 'sx';
+export interface Stock {
+  code: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  open?: number;
+  close?: number;
+  previousClose?: number;
+  high?: number;
+  low?: number;
+  volume?: number;
+  amount?: number;
+  time?: string;
+  date?: string;
+  market?: MarketType;
+}
 
-// 搜索结果类型
 export interface SearchResult {
   code: string;
   name: string;
-  market: string;
+  market?: MarketType;
 }
 
-/**
- * 根据涨跌额获取股票趋势
- * @param stock 股票数据
- */
-export function getStockTrend(stock: StockData): StockTrend {
-  if (stock.change > 0) return 'up';
-  if (stock.change < 0) return 'down';
-  return 'flat';
+export interface StockApiResponse {
+  stocks: Stock[];
+  error?: string;
 }
 
 export interface StockWidgetProps {
-  initialCode?: string;      // 初始股票代码
-  width?: number;            // 组件宽度，默认290px
-  autoRefresh?: boolean;     // 是否自动刷新，默认true
-  refreshInterval?: number;  // 刷新间隔(ms)，默认1000
+  className?: string;
+  showSearch?: boolean;
+  showDetails?: boolean;
+  initialStocks?: string[];
+  refreshInterval?: number;
+  title?: string;
 }
 
-// API响应类型
-export interface StockApiResponse {
-  success: boolean;
-  data?: StockData;
-  error?: string;
+export function getStockTrend(stock: Pick<StockData, 'change' | 'changePercent'>): StockTrend {
+  if (stock.change > 0 || stock.changePercent > 0) return 'up';
+  if (stock.change < 0 || stock.changePercent < 0) return 'down';
+  return 'flat';
 }
+
+/**
+ * 用户设置接口
+ */
+export interface StockSettings {
+  stockCode: string;       // 股票代码，如 sh600519 或 600519
+  refreshInterval: number; // 刷新间隔(秒)，最小5秒，最大300秒
+}
+
+/**
+ * 设置面板状态
+ */
+export interface SettingsPanelState {
+  isOpen: boolean;
+  inputCode: string;
+  isTesting: boolean;
+  testResult: 'idle' | 'success' | 'error';
+  testMessage: string;
+}
+
+/**
+ * 股票测试结果
+ */
+export interface StockTestResult {
+  name: string;           // 股票名称
+  price: number;          // 当前价格
+  code: string;          // 标准化后的股票代码
+}
+
+/**
+ * Hook 返回数据类型
+ */
+export interface UseStockDataReturn {
+  data: StockData | null;
+  loading: boolean;
+  error: Error | null;
+  refetch: () => Promise<void>;
+}
+
+/**
+ * 默认股票设置
+ */
+export const DEFAULT_STOCK_SETTINGS: StockSettings = {
+  stockCode: 'sh600519',  // 贵州茅台
+  refreshInterval: 30    // 30秒刷新一次
+};

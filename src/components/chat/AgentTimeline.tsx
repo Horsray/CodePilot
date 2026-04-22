@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Brain,
@@ -287,7 +287,21 @@ function ActivityCard({
 }) {
   const primaryTool = getPrimaryTool(step);
   const isCommandStep = Boolean(primaryTool && isCommandToolName(primaryTool.name));
-  const [open, setOpen] = useState(step.status === 'running' || step.status === 'retrying' || step.status === 'failed' || step.error);
+  
+  // Update state logic to maintain open state for running steps, but close when finished
+  const [userToggled, setUserToggled] = useState<boolean | null>(null);
+  const isRunning = step.status === 'running' || step.status === 'retrying';
+  
+  // Initialize as open when running. When finished, only remain open if explicitly toggled by user.
+  // CRITICAL FIX: To prevent UI jumping and endless expanding/collapsing, we default to FALSE
+  // when finished, unless the user explicitly requested it to be open.
+  // CRITICAL FIX 4: The problem is `compact` view height collapsing and expanding for single steps. 
+  // We NEVER auto-collapse steps in compact mode (since it's inside a fixed height scrolling box anyway), 
+  // this prevents the jumping behavior entirely.
+  // CRITICAL FIX 8: In compact mode, we STILL WANT TO COLLAPSE it when done, but we use fixed max-height on parent to prevent jumping.
+  // We don't want it permanently open, that looks cluttered.
+  const open = userToggled ?? isRunning;
+
   const activity = getActivityInfo(step);
   const reasoningText = cleanReasoningText(step.reasoning);
   const showReasoningDetail = Boolean(
@@ -328,7 +342,7 @@ function ActivityCard({
         : activity.subtitle;
     }
     if (activity.type === 'viewing') {
-      return step.status === 'completed' ? '点击展开查看检索细节' : activity.subtitle;
+      return step.status === 'completed' ? '已查看检索细节' : activity.subtitle;
     }
     if (activity.type === 'calling') {
       return step.status === 'completed' ? '工具执行完毕' : activity.subtitle;
@@ -338,7 +352,7 @@ function ActivityCard({
     }
     if (activity.type === 'thinking') {
       return showReasoningDetail
-        ? '点击展开查看思考内容'
+        ? '已完成思考分析'
         : activity.subtitle;
     }
     return activity.subtitle || step.summary || previewText(step.output.trim(), compact ? 80 : 140);
@@ -351,23 +365,31 @@ function ActivityCard({
 
 
   return (
-    <div className="my-1.5 border-b border-border/20 last:border-0 pb-1.5 bg-background overflow-hidden">
+    <div className={cn("my-1.5 border-b border-border/20 last:border-0 pb-1.5 overflow-hidden", compact ? "bg-transparent" : "bg-background")}>
       <button
-        type="button"
-        onClick={() => hasDetails && setOpen((value) => value ? null : true)}
-        className="flex w-full items-center justify-between px-2 py-2 text-[13px] hover:bg-muted/40 transition-colors rounded-[6px]"
-      >
-        <div className="flex items-center gap-2">
+          type="button"
+          onClick={() => {
+            if (hasDetails) {
+              if (isRunning) {
+                setUserToggled(prev => prev === false ? null : false);
+              } else {
+                setUserToggled(prev => prev === true ? null : true);
+              }
+            }
+          }}
+          className={cn("flex w-full items-center justify-between px-2 py-2 hover:bg-muted/40 transition-colors rounded-[6px]", compact ? "text-[12px]" : "text-[13px]")}
+        >
+        <div className="flex items-center gap-2 overflow-hidden min-w-0 pr-2">
           {activity.icon}
-          <span className="font-medium text-foreground/80 truncate ml-1 text-left">
+          <span className="font-medium text-foreground/80 truncate ml-1 text-left shrink-0">
             {activity.label}
           </span>
-          <span className="text-border mx-1">|</span>
-          <span className="font-mono text-[12px] text-muted-foreground/60 truncate flex-1 text-left">
+          <span className="text-border mx-1 shrink-0">|</span>
+          <span className="font-mono text-[12px] text-muted-foreground/60 truncate flex-1 text-left min-w-0">
             {isCommandStep && step.status === 'running' ? runningStatusText : collapsedLead}
           </span>
         </div>
-        <div className="flex items-center gap-2 text-muted-foreground">
+        <div className="flex items-center gap-2 text-muted-foreground shrink-0">
           {step.status === 'running' && <SpinnerGap size={14} className="animate-spin text-primary" />}
           {step.status === 'failed' && <XCircle size={14} className="text-red-500" />}
           {step.status === 'completed' && <CheckCircle size={14} className="text-emerald-500" />}
@@ -375,8 +397,15 @@ function ActivityCard({
       </button>
 
       {open && hasDetails && (
-        <div className="space-y-3 mt-1.5 mb-2 ml-7">
-          {showReasoningDetail && (
+        <motion.div 
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="overflow-hidden"
+        >
+          <div className="space-y-3 mt-1.5 mb-2 ml-7">
+            {showReasoningDetail && (
             <div className="rounded-[8px] bg-muted/20 border border-border/30 p-2.5">
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-violet-500/80">
                 <Brain size={12} weight="bold" />
@@ -450,6 +479,7 @@ function ActivityCard({
             </div>
           )}
         </div>
+        </motion.div>
       )}
     </div>
   );
@@ -481,21 +511,47 @@ export function AgentTimeline({
 
   const isRunning = visibleSteps.some(s => s.status === 'running' || s.status === 'retrying');
 
+  // Only render the last 2 visible steps to prevent vertical explosion, unless expanded
+  // If we are not running anymore, we want to show all steps, or we show the latest ones.
+  // CRITICAL FIX 3: To stop the screen from jumping up and down, we only use `recentSteps` when running.
+  // When complete, we show ALL steps so it doesn't suddenly shrink.
+  const recentSteps = visibleSteps.slice(-5); // increased to 5
+  // If we are in compact mode (which means this is a sub-agent timeline), ALWAYS just show recent steps to prevent huge scrolling containers
+  // CRITICAL FIX 6: Use ALL steps for compact mode too when done to prevent shrinking
+  // CRITICAL FIX 7: NEVER slice when compact, so we don't have items popping in and out constantly while running.
+  // We're already putting it inside a scrolling container in ToolActionsGroup, so it's safe to just show them all.
+  const displaySteps = compact ? visibleSteps : (isRunning ? recentSteps : visibleSteps);
+
+  // Auto scroll to bottom when compact mode (subagent running)
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (compact && containerRef.current) {
+      // Use a small timeout to let the DOM settle before scrolling
+      setTimeout(() => {
+        if (containerRef.current) {
+          containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 50);
+    }
+  }, [displaySteps, compact]);
+
   return (
-    <div className="mt-3 group/timeline">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center gap-2 px-2 py-1 mb-2 rounded-md hover:bg-muted/30 transition-colors text-muted-foreground/70 hover:text-foreground"
-      >
-        <CaretDown size={14} className={cn("transition-transform duration-300", !isExpanded && "-rotate-90")} />
-        <span className="text-[12px] font-bold uppercase tracking-wider">思考过程</span>
-        {isRunning && (
-          <div className="flex items-center gap-1.5 ml-2">
-            <div className="flex h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
-            <span className="text-[10px] font-medium text-primary animate-pulse tracking-tight">执行中...</span>
-          </div>
-        )}
-      </button>
+    <div className={cn("group/timeline", compact ? "mt-1" : "mt-3")}>
+      {!compact && (
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center gap-2 px-2 py-1 mb-2 rounded-md hover:bg-muted/30 transition-colors text-muted-foreground/70 hover:text-foreground"
+        >
+          <CaretDown size={14} className={cn("transition-transform duration-300", !isExpanded && "-rotate-90")} />
+          <span className="text-[12px] font-bold uppercase tracking-wider">思考过程</span>
+          {isRunning && (
+            <div className="flex items-center gap-1.5 ml-2">
+              <div className="flex h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+              <span className="text-[10px] font-medium text-primary animate-pulse tracking-tight">执行中...</span>
+            </div>
+          )}
+        </button>
+      )}
 
       <AnimatePresence initial={false}>
         {isExpanded && (
@@ -506,8 +562,8 @@ export function AgentTimeline({
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="space-y-1 ml-1 pl-1">
-              {visibleSteps.map((step) => (
+            <div className={cn("space-y-1", !compact && "ml-1 pl-1")}>
+              {displaySteps.map((step) => (
                 <ActivityCard
                   key={step.id}
                   step={step}
@@ -517,6 +573,7 @@ export function AgentTimeline({
                   onForceStop={onForceStop}
                 />
               ))}
+              <div ref={containerRef} />
             </div>
           </motion.div>
         )}

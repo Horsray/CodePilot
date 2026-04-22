@@ -685,7 +685,16 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                   console.error('[agent-loop] Failed to discover subdirectory hints:', e);
                 }
 
-                let resultContent = typeof (event as any).output === 'string' ? (event as any).output : typeof (event as any).result === 'string' ? (event as any).result : JSON.stringify((event as any).output ?? (event as any).result);
+                let rawOutput = (event as any).output ?? (event as any).result;
+                let resultContent: string;
+                if (typeof rawOutput === 'string') {
+                  resultContent = rawOutput;
+                } else if (rawOutput == null) {
+                  // Tool returned null or undefined — treat as empty result
+                  resultContent = '';
+                } else {
+                  resultContent = JSON.stringify(rawOutput);
+                }
                 if (hintContent) {
                   resultContent += hintContent;
                 }

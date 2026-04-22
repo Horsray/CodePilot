@@ -111,9 +111,11 @@ export function createAgentMcpServer(ctx: {
             ? `${agentDef.prompt}\n\nWorking directory: ${ctx.workingDirectory}\n\nIMPORTANT RULE: You are a sub-agent. Your text responses are the ONLY output sent back to the parent agent. You MUST provide a clear, final summary of your findings, answers, or completed actions before you finish. Do not just output your internal thoughts.`
             : `You are a helpful sub-agent. Working directory: ${ctx.workingDirectory}\n\nIMPORTANT RULE: You are a sub-agent. Your text responses are the ONLY output sent back to the parent agent. You MUST provide a clear, final summary of your findings, answers, or completed actions before you finish. Do not just output your internal thoughts.`;
 
+          const subAgentId = `subagent-${agentDef.id}-${Date.now()}`;
+
           const stream = runAgentLoop({
             prompt,
-            sessionId: `sub-${Date.now()}`,
+            sessionId: subAgentId,
             providerId: ctx.providerId,
             sessionProviderId: ctx.sessionProviderId,
             model,
@@ -125,11 +127,23 @@ export function createAgentMcpServer(ctx: {
           });
 
           if (ctx.emitSSE) {
+            ctx.emitSSE({
+              type: 'subagent_start',
+              data: JSON.stringify({
+                id: subAgentId,
+                name: agentDef.id,
+                displayName: agentDef.displayName,
+                prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
+              }),
+            });
             ctx.emitSSE({ type: 'tool_output', data: `[subagent:${agentDef.id}] ${prompt.length > 120 ? prompt.slice(0, 117) + '...' : prompt}` });
           }
 
           const reader = stream.getReader();
           const textParts: string[] = [];
+          const thinkingParts: string[] = [];
+          const toolResults: Array<{ name: string; content: string; isError: boolean }> = [];
+          let errorEvent: string | null = null;
 
           try {
             while (true) {
@@ -144,6 +158,31 @@ export function createAgentMcpServer(ctx: {
                     const event = JSON.parse(line.slice(6));
                     if (event.type === 'text') {
                       textParts.push(event.data);
+                    } else if (event.type === 'thinking') {
+                      thinkingParts.push(event.data);
+                    } else if (event.type === 'error') {
+                      try {
+                        const errData = JSON.parse(event.data);
+                        errorEvent = errData.userMessage || event.data;
+                      } catch {
+                        errorEvent = event.data;
+                      }
+                    } else if (event.type === 'tool_result') {
+                      try {
+                        const res = JSON.parse(event.data);
+                        toolResults.push({
+                          name: res.tool_use_id ? 'tool' : 'unknown',
+                          content: String(res.content || '').slice(0, 2000),
+                          isError: !!res.is_error,
+                        });
+                      } catch { }
+                      if (ctx.emitSSE) {
+                        try {
+                          const res = JSON.parse(event.data);
+                          const status = res.is_error ? 'x' : '+';
+                          ctx.emitSSE({ type: 'tool_output', data: `[${status}] done` });
+                        } catch { }
+                      }
                     } else if (event.type === 'permission_request' && ctx.emitSSE) {
                       ctx.emitSSE(event);
                     } else if (event.type === 'tool_use' && ctx.emitSSE) {
@@ -151,12 +190,6 @@ export function createAgentMcpServer(ctx: {
                         const t = JSON.parse(event.data);
                         const toolRenderer = getToolSummary(t.name, t.input);
                         ctx.emitSSE({ type: 'tool_output', data: `> ${toolRenderer}` });
-                      } catch { }
-                    } else if (event.type === 'tool_result' && ctx.emitSSE) {
-                      try {
-                        const res = JSON.parse(event.data);
-                        const status = res.is_error ? 'x' : '+';
-                        ctx.emitSSE({ type: 'tool_output', data: `[${status}] done` });
                       } catch { }
                     }
                   } catch { }
@@ -167,7 +200,42 @@ export function createAgentMcpServer(ctx: {
             reader.releaseLock();
           }
 
-          const resultText = textParts.join('') || '(Sub-agent produced no text output)';
+          let resultText: string;
+          if (textParts.length > 0) {
+            resultText = textParts.join('');
+          } else if (errorEvent) {
+            resultText = `**子Agent执行出错：** ${errorEvent}`;
+          } else if (thinkingParts.length > 0 || toolResults.length > 0) {
+            const parts: string[] = [];
+            if (thinkingParts.length > 0) {
+              const thinkingText = thinkingParts.join('').trim();
+              if (thinkingText) {
+                parts.push('**思考过程：**\n' + thinkingText.slice(0, 3000));
+              }
+            }
+            if (toolResults.length > 0) {
+              parts.push(`**执行了 ${toolResults.length} 个工具：**`);
+              for (const tr of toolResults.slice(0, 10)) {
+                const preview = tr.content.slice(0, 500).replace(/\n/g, ' ');
+                parts.push(`- ${tr.name}: ${preview}${tr.content.length > 500 ? '...' : ''}`);
+              }
+            }
+            resultText = parts.join('\n\n');
+          } else {
+            resultText = '(Sub-agent produced no text output)';
+          }
+
+          if (ctx.emitSSE) {
+            ctx.emitSSE({
+              type: 'subagent_complete',
+              data: JSON.stringify({
+                id: subAgentId,
+                report: resultText,
+                error: errorEvent || undefined,
+              }),
+            });
+          }
+
           return { content: [{ type: 'text' as const, text: resultText }] };
         }
       )

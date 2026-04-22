@@ -295,8 +295,16 @@ export async function GET(req: Request) {
         }
         for (const entry of roleEntries) {
           if (!rawModels.some(m => m.value === entry.id || m.upstreamModelId === entry.id)) {
-            const label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
-            rawModels.unshift({ value: entry.id, label });
+            let displayId = entry.id;
+            
+            if (protocol === 'multi_head' && entry.id.includes(':')) {
+              // Extract the modelId part from providerId:modelId, completely discarding providerId and parentheses
+              displayId = entry.id.split(':').slice(1).join(':');
+              rawModels.unshift({ value: entry.id, label: displayId });
+            } else {
+              const label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
+              rawModels.unshift({ value: entry.id, label });
+            }
           }
         }
       } catch { /* ignore */ }
@@ -339,6 +347,7 @@ export async function GET(req: Request) {
         provider_id: provider.id,
         provider_name: provider.name,
         provider_type: provider.provider_type,
+        protocol: protocol,
         ...(sdkProxyOnly ? { sdkProxyOnly: true } : {}),
         models,
       });

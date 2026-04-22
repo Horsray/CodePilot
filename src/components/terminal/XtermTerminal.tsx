@@ -12,8 +12,10 @@ interface XtermTerminalProps {
 }
 
 /**
- * XtermTerminal — renders a real xterm.js terminal with full ANSI support.
- * Lazy-loads xterm.js and addons to avoid SSR issues.
+ * XtermTerminal — 渲染 xterm.js 终端，支持完整 ANSI 序列。
+ * 懒加载 xterm.js 和插件以避免 SSR 问题。
+ * 中文注释：功能名称「xterm 终端渲染」，用法是提供完整的终端交互体验，
+ * 支持用户手动输入、AI Bash 工具的命令/输出镜像显示。
  */
 export function XtermTerminal({
   onData,
@@ -29,27 +31,31 @@ export function XtermTerminal({
   const onResizeRef = useRef(onResize);
   const onReadyRef = useRef(onReady);
 
+  // 中文注释：功能名称「终端主题配色」，用法是根据深色/浅色模式返回 macOS 原生风格配色方案，
+  // 对标 macOS Terminal.app 和 Trae IDE 的视觉风格。
   const getThemeConfig = useCallback((isDark: boolean) => ({
-    background: isDark ? "#1a1a2e" : "#ffffff",
-    foreground: isDark ? "#e4e4e7" : "#333333",
-    cursor: isDark ? "#e4e4e7" : "#333333",
-    selectionBackground: isDark ? "#3b3b5c" : "#cce2ff",
-    black: isDark ? "#1a1a2e" : "#000000",
-    red: isDark ? "#ff6b6b" : "#cd3131",
-    green: isDark ? "#51cf66" : "#0dbc79",
-    yellow: isDark ? "#ffd43b" : "#e5e510",
-    blue: isDark ? "#74c0fc" : "#2472c8",
-    magenta: isDark ? "#cc5de8" : "#bc3fbc",
-    cyan: isDark ? "#66d9e8" : "#11a8cd",
-    white: isDark ? "#e4e4e7" : "#e5e5e5",
-    brightBlack: isDark ? "#4a4a6a" : "#666666",
-    brightRed: isDark ? "#ff8787" : "#f14c4c",
-    brightGreen: isDark ? "#69db7c" : "#23d18b",
-    brightYellow: isDark ? "#ffe066" : "#f5f543",
-    brightBlue: isDark ? "#91d5ff" : "#3b8eea",
-    brightMagenta: isDark ? "#da77f2" : "#d670d6",
-    brightCyan: isDark ? "#99e9f2" : "#29b8db",
-    brightWhite: isDark ? "#ffffff" : "#e5e5e5",
+    background: isDark ? "#1e1e1e" : "#ffffff",
+    foreground: isDark ? "#d4d4d4" : "#383a42",
+    cursor: isDark ? "#d4d4d4" : "#383a42",
+    cursorAccent: isDark ? "#1e1e1e" : "#ffffff",
+    selectionBackground: isDark ? "#264f78" : "#add6ff",
+    selectionForeground: isDark ? "#ffffff" : "#000000",
+    black: isDark ? "#1e1e1e" : "#000000",
+    red: isDark ? "#ff5f56" : "#e45649",
+    green: isDark ? "#27c93f" : "#50a14f",
+    yellow: isDark ? "#ffbd2e" : "#c18401",
+    blue: isDark ? "#5ab0f6" : "#4078f2",
+    magenta: isDark ? "#d580ff" : "#a626a4",
+    cyan: isDark ? "#56d6e0" : "#0184bc",
+    white: isDark ? "#d4d4d4" : "#a0a0a0",
+    brightBlack: isDark ? "#636363" : "#636363",
+    brightRed: isDark ? "#ff7b72" : "#e06c75",
+    brightGreen: isDark ? "#7ee787" : "#98c379",
+    brightYellow: isDark ? "#f0c674" : "#e5c07b",
+    brightBlue: isDark ? "#79c0ff" : "#61afef",
+    brightMagenta: isDark ? "#d2a8ff" : "#c678dd",
+    brightCyan: isDark ? "#79dafa" : "#56b6c2",
+    brightWhite: isDark ? "#ffffff" : "#ffffff",
   }), []);
 
   useEffect(() => {
@@ -81,14 +87,20 @@ export function XtermTerminal({
 
       if (disposed) return;
 
+      // 中文注释：终端配置对标 macOS 原生 Terminal.app 和 Trae IDE 风格，
+      // 小字体(12px)、紧凑行高、等宽字体、左侧内边距。
       term = new xtermMod.Terminal({
         cursorBlink: true,
-        fontSize: 13,
-        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, 'Courier New', monospace",
-        lineHeight: 1.2,
-        scrollback: 5000,
+        fontSize: 12,
+        fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+        lineHeight: 1.15,
+        letterSpacing: 0,
+        scrollback: 10000,
         theme: getThemeConfig(resolvedTheme === "dark"),
         allowProposedApi: true,
+        convertEol: true,
+        scrollOnUserInput: true,
+        smoothScrollDuration: 50,
       });
 
       fitAddon = new fitMod.FitAddon();
@@ -107,40 +119,18 @@ export function XtermTerminal({
           console.warn("WebGL addon failed to load, falling back to canvas/dom", e);
         }
 
-        // Focus the terminal when it opens and on container click
         term.focus();
 
         term.onData((data) => {
           onDataRef.current(data);
         });
 
-        // Add a raw DOM listener to catch and manually forward keys if needed.
-        const handleKey = (e: KeyboardEvent) => {
-          if (document.activeElement === containerRef.current || 
-              containerRef.current?.contains(document.activeElement)) {
-            
-            // Allow xterm.js to handle most keys naturally.
-            // But if your Electron/React combo drops some simple keys, 
-            // you can uncomment this block to forcefully push them:
-            /*
-            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-              onDataRef.current(e.key);
-            }
-            */
-          }
-        };
-
-        // Ensure focus stays in the terminal when container is focused
         const handleContainerFocus = () => {
           term.focus();
         };
         containerRef.current.addEventListener('focus', handleContainerFocus);
-        
-        // Ensure clicking anywhere in the container focuses the terminal
         containerRef.current.addEventListener('click', handleContainerFocus);
-        document.addEventListener('keydown', handleKey);
 
-        // Force an initial resize to ensure the terminal picks up its container dimensions
         setTimeout(() => {
           if (fitAddonRef.current && termRef.current) {
             try {
@@ -155,14 +145,12 @@ export function XtermTerminal({
         return () => {
           containerRef.current?.removeEventListener('focus', handleContainerFocus);
           containerRef.current?.removeEventListener('click', handleContainerFocus);
-          document.removeEventListener('keydown', handleKey);
         };
       }
     }
 
     init();
 
-    // Resize observer
     const ro = new ResizeObserver(() => {
       if (fitAddonRef.current && termRef.current) {
         try {
@@ -192,7 +180,6 @@ export function XtermTerminal({
     }
   }, [resolvedTheme, getThemeConfig]);
 
-  // Also listen for window resize
   useEffect(() => {
     const handleResize = () => {
       if (fitAddonRef.current && termRef.current) {
@@ -227,7 +214,7 @@ export function XtermTerminal({
     <div
       ref={containerRef}
       className="absolute inset-0 focus:outline-none xterm-container flex"
-      style={{ padding: 0 }}
+      style={{ padding: "4px 0 0 8px" }}
       onClick={() => termRef.current?.focus()}
     />
   );

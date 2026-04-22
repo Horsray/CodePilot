@@ -209,6 +209,19 @@ export type TimelineEvent =
   | { type: 'text'; content: string; timestamp: number }
   | { type: 'tool'; toolCallId: string; timestamp: number };
 
+// 中文注释：功能名称「子Agent状态追踪」，用法是在主Agent时间线中嵌套显示子Agent的执行状态、进度和最终报告。
+export interface SubAgentState {
+  id: string;
+  name: string;
+  displayName: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  report?: string;
+  steps?: TimelineStep[];
+  error?: string;
+}
+
 export interface TimelineStep {
   id: string;
   index: number;
@@ -237,6 +250,8 @@ export interface TimelineStep {
   requestedAgent?: string;
   // 中文注释：当前步骤使用的多模型配置名称，用法是在时间线中显示来自哪套 profile。
   orchestrationProfileName?: string;
+  // 中文注释：子Agent状态列表，用法是在时间线步骤中嵌套显示子Agent的执行过程和结果。
+  subAgents?: SubAgentState[];
 }
 
 // Structured message content blocks (stored as JSON in messages.content)
@@ -297,6 +312,7 @@ export interface ProviderModelGroup {
   provider_id: string;       // provider DB id, or 'env' for environment variables
   provider_name: string;
   provider_type: string;
+  protocol?: string;
   /** True if this provider only supports Claude Code SDK wire protocol, not standard Messages API */
   sdkProxyOnly?: boolean;
   models: Array<{
@@ -601,6 +617,9 @@ export type SSEEventType =
   | 'rate_limit'         // SDK 0.2.111 subscription rate-limit telemetry
   | 'context_usage'      // SDK 0.2.111 post-turn context usage snapshot
   | 'terminal_mirror'    // AI Bash tool command/output mirror to terminal panel
+  | 'subagent_start'     // 子Agent开始执行
+  | 'subagent_progress'  // 子Agent执行中进度更新
+  | 'subagent_complete'  // 子Agent执行完成
   | 'done';              // stream complete
 
 export interface SSEEvent {
@@ -905,17 +924,24 @@ export interface FileAttachment {
 
 // Check if a MIME type is an image
 export function isImageFile(type: string): boolean {
-  return type.startsWith('image/');
+  if (!type) return false;
+  if (type.startsWith('image/')) return true;
+  // Fallback for missing MIME types: check common extensions
+  const ext = type.split('.').pop()?.toLowerCase();
+  return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic'].includes(ext || '');
 }
 
 // Check if a MIME type is a video
 export function isVideoFile(type: string): boolean {
-  return type.startsWith('video/');
+  if (!type) return false;
+  if (type.startsWith('video/')) return true;
+  const ext = type.split('.').pop()?.toLowerCase();
+  return ['mp4', 'webm', 'mov', 'ogg'].includes(ext || '');
 }
 
 // Check if a MIME type is any visual media (image or video)
 export function isMediaFile(type: string): boolean {
-  return type.startsWith('image/') || type.startsWith('video/') || type.startsWith('audio/');
+  return isImageFile(type) || isVideoFile(type) || type.startsWith('audio/');
 }
 
 // Format bytes into human-readable size
@@ -1093,6 +1119,22 @@ export interface ToolResultInfo {
 
 export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped';
 
+/**
+ * Sub-agent tracking info for nested timeline display
+ */
+export interface SubAgentInfo {
+  id: string;
+  name: string;
+  displayName: string;
+  prompt: string;
+  status: 'running' | 'completed' | 'error';
+  report?: string;
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+  progress?: string; // current activity
+}
+
 export interface SessionStreamSnapshot {
   sessionId: string;
   phase: StreamPhase;
@@ -1115,6 +1157,8 @@ export interface SessionStreamSnapshot {
   toolFiles?: string[];
   /** Final message content built at stream completion for ChatView to consume */
   finalMessageContent: string | null;
+  /** Active sub-agents being tracked for nested timeline display */
+  subAgents?: SubAgentInfo[];
   /**
    * Optional terminal reason emitted by SDK 0.2.111 on SDKResultMessage.
    * Used by ChatView to render a contextual end-of-turn chip (Phase 1 of

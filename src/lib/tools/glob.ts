@@ -23,6 +23,18 @@ export function createGlobTool(ctx: ToolContext) {
         : ctx.workingDirectory;
 
       try {
+        // Try ripgrep first since it handles gitignore and globs perfectly
+        try {
+          const rgResult = execSync(
+            `rg --files -g '${pattern}' 2>/dev/null | head -200 | sort`,
+            { cwd, encoding: 'utf-8', timeout: 10_000 },
+          );
+          const files = rgResult.trim().split('\n').filter(Boolean);
+          if (files.length > 0) return files.join('\n');
+        } catch {
+          // rg failed or returned empty, fallback to find
+        }
+
         // Use find + glob via bash for portability, with reasonable limits
         // Exclude common heavy directories
         const excludes = 'node_modules .git .next dist build coverage .cache __pycache__'
@@ -30,8 +42,13 @@ export function createGlobTool(ctx: ToolContext) {
           .map(d => `-not -path "*/${d}/*"`)
           .join(' ');
 
+        // If pattern contains '/', use -path with wildcards, else use -name
+        const isPath = pattern.includes('/');
+        const matchStr = isPath ? `*/${pattern.replace(/^\//, '').replace(/\*\*\//g, '')}` : pattern;
+        const flag = isPath ? '-path' : '-name';
+
         const result = execSync(
-          `find . -type f -name '${pattern.replace(/\*\*\//g, '')}' ${excludes} 2>/dev/null | head -200 | sort`,
+          `find . -type f ${flag} '${matchStr}' ${excludes} 2>/dev/null | head -200 | sort`,
           { cwd, encoding: 'utf-8', timeout: 10_000 },
         );
 

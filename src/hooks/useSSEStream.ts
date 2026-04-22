@@ -51,6 +51,10 @@ export interface SSECallbacks {
   onToolFiles?: (files: string[]) => void;
   onSkillNudge?: (data: SkillNudgeData) => void;
   onContextCompressed?: (data: { message: string; messagesCompressed: number; tokensSaved: number }) => void;
+  /** 中文注释：功能名称「子Agent状态回调」，用法是在主Agent流中接收子Agent的生命周期事件。 */
+  onSubAgentStart?: (data: { id: string; name: string; displayName: string; prompt: string }) => void;
+  onSubAgentProgress?: (data: { id: string; status: string; detail?: string }) => void;
+  onSubAgentComplete?: (data: { id: string; report: string; error?: string }) => void;
   onInitMeta?: (meta: {
     tools?: unknown;
     slash_commands?: unknown;
@@ -383,6 +387,30 @@ function handleSSEEvent(
       return next;
     }
 
+    case 'subagent_start': {
+      try {
+        const data = JSON.parse(event.data);
+        callbacks.onSubAgentStart?.(data);
+      } catch { /* skip malformed */ }
+      return accumulated;
+    }
+
+    case 'subagent_progress': {
+      try {
+        const data = JSON.parse(event.data);
+        callbacks.onSubAgentProgress?.(data);
+      } catch { /* skip malformed */ }
+      return accumulated;
+    }
+
+    case 'subagent_complete': {
+      try {
+        const data = JSON.parse(event.data);
+        callbacks.onSubAgentComplete?.(data);
+      } catch { /* skip malformed */ }
+      return accumulated;
+    }
+
     case 'terminal_mirror': {
       // 中文注释：功能名称「终端镜像事件」，用法是将 AI Bash 工具执行的命令和输出
       // 镜像到终端面板，通过 window 事件通知终端组件实时显示。
@@ -478,10 +506,14 @@ export function useSSEStream() {
         onTaskUpdate: (s) => callbacksRef.current?.onTaskUpdate(s),
         onRewindPoint: (id) => callbacksRef.current?.onRewindPoint(id),
         onThinking: (d) => callbacksRef.current?.onThinking?.(d),
+        onSubAgentStart: (d) => callbacksRef.current?.onSubAgentStart?.(d),
+        onSubAgentProgress: (d) => callbacksRef.current?.onSubAgentProgress?.(d),
+        onSubAgentComplete: (d) => callbacksRef.current?.onSubAgentComplete?.(d),
         onKeepAlive: () => callbacksRef.current?.onKeepAlive(),
         onError: (a) => callbacksRef.current?.onError(a),
         onReferencedContexts: (f) => callbacksRef.current?.onReferencedContexts?.(f),
         onSkillNudge: (d) => callbacksRef.current?.onSkillNudge?.(d),
+        onToolFiles: (f) => callbacksRef.current?.onToolFiles?.(f),
         onContextCompressed: (d) => callbacksRef.current?.onContextCompressed?.(d),
         onInitMeta: (m) => callbacksRef.current?.onInitMeta?.(m),
         onRateLimit: (info) => callbacksRef.current?.onRateLimit?.(info),

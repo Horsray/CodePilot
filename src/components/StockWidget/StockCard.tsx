@@ -1,25 +1,49 @@
 /**
  * 股票卡片组件
- * 展示单只股票的实时行情信息
+ * 中文注释：功能名称「股票卡片」，用法是展示单只股票的实时行情信息。
  */
 import React from 'react';
-import { Stock, StockTrend, getStockTrend } from '@/types/stock';
-import { formatPrice, formatChange, formatVolume, formatChangePercent } from '@/utils/formatters';
+import { Stock } from '@/types/stock';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
+// 中文注释：功能名称「涨跌趋势判断」，用法是根据股票涨跌幅判断涨跌状态。
+function getTrend(stock: Stock): 'up' | 'down' | 'flat' {
+  if (stock.changePercent > 0) return 'up';
+  if (stock.changePercent < 0) return 'down';
+  return 'flat';
+}
+
+// 中文注释：功能名称「价格格式化」，用法是将数字格式化为价格字符串。
+function formatPrice(val: number): string {
+  return val.toFixed(2);
+}
+
+// 中文注释：功能名称「涨跌格式化」，用法是将涨跌额格式化为带符号的字符串。
+function formatChange(val: number): string {
+  const sign = val > 0 ? '+' : '';
+  return `${sign}${val.toFixed(2)}`;
+}
+
+// 中文注释：功能名称「成交量格式化」，用法是将成交量格式化为易读的字符串。
+function formatVolume(val: number): string {
+  if (val >= 100000000) return `${(val / 100000000).toFixed(2)}亿`;
+  if (val >= 10000) return `${(val / 10000).toFixed(2)}万`;
+  return val.toLocaleString();
+}
+
+// 中文注释：功能名称「涨跌幅格式化」，用法是将涨跌幅格式化为百分比字符串。
+function formatChangePercent(val: number): string {
+  const sign = val > 0 ? '+' : '';
+  return `${sign}${val.toFixed(2)}%`;
+}
+
 interface StockCardProps {
-  /** 股票数据 */
   stock: Stock;
-  /** 是否可删除 */
   removable?: boolean;
-  /** 删除回调 */
   onRemove?: (code: string) => void;
-  /** 是否显示详细数据 */
   showDetails?: boolean;
-  /** 点击回调 */
   onClick?: (stock: Stock) => void;
-  /** 自定义类名 */
   className?: string;
 }
 
@@ -31,9 +55,8 @@ export function StockCard({
   onClick,
   className
 }: StockCardProps) {
-  const trend = getStockTrend(stock);
+  const trend = getTrend(stock);
   
-  // 根据涨跌状态获取样式
   const trendColors = {
     up: { text: 'text-green-500', bg: 'bg-green-500/10', border: 'border-green-500/20' },
     down: { text: 'text-red-500', bg: 'bg-red-500/10', border: 'border-red-500/20' },
@@ -52,7 +75,6 @@ export function StockCard({
       )}
       onClick={() => onClick?.(stock)}
     >
-      {/* 删除按钮 */}
       {removable && onRemove && (
         <Button
           variant="ghost"
@@ -67,7 +89,6 @@ export function StockCard({
         </Button>
       )}
 
-      {/* 股票基本信息 */}
       <div className="flex items-start justify-between mb-3">
         <div>
           <h3 className="font-semibold text-lg">{stock.name}</h3>
@@ -81,7 +102,6 @@ export function StockCard({
         </div>
       </div>
 
-      {/* 涨跌指示条 */}
       <div className="h-1 rounded-full overflow-hidden mb-3 bg-muted">
         <div 
           className={cn(
@@ -94,24 +114,23 @@ export function StockCard({
         />
       </div>
 
-      {/* 详细数据 */}
       {showDetails && (
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="flex justify-between">
             <span className="text-muted-foreground">今开</span>
-            <span>{formatPrice(stock.open || 0)}</span>
+            <span>{formatPrice(stock.open ?? 0)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">昨收</span>
-            <span>{formatPrice(stock.previousClose || 0)}</span>
+            <span>{formatPrice(stock.close ?? 0)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">最高</span>
-            <span>{formatPrice(stock.high || 0)}</span>
+            <span>{formatPrice(stock.high ?? 0)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">最低</span>
-            <span>{formatPrice(stock.low || 0)}</span>
+            <span>{formatPrice(stock.low ?? 0)}</span>
           </div>
           <div className="flex justify-between col-span-2">
             <span className="text-muted-foreground">成交量</span>
@@ -119,26 +138,10 @@ export function StockCard({
           </div>
         </div>
       )}
-
-      {/* 市场标签 */}
-      {stock.market && (
-        <div className="absolute bottom-2 left-2">
-          <span className={cn(
-            "text-[10px] px-1.5 py-0.5 rounded",
-            stock.market === 'sh' && "bg-blue-500/20 text-blue-500",
-            stock.market === 'sz' && "bg-orange-500/20 text-orange-500",
-            stock.market === 'hk' && "bg-purple-500/20 text-purple-500",
-            stock.market === 'us' && "bg-cyan-500/20 text-cyan-500"
-          )}>
-            {stock.market.toUpperCase()}
-          </span>
-        </div>
-      )}
     </div>
   );
 }
 
-// X 图标组件
 function XIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>

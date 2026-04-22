@@ -387,11 +387,12 @@ export const highlightCode = (
 
 // Line number styles using CSS counters
 const LINE_NUMBER_CLASSES = cn(
-  "block",
+  "block !relative !pl-10",
+  "before:absolute before:left-0",
   "before:content-[counter(line)]",
   "before:inline-block",
   "before:[counter-increment:line]",
-  "before:w-8",
+  "before:w-6",
   "before:mr-4",
   "before:text-right",
   "before:text-muted-foreground/50",
@@ -426,7 +427,7 @@ const CodeBlockBody = memo(
     return (
       <pre
         className={cn(
-          "m-0 p-4 text-sm",
+          "m-0 p-4 text-sm whitespace-pre-wrap break-words",
           isTerminal
             ? "!bg-[var(--terminal-bg)] !text-[var(--terminal-foreground)]"
             : "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]",

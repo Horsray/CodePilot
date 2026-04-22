@@ -796,9 +796,9 @@ function buildResolution(
 
   // Handle Multi-Head Router Logic
   if (protocol === 'multi_head') {
-    // If the UI requested the placeholder 'orchestrator', or if the model doesn't look like a valid mapping,
-    // fallback to the default (Orchestrator) model configured in settings.
-    if (!model || model === 'orchestrator' || !model.includes(':')) {
+    // Since the UI now sends the actual mapped string (e.g. "providerId:modelId")
+    // or falls back to 'orchestrator'/'default' if nothing was selected.
+    if (!model || model === 'orchestrator') {
       model = roleModels.default;
     }
     

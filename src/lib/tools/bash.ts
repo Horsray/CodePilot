@@ -1,14 +1,22 @@
 /**
- * tools/bash.ts — Execute shell commands with terminal panel mirroring.
+ * tools/bash.ts — 通过 PTY 会话执行 shell 命令，支持终端面板镜像显示。
+ * 中文注释：功能名称「Bash 工具」，用法是执行 shell 命令并返回输出，
+ * 同时通过 SSE 将命令和输出镜像到终端面板，让用户可以实时看到 AI 执行的命令。
+ * 优先使用 PTY 会话执行（与用户终端共享同一个 shell），回退到 spawn 独立执行。
  */
 
 import { tool } from 'ai';
 import { z } from 'zod';
 import { spawn } from 'child_process';
+import { executeCommandInPtySession, ensurePtySession, ensurePtyOutputBuffered } from '@/lib/pty-manager';
 import type { ToolContext } from './index';
 
 const MAX_OUTPUT_BYTES = 1024 * 1024; // 1MB
 const DEFAULT_TIMEOUT_MS = 120_000;   // 2 minutes
+
+// 中文注释：功能名称「AI 专用 PTY 会话 ID」，用法是为 AI Bash 工具创建专用的 PTY 会话，
+// 与用户手动操作的终端会话区分开来，避免干扰用户输入。
+const AI_PTY_SESSION_ID = '__codepilot_ai_bash__';
 
 export function createBashTool(ctx: ToolContext) {
   return tool({
@@ -22,13 +30,13 @@ export function createBashTool(ctx: ToolContext) {
       timeout: z.number().int().positive().optional()
         .describe('Timeout in milliseconds (default 120000)'),
     }),
-    // 中文注释：功能名称「Bash 工具直连执行+终端镜像」，用法是直接通过 bash -c 执行命令，
+    // 中文注释：功能名称「Bash 工具执行」，用法是优先通过 PTY 会话执行命令，
     // 同时通过 SSE 将命令和输出镜像到终端面板，让用户可以实时看到 AI 执行的命令。
+    // PTY 执行失败时回退到 spawn 独立执行。
     execute: async ({ command, timeout }, { abortSignal }) => {
       const timeoutMs = timeout ?? DEFAULT_TIMEOUT_MS;
 
       // 通过 SSE 将命令发送到终端面板显示
-      // 中文注释：功能名称「终端命令镜像」，用法是将 AI 执行的命令通过 SSE 推送到前端终端面板。
       if (ctx.emitSSE) {
         ctx.emitSSE({
           type: 'terminal_mirror',
@@ -40,6 +48,38 @@ export function createBashTool(ctx: ToolContext) {
         });
       }
 
+      // 中文注释：优先通过 PTY 会话执行命令，这样命令和输出会自动出现在终端面板中。
+      // PTY 会话与用户终端共享同一个 shell 进程，保证环境一致性。
+      try {
+        ensurePtySession(AI_PTY_SESSION_ID, ctx.workingDirectory);
+        ensurePtyOutputBuffered(AI_PTY_SESSION_ID);
+
+        const output = await executeCommandInPtySession(
+          AI_PTY_SESSION_ID,
+          ctx.workingDirectory,
+          command,
+          timeoutMs,
+          abortSignal,
+        );
+
+        // 通过 SSE 将退出码发送到终端面板
+        if (ctx.emitSSE) {
+          ctx.emitSSE({
+            type: 'terminal_mirror',
+            data: JSON.stringify({
+              action: 'exit',
+              exitCode: 0,
+            }),
+          });
+        }
+
+        return output;
+      } catch (ptyError) {
+        // 中文注释：PTY 执行失败时回退到 spawn 独立执行，保证功能可用性。
+        console.warn('[bash-tool] PTY execution failed, falling back to spawn:', ptyError);
+      }
+
+      // 回退路径：使用 child_process.spawn 独立执行
       return new Promise<string>((resolve) => {
         const chunks: Buffer[] = [];
         let totalBytes = 0;
@@ -72,8 +112,7 @@ export function createBashTool(ctx: ToolContext) {
               type: 'tool_output',
               data: chunkStr,
             });
-            // 同时将输出镜像到终端面板
-            // 中文注释：功能名称「终端输出镜像」，用法是将命令输出实时推送到终端面板。
+            // 中文注释：同时将输出镜像到终端面板
             ctx.emitSSE({
               type: 'terminal_mirror',
               data: JSON.stringify({
@@ -117,8 +156,7 @@ export function createBashTool(ctx: ToolContext) {
             output += `\n\n[Exit code: ${code}]`;
           }
 
-          // 通过 SSE 将退出码发送到终端面板
-          // 中文注释：功能名称「终端退出码镜像」，用法是命令执行完毕后推送退出码到终端面板。
+          // 中文注释：通过 SSE 将退出码发送到终端面板
           if (ctx.emitSSE) {
             ctx.emitSSE({
               type: 'terminal_mirror',

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup } from '@/types';
+import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup, SubAgentInfo } from '@/types';
 import { MessageList } from './MessageList';
 import { TerminalReasonChip } from './TerminalReasonChip';
 import { RateLimitBanner } from './RateLimitBanner';
@@ -234,6 +234,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const pendingPermission = streamSnapshot?.pendingPermission ?? null;
   const permissionResolved = streamSnapshot?.permissionResolved ?? null;
   const rewindPoints = getRewindPoints(sessionId);
+  const subAgents = streamSnapshot?.subAgents ?? [];
   const [skillNudge, setSkillNudge] = useState<{
     message: string;
     step: number;
@@ -958,6 +959,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         hasSummary={hasSummary}
         summaryBoundaryRowid={summaryBoundaryRowid}
         isContextCompressing={isContextCompressing}
+        subAgents={subAgents}
       />
       {/* End-of-turn terminal reason chip (only shown when stream is not active) */}
       {!isStreaming && (

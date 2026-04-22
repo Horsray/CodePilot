@@ -9,6 +9,9 @@ export type PanelContent = "files" | "tasks";
 export type PreviewViewMode = "source" | "rendered";
 export type BottomPanelTab = "console" | "terminal";
 export type WorkspaceTabKind = "preview" | "browser" | "terminal";
+export interface OpenBrowserTabOptions {
+  newTab?: boolean;
+}
 
 export interface WorkspaceTab {
   id: string;
@@ -44,7 +47,7 @@ export interface PanelContextValue {
   activeWorkspaceTabId: string | null;
   setActiveWorkspaceTabId: (id: string | null) => void;
   openPreviewTab: (path: string) => void;
-  openBrowserTab: (url: string, title?: string) => void;
+  openBrowserTab: (url: string, title?: string, options?: OpenBrowserTabOptions) => void;
   openTerminalTab: (terminalId?: string, title?: string) => void;
   updateWorkspaceTab: (id: string, updates: Partial<WorkspaceTab>) => void;
   closeWorkspaceTab: (id: string) => void;

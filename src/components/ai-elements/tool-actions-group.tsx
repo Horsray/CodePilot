@@ -13,12 +13,15 @@ import {
   XCircle,
   Brain,
   Lightning,
+  Robot,
   Eyeglasses,
   ArrowSquareOut,
   Code,
   FilePlus,
   CaretDown,
-  Play
+  Play,
+  ListChecks,
+  ShieldCheck
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { usePanel } from '@/hooks/usePanel';
@@ -41,6 +44,17 @@ import { mermaid } from '@streamdown/mermaid';
 const thinkingPlugins = { cjk, math, mermaid };
 
 import type { MediaBlock, TimelineStep } from '@/types';
+import { AgentTimeline } from '../chat/AgentTimeline';
+import {
+  createTimelineAccumulator,
+  appendTimelineReasoning,
+  appendTimelineOutput,
+  appendTimelineToolUse,
+  appendTimelineToolResult,
+  completeTimelineStep,
+  cloneTimelineSteps,
+  finalizeTimelineSteps
+} from '@/lib/agent-timeline';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,6 +115,155 @@ function truncatePath(path: string, maxLen = 50): string {
   return '...' + path.slice(path.length - maxLen + 3);
 }
 
+export const AGENT_META: Record<string, { icon: React.ElementType, color: string, bg: string, label: string }> = {
+  search: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '搜索者 (Search)' },
+  explorer: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者 (Explorer)' },
+  planner: { icon: ListChecks, color: 'text-purple-500', bg: 'bg-purple-500/10', label: '规划者 (Planner)' },
+  executor: { icon: Wrench, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '执行者 (Executor)' },
+  verifier: { icon: ShieldCheck, color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: '验证者 (Verifier)' },
+  analyst: { icon: Brain, color: 'text-indigo-500', bg: 'bg-indigo-500/10', label: '分析者 (Analyst)' },
+  general: { icon: Robot, color: 'text-slate-500', bg: 'bg-slate-500/10', label: '通用助手 (General)' }
+};
+
+function TeamAgentTimelines({ outputText, isRunning }: { outputText: string, isRunning: boolean }) {
+  // 1. Check if outputText has agent outputs (Team runner format)
+  // We determine if this is a team pipeline by looking for JSON with an 'agent' field.
+  const hasTeamFormat = React.useMemo(() => {
+    if (!outputText) return false;
+    const lines = outputText.split('\n').filter(Boolean);
+    // Scan all lines to be sure, since first few lines might just be text before JSON starts
+    return lines.some(line => {
+      try {
+        const d = JSON.parse(line);
+        return Boolean(d.agent);
+      } catch {
+        return false;
+      }
+    });
+  }, [outputText]);
+
+  if (!hasTeamFormat) {
+    // If it's just raw text output from the agent, render it directly as text
+    return (
+      <div className="mt-2 ml-3 border-l-2 border-primary/20 pl-3 py-1 bg-background/30 rounded-r-md">
+        <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[300px] overflow-auto">
+          {outputText}
+        </pre>
+      </div>
+    );
+  }
+
+  const agentStates = React.useMemo(() => {
+    const states = new Map<string, { model?: string, state: ReturnType<typeof createTimelineAccumulator> }>();
+    if (!outputText) return states;
+
+    const lines = outputText.split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        const data = JSON.parse(line);
+        if (!data.agent) continue;
+        
+        let entry = states.get(data.agent);
+        if (!entry) {
+          entry = { state: createTimelineAccumulator(Date.now()) };
+          states.set(data.agent, entry);
+        }
+        
+        if (data.event === 'start') {
+          if (data.model) entry.model = data.model;
+        } else if (data.event === 'done') {
+          completeTimelineStep(entry.state, undefined, Date.now());
+        } else if (data.payload) {
+          const event = data.payload;
+          const now = Date.now();
+          if (event.type === 'step_status') {
+            // we could sync status here, but the standard events are enough
+          } else if (event.type === 'reasoning' || event.type === 'thinking') {
+            appendTimelineReasoning(entry.state, event.data || '', now);
+          } else if (event.type === 'text') {
+            appendTimelineOutput(entry.state, event.data || '', now);
+          } else if (event.type === 'tool_use') {
+            const t = JSON.parse(event.data);
+            appendTimelineToolUse(entry.state, { id: t.id, name: t.name, input: t.input }, now);
+          } else if (event.type === 'tool_result') {
+            const r = JSON.parse(event.data);
+            appendTimelineToolResult(entry.state, { tool_use_id: r.tool_use_id, content: r.content, is_error: r.is_error }, now);
+          }
+        }
+      } catch {
+        // Not a JSON line or invalid
+      }
+    }
+    return states;
+  }, [outputText]);
+
+  if (agentStates.size === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-2 mt-2 mb-2 ml-4 relative">
+      {/* Visual connecting line for the pipeline */}
+      <div className="absolute left-[13px] top-4 bottom-4 w-px bg-border/40 -z-10" />
+
+      {Array.from(agentStates.entries()).map(([agentId, entry]) => {
+        const steps = cloneTimelineSteps(entry.state);
+        // Force finalize if not running overall
+        if (!isRunning && steps.length > 0) {
+          const last = steps[steps.length - 1];
+          if (last && last.status === 'running') {
+            last.status = 'completed';
+          }
+        }
+        
+        const lastStep = steps[steps.length - 1];
+        const isAgentRunning = isRunning && (!lastStep || (lastStep.status !== 'completed' && lastStep.status !== 'failed'));
+        const hasError = steps.some(s => s.status === 'failed' || s.error);
+        
+        const meta = AGENT_META[agentId.toLowerCase()] || { icon: Brain, color: 'text-muted-foreground', bg: 'bg-muted/30', label: `智能体 (${agentId})` };
+        const IconComponent = meta.icon;
+
+        // Force fixed height container for running agents to prevent jumping when content updates
+        // CRITICAL FIX 5: Use a fixed height with scroll for running agents, but let it grow naturally
+        // when completed so it doesn't jump.
+        return (
+          <div key={agentId} className={cn("border rounded-xl overflow-hidden shadow-sm z-10 bg-card my-1 transition-all duration-300", `border-${meta.color.split('-')[1]}-500/20`)}>
+            <div className={cn("px-3 py-2 border-b flex items-center justify-between", meta.bg, `border-${meta.color.split('-')[1]}-500/20`)}>
+              <div className="flex items-center gap-2">
+                <IconComponent size={14} className={cn(meta.color, isAgentRunning && "animate-pulse")} />
+                <span className="font-medium text-xs tracking-wide text-foreground/90">
+                  {meta.label} 
+                  <span className={cn("ml-2", isAgentRunning ? "text-blue-500" : (hasError ? "text-red-500" : "text-emerald-500"))}>
+                    {isAgentRunning ? '执行中...' : (hasError ? '执行失败' : '执行完毕')}
+                  </span>
+                </span>
+              </div>
+              {entry.model && (
+                <div className="text-[10px] font-mono bg-background/50 border border-border/50 px-1.5 py-0.5 rounded text-muted-foreground">
+                  {entry.model.split('/').pop()}
+                </div>
+              )}
+            </div>
+            
+            <AnimatePresence initial={false}>
+              {/* Only conditionally render AnimatePresence to keep it open when done */}
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                className="overflow-hidden"
+              >
+                <div className={cn("p-2 bg-muted/10 [&_.text-sm]:!text-xs", isAgentRunning && "h-[250px] overflow-y-auto")}>
+                  <AgentTimeline steps={steps} compact={true} />
+                </div>
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => n.toLowerCase() === 'team' || n.toLowerCase().includes('__team'),
@@ -115,71 +278,9 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     renderDetail: (tool, streamingOutput) => {
       const isRunning = tool.result === undefined;
       const outputText = isRunning ? streamingOutput : tool.result;
-      if (!outputText) return null;
-
-      const lines = outputText.split('\n').filter(Boolean);
-      const visible = lines.slice(-16);
-      const statusMap = new Map<string, { status: 'running' | 'success' | 'error'; last?: string }>();
-
-      for (const line of lines) {
-        const m = line.match(/^\[team:([a-z0-9_-]+)\]\s+(.*)$/i);
-        if (!m) continue;
-        const agentId = m[1];
-        const rest = m[2];
-        const cur = statusMap.get(agentId) || { status: 'running' as const };
-        if (rest === 'start') cur.status = 'running';
-        else if (rest === 'done') cur.status = 'success';
-        else if (rest.startsWith('[x]')) cur.status = 'error';
-        cur.last = rest;
-        statusMap.set(agentId, cur);
-      }
-
-      const order = ['search', 'planner', 'executor', 'verifier'];
-
-      return (
-        <div className="px-3 py-3 border-l-2 ml-3 border-blue-500/20 space-y-3">
-          <div className="grid grid-cols-1 gap-1">
-            {order.filter(id => statusMap.has(id)).map((id) => {
-              const st = statusMap.get(id)!;
-              return (
-                <div key={id} className="flex items-center gap-2 text-[12px]">
-                  {st.status === 'running' && <SpinnerGap size={12} className="animate-spin text-primary" />}
-                  {st.status === 'success' && <CheckCircle size={12} className="text-emerald-500" />}
-                  {st.status === 'error' && <XCircle size={12} className="text-red-500" />}
-                  <span className="font-mono text-muted-foreground/70 w-[80px]">{id}</span>
-                  <span className="font-mono text-muted-foreground/60 truncate">
-                    {(st.last || '').replace(/^>\s*/, '').replace(/^\[[+x]\]\s*/, '')}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-
-          {isRunning ? (
-            <div className="mt-1 ml-2 border-l-2 border-border/30 pl-2 space-y-0.5">
-              {visible.slice(-8).map((line, i) => (
-                <div key={i} className="text-[11px] font-mono truncate text-muted-foreground/60">
-                  {line}
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          {!isRunning && tool.result ? (
-            <div>
-              <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
-                {tool.isError ? '执行失败 (Error)' : '执行结果 (Result)'}
-              </h5>
-              <pre className={cn(
-                "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[420px] overflow-auto",
-                tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
-              )}>
-                {tool.result.length > 12000 ? tool.result.slice(0, 12000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      );
+      // Make sure we pass output text even if it's just the final empty string to trigger re-renders properly
+      if (outputText === undefined) return null;
+      return <TeamAgentTimelines outputText={outputText} isRunning={isRunning} />;
     },
   },
   {
@@ -403,100 +504,30 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
       const inp = input as Record<string, unknown> | undefined;
       return (n.toLowerCase() === 'agent' || n.toLowerCase().includes('__agent')) && inp?.agent !== 'explore' && inp?.subagent_type !== 'explore';
     },
-    icon: Lightning,
+    icon: Robot, // Changed from Lightning to Robot for consistency with SubAgentTimeline
     label: '智能体',
     getSummary: (input) => {
       const inp = input as Record<string, unknown> | undefined;
       const agentType = (inp?.agent || inp?.subagent_type || 'general') as string;
       const prompt = (inp?.prompt || inp?.description || inp?.query || '') as string;
       const short = prompt.length > 50 ? prompt.slice(0, 47) + '...' : prompt;
-      return `${agentType}: ${short}`;
+      return `${AGENT_META[agentType.toLowerCase()]?.label || agentType}: ${short}`;
     },
     renderDetail: (tool, streamingOutput) => {
       const isRunning = tool.result === undefined;
       if (!isRunning) {
-        return (
-          <div className="px-3 py-3 border-l-2 ml-3 border-purple-500/20 bg-background/50 rounded-r-md mt-1">
-            {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
-              <div className="mb-3">
-                <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">任务详情 (Input)</h5>
-                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[200px] overflow-auto">
-                  {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
-                </pre>
-              </div>
-            ) : null}
-            {tool.result ? (
-              <div>
-                <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
-                  {tool.isError ? '执行失败 (Error)' : '执行结果 (Result)'}
-                </h5>
-                <pre className={cn(
-                  "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
-                  tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
-                )}>
-                  {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
-                </pre>
-              </div>
-            ) : null}
-          </div>
-        );
+        // When finished, return null to keep it as a single line in the main timeline.
+        // The actual details are shown in the SubAgentTimeline at the bottom.
+        return null;
       }
 
       const outputText = streamingOutput;
       if (!outputText) return null;
 
-      // Parse progress lines into structured items
-      const lines = (outputText || '').split('\n').filter(Boolean);
-      // Show more lines for sub-agent transparency
-      const visible = lines.slice(-15);
-
+      // Show minimal text during streaming
       return (
-        <div className="mt-2 ml-3 border-l-2 border-purple-500/30 pl-3 py-1 space-y-1 bg-background/30 rounded-r-md">
-          {visible.map((line, i) => {
-            const isActive = line.startsWith('>');
-            const isDone = line.startsWith('[+]');
-            const isError = line.startsWith('[x]');
-            const isHeader = line.startsWith('[subagent:');
-            
-            // Highlight tool calls from the sub-agent
-            if (isActive) {
-              return (
-                <div key={i} className="text-[11px] font-mono truncate text-purple-500/70 bg-purple-500/5 px-1 py-0.5 rounded flex items-center">
-                  <SpinnerGap size={10} className="inline-block mr-1.5 animate-spin shrink-0" />
-                  {line.replace(/^>\s*/, '')}
-                </div>
-              );
-            }
-            if (isDone) {
-              return (
-                <div key={i} className="text-[11px] font-mono truncate text-emerald-500/70 flex items-center">
-                  <CheckCircle size={10} className="inline-block mr-1.5 shrink-0" />
-                  {line.replace(/^\[\+\]\s*/, '')}
-                </div>
-              );
-            }
-            if (isError) {
-              return (
-                <div key={i} className="text-[11px] font-mono truncate text-red-500/70 flex items-center">
-                  <XCircle size={10} className="inline-block mr-1.5 shrink-0" />
-                  {line.replace(/^\[x\]\s*/, '')}
-                </div>
-              );
-            }
-            
-            // Regular thought process or summary
-            return (
-              <div
-                key={i}
-                className={cn(
-                  "text-[11px] font-mono whitespace-pre-wrap break-all",
-                  isHeader ? "text-muted-foreground/70 font-bold mb-2" : "text-muted-foreground/60"
-                )}
-              >
-                {line.replace(/^\[subagent:\w+\]\s*/, '')}
-              </div>
-            );
-          })}
+        <div className="mt-2 ml-3 pl-3 py-1 space-y-1 text-[11px] text-muted-foreground/60 italic">
+          智能体正在后台执行任务，请查看底部面板...
         </div>
       );
     },

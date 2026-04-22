@@ -209,9 +209,21 @@ function wrapWithPermissions(
 
         // Execute the original tool (with possibly updated input from permission approval)
         if (original.execute) {
-          const output = await original.execute(input, execOptions);
-          emitEvent('tool:post-use', { sessionId: ctx.sessionId, toolName: name });
-          return output;
+          try {
+            const output = await original.execute(input, execOptions);
+            emitEvent('tool:post-use', { sessionId: ctx.sessionId, toolName: name });
+            // Ensure we always return a valid value, never null/undefined
+            if (output == null) {
+              console.warn(`[permission-wrapper] Tool ${name} returned null/undefined, converting to empty string`);
+              return '';
+            }
+            return output;
+          } catch (err) {
+            // Tool execution failed — return error message instead of throwing
+            // This prevents the entire agent loop from crashing
+            console.error(`[permission-wrapper] Tool ${name} execution failed:`, err);
+            return `Tool execution error: ${err instanceof Error ? err.message : String(err)}`;
+          }
         }
         return '(tool has no execute function)';
       },

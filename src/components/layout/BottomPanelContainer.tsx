@@ -64,7 +64,7 @@ export function BottomPanelContainer() {
     },
     {
       id: "terminal",
-      label: "Terminal",
+      label: t("bottomPanel.terminal"),
       icon: <TerminalWindow size={14} />,
     },
   ];

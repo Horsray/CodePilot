@@ -99,6 +99,8 @@ export {
   TreeStructure,
   UploadSimple,
   UserCircle,
+  Users,
+  UsersThree,
   Warning,
   WarningCircle,
   WifiHigh,

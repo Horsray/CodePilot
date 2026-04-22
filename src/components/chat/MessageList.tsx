@@ -17,6 +17,7 @@ import { useStickToBottomContext } from "use-stick-to-bottom";
 import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
 import { CodePilotLogo } from './CodePilotLogo';
+import { SubAgentTimeline } from './SubAgentTimeline';
 import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, RARITY_BG_GRADIENT, type Species, type Rarity } from '@/lib/buddy';
 
 /**
@@ -136,6 +137,20 @@ interface ToolResultInfo {
   is_error?: boolean;
 }
 
+/** Sub-agent tracking info for nested timeline display */
+interface SubAgentInfo {
+  id: string;
+  name: string;
+  displayName: string;
+  prompt: string;
+  status: 'running' | 'completed' | 'error';
+  report?: string;
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+  progress?: string;
+}
+
 /** Rewind points contain SDK UUIDs (not local message IDs) */
 interface RewindPoint {
   userMessageId: string; // SDK UUID
@@ -167,6 +182,8 @@ interface MessageListProps {
   hasSummary?: boolean;
   summaryBoundaryRowid?: number;
   isContextCompressing?: boolean;
+  /** Active sub-agents for nested timeline display */
+  subAgents?: SubAgentInfo[];
 }
 
 function getRewindTargetForMessage(messages: Message[], rewindPoints: RewindPoint[], message: Message): string | undefined {
@@ -238,6 +255,7 @@ export function MessageList({
   hasSummary,
   summaryBoundaryRowid,
   isContextCompressing,
+  subAgents = [],
 }: MessageListProps) {
   const { t } = useTranslation();
   // Scroll anchor: preserve position when older messages are prepended
@@ -384,6 +402,13 @@ export function MessageList({
             statusText={statusText}
             onForceStop={onForceStop}
           />
+        )}
+
+        {/* 子Agent嵌套时间线 - 显示在主时间线下方 */}
+        {subAgents && subAgents.length > 0 && (
+          <div className="w-full">
+            <SubAgentTimeline subAgents={subAgents} />
+          </div>
         )}
       </ConversationContent>
       <ConversationScrollButton />
