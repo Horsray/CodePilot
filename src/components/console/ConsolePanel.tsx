@@ -135,24 +135,30 @@ export function ConsolePanel() {
     };
   }, []);
 
-  // Listen for console events from the built-in browser iframe
+  // 中文注释：监听浏览器控制台事件，使用 queueMicrotask 延迟 setState，
+  // 避免在其他组件渲染期间同步更新 ConsolePanel 状态导致 React 警告
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail) {
-        addEntry(detail.level || "log", detail.message || "", detail.source);
+        const level = detail.level || "log";
+        const message = detail.message || "";
+        const source = detail.source;
+        queueMicrotask(() => addEntry(level, message, source));
       }
     };
     window.addEventListener("console-log", handler);
     return () => window.removeEventListener("console-log", handler);
   }, [addEntry]);
 
-  // Listen for build output events
+  // 中文注释：监听构建输出事件，同样使用 queueMicrotask 延迟 setState
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.message) {
-        addEntry(detail.level || "info", detail.message, "build");
+        const level = detail.level || "info";
+        const message = detail.message;
+        queueMicrotask(() => addEntry(level, message, "build"));
       }
     };
     window.addEventListener("build-output", handler);

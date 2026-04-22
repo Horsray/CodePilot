@@ -84,9 +84,7 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
       startedAt: Date.now(),
     });
 
-    if (emitSSE) {
-      emitSSE({ type: 'tool_output', data: JSON.stringify({ agent: step.role, event: 'start', model }) + '\n' });
-    }
+    const subAgentId = `team-${step.role}-${Date.now()}`;
 
     const prompt = `Your role is ${step.role}. Your task is: ${step.desc}.\n\nOverall Team Goal: ${goal}\n\nContext from previous steps:\n${accumulatedContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
 
@@ -109,12 +107,26 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
 
     const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
     const systemPrompt = agentDef.prompt
-      ? `${agentDef.prompt}\n\nWorking directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do NOT just output your internal thoughts.`
-      : `You are a helpful sub-agent in a team. Working directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do NOT just output your internal thoughts.`;
+      ? `${agentDef.prompt}\n\nWorking directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do not just output your internal thoughts.`
+      : `You are a helpful sub-agent in a team. Working directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do not just output your internal thoughts.`;
+
+    if (emitSSE) {
+      emitSSE({
+        type: 'subagent_start',
+        data: JSON.stringify({
+          id: subAgentId,
+          name: step.role,
+          displayName: agentDef.displayName || step.role,
+          prompt: step.desc,
+        }),
+      });
+      // Legacy support for older frontends if needed, or just standard tool output
+      emitSSE({ type: 'tool_output', data: `[subagent:${step.role}] ${step.desc}\n` });
+    }
 
     const stream = runAgentLoop({
       prompt,
-      sessionId: `team-${step.role}-${Date.now()}`,
+      sessionId: subAgentId,
       providerId: options.providerId,
       sessionProviderId: options.sessionProviderId,
       model,
@@ -183,7 +195,17 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
                   } catch { }
                 }
                 if (emitSSE) {
-                  emitSSE({ type: 'tool_output', data: JSON.stringify({ agent: step.role, payload: event }) + '\n' });
+                  let progressMsg = '';
+                  if (event.type === 'text') progressMsg = '正在思考与输出...';
+                  else if (event.type === 'tool_use') progressMsg = `执行工具...`;
+                  else if (event.type === 'thinking') progressMsg = '正在思考...';
+                  
+                  if (progressMsg) {
+                    emitSSE({
+                      type: 'subagent_progress',
+                      data: JSON.stringify({ id: subAgentId, detail: progressMsg })
+                    });
+                  }
                 }
               }
             } catch { }
@@ -230,7 +252,16 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
     });
 
     if (emitSSE) {
-      emitSSE({ type: 'tool_output', data: JSON.stringify({ agent: step.role, event: 'done' }) + '\n' });
+      emitSSE({
+        type: 'subagent_complete',
+        data: JSON.stringify({
+          id: subAgentId,
+          report,
+          error: errorEvent || undefined,
+        }),
+      });
+      // Also emit tool_output for legacy or standard tool parsing
+      emitSSE({ type: 'tool_output', data: `[+] done\n\n` });
     }
   }
 

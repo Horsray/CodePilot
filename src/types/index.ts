@@ -261,7 +261,8 @@ export type MessageContentBlock =
   | { type: 'tool_use'; id: string; name: string; input: unknown; model?: string }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; media?: MediaBlock[] }
   | { type: 'timeline'; steps: TimelineStep[] }
-  | { type: 'code'; language: string; code: string };
+  | { type: 'code'; language: string; code: string }
+  | { type: 'sub_agents'; subAgents: any[] };
 
 // Helper to parse message content - returns blocks or wraps plain text
 export function parseMessageContent(content: string): MessageContentBlock[] {

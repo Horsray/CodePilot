@@ -52,7 +52,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
     return () => window.removeEventListener('subagent-progress', handleProgress);
   }, []);
 
-  // 当有新的子Agent启动时，自动展开；完成时自动折叠
+  // 当有新的子Agent启动时，自动展开；完成时不要自动折叠
   useEffect(() => {
     setExpandedAgents(prev => {
       const next = new Set(prev);
@@ -60,9 +60,6 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
       subAgents.forEach(agent => {
         if (agent.status === 'running' && !next.has(agent.id)) {
           next.add(agent.id);
-          changed = true;
-        } else if ((agent.status === 'completed' || agent.status === 'error') && next.has(agent.id)) {
-          next.delete(agent.id);
           changed = true;
         }
       });
@@ -112,11 +109,11 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   const getStatusBadge = (status: SubAgentInfo['status']) => {
     switch (status) {
       case 'running':
-        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-500 border border-blue-500/30">运行中</span>;
+        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-500 border border-blue-500/30 w-5 h-5 flex items-center justify-center shrink-0"><SpinnerGap size={12} className="animate-spin" /></span>;
       case 'completed':
-        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/20 text-green-500 border border-green-500/30">完成</span>;
+        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/20 text-green-500 border border-green-500/30 w-5 h-5 flex items-center justify-center shrink-0"><CheckCircle size={12} weight="fill" /></span>;
       case 'error':
-        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/20 text-red-500 border border-red-500/30">错误</span>;
+        return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/20 text-red-500 border border-red-500/30 w-5 h-5 flex items-center justify-center shrink-0"><XCircle size={12} weight="fill" /></span>;
     }
   };
 
@@ -196,17 +193,16 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                   {agent.prompt}
                 </span>
 
-                {/* 状态标签 */}
-                <div className="flex items-center gap-1.5 ml-auto">
-                  {getStatusIcon(agent.status)}
-                  {getStatusBadge(agent.status)}
-                </div>
-
                 {/* 时长 */}
-                <span className="flex items-center gap-1 text-[10px] text-muted-foreground/60 ml-2 mr-2 shrink-0">
+                <span className="flex items-center gap-1 text-[10px] text-muted-foreground/60 ml-auto mr-2 shrink-0">
                   <Clock size={10} />
                   {formatDuration(agent.startedAt, agent.completedAt)}
                 </span>
+
+                {/* 状态标签 */}
+                <div className="flex items-center gap-1.5">
+                  {getStatusBadge(agent.status)}
+                </div>
               </div>
 
               {/* 展开详情 */}
@@ -239,10 +235,10 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
 
                   {/* 完成报告摘要 */}
                   {agent.status === 'completed' && agent.report && (
-                    <div className="text-[11px] text-muted-foreground/70 p-2 rounded bg-muted/30 border border-border/20 max-h-32 overflow-y-auto">
+                    <div className="text-[11px] text-muted-foreground/70 p-2 rounded bg-muted/30 border border-border/20 max-h-64 overflow-y-auto">
                       <span className="font-medium text-muted-foreground/60">报告：</span>
                       <pre className="whitespace-pre-wrap break-words mt-1 font-mono text-[10px]">
-                        {agent.report.length > 500 ? `${agent.report.slice(0, 500)}...` : agent.report}
+                        {agent.report}
                       </pre>
                     </div>
                   )}

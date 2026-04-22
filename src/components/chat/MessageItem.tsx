@@ -23,6 +23,7 @@ import { parseDBDate } from '@/lib/utils';
 import { usePanel } from '@/hooks/usePanel';
 import { extractTimelineStepsFromBlocks } from '@/lib/agent-timeline';
 import { ReferencedContexts } from '@/components/chat/ReferencedContexts';
+import { SubAgentTimeline } from './SubAgentTimeline';
 import type { PlannerOutput, MessageContentBlock } from '@/types';
 
 interface ImageGenRequest {
@@ -739,6 +740,13 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     minute: '2-digit',
   });
 
+  // Extract subAgents from content blocks if present
+  const subAgents = useMemo(() => {
+    if (isUser) return null;
+    const subAgentsBlock = contentBlocks.find(b => b.type === 'sub_agents');
+    return subAgentsBlock ? (subAgentsBlock as any).subAgents : null;
+  }, [contentBlocks, isUser]);
+
   const showAssistantAvatar = !isUser && isAssistantProject;
   const buddyInfo = isAssistantProject ? (globalThis as Record<string, unknown>).__codepilot_buddy_info__ as { emoji?: string; species?: string; rarity?: string } | undefined : undefined;
 
@@ -806,6 +814,13 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           const allMedia = pairedTools.flatMap(t => t.media || []);
           return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
         })()}
+
+        {/* Render SubAgentTimeline for historical messages if subAgents exist (before text content) */}
+        {!isUser && subAgents && subAgents.length > 0 && (
+          <div className="w-full mt-2 mb-2">
+            <SubAgentTimeline subAgents={subAgents} />
+          </div>
+        )}
 
         {/* Text content */}
         {displayText && (

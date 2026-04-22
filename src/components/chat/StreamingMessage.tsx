@@ -16,6 +16,7 @@ import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview
 import { WidgetRenderer } from './WidgetRenderer';
 import { ReferencedContexts } from './ReferencedContexts';
 import { AgentTimeline } from './AgentTimeline';
+import { SubAgentTimeline } from './SubAgentTimeline';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
   appendTimelineReasoning,
@@ -304,6 +305,32 @@ function StreamingStatusBar({ statusText, onForceStop, startedAt }: { statusText
           Force stop
         </Button>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Component to subscribe to team events and show SubAgentTimeline during streaming
+// ---------------------------------------------------------------------------
+function SubAgentTimelineStreamAdapter() {
+  const [subAgents, setSubAgents] = useState<any[]>([]);
+
+  useEffect(() => {
+    const handleSync = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.subAgents) {
+        setSubAgents(detail.subAgents);
+      }
+    };
+    window.addEventListener('subagents-sync', handleSync);
+    return () => window.removeEventListener('subagents-sync', handleSync);
+  }, []);
+
+  if (subAgents.length === 0) return null;
+
+  return (
+    <div className="w-full mt-2 mb-2">
+      <SubAgentTimeline subAgents={subAgents} />
     </div>
   );
 }
@@ -724,6 +751,9 @@ export function StreamingMessage({
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
         {mediaPreview}
+
+        {/* SubAgentTimeline for active team workflows during streaming */}
+        <SubAgentTimelineStreamAdapter />
 
         {/* Streaming text content rendered via Streamdown */}
         {renderedContent}

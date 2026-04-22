@@ -403,13 +403,6 @@ export function MessageList({
             onForceStop={onForceStop}
           />
         )}
-
-        {/* 子Agent嵌套时间线 - 显示在主时间线下方 */}
-        {subAgents && subAgents.length > 0 && (
-          <div className="w-full">
-            <SubAgentTimeline subAgents={subAgents} />
-          </div>
-        )}
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>

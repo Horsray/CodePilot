@@ -715,6 +715,7 @@ async function collectStreamResponse(
   const contentBlocks: MessageContentBlock[] = [];
   let currentText = '';
   let thinkingText = '';
+  let subAgents: any[] = [];
 
   const flushThinking = () => {
     if (thinkingText.trim()) {
@@ -851,6 +852,35 @@ async function collectStreamResponse(
             } else if (event.type === 'error') {
               hasError = true;
               errorMessage = event.data || 'Unknown error';
+            } else if (event.type === 'subagent_start') {
+              try {
+                const data = JSON.parse(event.data);
+                subAgents.push({
+                  id: data.id,
+                  name: data.name,
+                  displayName: data.displayName,
+                  prompt: data.prompt,
+                  status: 'running',
+                  startedAt: Date.now()
+                });
+              } catch {}
+            } else if (event.type === 'subagent_progress') {
+              try {
+                const data = JSON.parse(event.data);
+                const idx = subAgents.findIndex(a => a.id === data.id);
+                if (idx >= 0) subAgents[idx].progress = data.detail;
+              } catch {}
+            } else if (event.type === 'subagent_complete') {
+              try {
+                const data = JSON.parse(event.data);
+                const idx = subAgents.findIndex(a => a.id === data.id);
+                if (idx >= 0) {
+                  subAgents[idx].status = data.error ? 'error' : 'completed';
+                  subAgents[idx].report = data.report;
+                  subAgents[idx].error = data.error;
+                  subAgents[idx].completedAt = Date.now();
+                }
+              } catch {}
             } else if (event.type === 'result') {
               try {
                 const resultData = JSON.parse(event.data);
@@ -886,6 +916,10 @@ async function collectStreamResponse(
       contentBlocks.push({ type: 'text', text: currentText });
     }
     flushThinking();
+    
+    if (subAgents.length > 0) {
+      contentBlocks.push({ type: 'sub_agents', subAgents });
+    }
 
     if (hasError && errorMessage) {
       let rawErrorStr = '';
@@ -927,7 +961,7 @@ async function collectStreamResponse(
 
       // If it contains tool calls or thinking blocks, store as structured JSON.
       const hasStructuredBlocks = cleanedBlocks.some(
-        (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
+        (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking' || b.type === 'sub_agents'
       );
 
       const content = hasStructuredBlocks

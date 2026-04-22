@@ -266,24 +266,6 @@ function TeamAgentTimelines({ outputText, isRunning }: { outputText: string, isR
 
 const TOOL_REGISTRY: ToolRendererDef[] = [
   {
-    match: (n) => n.toLowerCase() === 'team' || n.toLowerCase().includes('__team'),
-    icon: Lightning,
-    label: 'Team',
-    getSummary: (input) => {
-      const inp = input as Record<string, unknown> | undefined;
-      const goal = (inp?.goal || inp?.prompt || inp?.description || '') as string;
-      const short = goal.length > 60 ? goal.slice(0, 57) + '...' : goal;
-      return short || 'team';
-    },
-    renderDetail: (tool, streamingOutput) => {
-      const isRunning = tool.result === undefined;
-      const outputText = isRunning ? streamingOutput : tool.result;
-      // Make sure we pass output text even if it's just the final empty string to trigger re-renders properly
-      if (outputText === undefined) return null;
-      return <TeamAgentTimelines outputText={outputText} isRunning={isRunning} />;
-    },
-  },
-  {
     match: (n) => ['bash', 'execute', 'run', 'shell', 'execute_command'].includes(n.toLowerCase()),
     icon: TerminalWindow,
     label: '',
@@ -391,6 +373,40 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
           {more > 0 && (
             <div className="text-[10px] font-medium text-muted-foreground/40 mt-1 pl-2">
               ... 及其他 {more} 项
+            </div>
+          )}
+        </div>
+      );
+    },
+  },
+  {
+    match: (n, input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      return (n.toLowerCase() === 'team' || n.toLowerCase().includes('__team'));
+    },
+    icon: Robot,
+    label: '团队协作模式',
+    getSummary: (input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      const prompt = (inp?.goal || inp?.prompt || inp?.description || inp?.query || '') as string;
+      const short = prompt.length > 50 ? prompt.slice(0, 47) + '...' : prompt;
+      return `${short}`;
+    },
+    renderDetail: (tool, streamingOutput) => {
+      const isRunning = tool.result === undefined;
+      const inp = tool.input as Record<string, unknown> | undefined;
+      const prompt = (inp?.goal || inp?.prompt || inp?.description || inp?.query || '') as string;
+      
+      return (
+        <div className="px-3 pb-3 pt-2 border-t border-purple-500/10 mt-1">
+          <div className="text-[12px] text-purple-600/80 dark:text-purple-400/80 mb-1 font-medium">任务详情：</div>
+          <div className="text-[12px] text-muted-foreground/80 break-words whitespace-pre-wrap leading-relaxed">
+            {prompt || '无任务详情'}
+          </div>
+          {isRunning && (
+            <div className="mt-3 text-[11px] text-purple-500/60 italic flex items-center gap-1.5">
+              <SpinnerGap size={12} className="animate-spin" />
+              正在协同规划与执行任务，请查看底部面板...
             </div>
           )}
         </div>
@@ -862,18 +878,19 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
   const summary = MCP_TOOL_NAME_MAP[tool.name] ? baseSummary.replace(tool.name, MCP_TOOL_NAME_MAP[tool.name]) : baseSummary;
   const filePath = getFilePath(tool.input);
   const status = getStatus(tool);
+  const isTeam = tool.name.toLowerCase() === 'team' || tool.name.toLowerCase().includes('__team');
   const hasDetail = !!renderer.renderDetail;
   const detailVisible = hasDetail && (status === 'running' || !!streamingToolOutput || !!tool.result);
-  const [internalExpanded, setInternalExpanded] = useState(status === 'running');
+  const [internalExpanded, setInternalExpanded] = useState(isTeam ? false : status === 'running');
   const [showRaw, setShowRaw] = useState(false);
 
   const expanded = expandedOverride !== undefined ? expandedOverride : internalExpanded;
 
   React.useEffect(() => {
     if (expandedOverride === undefined) {
-      setInternalExpanded(status === 'running');
+      setInternalExpanded(isTeam ? false : status === 'running');
     }
-  }, [status, expandedOverride]);
+  }, [status, expandedOverride, isTeam]);
 
   const hasRawContent = !hasDetail && (tool.result || (tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0));
 
@@ -893,30 +910,31 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
         }}
         className={cn(
           "flex w-full items-center gap-2 px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
-          status === 'error' ? "bg-red-500/[0.03]" : ""
+          status === 'error' ? "bg-red-500/[0.03]" : "",
+          isTeam ? "bg-purple-500/[0.05] hover:bg-purple-500/[0.1] text-purple-500" : ""
         )}
       >
         <div className="flex shrink-0 items-center justify-center">
-          {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : "text-blue-500" })}
+          {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-500" : "text-blue-500") })}
         </div>
 
         <span className={cn(
-          "truncate ml-1 text-left",
-          status === 'error' ? "text-red-500/80" : "text-foreground/80"
+          "truncate ml-1 text-left font-medium",
+          status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-600 dark:text-purple-400" : "text-foreground/80")
         )}>
-          {renderer.label || summary}
+          {renderer.label || (isTeam ? '' : summary)}
         </span>
         
-        {(renderer.label ? !!summary : !!filePath) && (
+        {!isTeam && (renderer.label ? !!summary : !!filePath) && (
           <>
-            <span className="text-border mx-1">|</span>
-            <span className={cn("font-mono text-[12px] text-muted-foreground/60 truncate", renderer.label && filePath ? "max-w-[200px]" : "flex-1")}>
+            <span className="mx-1 text-border">|</span>
+            <span className={cn("font-mono text-[12px] truncate text-muted-foreground/60", renderer.label && filePath ? "max-w-[200px]" : "flex-1")}>
               {renderer.label ? summary : truncatePath(filePath)}
             </span>
             {renderer.label && filePath && (
               <>
-                <span className="text-border mx-1">|</span>
-                <span className="font-mono text-[11px] text-muted-foreground/40 truncate flex-1">
+                <span className="mx-1 text-border">|</span>
+                <span className="font-mono text-[11px] truncate flex-1 text-muted-foreground/40">
                   {filePath}
                 </span>
               </>
@@ -924,9 +942,9 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           </>
         )}
 
-        <div className="ml-auto flex items-center gap-2 text-muted-foreground">
-          {status === 'running' && <SpinnerGap size={14} className="animate-spin text-primary" />}
-          {status === 'success' && <CheckCircle size={14} className="text-emerald-500" />}
+        <div className={cn("ml-auto flex items-center gap-2", isTeam ? "text-purple-500/80" : "text-muted-foreground")}>
+          {status === 'running' && <SpinnerGap size={14} className={cn("animate-spin", isTeam ? "text-purple-500" : "text-primary")} />}
+          {status === 'success' && <CheckCircle size={14} className={isTeam ? "text-purple-500" : "text-emerald-500"} />}
           {status === 'error' && <XCircle size={14} className="text-red-500" />}
         </div>
       </button>
@@ -968,7 +986,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   const status = getStatus(tool);
   
   // Unconditional hook calls at the top level
-  const [expanded, setExpanded] = useState(status === 'running');
+  const [expanded, setExpanded] = useState(k === 'team' ? false : status === 'running');
   const prevStatusRef = React.useRef(status);
 
   React.useEffect(() => {
@@ -986,6 +1004,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   }, [tool.name, status, tool.input]);
 
   React.useEffect(() => {
+    if (k === 'team') return; // Do not auto-expand team
     if (status === 'running') {
       setExpanded(true);
     } else {
@@ -994,7 +1013,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [status]);
+  }, [status, k]);
 
   if (k === 'write' || k === 'create') {
     const diff = extractDiff(tool);
@@ -1061,6 +1080,14 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
         <div className="border border-blue-500/30 bg-muted/20 rounded-[8px] overflow-hidden shadow-sm">
           <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
         </div>
+      </div>
+    );
+  }
+
+  if (k === 'team') {
+    return (
+      <div className="my-2 border border-purple-500/30 bg-purple-500/[0.05] rounded-[8px] overflow-hidden shadow-sm">
+        <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
       </div>
     );
   }
@@ -1150,13 +1177,14 @@ function extractDiffFromMcpFilesystemEditInput(input: unknown): { oldText: strin
   if (oldParts.length === 0 && newParts.length === 0) return null;
   return { oldText: oldParts.join('\n'), newText: newParts.join('\n') };
 }
-function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'agent' | 'other' {
+function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'agent' | 'team' | 'other' {
   const n = name.toLowerCase();
   if (['read', 'readfile', 'read_file', 'read_text_file', 'read_multiple_files'].includes(n)) return 'read';
   if (['edit', 'notebookedit', 'notebook_edit', 'apply_patch'].includes(n) || n.endsWith('__edit_file')) return 'write';
   if (n.endsWith('__write_file')) return 'create';
   if (['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(n)) return 'create';
   if (['glob', 'grep', 'search', 'find_files', 'search_files', 'websearch', 'web_search'].some(x => n.includes(x))) return 'search';
+  if (n === 'team' || n.includes('__team')) return 'team';
   if (n.toLowerCase() === 'agent' || n.toLowerCase().includes('__agent')) return 'agent';
   if (['bash', 'execute', 'run', 'shell', 'execute_command', 'computer'].includes(n)) return 'bash';
   return 'other';

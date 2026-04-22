@@ -630,7 +630,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     const allThinking = [stream.fullThinking, stream.accumulatedThinking]
       .filter(s => s.trim()).join('\n\n---\n\n');
     const hasThinking = allThinking.length > 0;
-    if ((hasTools || hasThinking) && (messageContent || hasThinking)) {
+    const hasSubAgents = stream.subAgents && stream.subAgents.length > 0;
+
+    if (hasTools || hasThinking || hasSubAgents) {
       const contentBlocks: Array<Record<string, unknown>> = [];
       // Include thinking block if present — rendered as collapsed Reasoning in MessageItem
       if (hasThinking) {
@@ -651,6 +653,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       }
       if (finalAnswerText) {
         contentBlocks.push({ type: 'text', text: finalAnswerText });
+      }
+      if (hasSubAgents) {
+        contentBlocks.push({ type: 'sub_agents', subAgents: stream.subAgents });
       }
       messageContent = JSON.stringify(contentBlocks);
     }
@@ -693,11 +698,17 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     const buildFinalContent = (textContent: string | null): string | null => {
       const allThinking = [stream.fullThinking, stream.accumulatedThinking]
         .filter(s => s.trim()).join('\n\n---\n\n');
-      if (!allThinking) return textContent;
+      const hasSubAgents = stream.subAgents && stream.subAgents.length > 0;
+      if (!allThinking && !hasSubAgents) return textContent;
       // Wrap as content-block JSON so MessageItem can render the thinking block
       const blocks: Array<Record<string, unknown>> = [];
-      blocks.push({ type: 'thinking', thinking: allThinking });
+      if (allThinking) {
+        blocks.push({ type: 'thinking', thinking: allThinking });
+      }
       if (textContent) blocks.push({ type: 'text', text: textContent });
+      if (hasSubAgents) {
+        blocks.push({ type: 'sub_agents', subAgents: stream.subAgents });
+      }
       return JSON.stringify(blocks);
     };
 
