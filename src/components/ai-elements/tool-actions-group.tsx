@@ -22,7 +22,8 @@ import {
   Play,
   ListChecks,
   ShieldCheck,
-  PencilSimple
+  PencilSimple,
+  FolderOpen
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { usePanel } from '@/hooks/usePanel';
@@ -119,6 +120,7 @@ function truncatePath(path: string, maxLen = 50): string {
 export const AGENT_META: Record<string, { icon: React.ElementType, color: string, bg: string, label: string }> = {
   search: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '搜索者' },
   explorer: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者' },
+  explore: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者' },
   planner: { icon: ListChecks, color: 'text-purple-500', bg: 'bg-purple-500/10', label: '规划者' },
   executor: { icon: PencilSimple, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '执行者' },
   verifier: { icon: ShieldCheck, color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: '验证者' },
@@ -1330,6 +1332,17 @@ export function CompletionBar({
   const totalRemoved = changedFiles.reduce((acc, f) => acc + f.diff.removed, 0);
   const pending = changedFiles.length;
 
+  // 在 Finder 中打开：打开第一个文件的目录
+  const openInFinder = () => {
+    if (changedFiles.length > 0 && changedFiles[0].diff.fullPath) {
+      const dir = changedFiles[0].diff.fullPath.substring(0, changedFiles[0].diff.fullPath.lastIndexOf('/'));
+      fetch('/api/open-file', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: dir, openInFinder: true }),
+      }).catch(() => {});
+    }
+  };
+
   if (pending === 0) return null;
 
   return (
@@ -1346,6 +1359,14 @@ export function CompletionBar({
               <span className="text-red-500 font-mono">-{totalRemoved}</span>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={openInFinder}
+            className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-2 py-1 text-[12px] font-medium text-foreground/70 transition hover:bg-muted hover:text-foreground"
+            title="在 Finder 中打开"
+          >
+            <FolderOpen size={12} />
+          </button>
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}

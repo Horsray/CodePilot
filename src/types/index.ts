@@ -635,6 +635,7 @@ export type SSEEventType =
   | 'subagent_start'     // 子Agent开始执行
   | 'subagent_progress'  // 子Agent执行中进度更新
   | 'subagent_complete'  // 子Agent执行完成
+  | 'aborted'            // 流被异常中断（区别于正常完成的 done）
   | 'done';              // stream complete
 
 export interface SSEEvent {
@@ -1132,7 +1133,7 @@ export interface ToolResultInfo {
   media?: MediaBlock[];
 }
 
-export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped';
+export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped' | 'aborted';
 
 /**
  * Sub-agent tracking info for nested timeline display

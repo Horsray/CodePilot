@@ -3,6 +3,7 @@ import { runAgentLoop } from './agent-loop';
 import { assembleTools } from './agent-tools';
 import type { ToolSet } from 'ai';
 import { resolveAgentModel } from './agent-routing';
+import { truncateToTokenBudget } from './context-pruner';
 
 export interface TeamRunnerOptions {
   goal: string;
@@ -87,7 +88,11 @@ async function executeAgentTask(
   });
 
   const subAgentId = `team-${task.role}-${Date.now()}`;
-  const prompt = `Your role is ${task.role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${accumulatedContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
+  
+  // 防止 Team 模式下的上下文溢出 (Truncate to reasonable token limit)
+  const safeContext = truncateToTokenBudget(accumulatedContext, 15000);
+  
+  const prompt = `Your role is ${task.role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${safeContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
 
   const permissionContext = (options.parentSessionId && options.emitSSE && options.permissionMode)
     ? {
@@ -143,6 +148,8 @@ async function executeAgentTask(
   const thinkingParts: string[] = [];
   const toolResults: Array<{ content: string; isError: boolean }> = [];
   let errorEvent: string | null = null;
+  let taskFailed = false;
+
 
   try {
     while (true) {
@@ -163,6 +170,7 @@ async function executeAgentTask(
               } else if (event.type === 'thinking') {
                 thinkingParts.push(event.data);
               } else if (event.type === 'error') {
+                taskFailed = true;
                 try {
                   const errData = JSON.parse(event.data);
                   errorEvent = errData.userMessage || event.data;
@@ -195,15 +203,27 @@ async function executeAgentTask(
                 } catch { }
               }
               if (emitSSE) {
-                let progressMsg = '';
-                if (event.type === 'text') progressMsg = '正在思考与输出...';
-                else if (event.type === 'tool_use') progressMsg = `执行工具...`;
-                else if (event.type === 'thinking') progressMsg = '正在思考...';
+                  let progressMsg = '';
+                  if (event.type === 'text') progressMsg = event.data;
+                  else if (event.type === 'tool_use') {
+                    try {
+                      const toolData = JSON.parse(event.data);
+                      progressMsg = `\n🛠️ 准备执行工具: ${toolData.name}\n`;
+                    } catch { }
+                  }
+                  else if (event.type === 'tool_result') {
+                    try {
+                      const res = JSON.parse(event.data);
+                      const preview = String(res.content || '').slice(0, 200).replace(/\n/g, ' ');
+                      progressMsg = `\n📋 结果: ${res.is_error ? '❌' : '✅'} ${preview}${String(res.content || '').length > 200 ? '...' : ''}\n\n`;
+                    } catch { }
+                  }
+                  else if (event.type === 'thinking') progressMsg = event.data;
                 
                 if (progressMsg) {
                   emitSSE({
                     type: 'subagent_progress',
-                    data: JSON.stringify({ id: subAgentId, detail: progressMsg })
+                    data: JSON.stringify({ id: subAgentId, detail: progressMsg, append: true })
                   });
                 }
               }
@@ -212,32 +232,45 @@ async function executeAgentTask(
         }
       }
     }
+  } catch (streamErr: unknown) {
+    // Stream interrupted (network disconnect, client abort, etc.)
+    taskFailed = true;
+    const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+    if (!errorEvent) {
+      errorEvent = `任务执行中断: ${errMsg}`;
+    }
+    console.warn(`[team-runner] executeAgentTask stream error for ${task.role}:`, errMsg);
   } finally {
     reader.releaseLock();
   }
 
-  let report: string;
+  const parts: string[] = [];
+  
+  if (errorEvent) {
+    parts.push(`**❌ 执行出错：**\n${errorEvent}\n`);
+  }
+
+  if (thinkingParts.length > 0) {
+    const thinkingText = thinkingParts.join('').trim();
+    if (thinkingText) {
+      parts.push('**💭 思考过程：**\n' + thinkingText);
+    }
+  }
+
+  if (toolResults.length > 0) {
+    parts.push(`**🛠️ 工具执行 (${toolResults.length} 次)：**`);
+    for (const tr of toolResults) {
+      const preview = tr.content.slice(0, 800).replace(/\n/g, ' ');
+      parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 800 ? '...' : ''}`);
+    }
+  }
+
   if (textParts.length > 0) {
-    report = textParts.join('');
-  } else if (errorEvent) {
-    report = `**执行出错：** ${errorEvent}`;
-  } else if (thinkingParts.length > 0 || toolResults.length > 0) {
-    const parts: string[] = [];
-    if (thinkingParts.length > 0) {
-      const thinkingText = thinkingParts.join('').trim();
-      if (thinkingText) {
-        parts.push('**思考过程：**\n' + thinkingText.slice(0, 3000));
-      }
-    }
-    if (toolResults.length > 0) {
-      parts.push(`**执行了 ${toolResults.length} 个工具：**`);
-      for (const tr of toolResults.slice(0, 10)) {
-        const preview = tr.content.slice(0, 500).replace(/\n/g, ' ');
-        parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 500 ? '...' : ''}`);
-      }
-    }
-    report = parts.join('\n\n');
-  } else {
+    parts.push('**📝 最终输出：**\n' + textParts.join(''));
+  }
+
+  let report = parts.join('\n\n');
+  if (!report.trim()) {
     report = '(No report provided)';
   }
 
@@ -327,6 +360,22 @@ Only output the JSON block, no other text.`;
   try {
     const dag = JSON.parse(jsonMatch[1] || jsonMatch[0]) as TeamDAG;
     if (!dag.tasks || !Array.isArray(dag.tasks)) throw new Error('Invalid DAG format');
+    
+    // Validate DAG to prevent deadlocks (missing dependencies or circular deps)
+    const taskIds = new Set(dag.tasks.map(t => t.id));
+    for (const task of dag.tasks) {
+      if (task.dependsOn) {
+        for (const dep of task.dependsOn) {
+          if (!taskIds.has(dep)) {
+            throw new Error(`DAG Validation Error: Task ${task.id} depends on non-existent task ${dep}`);
+          }
+        }
+      }
+    }
+    
+    // A simple cycle detection could be added here, but for now we rely on 
+    // the deadlock detector in the while loop below to catch circular dependencies at runtime.
+    
     return dag;
   } catch (e) {
     return {
@@ -379,6 +428,15 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
     const readyTasks = pendingTasks.filter(t => 
       !t.dependsOn || t.dependsOn.length === 0 || t.dependsOn.every(dep => completedTasks.has(dep))
     );
+
+    // Deadlock detection: if there are pending tasks but none are ready AND no tasks are running,
+    // we have a circular dependency or unresolvable dependency in the DAG.
+    if (readyTasks.length === 0 && runningTasks.size === 0 && pendingTasks.length > 0) {
+      console.error('[team-runner] Deadlock detected in DAG:', pendingTasks);
+      const errMsg = `⚠️ **调度死锁错误**\n任务图中存在循环依赖或无法解析的前置条件。强制中止管线以防止系统卡死。\n剩余未执行任务: ${pendingTasks.map(t => t.id).join(', ')}`;
+      if (emitSSE) emitSSE({ type: 'error', data: JSON.stringify({ category: 'DAG_DEADLOCK', userMessage: errMsg }) });
+      throw new Error('DAG Execution Deadlock: Circular dependencies detected.');
+    }
 
     // Start ready tasks
     for (const task of readyTasks) {

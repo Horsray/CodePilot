@@ -73,6 +73,9 @@ const ACTIONS_BY_REASON: Record<string, ActionDescriptor[]> = {
   model_error: [
     { id: 'retry_simple', labelKey: 'terminalAction.retry' as TranslationKey, variant: 'primary' },
   ],
+  length: [
+    { id: 'retry_simple', labelKey: 'terminalAction.retry' as TranslationKey, variant: 'primary' },
+  ],
   // tool_deferred handled by Phase 7b's deferred-tool card, no action here.
 };
 
@@ -86,6 +89,7 @@ const TONE_BY_REASON: Record<string, Tone> = {
   stop_hook_prevented: 'muted',
   hook_stopped: 'muted',
   tool_deferred: 'info',
+  length: 'warning',
 };
 
 // Reasons that should render silently (no chip). Users either already know
@@ -105,6 +109,7 @@ const KNOWN_REASONS = new Set([
   'stop_hook_prevented',
   'hook_stopped',
   'tool_deferred',
+  'length',
 ]);
 
 const TONE_CLASSES: Record<Tone, string> = {

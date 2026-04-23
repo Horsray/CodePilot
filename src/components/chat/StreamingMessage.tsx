@@ -329,7 +329,14 @@ function SubAgentTimelineStreamAdapter({ sessionId, isStreaming }: { sessionId?:
             return prev.map(a => a.id === detail.id ? { ...a, status: 'completed', report: detail.report, completedAt: Date.now() } : a);
           } else if (detail.detail) {
             // Progress update (from subagent-progress event)
-            return prev.map(a => a.id === detail.id ? { ...a, progress: detail.detail } : a);
+            return prev.map(a => {
+              if (a.id === detail.id) {
+                const newProgress = detail.append ? (a.progress || '') + detail.detail : detail.detail;
+                // Limit the buffer size to avoid memory issues (keep last 10000 chars)
+                return { ...a, progress: newProgress.length > 10000 ? '...' + newProgress.slice(-10000) : newProgress };
+              }
+              return a;
+            });
           } else {
             // It's a start event
             if (prev.some(a => a.id === detail.id)) return prev;

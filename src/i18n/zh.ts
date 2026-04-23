@@ -1260,6 +1260,7 @@ const zh: Record<TranslationKey, string> = {
   'terminal.stop_hook_prevented': 'Stop Hook 阻止了结束',
   'terminal.hook_stopped': 'Hook 中断本轮',
   'terminal.tool_deferred': '有工具等待响应',
+  'terminal.length': '输出被截断',
   'terminal.unknown': '本轮已结束',
 
   // ── TerminalReason action buttons (Phase 1b) ──

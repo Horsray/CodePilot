@@ -113,7 +113,16 @@ export function ContextCompressionWidget({
 
     // Add tool files from SSE events (AI actual file reads)
     toolFiles?.forEach(f => {
-      if (!filesMap.has(f)) {
+      // Categorize: URLs go to web, local file paths go to files
+      if (f.startsWith('http://') || f.startsWith('https://')) {
+        if (!webSet.has(f)) {
+          webSet.add(f);
+        }
+        // Also add to filesMap so it shows in the Files tab
+        if (!filesMap.has(f)) {
+          filesMap.set(f, { path: f, name: f });
+        }
+      } else if (!filesMap.has(f)) {
         const name = f.split('/').pop() || f;
         filesMap.set(f, { path: f, name });
       }

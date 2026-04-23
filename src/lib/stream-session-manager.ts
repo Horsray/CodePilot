@@ -94,6 +94,7 @@ export interface StartStreamParams {
 const GLOBAL_KEY = '__streamSessionManager__' as const;
 const LISTENERS_KEY = '__streamSessionListeners__' as const;
 const STREAM_IDLE_TIMEOUT_MS = 330_000;
+const STREAM_THINKING_IDLE_TIMEOUT_MS = 600_000; // 中文注释：深度思考阶段允许更长的空闲超时（10分钟）
 const GC_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 function getStreamsMap(): Map<string, ActiveStream> {
@@ -256,9 +257,11 @@ export function startStream(params: StartStreamParams): void {
 async function runStream(stream: ActiveStream, params: StartStreamParams): Promise<void> {
   const markActive = () => { stream.lastEventTime = Date.now(); };
 
-  // Idle timeout checker
+  // 中文注释：空闲超时检测器 — 深度思考阶段使用更长的超时值
   stream.idleCheckTimer = setInterval(() => {
-    if (Date.now() - stream.lastEventTime >= STREAM_IDLE_TIMEOUT_MS) {
+    const isThinking = !stream.thinkingPhaseEnded && stream.accumulatedThinking.length > 0;
+    const timeoutMs = isThinking ? STREAM_THINKING_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
+    if (Date.now() - stream.lastEventTime >= timeoutMs) {
       cleanupTimers(stream);
       stream.isIdleTimeout = true;
       stream.abortController.abort();
@@ -689,9 +692,13 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     }
 
     // Update snapshot with completion info
+    const isAborted = stream.snapshot.terminalReason === 'aborted' ||
+      stream.snapshot.terminalReason === 'user_cancel' ||
+      stream.snapshot.terminalReason === 'error';
+    const finalPhase = isAborted ? 'aborted' : 'completed';
     stream.snapshot = {
       ...buildSnapshot(stream),
-      phase: 'completed',
+      phase: finalPhase,
       completedAt: Date.now(),
       tokenUsage: result.tokenUsage,
       finalMessageContent: messageContent || null,
@@ -742,11 +749,12 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
 
     if (error instanceof DOMException && error.name === 'AbortError') {
       if (stream.isIdleTimeout) {
-        // Idle timeout
-        const idleSecs = Math.round(STREAM_IDLE_TIMEOUT_MS / 1000);
+        const isThinking = !stream.thinkingPhaseEnded && stream.accumulatedThinking.length > 0;
+        const timeoutMs = isThinking ? STREAM_THINKING_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
+        const idleSecs = Math.round(timeoutMs / 1000);
         const textPart = stream.accumulatedText.trim()
-          ? stream.accumulatedText.trim() + `\n\n**Error:** Stream idle timeout — no response for ${idleSecs}s. The connection may have dropped.`
-          : `**Error:** Stream idle timeout — no response for ${idleSecs}s. The connection may have dropped.`;
+          ? stream.accumulatedText.trim() + `\n\n**Error:** Stream idle timeout — no response for ${idleSecs}s${isThinking ? ' (extended thinking mode)' : ''}. The connection may have dropped.`
+          : `**Error:** Stream idle timeout — no response for ${idleSecs}s${isThinking ? ' (extended thinking mode)' : ''}. The connection may have dropped.`;
 
         stream.snapshot = {
           ...buildSnapshot(stream),

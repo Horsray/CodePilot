@@ -1659,6 +1659,8 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
         // Track pending file modifications so we can record checkpoints
         const pendingFileModifications = new Map<string, string>();
+        // Collect file paths and web URLs from tool calls/results for context stats
+        const toolFilesAccumulator = new Set<string>();
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
             if (usingPersistentSession) {
@@ -1729,6 +1731,50 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                       }
                     } catch (e) {
                       console.warn('[claude-client] Failed to parse file modification input:', e);
+                    }
+                  }
+
+                  // Collect file paths for context stats (broader than just file modification tools)
+                  const inp = block.input as Record<string, unknown>;
+                  if (inp) {
+                    // Read tools
+                    if (/^Read$|^ReadFile$|^read_file$|^read$|^ReadMultipleFiles$|^read_text_file$|^str_replace_editor$|^View$|^Open$/i.test(block.name)) {
+                      if (inp.file_path && typeof inp.file_path === 'string') toolFilesAccumulator.add(inp.file_path);
+                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
+                      if (inp.files && Array.isArray(inp.files)) {
+                        (inp.files as string[]).forEach((f: string) => {
+                          if (typeof f === 'string') toolFilesAccumulator.add(f);
+                        });
+                      }
+                    }
+                    // Glob/Search tools
+                    else if (/^Glob$|^GlobFiles$|^search_files$|^find_files$|^Find$|^NotebookRead$/i.test(block.name)) {
+                      if (inp.pattern && typeof inp.pattern === 'string') toolFilesAccumulator.add(inp.pattern);
+                      if (inp.glob && typeof inp.glob === 'string') toolFilesAccumulator.add(inp.glob);
+                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
+                    }
+                    // Grep/Search tools
+                    else if (/^Grep$|^SearchCodebase$|^search$|^grep$|^NotebookEdit$/i.test(block.name)) {
+                      if (inp.pattern && typeof inp.pattern === 'string') toolFilesAccumulator.add(inp.pattern);
+                      if (inp.query && typeof inp.query === 'string') toolFilesAccumulator.add(inp.query);
+                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
+                    }
+                    // Write/Edit tools
+                    else if (/^Write$|^WriteFile$|^write_file$|^create_file$|^Edit$|^Patch$|^replace_in_file$|^EditFile$|^WriteEdit$/i.test(block.name)) {
+                      if (inp.file_path && typeof inp.file_path === 'string') toolFilesAccumulator.add(inp.file_path);
+                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
+                    }
+                    // Web search tools
+                    else if (/^WebSearch$|^web_search$|^search$|^Browse$|^Fetch$|^getUrl$|^get_url$|^mcp__MiniMax__web_search$|^mcp__bailian-web-search__bailian_web_search$/i.test(block.name)) {
+                      // Extract URLs from search query / input
+                      if (inp.query && typeof inp.query === 'string') {
+                        const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
+                        let match;
+                        while ((match = urlPattern.exec(inp.query)) !== null) {
+                          toolFilesAccumulator.add(match[0]);
+                        }
+                      }
+                      if (inp.url && typeof inp.url === 'string') toolFilesAccumulator.add(inp.url);
                     }
                   }
                 }
@@ -1806,6 +1852,11 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                       type: 'tool_result',
                       data: JSON.stringify(ssePayload),
                     }));
+
+                    // Extract web search URLs from tool result content for context stats
+                    const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
+                    const urls = resultContent.match(urlPattern) || [];
+                    urls.forEach(url => toolFilesAccumulator.add(url));
 
                                                             // Deferred TodoWrite sync: emit task_update after both success and error
                     // (UI should reflect the attempted state even if tool failed)
@@ -2049,6 +2100,15 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
               break;
             }
           }
+        }
+
+        // Emit accumulated file paths and web URLs for context stats
+        const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
+        if (allToolFiles.length > 0) {
+          controller.enqueue(formatSSE({
+            type: 'tool_files',
+            data: JSON.stringify({ files: allToolFiles }),
+          }));
         }
 
         controller.enqueue(formatSSE({ type: 'done', data: '' }));
@@ -2331,7 +2391,13 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
             _formattedMessage: errorMessage,
           }),
         }));
-        controller.enqueue(formatSSE({ type: 'done', data: '' }));
+        controller.enqueue(formatSSE({
+          type: 'aborted',
+          data: JSON.stringify({
+            reason: 'error',
+            message: classified.userMessage || classified.rawMessage || 'Unknown error',
+          }),
+        }));
 
         // Always clear sdk_session_id on crash so the next message starts fresh.
         // Even for fresh sessions — the SDK may emit a session_id via status

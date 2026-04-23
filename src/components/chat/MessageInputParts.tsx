@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { ArrowUp, Plus, X, Stop, Toolbox, Brain, NotePencil, Lightning, File as FileIcon, Folder } from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -13,6 +13,7 @@ import type { ChatStatus } from 'ai';
 import { isSubmitEnabled } from '@/lib/message-input-logic';
 import type { MentionRef, CommandBadge as CommandBadgeType } from '@/types';
 import { isImageFile } from '@/types';
+import { ImageLightbox } from './ImageLightbox';
 
 /**
  * Submit button that's aware of file attachments. Must be rendered inside PromptInput.
@@ -142,13 +143,26 @@ export function FileTreeAttachmentBridge() {
  */
 export function FileAttachmentsCapsules() {
   const attachments = usePromptInputAttachments();
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
 
   if (attachments.files.length === 0) return null;
+
+  const imageFiles = attachments.files.filter(file => 
+    file.mediaType?.startsWith('image/') || isImageFile(file.mediaType || file.filename || '')
+  );
+
+  const lightboxImages = imageFiles.map(f => ({
+    src: f.url || '',
+    alt: f.filename || 'image'
+  })).filter(img => img.src);
 
   return (
     <div className="flex w-full flex-wrap items-center gap-1.5 px-3 pt-2 pb-0 order-first">
       {attachments.files.map((file) => {
         const isImage = file.mediaType?.startsWith('image/') || isImageFile(file.mediaType || file.filename || '');
+        const imageIndex = isImage ? imageFiles.indexOf(file) : -1;
+        
         return (
           <span
             key={file.id}
@@ -159,7 +173,13 @@ export function FileAttachmentsCapsules() {
               <img
                 src={file.url}
                 alt={file.filename || 'image'}
-                className="h-5 w-5 rounded object-cover"
+                className="h-5 w-5 rounded object-cover cursor-pointer hover:opacity-80 transition-opacity"
+                onClick={() => {
+                  if (imageIndex !== -1) {
+                    setLightboxIndex(imageIndex);
+                    setLightboxOpen(true);
+                  }
+                }}
               />
             )}
             <span className="max-w-[120px] truncate text-[11px]">
@@ -177,6 +197,15 @@ export function FileAttachmentsCapsules() {
           </span>
         );
       })}
+
+      {lightboxImages.length > 0 && (
+        <ImageLightbox
+          images={lightboxImages}
+          initialIndex={lightboxIndex}
+          open={lightboxOpen}
+          onOpenChange={setLightboxOpen}
+        />
+      )}
     </div>
   );
 }

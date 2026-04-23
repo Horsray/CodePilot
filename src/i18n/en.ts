@@ -1263,6 +1263,7 @@ const en = {
   'terminal.stop_hook_prevented': 'Stop hook prevented',
   'terminal.hook_stopped': 'Hook stopped this turn',
   'terminal.tool_deferred': 'Tool awaiting response',
+  'terminal.length': 'Output truncated',
   'terminal.unknown': 'Turn ended',
 
   // ── TerminalReason action buttons (Phase 1b) ──

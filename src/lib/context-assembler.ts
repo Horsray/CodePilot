@@ -277,6 +277,27 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     }
   }
 
+  // [VOLATILE 6.5] Current Todo List State
+  try {
+    const { getTasksBySession } = await import('@/lib/db');
+    const tasks = getTasksBySession(session.id);
+    if (tasks && tasks.length > 0) {
+      const activeTasks = tasks.filter(t => t.status !== 'completed');
+      let taskPrompt = `<current-todo-list>\n`;
+      taskPrompt += `Here is the CURRENT state of the global Todo list for this session. It may be out of sync if you were interrupted or if a Team sub-agent finished a task.\n`;
+      taskPrompt += `CRITICAL: You MUST review these tasks. If any "in_progress" or "pending" tasks are actually completed, or if the plan needs updating based on recent findings, use the TodoWrite tool IMMEDIATELY to update their status.\n\n`;
+      tasks.forEach((t, i) => {
+        const check = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
+        const desc = t.description ? ` - ${t.description}` : '';
+        taskPrompt += `${i + 1}. ${check} (${t.status}) ${t.title}${desc}\n`;
+      });
+      taskPrompt += `</current-todo-list>`;
+      volatileParts.push(taskPrompt);
+    }
+  } catch {
+    // ignore
+  }
+
   // [VOLATILE 7] Per-request append (image agent mode, skills, etc.)
   if (systemPromptAppend) {
     volatileParts.push(systemPromptAppend);

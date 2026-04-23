@@ -673,7 +673,7 @@ ORCHESTRATION RULES (CRITICAL):
         } catch (err) {
           console.error('[chat API] streamClaude execution failed:', err);
           controller.enqueue(`data: ${JSON.stringify({ type: 'error', data: err instanceof Error ? err.message : 'Internal Server Error' })}\n\n`);
-          controller.enqueue(`data: ${JSON.stringify({ type: 'done', data: '' })}\n\n`);
+          controller.enqueue(`data: ${JSON.stringify({ type: 'aborted', data: JSON.stringify({ reason: 'error', message: err instanceof Error ? err.message : 'Internal Server Error' }) })}\n\n`);
         } finally {
           controller.close();
         }

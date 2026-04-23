@@ -200,6 +200,21 @@ function buildToolResultMarker(part: { type: string; [k: string]: unknown }): st
   return TRUNCATED_RESULT_MARKER;
 }
 
+export function truncateToTokenBudget(text: string, maxTokens: number): string {
+  // Rough estimate: ~3.5 chars per token
+  const maxChars = Math.floor(maxTokens * 3.5);
+  if (text.length <= maxChars) return text;
+  
+  // Keep the beginning (usually contains important goals/instructions)
+  // and the end (most recent context), cutting out the middle.
+  const headChars = Math.floor(maxChars * 0.3);
+  const tailChars = Math.floor(maxChars * 0.7);
+  
+  return text.slice(0, headChars) + 
+         `\n\n... [${Math.floor((text.length - maxChars) / 3.5)} tokens omitted for context limits] ...\n\n` + 
+         text.slice(text.length - tailChars);
+}
+
 // ── Token estimation ───────────────────────────────────────────────
 
 /**

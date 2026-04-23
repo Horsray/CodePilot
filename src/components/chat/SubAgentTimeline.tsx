@@ -21,23 +21,6 @@ import { SubAgentInfo } from '@/types';
 export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [userInteractedAgents, setUserInteractedAgents] = useState<Set<string>>(new Set());
-  const [agentProgress, setAgentProgress] = useState<Record<string, string>>({});
-
-  // 监听子Agent进度更新事件
-  useEffect(() => {
-    const handleProgress = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.id) {
-        setAgentProgress(prev => ({
-          ...prev,
-          [detail.id]: detail.detail || detail.status || '处理中...',
-        }));
-      }
-    };
-
-    window.addEventListener('subagent-progress', handleProgress);
-    return () => window.removeEventListener('subagent-progress', handleProgress);
-  }, []);
 
   // 自动展开/收起逻辑：
   // - 新Agent启动时，自动展开
@@ -120,6 +103,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
     if (lowerName.includes('debug')) return '调试者';
     if (lowerName.includes('plan')) return '规划者';
     if (lowerName.includes('search')) return '搜索者';
+    if (lowerName.includes('explor')) return '探索者';
     if (lowerName.includes('exec')) return '执行者';
     
     return displayName || name;
@@ -141,7 +125,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
       <div className="grid gap-2">
         {subAgents.map((agent) => {
           const isExpanded = expandedAgents.has(agent.id);
-          const currentProgress = agent.progress || agentProgress[agent.id];
+          const currentProgress = agent.progress;
 
           return (
             <div
@@ -203,19 +187,23 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
 
                   {/* 运行进度 */}
                   {agent.status === 'running' && currentProgress && (
-                    <div className="flex items-center gap-2 text-[11px] text-blue-500/80">
-                      <SpinnerGap size={10} className="animate-spin" />
-                      <span className="italic">{currentProgress}</span>
+                    <div className="text-[11px] text-muted-foreground/80 p-2.5 rounded-md bg-blue-500/5 border border-blue-500/10 max-h-64 overflow-y-auto flex flex-col gap-1">
+                      <div className="flex items-center gap-1.5 text-blue-500/80 font-medium pb-1.5 border-b border-blue-500/10 mb-1">
+                        <SpinnerGap size={12} className="animate-spin" />
+                        执行过程实时记录...
+                      </div>
+                      <div className="whitespace-pre-wrap break-words text-[11px] leading-relaxed">
+                        {currentProgress}
+                      </div>
                     </div>
                   )}
 
                   {/* 报告输出 */}
                   {(agent.status === 'completed' || agent.status === 'error') && agent.report && (
-                    <div className="text-[11px] text-muted-foreground/70 p-2 rounded bg-muted/30 border border-border/20 max-h-64 overflow-y-auto">
-                      <span className="font-medium text-muted-foreground/60">报告：</span>
-                      <pre className="whitespace-pre-wrap break-words mt-1 font-mono text-[10px]">
+                    <div className="text-[11px] text-muted-foreground/80 p-3 rounded-md bg-muted/30 border border-border/40 max-h-96 overflow-y-auto">
+                      <div className="whitespace-pre-wrap break-words leading-relaxed">
                         {agent.report}
-                      </pre>
+                      </div>
                     </div>
                   )}
                   </div>
@@ -230,7 +218,9 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
       <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-muted/40 border border-border/30">
         <div className="flex items-center gap-1.5">
           <Robot size={14} className="text-primary" />
-          <span className="text-xs font-medium text-foreground">Team Leader ｜ 监控中 ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个</span>
+          <span className="text-xs font-medium text-foreground">
+            Team Leader ｜ {runningCount > 0 ? <span className="font-mono text-[10px] bg-blue-500/10 text-blue-500/80 px-1.5 py-0.5 rounded border border-blue-500/20">{subAgents[0]?.model?.split('/').pop()?.split('-').slice(0, 2).join('-') || subAgents[0]?.model || 'haiku'}</span> : '监控中'} ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个
+          </span>
         </div>
         <div className="flex-1" />
         <div className="flex items-center gap-3 text-[11px]">

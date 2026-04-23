@@ -557,7 +557,8 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           const stepToolCalls: string[] = [];
           let stepText = '';
 
-          // Extract file paths from tool calls
+          try {
+            // Extract file paths from tool calls
           function extractFilePaths(toolName: string, input: unknown): string[] {
             const files: string[] = [];
             if (!input || typeof input !== 'object') return files;
@@ -710,6 +711,14 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                   }),
                 }));
 
+                // Extract web search URLs from tool results for context stats
+                const toolName = (event as any).toolName;
+                if (toolName && /^(WebSearch|web_search|search|mcp__MiniMax__web_search|mcp__bailian-web-search__bailian_web_search|Browse|fetch|Fetch|getUrl|get_url|get_page)$/i.test(toolName)) {
+                  const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
+                  const urls = resultContent.match(urlPattern) || [];
+                  urls.forEach(url => toolFilesAccumulator.add(url));
+                }
+
                 // Deferred TodoWrite sync: emit task_update after successful execution
                 if (stepPendingTodoWrites.has(event.toolCallId)) {
                   const todos = stepPendingTodoWrites.get(event.toolCallId)!;
@@ -756,6 +765,36 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 break;
             }
           }
+          } catch (error: any) {
+            // Intercept SDK's internal "No output generated" error, which bypasses
+            // the loop logic entirely if the model sends invalid/missing tool calls
+            if (error?.message?.includes('No output generated') || error?.name === 'AI_NoOutputGeneratedError') {
+              console.warn(`[agent-loop] SDK aborted due to NoOutputGeneratedError (often caused by hallucinated or filtered tools). Model: ${modelId}`);
+              
+              if (!hasContent) {
+                reportNativeError('EMPTY_RESPONSE', error, { modelId, sessionId });
+                controller.enqueue(formatSSE({
+                  type: 'error',
+                  data: JSON.stringify({
+                    category: 'EMPTY_RESPONSE',
+                    userMessage: `模型未返回任何内容，或者试图调用不在权限列表内的工具（例如被过滤的 SearchCodebase）。模型 ID: "${modelId}"。`,
+                  }),
+                }));
+                break;
+              }
+            } else {
+              throw error; // re-throw genuine errors
+            }
+          }
+
+          // Emit accumulated file paths (from tool calls and web search results) for context stats
+          const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
+          if (allToolFiles.length > 0) {
+            controller.enqueue(formatSSE({
+              type: 'tool_files',
+              data: JSON.stringify({ files: allToolFiles }),
+            }));
+          }
 
           // Usage is accumulated in onStepFinish callback above
 
@@ -763,7 +802,12 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           if (!hasToolCalls) {
             // Detect truly empty response (no text, no thinking, no tools)
             if (!hasContent) {
-              const finishReason = await result.finishReason;
+              let finishReason = 'unknown_no_output';
+              try {
+                finishReason = await result.finishReason;
+              } catch (e) {
+                // Ignore NoOutputGeneratedError thrown by SDK when content is empty
+              }
               console.error(`[agent-loop] Empty response: finishReason=${finishReason}, model=${modelId}`);
               reportNativeError('EMPTY_RESPONSE', new Error(`Empty response: finishReason=${finishReason}`), { modelId, sessionId });
               controller.enqueue(formatSSE({
@@ -983,14 +1027,6 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
           }
         }
 
-        // 6. Emit tool_files event with collected file paths from tool calls
-        if (toolFilesAccumulator.size > 0) {
-          controller.enqueue(formatSSE({
-            type: 'tool_files',
-            data: JSON.stringify({ files: Array.from(toolFilesAccumulator) }),
-          }));
-        }
-
         // 7. Emit result event
         controller.enqueue(formatSSE({
           type: 'result',
@@ -1003,6 +1039,7 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
 
         emitEvent('session:end', { sessionId, steps: step });
         onRuntimeStatusChange?.('idle');
+        controller.enqueue(formatSSE({ type: 'done', data: '' }));
       } catch (err: unknown) {
         const isAbort = err instanceof Error && (
           err.name === 'AbortError' ||
@@ -1022,9 +1059,15 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
         }
 
         onRuntimeStatusChange?.('error');
+        controller.enqueue(formatSSE({
+          type: 'aborted',
+          data: JSON.stringify({
+            reason: isAbort ? 'user_cancel' : 'error',
+            message: isAbort ? 'User cancelled' : (err instanceof Error ? err.message : String(err)),
+          }),
+        }));
       } finally {
         clearInterval(keepAliveTimer);
-        controller.enqueue(formatSSE({ type: 'done', data: '' }));
         controller.close();
       }
     },

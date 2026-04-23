@@ -423,6 +423,19 @@ function handleSSEEvent(
       return accumulated;
     }
 
+    case 'aborted': {
+      // 中文注释：功能名称「异常中断事件处理」，用法是当后端因错误或取消而中断流时，
+      // 不再将此视为正常完成，而是触发 onResult 以标记流结束，但附带 terminalReason='aborted'
+      // 让前端可以区分正常完成和异常中断
+      try {
+        const abortData = JSON.parse(event.data);
+        callbacks.onResult(null, { terminalReason: abortData.reason || 'aborted' });
+      } catch {
+        callbacks.onResult(null, { terminalReason: 'aborted' });
+      }
+      return accumulated;
+    }
+
     case 'done': {
       return accumulated;
     }
