@@ -181,6 +181,8 @@ async function executeAgentTask(
               emitSSE(event);
             } else if (event.type === 'keep_alive' && emitSSE) {
               emitSSE({ type: 'keep_alive', data: '' });
+            } else if (event.type === 'terminal_mirror' && emitSSE) {
+              emitSSE(event);
             } else {
               if (event.type === 'text') {
                 progress.setStage('整理子任务结果');
@@ -241,6 +243,7 @@ async function executeAgentTask(
                     } catch { }
                   }
                   else if (event.type === 'thinking') progressMsg = event.data;
+                  else if (event.type === 'tool_output') progressMsg = event.data;
                 
                 if (progressMsg) {
                   emitSSE({

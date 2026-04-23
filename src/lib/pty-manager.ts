@@ -261,6 +261,7 @@ export async function executeCommandInPtySession(
   command: string,
   timeoutMs = 120_000,
   abortSignal?: AbortSignal,
+  onData?: (chunk: string) => void,
 ): Promise<string> {
   return enqueuePtyCommand(id, async () => {
     const session = ensurePtySession(id, cwd);
@@ -326,13 +327,17 @@ export async function executeCommandInPtySession(
         if (!match || match.index === undefined) {
           if (rawBuffer.length > endMarker.length * 2) {
             const safeLength = rawBuffer.length - endMarker.length * 2;
-            appendCaptured(rawBuffer.slice(0, safeLength));
+            const safeChunk = rawBuffer.slice(0, safeLength);
+            appendCaptured(safeChunk);
+            onData?.(safeChunk);
             rawBuffer = rawBuffer.slice(safeLength);
           }
           return;
         }
 
-        appendCaptured(rawBuffer.slice(0, match.index));
+        const finalChunk = rawBuffer.slice(0, match.index);
+        appendCaptured(finalChunk);
+        onData?.(finalChunk);
         exitCode = Number.parseInt(match[1] || '0', 10);
         finalize();
       };
@@ -392,6 +397,10 @@ export async function executeCommandInPtySession(
       }, timeoutMs);
 
       const wrappedCommand = [
+        'export PAGER=cat',
+        'export GIT_PAGER=cat',
+        'export DEBIAN_FRONTEND=noninteractive',
+        'export NPM_CONFIG_YES=true',
         // 中文注释：仅在交互式终端里关闭回显，避免非 TTY 下出现 "stdin isn\'t a terminal"。
         '__codepilot_has_tty=0',
         '[ -t 0 ] && __codepilot_has_tty=1 || true',

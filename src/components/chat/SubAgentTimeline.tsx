@@ -32,10 +32,6 @@ function SubAgentProgress({ progress }: { progress: string }) {
       ref={scrollRef}
       className="text-[11px] text-muted-foreground/80 p-2.5 rounded-md bg-blue-500/5 border border-blue-500/10 max-h-64 overflow-y-auto flex flex-col gap-1 scroll-smooth"
     >
-      <div className="flex items-center gap-1.5 text-blue-500/80 font-medium pb-1.5 border-b border-blue-500/10 mb-1 sticky top-0 bg-[#f5f8ff] dark:bg-[#111927] z-10">
-        <SpinnerGap size={12} className="animate-spin" />
-        执行过程实时记录...
-      </div>
       <div className="whitespace-pre-wrap break-words text-[11px] leading-relaxed">
         {progress}
       </div>
@@ -130,6 +126,9 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
     if (lowerName.includes('search')) return '搜索者';
     if (lowerName.includes('explor')) return '探索者';
     if (lowerName.includes('exec')) return '执行者';
+    
+    // 如果是类似 call_function_xxx 的模型幻觉输出，直接显示通用名称
+    if (lowerName.startsWith('call_function_')) return '智能体';
     
     return displayName || name;
   };

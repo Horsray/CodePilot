@@ -24,7 +24,8 @@ export function createBashTool(ctx: ToolContext) {
       'Execute a bash command and return its output (stdout + stderr combined). ' +
       'The command runs in the working directory. Use for system operations, ' +
       'running tests, installing packages, git commands, etc. ' +
-      'Long-running commands are automatically killed after the timeout.',
+      'Long-running commands are automatically killed after the timeout. ' +
+      'IMPORTANT: Commands are run non-interactively. NEVER run commands that require user input or open a pager (e.g., use `git log --no-pager` or `PAGER=cat`).',
     inputSchema: z.object({
       command: z.string().describe('The bash command to execute'),
       timeout: z.number().int().positive().max(300000).optional()
@@ -60,6 +61,14 @@ export function createBashTool(ctx: ToolContext) {
           command,
           timeoutMs,
           abortSignal,
+          (chunkStr) => {
+            if (ctx.emitSSE && chunkStr) {
+              ctx.emitSSE({
+                type: 'tool_output',
+                data: chunkStr,
+              });
+            }
+          }
         );
 
         // 通过 SSE 将退出码发送到终端面板
