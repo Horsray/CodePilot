@@ -13,6 +13,7 @@ import { assembleTools } from '../agent-tools';
 import type { ToolSet } from 'ai';
 import { buildSubAgentExecutionProfile } from '../subagent-profile';
 import { createSubAgentProgressTracker } from '../subagent-progress';
+import { tryExecuteSubAgentFastPath } from '../subagent-fast-path';
 
 /**
  * Create the Agent tool for spawning sub-agents.
@@ -89,20 +90,6 @@ export function createAgentTool(ctx: {
       // 生成稳定的子Agent ID，用于UI追踪
       const subAgentId = `subagent-${agentDef.id}-${Date.now()}`;
 
-      // Run sub-agent loop and collect the full response
-      const stream = runAgentLoop({
-        prompt,
-        sessionId: subAgentId,
-        providerId: finalProviderId,
-        sessionProviderId: ctx.sessionProviderId,
-        model: finalModel,
-        systemPrompt,
-        workingDirectory: ctx.workingDirectory,
-        tools: subTools,
-        maxSteps: agentDef.maxSteps || 30,
-        permissionMode: ctx.permissionMode, // inherit from parent
-      });
-
       // Emit subagent start event for UI tracking
       if (ctx.emitSSE) {
         ctx.emitSSE({
@@ -123,6 +110,56 @@ export function createAgentTool(ctx: {
         emitSSE: ctx.emitSSE,
         initialStage: profile.initialStatus,
         sla: profile.sla,
+      });
+
+      const fastPathResult = await tryExecuteSubAgentFastPath({
+        agentId: agentDef.id,
+        prompt,
+        workingDirectory: ctx.workingDirectory,
+        tools: subTools,
+        abortSignal: ctx.abortSignal,
+        onStage: (stage, detail) => {
+          progress.setStage(stage);
+          if (ctx.emitSSE && detail) {
+            ctx.emitSSE({
+              type: 'subagent_progress',
+              data: JSON.stringify({
+                id: subAgentId,
+                detail: `${detail}\n`,
+                append: true,
+              }),
+            });
+          }
+        },
+      });
+
+      if (fastPathResult) {
+        progress.setStage('整理子任务结果');
+        progress.close();
+        if (ctx.emitSSE) {
+          ctx.emitSSE({
+            type: 'subagent_complete',
+            data: JSON.stringify({
+              id: subAgentId,
+              report: fastPathResult.report,
+            }),
+          });
+        }
+        return fastPathResult.report;
+      }
+
+      // Run sub-agent loop and collect the full response
+      const stream = runAgentLoop({
+        prompt,
+        sessionId: subAgentId,
+        providerId: finalProviderId,
+        sessionProviderId: ctx.sessionProviderId,
+        model: finalModel,
+        systemPrompt,
+        workingDirectory: ctx.workingDirectory,
+        tools: subTools,
+        maxSteps: agentDef.maxSteps || 30,
+        permissionMode: ctx.permissionMode, // inherit from parent
       });
 
       // Collect text from the stream
@@ -186,6 +223,8 @@ export function createAgentTool(ctx: {
                   // client can show the approval UI for sub-agent tool calls
                   progress.setStage('等待权限确认');
                   ctx.emitSSE(event);
+                } else if (event.type === 'keep_alive' && ctx.emitSSE) {
+                  ctx.emitSSE({ type: 'keep_alive', data: '' });
                 } else if (event.type === 'tool_use' && ctx.emitSSE) {
                   // Forward subagent tool invocations as tool_output progress
                   try {

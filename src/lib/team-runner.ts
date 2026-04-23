@@ -177,6 +177,8 @@ async function executeAgentTask(
             if (event.type === 'permission_request' && emitSSE) {
               progress.setStage('等待权限确认');
               emitSSE(event);
+            } else if (event.type === 'keep_alive' && emitSSE) {
+              emitSSE({ type: 'keep_alive', data: '' });
             } else {
               if (event.type === 'text') {
                 progress.setStage('整理子任务结果');

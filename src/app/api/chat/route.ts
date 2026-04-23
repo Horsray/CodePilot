@@ -852,6 +852,9 @@ async function collectStreamResponse(
             } else if (event.type === 'error') {
               hasError = true;
               errorMessage = event.data || 'Unknown error';
+            } else if (event.type === 'aborted') {
+              hasError = true;
+              errorMessage = event.data || 'Stream aborted';
             } else if (event.type === 'subagent_start') {
               try {
                 const data = JSON.parse(event.data);
@@ -1027,6 +1030,10 @@ async function collectStreamResponse(
       contentBlocks.push({ type: 'text', text: `\n\n\`\`\`chat-error\n${errPayload}\n\`\`\`` });
     }
 
+    if (subAgents.length > 0) {
+      contentBlocks.push({ type: 'sub_agents', subAgents });
+    }
+
     if (contentBlocks.length > 0) {
       const hbRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
       const errCleanedBlocks = contentBlocks
@@ -1037,7 +1044,7 @@ async function collectStreamResponse(
         )
         .filter((b) => b.type !== 'text' || b.text.trim());
       const hasStructuredBlocks = errCleanedBlocks.some(
-        (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
+        (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking' || b.type === 'sub_agents'
       );
       const content = hasStructuredBlocks
         ? JSON.stringify(errCleanedBlocks)

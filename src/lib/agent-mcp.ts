@@ -209,6 +209,8 @@ export function createAgentMcpServer(ctx: {
                     } else if (event.type === 'permission_request' && ctx.emitSSE) {
                       progress.setStage('等待权限确认');
                       ctx.emitSSE(event);
+                    } else if (event.type === 'keep_alive' && ctx.emitSSE) {
+                      ctx.emitSSE({ type: 'keep_alive', data: '' });
                     } else if (event.type === 'tool_use' && ctx.emitSSE) {
                       try {
                         const t = JSON.parse(event.data);

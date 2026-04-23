@@ -1,8 +1,9 @@
 import type { AgentDefinition } from './agent-registry';
+import { isSimpleWebLookupTask } from './subagent-fast-path';
 
 export interface SubAgentExecutionProfile {
   initialStatus: string;
-  mode: 'default' | 'local_code_search';
+  mode: 'default' | 'local_code_search' | 'web_lookup';
   sla: {
     softMs: number;
     hardMs: number;
@@ -45,9 +46,12 @@ const EXTERNAL_RESEARCH_SIGNALS = [
   'anthropic',
 ];
 
-function getSubAgentSla(agentId: string, mode: 'default' | 'local_code_search') {
+function getSubAgentSla(agentId: string, mode: 'default' | 'local_code_search' | 'web_lookup') {
   if (mode === 'local_code_search') {
     return { softMs: 20_000, hardMs: 60_000 };
+  }
+  if (mode === 'web_lookup') {
+    return { softMs: 20_000, hardMs: 75_000 };
   }
 
   switch (agentId) {
@@ -82,12 +86,17 @@ export function isLocalCodeSearchTask(prompt: string): boolean {
 }
 
 export function buildSubAgentExecutionProfile(agentDef: AgentDefinition, prompt: string): SubAgentExecutionProfile {
-  const mode = SEARCH_LIKE_AGENT_IDS.has(agentDef.id) && isLocalCodeSearchTask(prompt)
-    ? 'local_code_search'
+  const mode = SEARCH_LIKE_AGENT_IDS.has(agentDef.id)
+    ? (isLocalCodeSearchTask(prompt)
+        ? 'local_code_search'
+        : (isSimpleWebLookupTask(prompt) ? 'web_lookup' : 'default'))
     : 'default';
 
   return {
-    initialStatus: mode === 'local_code_search' ? '准备代码检索' : '等待模型响应',
+    initialStatus:
+      mode === 'local_code_search'
+        ? '准备代码检索'
+        : (mode === 'web_lookup' ? '准备网页检索' : '等待模型响应'),
     mode,
     sla: getSubAgentSla(agentDef.id, mode),
   };
