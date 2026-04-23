@@ -726,7 +726,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       const displayUserContent = displayOverride || content;
       let displayContent = displayUserContent;
       if (files && files.length > 0) {
-        const fileMeta = files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size }));
+        const fileMeta = files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, data: f.data }));
         displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
       }
 
@@ -778,7 +778,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       const displayUserContent = next.displayOverride || next.content;
       let displayContent = displayUserContent;
       if (next.files && next.files.length > 0) {
-        const fileMeta = next.files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size }));
+        const fileMeta = next.files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, data: f.data }));
         displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
       }
       const userMessage: Message = {

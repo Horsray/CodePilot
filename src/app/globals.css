@@ -378,6 +378,49 @@
   overflow-wrap: break-word !important;
 }
 
+/* Make Streamdown code block header refined and compact */
+[data-streamdown="code-block"] {
+  margin: 12px 0 !important;
+  border: 1px solid hsl(var(--border) / 0.5) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  background-color: hsl(var(--muted) / 0.1) !important;
+}
+
+[data-streamdown="code-block-header"] {
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 12px !important;
+  background-color: hsl(var(--muted) / 0.5) !important;
+  border-bottom: 1px solid hsl(var(--border) / 0.5) !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+[data-streamdown="code-block-header"] > div,
+[data-streamdown="code-block-header"] > span {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 100% !important;
+}
+
+[data-streamdown="code-block-header"] button {
+  height: 24px !important;
+  padding: 0 6px !important;
+  border-radius: 4px !important;
+  color: hsl(var(--muted-foreground)) !important;
+  transition: all 0.2s !important;
+  display: flex !important;
+  align-items: center !important;
+  background: transparent !important;
+}
+
+[data-streamdown="code-block-header"] button:hover {
+  background-color: hsl(var(--accent)) !important;
+  color: hsl(var(--accent-foreground)) !important;
+}
+
 [data-streamdown="code-block-body"] > code > span {
   display: block !important;
   position: relative;

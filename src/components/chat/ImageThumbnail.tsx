@@ -1,19 +1,11 @@
 'use client';
 
-import { Button } from '@/components/ui/button';
-
-interface ImageThumbnailProps {
-  src: string;
-  alt: string;
-  onClick: () => void;
-}
-
-export function ImageThumbnail({ src, alt, onClick }: ImageThumbnailProps) {
+export function ImageThumbnail({ src, alt, onClick }: { src: string; alt: string; onClick?: () => void }) {
+  if (!src) return null;
   return (
-    <Button
-      variant="ghost"
+    <div
+      className="relative overflow-hidden rounded-lg border border-border/50 bg-muted/20 cursor-pointer hover:border-border transition-colors"
       onClick={onClick}
-      className="rounded-lg overflow-hidden cursor-pointer hover:opacity-80 p-0 h-auto"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
@@ -21,6 +13,6 @@ export function ImageThumbnail({ src, alt, onClick }: ImageThumbnailProps) {
         alt={alt}
         className="max-h-32 w-full object-cover rounded-lg"
       />
-    </Button>
+    </div>
   );
 }

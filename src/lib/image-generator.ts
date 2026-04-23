@@ -43,7 +43,7 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
 
   // Helper to get a provider by ID
   const getProviderById = (id: string) => db.prepare(
-    "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE id = ? AND api_key != '' LIMIT 1"
+    "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE id = ? LIMIT 1"
   ).get(id) as {
     id: string;
     name: string;
@@ -60,7 +60,7 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
   if (params.providerId) {
     const provider = getProviderById(params.providerId);
     if (!provider) {
-      throw new Error('Specified provider not found or has no API key.');
+      throw new Error('Specified provider not found.');
     }
     return generateWithProvider(provider, params, startTime);
   }

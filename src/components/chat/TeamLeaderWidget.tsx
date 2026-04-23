@@ -133,7 +133,29 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
       }
     };
 
+    const handleTeamDagReady = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.agents) {
+        setAgents(prev => {
+          const newAgents = [...prev];
+          detail.agents.forEach((agentInfo: any) => {
+            const id = agentInfo.id || agentInfo;
+            const role = agentInfo.role || agentInfo;
+            if (!newAgents.some(a => a.id === id)) {
+              newAgents.push({
+                id,
+                agent: role,
+                status: 'pending' as const,
+              });
+            }
+          });
+          return newAgents;
+        });
+      }
+    };
+
     window.addEventListener('team_start', handleTeamStart);
+    window.addEventListener('team_dag_ready', handleTeamDagReady);
     window.addEventListener('team_agent_start', handleTeamAgentStart);
     window.addEventListener('team_agent_update', handleTeamAgentUpdate);
     window.addEventListener('team_agent_done', handleTeamAgentDone);
@@ -141,6 +163,7 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
 
     return () => {
       window.removeEventListener('team_start', handleTeamStart);
+      window.removeEventListener('team_dag_ready', handleTeamDagReady);
       window.removeEventListener('team_agent_start', handleTeamAgentStart);
       window.removeEventListener('team_agent_update', handleTeamAgentUpdate);
       window.removeEventListener('team_agent_done', handleTeamAgentDone);

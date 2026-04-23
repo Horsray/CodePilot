@@ -37,7 +37,8 @@ const nextConfig: NextConfig = {
   //   omits cli.js, so the SDK fails with "Claude Code executable not found at
   //   .../node_modules/@anthropic-ai/claude-agent-sdk/cli.js" in production.
   //   Sentry recorded ~247 events in 14d before this was added.
-  serverExternalPackages: ['better-sqlite3', 'node-pty', 'discord.js', '@discordjs/ws', 'zlib-sync', '@anthropic-ai/claude-agent-sdk'],
+  // - @modelcontextprotocol/sdk: Dynamic imports and runtime resolution issues
+  serverExternalPackages: ['better-sqlite3', 'node-pty', 'discord.js', '@discordjs/ws', 'zlib-sync', '@anthropic-ai/claude-agent-sdk', 'chrome-devtools-mcp'],
   env: {
     NEXT_PUBLIC_APP_VERSION: pkg.version,
     NEXT_PUBLIC_SENTRY_DSN: 'https://245dc3525425bcd8eb99dd4b9a2ca5cd@o4511161899548672.ingest.us.sentry.io/4511161904791552',

@@ -102,9 +102,29 @@ module.exports = async function afterPack(context) {
         path.join(appOutDir, 'CodePilot.app', 'Contents', 'Resources', 'standalone'),
         path.join(appOutDir, 'Contents', 'Resources', 'standalone'),
         path.join(appOutDir, 'resources', 'standalone'),
+        path.join(appOutDir, 'CodePilot.app', 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules'),
+        path.join(appOutDir, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules'),
+        path.join(appOutDir, 'resources', 'app.asar.unpacked', 'node_modules'),
+        path.join(appOutDir, 'CodePilot.app', 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', name),
+        path.join(appOutDir, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', name),
+        path.join(appOutDir, 'resources', 'app.asar.unpacked', 'node_modules', name)
       ];
 
       let replaced = 0;
+
+      // Handle Next.js nft omission: copy the .node file if it's completely missing in standalone/node_modules
+      for (const root of searchRoots) {
+        if (fs.existsSync(root) && path.basename(root) === 'standalone') {
+          const expectedDir = path.join(root, 'node_modules', name, 'build', 'Release');
+          const expectedDest = path.join(expectedDir, binaryName);
+          if (!fs.existsSync(expectedDest)) {
+            console.log(`[afterPack] Forcing copy of ${binaryName} into ${expectedDir} (missed by Next.js trace)`);
+            fs.mkdirSync(expectedDir, { recursive: true });
+            fs.copyFileSync(sourcePath, expectedDest);
+            replaced++;
+          }
+        }
+      }
 
       function walkAndReplace(dir) {
         if (!fs.existsSync(dir)) return;
@@ -128,7 +148,7 @@ module.exports = async function afterPack(context) {
       }
 
       if (replaced > 0) {
-        console.log(`[afterPack] Successfully replaced ${replaced} ${binaryName} file(s) with Electron ABI build`);
+        console.log(`[afterPack] Successfully replaced/copied ${replaced} ${binaryName} file(s) with Electron ABI build`);
       } else {
         console.warn(`[afterPack] WARNING: No ${binaryName} files found in standalone resources!`);
       }

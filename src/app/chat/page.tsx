@@ -656,6 +656,10 @@ export default function NewChatPage() {
       });
 
       let sessionId = '';
+      let accumulated = '';
+      let thinkingAccumulated = '';
+      const toolUsesLocal: ToolUseInfo[] = [];
+      const toolResultsLocal: ToolResultInfo[] = [];
 
       try {
         // Create a new session with working directory + model/provider
@@ -740,20 +744,34 @@ export default function NewChatPage() {
         });
 
         if (!response.ok) {
-          const err = await response.json().catch(() => ({}));
+          let err: any = {};
+          let rawText = '';
+          try {
+            rawText = await response.text();
+            err = JSON.parse(rawText);
+          } catch (e) {
+            err = { raw: rawText };
+          }
+
           if (err?.code === 'NEEDS_PROVIDER_SETUP' && typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('open-setup-center', {
               detail: { initialCard: err.initialCard ?? 'provider' },
             }));
           }
-          throw new Error(err?.error || 'Failed to send message');
+          
+          // 特殊处理 413 Payload Too Large
+          if (response.status === 413) {
+            throw new Error('请求体积过大：发送的消息、附件或提及的文件过多。请减少内容后重试。');
+          }
+          
+          const fallbackMsg = `Failed to send message (HTTP ${response.status}). ${err.raw ? 'Raw response: ' + err.raw.slice(0, 200) : ''}`;
+          throw new Error(err?.error || err?.message || fallbackMsg);
         }
 
         const reader = response.body?.getReader();
         if (!reader) throw new Error('No response stream');
 
         const decoder = new TextDecoder();
-        let accumulated = '';
         let tokenUsage: TokenUsage | null = null;
         let buffer = '';
         let firstChunkSeen = false;
@@ -783,6 +801,7 @@ export default function NewChatPage() {
                   break;
                 }
                 case 'thinking': {
+                  thinkingAccumulated += event.data;
                   setStreamingThinkingContent((prev) => prev + event.data);
                   break;
                 }
@@ -792,6 +811,9 @@ export default function NewChatPage() {
                 case 'tool_use': {
                   try {
                     const toolData = JSON.parse(event.data);
+                    if (!toolUsesLocal.some((t) => t.id === toolData.id)) {
+                      toolUsesLocal.push({ id: toolData.id, name: toolData.name, input: toolData.input });
+                    }
                     setStreamingToolOutput('');
                     setToolUses((prev) => {
                       if (prev.some((t) => t.id === toolData.id)) return prev;
@@ -803,6 +825,12 @@ export default function NewChatPage() {
                 case 'tool_result': {
                   try {
                     const resultData = JSON.parse(event.data);
+                    toolResultsLocal.push({
+                      tool_use_id: resultData.tool_use_id,
+                      content: resultData.content,
+                      ...(resultData.is_error ? { is_error: true } : {}),
+                      ...(Array.isArray(resultData.media) && resultData.media.length > 0 ? { media: resultData.media } : {}),
+                    });
                     setStreamingToolOutput('');
                     setToolResults((prev) => [...prev, { tool_use_id: resultData.tool_use_id, content: resultData.content }]);
                   } catch { /* skip */ }
@@ -918,6 +946,7 @@ export default function NewChatPage() {
                   // content-block JSON on the assistant message, so the
                   // redirected ChatView gets a fully-formed message from
                   // DB — this branch is for the pre-redirect live view.
+                  thinkingAccumulated += event.data;
                   setStreamingThinkingContent((prev) => prev + event.data);
                   break;
                 }
@@ -933,31 +962,29 @@ export default function NewChatPage() {
                   break;
                 }
                 case 'error': {
-                  // Try to parse structured error JSON from classifier
-                  let errorDisplay: string;
+                  let rawErrorStr = '';
                   try {
                     const parsed = JSON.parse(event.data);
                     if (parsed.category && parsed.userMessage) {
-                      errorDisplay = parsed.userMessage;
-                      if (parsed.actionHint) errorDisplay += `\n\n**What to do:** ${parsed.actionHint}`;
-                      if (parsed.details) errorDisplay += `\n\nDetails: ${parsed.details}`;
-                      // Add diagnostic guidance for provider/auth related errors
-                      const diagCategories = new Set([
-                        'AUTH_REJECTED', 'AUTH_FORBIDDEN', 'AUTH_STYLE_MISMATCH',
-                        'NO_CREDENTIALS', 'PROVIDER_NOT_APPLIED', 'MODEL_NOT_AVAILABLE',
-                        'NETWORK_UNREACHABLE', 'ENDPOINT_NOT_FOUND', 'PROCESS_CRASH',
-                        'CLI_NOT_FOUND', 'UNSUPPORTED_FEATURE',
-                      ]);
-                      if (diagCategories.has(parsed.category)) {
-                        errorDisplay += '\n\n💡 [Run Provider Diagnostics](/settings#providers) to troubleshoot, or check the [Provider Setup Guide](https://www.codepilot.sh/docs/providers).';
-                      }
+                      rawErrorStr = parsed.userMessage;
+                      if (parsed.actionHint) rawErrorStr += `\n\nWhat to do: ${parsed.actionHint}`;
+                      if (parsed.details) rawErrorStr += `\n\nDetails: ${parsed.details}`;
                     } else {
-                      errorDisplay = event.data;
+                      rawErrorStr = event.data;
                     }
                   } catch {
-                    errorDisplay = event.data;
+                    rawErrorStr = event.data;
                   }
-                  accumulated += '\n\n**Error:** ' + errorDisplay;
+
+                  let explain = '模型服务连接中断或遇到错误';
+                  const lowerErr = rawErrorStr.toLowerCase();
+                  if (lowerErr.includes('rate') && lowerErr.includes('limit')) explain = '触发了模型提供商的速率限制 (Rate Limit) 或限流，请稍后重试';
+                  else if (lowerErr.includes('overloaded') || lowerErr.includes('503') || lowerErr.includes('502') || lowerErr.includes('timeout')) explain = '模型提供商的服务器当前拥堵或响应超时';
+                  else if (lowerErr.includes('api_key') || lowerErr.includes('unauthorized') || lowerErr.includes('401')) explain = 'API 密钥无效或未授权';
+                  else if (lowerErr.includes('fetch') || lowerErr.includes('network') || lowerErr.includes('econnrefused')) explain = '网络连接失败，请检查网络或系统代理设置';
+
+                  const errPayload = JSON.stringify({ explain, raw: rawErrorStr });
+                  accumulated += `\n\n\`\`\`chat-error\n${errPayload}\n\`\`\``;
                   setStreamingContent(accumulated);
                   break;
                 }
@@ -1000,6 +1027,45 @@ export default function NewChatPage() {
         } else {
           const errMsg = error instanceof Error ? error.message : 'Unknown error';
           perfTrace.finish('failed', { sessionId, message: errMsg });
+          const hasPartial = Boolean(
+            accumulated.trim()
+              || thinkingAccumulated.trim()
+              || toolUsesLocal.length > 0
+              || toolResultsLocal.length > 0
+          );
+          if (hasPartial && sessionId) {
+            let explain = '模型服务连接中断或遇到错误';
+            const lowerErr = String(errMsg).toLowerCase();
+            if (lowerErr.includes('rate') && lowerErr.includes('limit')) explain = '触发了模型提供商的速率限制 (Rate Limit) 或限流，请稍后重试';
+            else if (lowerErr.includes('overloaded') || lowerErr.includes('503') || lowerErr.includes('502') || lowerErr.includes('timeout')) explain = '模型提供商的服务器当前拥堵或响应超时';
+            else if (lowerErr.includes('api_key') || lowerErr.includes('unauthorized') || lowerErr.includes('401')) explain = 'API 密钥无效或未授权';
+            else if (lowerErr.includes('fetch') || lowerErr.includes('network') || lowerErr.includes('econnrefused')) explain = '网络连接失败，请检查网络或系统代理设置';
+
+            const errPayload = JSON.stringify({ explain, raw: errMsg });
+            const errorFence = `\n\n\`\`\`chat-error\n${errPayload}\n\`\`\``;
+            const textPart = accumulated.trim() ? accumulated.trim() + errorFence : errorFence;
+
+            const blocks: Array<Record<string, unknown>> = [];
+            if (thinkingAccumulated.trim()) {
+              blocks.push({ type: 'thinking', thinking: thinkingAccumulated.trim() });
+            }
+            for (const tu of toolUsesLocal) {
+              blocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
+              const tr = toolResultsLocal.find((r) => r.tool_use_id === tu.id);
+              if (tr) blocks.push({ type: 'tool_result', tool_use_id: tr.tool_use_id, content: tr.content });
+            }
+            blocks.push({ type: 'text', text: textPart.trim() });
+
+            const assistantMessage: Message = {
+              id: 'temp-assistant-error-' + Date.now(),
+              session_id: sessionId,
+              role: 'assistant',
+              content: JSON.stringify(blocks),
+              created_at: new Date().toISOString(),
+              token_usage: null,
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+          }
           setErrorBanner({ message: t('error.sessionCreateFailed'), description: errMsg });
         }
       } finally {

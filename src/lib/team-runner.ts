@@ -348,13 +348,18 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
   const { goal, emitSSE, abortSignal } = options;
   let accumulatedContext = `Team Goal: ${goal}\n\n`;
 
+  // Phase 0: 立即触发前端 UI 渲染，避免用户觉得卡顿
+  emitTeamEvent('team_start', {
+    goal,
+    agents: [], // 先传空列表，稍后 DAG 生成后补充
+    startedAt: Date.now(),
+  });
+
   // Phase 1: Generate DAG
   const dag = await generateTeamDAG(options);
   
-  emitTeamEvent('team_start', {
-    goal,
+  emitTeamEvent('team_dag_ready', {
     agents: dag.tasks,
-    startedAt: Date.now(),
   });
 
   if (emitSSE) {

@@ -555,6 +555,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           let hasToolCalls = false;
           let hasContent = false; // tracks whether any actual content was produced
           const stepToolCalls: string[] = [];
+          let stepText = '';
 
           // Extract file paths from tool calls
           function extractFilePaths(toolName: string, input: unknown): string[] {
@@ -622,6 +623,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
             switch (event.type) {
               case 'text-delta':
                 hasContent = true;
+                stepText += event.text;
                 controller.enqueue(formatSSE({ type: 'text', data: event.text }));
                 break;
 
@@ -771,6 +773,65 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                   userMessage: `模型未返回任何内容 (finishReason: ${finishReason})。可能是 API 代理不兼容或模型 ID "${modelId}" 不被支持。`,
                 }),
               }));
+            } else {
+              // We have content, but no tool calls. Check if it's an abnormal termination or raw JSON leak.
+              // 检测异常终止或模型直接输出裸 JSON（未触发工具调用）的情况，并渲染重试按钮
+              const finishReason = await result.finishReason;
+              const trimmed = stepText.trim();
+
+              if (finishReason === 'length') {
+                console.error(`[agent-loop] Truncated response: finishReason=length, model=${modelId}`);
+                // 生成由于长度截断导致的错误信息区块
+                const errJson = JSON.stringify({
+                  explain: '模型输出被截断（可能达到最大上下文长度或最大输出Token限制），任务被迫中断。',
+                  raw: 'finishReason: length'
+                });
+                controller.enqueue(formatSSE({
+                  type: 'text',
+                  data: `\n\n\`\`\`chat-error\n${errJson}\n\`\`\``
+                }));
+              } else if (finishReason === 'error') {
+                console.error(`[agent-loop] Error response: finishReason=error, model=${modelId}`);
+                // 生成由于网络或服务端错误导致的错误信息区块
+                const errJson = JSON.stringify({
+                  explain: '模型生成过程中发生网络或服务端错误，任务被迫中断。',
+                  raw: 'finishReason: error'
+                });
+                controller.enqueue(formatSSE({
+                  type: 'text',
+                  data: `\n\n\`\`\`chat-error\n${errJson}\n\`\`\``
+                }));
+              } else if (trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```json')) {
+                // Suspicious JSON output without actual tool calls
+                const isLikelyJson = (trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+                                     (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+                                     (trimmed.startsWith('```json') && trimmed.endsWith('```'));
+                if (isLikelyJson) {
+                  let parsed = null;
+                  try {
+                    const toParse = trimmed.startsWith('```json') 
+                      ? trimmed.replace(/^```json\s*/, '').replace(/\s*```$/, '')
+                      : trimmed;
+                    parsed = JSON.parse(toParse);
+                  } catch (e) {
+                    // Ignore parse errors
+                  }
+                  
+                  // If it parses as an object/array, it's a leaked tool call or raw JSON
+                  if (parsed && typeof parsed === 'object') {
+                    console.warn(`[agent-loop] Model leaked raw JSON instead of tool call, model=${modelId}`);
+                    // 生成由于模型直接输出裸 JSON 导致的错误信息区块
+                    const errJson = JSON.stringify({
+                      explain: '模型输出了原始 JSON 数据而未正确触发工具调用，导致任务中断。',
+                      raw: stepText.slice(0, 500) + (stepText.length > 500 ? '...' : '')
+                    });
+                    controller.enqueue(formatSSE({
+                      type: 'text',
+                      data: `\n\n\`\`\`chat-error\n${errJson}\n\`\`\``
+                    }));
+                  }
+                }
+              }
             }
             break;
           }

@@ -10,9 +10,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import type { IPty } from 'node-pty';
 import { appendTerminalOutput } from './terminal-output-store';
 
-// node-pty is native; lazy-load it inside the Node runtime.
-import * as ptyModule from 'node-pty';
-
+// node-pty is native; lazy-load it inside the Node runtime to prevent Next.js standalone crashes.
 let pty: typeof import('node-pty') | null = null;
 let ptyLoadError: Error | null = null;
 
@@ -20,7 +18,20 @@ function getPty() {
   if (ptyLoadError) return null;
   if (!pty) {
     try {
-      pty = ptyModule;
+      // Check if we are in Electron packaged app and load from asar.unpacked
+      if (process.env.ELECTRON_RUN_AS_NODE || process.versions.electron) {
+        const path = require('path');
+        const fs = require('fs');
+        const asarPath = path.join(process.execPath, '..', '..', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty');
+        if (fs.existsSync(asarPath)) {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          pty = require(asarPath);
+          return pty as typeof import('node-pty');
+        }
+      }
+      // Fallback for dev mode
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      pty = require('node-pty');
     } catch (err) {
       ptyLoadError = err instanceof Error ? err : new Error(String(err));
       console.error('[pty-manager] Failed to load node-pty:', ptyLoadError);

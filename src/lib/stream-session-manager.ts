@@ -360,13 +360,28 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     });
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
+      let err: any = {};
+      let rawText = '';
+      try {
+        rawText = await response.text();
+        err = JSON.parse(rawText);
+      } catch (e) {
+        err = { raw: rawText };
+      }
+
       if (err?.code === 'NEEDS_PROVIDER_SETUP' && typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('open-setup-center', {
           detail: { initialCard: err.initialCard ?? 'provider' },
         }));
       }
-      throw new Error(err?.error || 'Failed to send message');
+      
+      // 特殊处理 413 Payload Too Large，这是由于 Electron Standalone Server 的内置大小限制导致的
+      if (response.status === 413) {
+        throw new Error('请求体积过大：发送的消息、附件或提及的文件过多。请减少内容后重试。');
+      }
+      
+      const fallbackMsg = `Failed to send message (HTTP ${response.status}). ${err.raw ? 'Raw response: ' + err.raw.slice(0, 200) : ''}`;
+      throw new Error(err?.error || err?.message || fallbackMsg);
     }
 
     const reader = response.body?.getReader();

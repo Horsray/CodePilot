@@ -2,13 +2,29 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import type { IPty } from 'node-pty';
+import { app } from 'electron';
+import path from 'path';
 
 let pty: typeof import('node-pty') | null = null;
 
 function getPty() {
   if (!pty) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    pty = require('node-pty');
+    try {
+      // 优先尝试从 asar.unpacked 目录加载
+      const asarPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'node-pty');
+      if (fs.existsSync(asarPath)) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        pty = require(asarPath);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        pty = require('node-pty');
+      }
+    } catch (e) {
+      console.error('[terminal-manager] Failed to load node-pty', e);
+      // fallback...
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      pty = require('node-pty');
+    }
   }
   return pty as typeof import('node-pty');
 }

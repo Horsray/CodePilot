@@ -327,6 +327,9 @@ function SubAgentTimelineStreamAdapter({ sessionId, isStreaming }: { sessionId?:
           } else if (detail.report) {
             // Report marks successful completion
             return prev.map(a => a.id === detail.id ? { ...a, status: 'completed', report: detail.report, completedAt: Date.now() } : a);
+          } else if (detail.detail) {
+            // Progress update (from subagent-progress event)
+            return prev.map(a => a.id === detail.id ? { ...a, progress: detail.detail } : a);
           } else {
             // It's a start event
             if (prev.some(a => a.id === detail.id)) return prev;
@@ -344,8 +347,14 @@ function SubAgentTimelineStreamAdapter({ sessionId, isStreaming }: { sessionId?:
       }
     };
     
-    window.addEventListener('subagent-event', handleSync);
-    return () => window.removeEventListener('subagent-event', handleSync);
+    window.addEventListener('subagent-start', handleSync);
+    window.addEventListener('subagent-progress', handleSync);
+    window.addEventListener('subagent-complete', handleSync);
+    return () => {
+      window.removeEventListener('subagent-start', handleSync);
+      window.removeEventListener('subagent-progress', handleSync);
+      window.removeEventListener('subagent-complete', handleSync);
+    };
   }, [sessionId]);
 
   // Also clear timeline on unmount if streaming is stopped
