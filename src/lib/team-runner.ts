@@ -173,7 +173,9 @@ async function executeAgentTask(
           if (!line.startsWith('data: ')) continue;
           try {
             const event = JSON.parse(line.slice(6));
-            progress.touch();
+            if (event.type !== 'keep_alive') {
+              progress.touch();
+            }
             if (event.type === 'permission_request' && emitSSE) {
               progress.setStage('等待权限确认');
               emitSSE(event);

@@ -19,7 +19,7 @@ describe('subagent progress tracker', () => {
     await new Promise((resolve) => setTimeout(resolve, 45));
     tracker.close();
 
-    assert.equal(events[0], '等待模型响应');
+    assert.equal(events[0].trim(), '等待模型响应');
     assert.ok(events.some((detail) => detail.includes('SLA 预警')), 'should emit soft SLA warning');
     assert.ok(events.some((detail) => detail.includes('SLA 超时')), 'should emit hard SLA timeout');
   });

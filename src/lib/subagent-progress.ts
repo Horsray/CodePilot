@@ -28,30 +28,30 @@ export function createSubAgentProgressTracker(options: {
   let softWarned = false;
   let hardWarned = false;
 
-  const emit = (detail: string) => {
+  const emit = (detail: string, append = true) => {
     emitSSE?.({
       type: 'subagent_progress',
-      data: JSON.stringify({ id, detail }),
+      data: JSON.stringify({ id, detail, append }),
     });
   };
 
-  emit(initialStage);
+  emit(initialStage + '\n', true);
 
   const timer = emitSSE
     ? setInterval(() => {
         const idleMs = Date.now() - lastActivityAt;
         if (sla && !hardWarned && idleMs >= sla.hardMs) {
           hardWarned = true;
-          emit(`SLA 超时：${currentStage}（已等待 ${formatSeconds(idleMs)}）`);
+          emit(`\n⚠️ SLA 超时：${currentStage}（已等待 ${formatSeconds(idleMs)}）\n`, true);
           return;
         }
         if (sla && !softWarned && idleMs >= sla.softMs) {
           softWarned = true;
-          emit(`SLA 预警：${currentStage}（已等待 ${formatSeconds(idleMs)}）`);
+          emit(`\n⏱️ SLA 预警：${currentStage}（已等待 ${formatSeconds(idleMs)}）\n`, true);
           return;
         }
         if (idleMs >= heartbeatMs) {
-          emit(`${currentStage}（已等待 ${formatSeconds(idleMs)}）`);
+          emit(`\n...${currentStage}（已等待 ${formatSeconds(idleMs)}）\n`, true);
         }
       }, heartbeatMs)
     : null;
@@ -74,7 +74,7 @@ export function createSubAgentProgressTracker(options: {
       currentStage = stage;
       lastActivityAt = Date.now();
       resetWarnings();
-      emit(stage);
+      // Do not emit stage changes, as executeAgentTask will emit the actual progress
     },
     close() {
       if (timer) clearInterval(timer);

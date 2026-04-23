@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { SpinnerGap, CheckCircle, XCircle, Clock, Robot, CaretDown, CaretRight } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { AGENT_META } from '../ai-elements/tool-actions-group';
@@ -18,6 +18,31 @@ import { SubAgentInfo } from '@/types';
  * - 字体比主时间线小
  * - 主Agent下方显示子Agent完成统计
  */
+function SubAgentProgress({ progress }: { progress: string }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [progress]);
+
+  return (
+    <div 
+      ref={scrollRef}
+      className="text-[11px] text-muted-foreground/80 p-2.5 rounded-md bg-blue-500/5 border border-blue-500/10 max-h-64 overflow-y-auto flex flex-col gap-1 scroll-smooth"
+    >
+      <div className="flex items-center gap-1.5 text-blue-500/80 font-medium pb-1.5 border-b border-blue-500/10 mb-1 sticky top-0 bg-[#f5f8ff] dark:bg-[#111927] z-10">
+        <SpinnerGap size={12} className="animate-spin" />
+        执行过程实时记录...
+      </div>
+      <div className="whitespace-pre-wrap break-words text-[11px] leading-relaxed">
+        {progress}
+      </div>
+    </div>
+  );
+}
+
 export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [userInteractedAgents, setUserInteractedAgents] = useState<Set<string>>(new Set());
@@ -187,15 +212,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
 
                   {/* 运行进度 */}
                   {agent.status === 'running' && currentProgress && (
-                    <div className="text-[11px] text-muted-foreground/80 p-2.5 rounded-md bg-blue-500/5 border border-blue-500/10 max-h-64 overflow-y-auto flex flex-col gap-1">
-                      <div className="flex items-center gap-1.5 text-blue-500/80 font-medium pb-1.5 border-b border-blue-500/10 mb-1">
-                        <SpinnerGap size={12} className="animate-spin" />
-                        执行过程实时记录...
-                      </div>
-                      <div className="whitespace-pre-wrap break-words text-[11px] leading-relaxed">
-                        {currentProgress}
-                      </div>
-                    </div>
+                    <SubAgentProgress progress={currentProgress} />
                   )}
 
                   {/* 报告输出 */}
