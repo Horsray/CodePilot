@@ -224,8 +224,12 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function sanitizeCapturedOutput(command: string, captured: string): string {
-  const plainCaptured = captured
+function sanitizeCapturedOutput(command: string, captured: string, startMarker?: string, endMarker?: string): string {
+  let plainCaptured = captured;
+  if (startMarker) plainCaptured = plainCaptured.replace(new RegExp(`^.*${escapeRegExp(startMarker)}.*$\\r?\\n?`, 'gm'), '');
+  if (endMarker) plainCaptured = plainCaptured.replace(new RegExp(`^.*${escapeRegExp(endMarker)}.*$\\r?\\n?`, 'gm'), '');
+
+  plainCaptured = plainCaptured
     .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
     .replace(/\u001b\][^\u0007]*\u0007/g, '')
     .replace(/\u001b[PX^_].*?\u001b\\/g, '')
@@ -270,8 +274,8 @@ export async function executeCommandInPtySession(
     const token = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const startMarker = `__CODEPILOT_CMD_START_${token}__`;
     const endMarker = `__CODEPILOT_CMD_END_${token}__`;
-    const startRegex = new RegExp(`(?:\\r?\\n|^)${escapeRegExp(startMarker)}\\r?\\n`);
-    const endRegex = new RegExp(`(?:\\r?\\n|^)${escapeRegExp(endMarker)}:(\\d+)__\\r?\\n?`);
+    const startRegex = new RegExp(escapeRegExp(startMarker));
+    const endRegex = new RegExp(`${escapeRegExp(endMarker)}:(\\d+)__`);
     const maxCaptureLength = 1024 * 1024;
 
     return new Promise<string>((resolve) => {
@@ -299,7 +303,7 @@ export async function executeCommandInPtySession(
         abortSignal?.removeEventListener('abort', handleAbort);
         clearTimeout(timeoutHandle);
 
-        let output = sanitizeCapturedOutput(command, captured.replace(/^\r?\n/, '').replace(/\r?\n$/, ''));
+        let output = sanitizeCapturedOutput(command, captured.replace(/^\r?\n/, '').replace(/\r?\n$/, ''), startMarker, endMarker);
         if (truncated) {
           output += `${output ? '\n\n' : ''}[Output truncated — exceeded 1MB limit]`;
         }
