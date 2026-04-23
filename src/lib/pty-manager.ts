@@ -340,7 +340,15 @@ export async function executeCommandInPtySession(
       const handleAbort = () => {
         // 中文注释：中断命令时仅在 TTY 场景尝试恢复回显，避免 spawn 回退模式报 stty 错误。
         writePtySession(id, '\u0003\n[ -t 0 ] && stty echo 2>/dev/null || true\n');
-        finalize('[Process killed: SIGTERM]');
+        
+        setTimeout(() => {
+          if (!finished) {
+            console.warn(`[pty-manager] Session ${id} did not respond to SIGINT within 2s after abort. Killing PTY session to prevent head-of-line blocking.`);
+            killPtySession(id);
+          }
+        }, 2000);
+
+        finalize('[Process killed: SIGINT (Aborted)]');
       };
 
       let dataDisposable: { dispose: () => void };
@@ -368,9 +376,19 @@ export async function executeCommandInPtySession(
       abortSignal?.addEventListener('abort', handleAbort, { once: true });
 
       const timeoutHandle = setTimeout(() => {
-        // 中文注释：超时终止时同样做安全回显恢复，保证手动输入不会被永久隐藏。
+        // 发送 SIGINT 尝试优雅中断
         writePtySession(id, '\u0003\n[ -t 0 ] && stty echo 2>/dev/null || true\n');
-        finalize('[Process killed: SIGTERM]');
+        
+        // 增加一个短延迟，如果 PTY 没有响应 \u0003，说明该 PTY 会话已经“变砖”或死锁。
+        // 为了不影响后续排队的命令，我们必须直接杀掉并销毁整个 PTY 会话。
+        setTimeout(() => {
+          if (!finished) {
+            console.warn(`[pty-manager] Session ${id} did not respond to SIGINT within 2s after timeout. Killing PTY session to prevent head-of-line blocking.`);
+            killPtySession(id);
+          }
+        }, 2000);
+
+        finalize('[Process killed: SIGTERM (Timeout)]');
       }, timeoutMs);
 
       const wrappedCommand = [

@@ -27,7 +27,7 @@ export function createBashTool(ctx: ToolContext) {
       'Long-running commands are automatically killed after the timeout.',
     inputSchema: z.object({
       command: z.string().describe('The bash command to execute'),
-      timeout: z.number().int().positive().optional()
+      timeout: z.number().int().positive().max(300000).optional()
         .describe('Timeout in milliseconds (default 120000)'),
     }),
     // 中文注释：功能名称「Bash 工具执行」，用法是优先通过 PTY 会话执行命令，
@@ -126,21 +126,53 @@ export function createBashTool(ctx: ToolContext) {
         proc.stdout?.on('data', collect);
         proc.stderr?.on('data', collect);
 
-        const onAbort = () => {
+        const killProc = () => {
           try {
-            if (proc.pid) {
+            if (proc.pid && process.platform !== 'win32') {
               process.kill(-proc.pid, 'SIGTERM');
               setTimeout(() => {
                 try { process.kill(-proc.pid!, 'SIGKILL'); } catch {}
               }, 2000);
+            } else {
+              proc.kill('SIGTERM');
             }
           } catch {
             proc.kill('SIGTERM');
           }
         };
+
+        const onAbort = () => {
+          killProc();
+        };
         abortSignal?.addEventListener('abort', onAbort, { once: true });
 
+        let isResolved = false;
+        const absoluteTimeout = setTimeout(() => {
+          if (isResolved) return;
+          isResolved = true;
+          killProc();
+          proc.stdout?.destroy();
+          proc.stderr?.destroy();
+          
+          let output = Buffer.concat(chunks).toString('utf-8');
+          if (truncated) {
+            output += '\n\n[Output truncated — exceeded 1MB limit]';
+          }
+          output += `\n\n[Process killed: Timeout after ${timeoutMs}ms]`;
+          
+          if (ctx.emitSSE) {
+            ctx.emitSSE({
+              type: 'terminal_mirror',
+              data: JSON.stringify({ action: 'exit', exitCode: 1, signal: 'SIGTERM' }),
+            });
+          }
+          resolve(output);
+        }, timeoutMs + 1000); // Add 1s buffer over native spawn timeout
+
         proc.on('close', (code, signal) => {
+          if (isResolved) return;
+          isResolved = true;
+          clearTimeout(absoluteTimeout);
           abortSignal?.removeEventListener('abort', onAbort);
 
           let output = Buffer.concat(chunks).toString('utf-8');
@@ -172,6 +204,9 @@ export function createBashTool(ctx: ToolContext) {
         });
 
         proc.on('error', (err) => {
+          if (isResolved) return;
+          isResolved = true;
+          clearTimeout(absoluteTimeout);
           resolve(`Error executing command: ${err.message}`);
         });
       });
