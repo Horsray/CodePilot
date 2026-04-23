@@ -38,6 +38,8 @@ export interface AssembleToolsOptions {
     emitSSE: (event: { type: string; data: string }) => void;
     abortSignal?: AbortSignal;
   };
+  /** Optional allow-list to avoid instantiating unrelated MCP tool wrappers */
+  allowedToolNames?: string[];
 }
 
 export interface AssembleToolsResult {
@@ -52,6 +54,7 @@ export interface AssembleToolsResult {
  */
 export function assembleTools(options: AssembleToolsOptions = {}): AssembleToolsResult {
   const cwd = options.workingDirectory || process.cwd();
+  const allowedToolNames = options.allowedToolNames;
 
   // Built-in coding tools — pass permission context through so sub-agents
   // (Agent tool) can inherit the parent's permission mode and SSE emitter.
@@ -78,19 +81,23 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
   const { tools: builtinMcpTools, systemPrompts } = getBuiltinTools({
     workspacePath: cwd,
     prompt: options.prompt,
+    allowedToolNames,
   });
 
   // External MCP tools from connected servers
-  const mcpTools = buildMcpToolSet();
+  const mcpTools = buildMcpToolSet(allowedToolNames);
 
   const allTools = { ...builtinTools, ...builtinMcpTools, ...mcpTools };
+  const filteredTools = (allowedToolNames
+    ? Object.fromEntries(Object.entries(allTools).filter(([toolName]) => allowedToolNames.includes(toolName)))
+    : allTools) as ToolSet;
 
   // Wrap with permission checks if context provided
   if (options.permissionContext) {
-    return { tools: wrapWithPermissions(allTools, options.permissionContext), systemPrompts };
+    return { tools: wrapWithPermissions(filteredTools, options.permissionContext), systemPrompts };
   }
 
-  return { tools: allTools, systemPrompts };
+  return { tools: filteredTools, systemPrompts };
 }
 
 // ── Permission wrapper ──────────────────────────────────────────

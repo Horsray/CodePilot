@@ -29,9 +29,11 @@ export interface BuiltinToolGroup {
 export function getBuiltinTools(options: {
   workspacePath?: string;
   prompt?: string;
+  allowedToolNames?: Iterable<string>;
 }): { tools: ToolSet; systemPrompts: string[] } {
   const tools: ToolSet = {};
   const systemPrompts: string[] = [];
+  const allowed = options.allowedToolNames ? new Set(options.allowedToolNames) : null;
 
   for (const group of getToolGroups(options)) {
     // Check condition
@@ -44,7 +46,10 @@ export function getBuiltinTools(options: {
       if (!group.condition.keywords.test(text)) continue;
     }
 
-    Object.assign(tools, group.tools);
+    const selectedEntries = Object.entries(group.tools).filter(([toolName]) => !allowed || allowed.has(toolName));
+    if (selectedEntries.length === 0) continue;
+
+    Object.assign(tools, Object.fromEntries(selectedEntries));
     if (group.systemPrompt) {
       systemPrompts.push(group.systemPrompt);
     }

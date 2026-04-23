@@ -9,9 +9,10 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { getAgent, getSubAgents } from '../agent-registry';
 import { runAgentLoop } from '../agent-loop';
-import { createModel } from '../ai-provider';
 import { assembleTools } from '../agent-tools';
 import type { ToolSet } from 'ai';
+import { buildSubAgentExecutionProfile } from '../subagent-profile';
+import { createSubAgentProgressTracker } from '../subagent-progress';
 
 /**
  * Create the Agent tool for spawning sub-agents.
@@ -52,6 +53,8 @@ export function createAgentTool(ctx: {
       }
 
       // Build restricted tool set — inherit permission context from parent
+      const profile = buildSubAgentExecutionProfile(agentDef, prompt);
+
       const permissionContext = (ctx.parentSessionId && ctx.emitSSE && ctx.permissionMode)
         ? {
             sessionId: ctx.parentSessionId,
@@ -62,6 +65,7 @@ export function createAgentTool(ctx: {
         : undefined;
       const { tools: allTools } = assembleTools({
         workingDirectory: ctx.workingDirectory,
+        prompt,
         providerId: ctx.providerId,
         sessionProviderId: ctx.sessionProviderId,
         model: ctx.parentModel,
@@ -108,10 +112,18 @@ export function createAgentTool(ctx: {
             name: agentDef.id,
             displayName: agentDef.displayName,
             prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
+            model: finalModel,
           }),
         });
         ctx.emitSSE({ type: 'tool_output', data: `[subagent:${agentDef.id}] ${prompt.length > 120 ? prompt.slice(0, 117) + '...' : prompt}` });
       }
+
+      const progress = createSubAgentProgressTracker({
+        id: subAgentId,
+        emitSSE: ctx.emitSSE,
+        initialStage: profile.initialStatus,
+        sla: profile.sla,
+      });
 
       // Collect text from the stream
       const reader = stream.getReader();
@@ -132,13 +144,17 @@ export function createAgentTool(ctx: {
               if (!line.startsWith('data: ')) continue;
               try {
                 const event = JSON.parse(line.slice(6));
+                progress.touch();
                 if (event.type === 'text') {
+                  progress.setStage('整理子任务结果');
                   textParts.push(event.data);
                 } else if (event.type === 'thinking') {
                   // 收集thinking作为后备输出
+                  progress.setStage('模型思考中');
                   thinkingParts.push(event.data);
                 } else if (event.type === 'error') {
                   // 收集错误事件
+                  progress.setStage('子任务执行出错');
                   try {
                     const errData = JSON.parse(event.data);
                     errorEvent = errData.userMessage || event.data;
@@ -147,6 +163,7 @@ export function createAgentTool(ctx: {
                   }
                 } else if (event.type === 'tool_result') {
                   // 收集工具结果用于生成fallback摘要
+                  progress.setStage('分析工具结果');
                   try {
                     const res = JSON.parse(event.data);
                     const toolName = res.tool_use_id ? 'tool' : 'unknown';
@@ -167,12 +184,14 @@ export function createAgentTool(ctx: {
                 } else if (event.type === 'permission_request' && ctx.emitSSE) {
                   // Forward permission requests to parent stream so the
                   // client can show the approval UI for sub-agent tool calls
+                  progress.setStage('等待权限确认');
                   ctx.emitSSE(event);
                 } else if (event.type === 'tool_use' && ctx.emitSSE) {
                   // Forward subagent tool invocations as tool_output progress
                   try {
                     const tool = JSON.parse(event.data);
                     const toolRenderer = getToolSummary(tool.name, tool.input);
+                    progress.setStage(`执行工具: ${toolRenderer}`);
                     ctx.emitSSE({ type: 'tool_output', data: `> ${toolRenderer}` });
                   } catch { /* skip malformed */ }
                 }
@@ -181,6 +200,7 @@ export function createAgentTool(ctx: {
           }
         }
       } finally {
+        progress.close();
         reader.releaseLock();
       }
 

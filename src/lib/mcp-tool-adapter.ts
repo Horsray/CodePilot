@@ -14,11 +14,13 @@ import { getAllMcpTools, callMcpTool, type McpToolDefinition } from './mcp-conne
  * Tool names are fully qualified: `mcp__{serverName}__{toolName}`
  * This prevents collisions between tools from different servers.
  */
-export function buildMcpToolSet(): ToolSet {
+export function buildMcpToolSet(allowedToolNames?: Iterable<string>): ToolSet {
   const mcpTools = getAllMcpTools();
   const toolSet: ToolSet = {};
+  const allowed = allowedToolNames ? new Set(allowedToolNames) : null;
 
   for (const mcpTool of mcpTools) {
+    if (allowed && !allowed.has(mcpTool.qualifiedName)) continue;
     toolSet[mcpTool.qualifiedName] = convertMcpTool(mcpTool);
   }
 

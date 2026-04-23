@@ -1,6 +1,6 @@
 "use client";
 
-import { Lightning, Trash } from "@/components/ui/icon";
+import { Lightning, Trash, Sparkle } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -15,9 +15,10 @@ export interface SkillItem {
   name: string;
   description: string;
   content: string;
-  source: "global" | "project" | "plugin" | "installed";
+  source: "global" | "project" | "plugin" | "installed" | "sdk";
   installedSource?: "agents" | "claude";
   filePath: string;
+  autoExtracted?: boolean;
 }
 
 interface SkillListItemProps {
@@ -66,8 +67,21 @@ export function SkillListItem({
     >
       <Lightning size={16} className="shrink-0 text-muted-foreground" />
       <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium truncate block">/{skill.name}</span>
-        <p className="text-xs text-muted-foreground truncate">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium truncate block">/{skill.name}</span>
+          {skill.autoExtracted && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[9px] font-medium shrink-0">
+                  <Sparkle size={10} className="shrink-0" />
+                  智能习得
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>这是 AI 助手在之前的任务中自动提取并保存的技能</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground truncate mt-0.5">
           {skill.description}
         </p>
       </div>

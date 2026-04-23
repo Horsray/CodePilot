@@ -4,6 +4,9 @@ import { getAgent, getSubAgents } from './agent-registry';
 import { runAgentLoop } from './agent-loop';
 import { assembleTools } from './agent-tools';
 import type { ToolSet } from 'ai';
+import { resolveAgentModel } from './agent-routing';
+import { buildSubAgentExecutionProfile } from './subagent-profile';
+import { createSubAgentProgressTracker } from './subagent-progress';
 
 export const AGENT_MCP_SYSTEM_PROMPT = `
 - **Agent Delegation (CRITICAL)**: You have access to the \`mcp__codepilot-agent__Agent\` (or \`Agent\`) tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent, you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
@@ -98,15 +101,22 @@ export function createAgentMcpServer(ctx: {
               }
             : undefined;
 
+          const profile = buildSubAgentExecutionProfile(agentDef, prompt);
+          const { providerId: finalProviderId, model: finalModel } = resolveAgentModel(
+            agentDef,
+            ctx.providerId,
+            ctx.parentModel,
+          );
+
           const { tools: allTools } = assembleTools({
             workingDirectory: ctx.workingDirectory,
-            providerId: ctx.providerId,
+            prompt,
+            providerId: finalProviderId,
             sessionProviderId: ctx.sessionProviderId,
-            model: ctx.parentModel,
+            model: finalModel,
             permissionContext,
           });
           const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
-          const model = agentDef.model || ctx.parentModel;
           const systemPrompt = agentDef.prompt
             ? `${agentDef.prompt}\n\nWorking directory: ${ctx.workingDirectory}\n\nIMPORTANT RULE: You are a sub-agent. Your text responses are the ONLY output sent back to the parent agent. You MUST provide a clear, final summary of your findings, answers, or completed actions before you finish. Do not just output your internal thoughts.`
             : `You are a helpful sub-agent. Working directory: ${ctx.workingDirectory}\n\nIMPORTANT RULE: You are a sub-agent. Your text responses are the ONLY output sent back to the parent agent. You MUST provide a clear, final summary of your findings, answers, or completed actions before you finish. Do not just output your internal thoughts.`;
@@ -116,9 +126,9 @@ export function createAgentMcpServer(ctx: {
           const stream = runAgentLoop({
             prompt,
             sessionId: subAgentId,
-            providerId: ctx.providerId,
+            providerId: finalProviderId,
             sessionProviderId: ctx.sessionProviderId,
-            model,
+            model: finalModel,
             systemPrompt,
             workingDirectory: ctx.workingDirectory,
             tools: subTools,
@@ -134,10 +144,18 @@ export function createAgentMcpServer(ctx: {
                 name: agentDef.id,
                 displayName: agentDef.displayName,
                 prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
+                model: finalModel,
               }),
             });
             ctx.emitSSE({ type: 'tool_output', data: `[subagent:${agentDef.id}] ${prompt.length > 120 ? prompt.slice(0, 117) + '...' : prompt}` });
           }
+
+          const progress = createSubAgentProgressTracker({
+            id: subAgentId,
+            emitSSE: ctx.emitSSE,
+            initialStage: profile.initialStatus,
+            sla: profile.sla,
+          });
 
           const reader = stream.getReader();
           const textParts: string[] = [];
@@ -156,11 +174,15 @@ export function createAgentMcpServer(ctx: {
                   if (!line.startsWith('data: ')) continue;
                   try {
                     const event = JSON.parse(line.slice(6));
+                    progress.touch();
                     if (event.type === 'text') {
+                      progress.setStage('整理子任务结果');
                       textParts.push(event.data);
                     } else if (event.type === 'thinking') {
+                      progress.setStage('模型思考中');
                       thinkingParts.push(event.data);
                     } else if (event.type === 'error') {
+                      progress.setStage('子任务执行出错');
                       try {
                         const errData = JSON.parse(event.data);
                         errorEvent = errData.userMessage || event.data;
@@ -168,6 +190,7 @@ export function createAgentMcpServer(ctx: {
                         errorEvent = event.data;
                       }
                     } else if (event.type === 'tool_result') {
+                      progress.setStage('分析工具结果');
                       try {
                         const res = JSON.parse(event.data);
                         toolResults.push({
@@ -184,11 +207,13 @@ export function createAgentMcpServer(ctx: {
                         } catch { }
                       }
                     } else if (event.type === 'permission_request' && ctx.emitSSE) {
+                      progress.setStage('等待权限确认');
                       ctx.emitSSE(event);
                     } else if (event.type === 'tool_use' && ctx.emitSSE) {
                       try {
                         const t = JSON.parse(event.data);
                         const toolRenderer = getToolSummary(t.name, t.input);
+                        progress.setStage(`执行工具: ${toolRenderer}`);
                         ctx.emitSSE({ type: 'tool_output', data: `> ${toolRenderer}` });
                       } catch { }
                     }
@@ -197,6 +222,7 @@ export function createAgentMcpServer(ctx: {
               }
             }
           } finally {
+            progress.close();
             reader.releaseLock();
           }
 

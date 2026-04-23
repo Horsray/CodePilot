@@ -4,6 +4,8 @@ import { assembleTools } from './agent-tools';
 import type { ToolSet } from 'ai';
 import { resolveAgentModel } from './agent-routing';
 import { truncateToTokenBudget } from './context-pruner';
+import { buildSubAgentExecutionProfile, isLocalCodeSearchTask } from './subagent-profile';
+import { createSubAgentProgressTracker } from './subagent-progress';
 
 export interface TeamRunnerOptions {
   goal: string;
@@ -71,6 +73,7 @@ async function executeAgentTask(
   if (!agentDef) {
     return { report: `Error: Agent ${task.role} not found.`, errorEvent: 'Agent not found', role: task.role };
   }
+  const profile = buildSubAgentExecutionProfile(agentDef, task.desc);
 
   const { providerId: finalProviderId, model: finalModel } = resolveAgentModel(
     agentDef,
@@ -105,6 +108,7 @@ async function executeAgentTask(
 
   const { tools: allTools } = assembleTools({
     workingDirectory,
+    prompt: task.desc,
     providerId: finalProviderId,
     sessionProviderId: options.sessionProviderId,
     model: finalModel,
@@ -143,6 +147,13 @@ async function executeAgentTask(
     permissionMode: options.permissionMode,
   });
 
+  const progress = createSubAgentProgressTracker({
+    id: subAgentId,
+    emitSSE,
+    initialStage: profile.initialStatus,
+    sla: profile.sla,
+  });
+
   const reader = stream.getReader();
   const textParts: string[] = [];
   const thinkingParts: string[] = [];
@@ -162,15 +173,20 @@ async function executeAgentTask(
           if (!line.startsWith('data: ')) continue;
           try {
             const event = JSON.parse(line.slice(6));
+            progress.touch();
             if (event.type === 'permission_request' && emitSSE) {
+              progress.setStage('等待权限确认');
               emitSSE(event);
             } else {
               if (event.type === 'text') {
+                progress.setStage('整理子任务结果');
                 textParts.push(event.data);
               } else if (event.type === 'thinking') {
+                progress.setStage('模型思考中');
                 thinkingParts.push(event.data);
               } else if (event.type === 'error') {
                 taskFailed = true;
+                progress.setStage('子任务执行出错');
                 try {
                   const errData = JSON.parse(event.data);
                   errorEvent = errData.userMessage || event.data;
@@ -178,6 +194,7 @@ async function executeAgentTask(
                   errorEvent = event.data;
                 }
               } else if (event.type === 'tool_result') {
+                progress.setStage('分析工具结果');
                 try {
                   const res = JSON.parse(event.data);
                   let content = res.content;
@@ -194,6 +211,7 @@ async function executeAgentTask(
               } else if (event.type === 'tool_use') {
                 try {
                   const toolData = JSON.parse(event.data);
+                  progress.setStage(`执行工具: ${toolData.name}`);
                   emitTeamEvent('team_agent_update', {
                     id: task.id,
                     name: task.role,
@@ -235,12 +253,14 @@ async function executeAgentTask(
   } catch (streamErr: unknown) {
     // Stream interrupted (network disconnect, client abort, etc.)
     taskFailed = true;
+    progress.setStage('子任务执行中断');
     const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
     if (!errorEvent) {
       errorEvent = `任务执行中断: ${errMsg}`;
     }
     console.warn(`[team-runner] executeAgentTask stream error for ${task.role}:`, errMsg);
   } finally {
+    progress.close();
     reader.releaseLock();
   }
 
@@ -307,6 +327,17 @@ async function executeAgentTask(
  * 用法：在执行管线前调用，替换固定的串行编排数组
  */
 async function generateTeamDAG(options: TeamRunnerOptions): Promise<TeamDAG> {
+  if (isLocalCodeSearchTask(options.goal)) {
+    if (options.emitSSE) {
+      options.emitSSE({ type: 'text', data: `\n\n⚡ **启用轻量检索编排**\n检测到这是本地代码检索任务，跳过 DAG 规划子任务，直接派发搜索智能体。\n` });
+    }
+    return {
+      tasks: [
+        { id: 'lookup-1', role: 'explore', desc: options.goal, dependsOn: [] },
+      ],
+    };
+  }
+
   const subAgents = getSubAgents();
   const subAgentsList = subAgents.map(a => `- ${a.id}: ${a.description}`).join('\n');
 

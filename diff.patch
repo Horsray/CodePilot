@@ -1,0 +1,1052 @@
+diff --git a/src/app/api/chat/route.ts b/src/app/api/chat/route.ts
+index 4e9cd34..2385fa6 100644
+--- a/src/app/api/chat/route.ts
++++ b/src/app/api/chat/route.ts
+@@ -673,7 +673,7 @@ ORCHESTRATION RULES (CRITICAL):
+         } catch (err) {
+           console.error('[chat API] streamClaude execution failed:', err);
+           controller.enqueue(`data: ${JSON.stringify({ type: 'error', data: err instanceof Error ? err.message : 'Internal Server Error' })}\n\n`);
+-          controller.enqueue(`data: ${JSON.stringify({ type: 'done', data: '' })}\n\n`);
++          controller.enqueue(`data: ${JSON.stringify({ type: 'aborted', data: JSON.stringify({ reason: 'error', message: err instanceof Error ? err.message : 'Internal Server Error' }) })}\n\n`);
+         } finally {
+           controller.close();
+         }
+diff --git a/src/app/api/files/open/route.ts b/src/app/api/files/open/route.ts
+index 7c78bd0..ab21141 100644
+--- a/src/app/api/files/open/route.ts
++++ b/src/app/api/files/open/route.ts
+@@ -1,29 +1,42 @@
+ import { NextRequest, NextResponse } from 'next/server';
+-import { exec } from 'child_process';
++import { spawn } from 'child_process';
+ 
+ export async function POST(req: NextRequest) {
+-  const { path } = await req.json();
++  const { path, openInFinder } = await req.json();
+   if (!path || typeof path !== 'string') {
+     return NextResponse.json({ error: 'Missing path' }, { status: 400 });
+   }
+ 
+   const platform = process.platform;
+   let cmd: string;
++  let args: string[] = [];
++
+   if (platform === 'darwin') {
+-    cmd = `open "${path}"`;
++    // open -R: 在 Finder 中显示文件（在父文件夹中选中该文件）
++    // open: 打开文件或目录
++    if (openInFinder) {
++      cmd = 'open';
++      args = ['-R', path]; // -R 参数让 Finder 显示并选中该文件
++    } else {
++      cmd = 'open';
++      args = [path];
++    }
+   } else if (platform === 'win32') {
+-    cmd = `explorer "${path}"`;
++    cmd = 'explorer';
++    args = [path];
+   } else {
+-    cmd = `xdg-open "${path}"`;
++    cmd = 'xdg-open';
++    args = [path];
+   }
+ 
+   return new Promise<NextResponse>((resolve) => {
+-    exec(cmd, (err) => {
+-      if (err) {
+-        resolve(NextResponse.json({ error: err.message }, { status: 500 }));
+-      } else {
+-        resolve(NextResponse.json({ ok: true }));
+-      }
++    const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
++    child.on('error', (err) => {
++      resolve(NextResponse.json({ error: err.message }, { status: 500 }));
++    });
++    child.on('spawn', () => {
++      child.unref();
++      resolve(NextResponse.json({ ok: true }));
+     });
+   });
+ }
+diff --git a/src/app/mockup-ui/page.tsx b/src/app/mockup-ui/page.tsx
+new file mode 100644
+index 0000000..a86931d
+--- /dev/null
++++ b/src/app/mockup-ui/page.tsx
+@@ -0,0 +1,53 @@
++import { SubAgentTimeline } from '@/components/chat/SubAgentTimeline';
++
++export default function MockupPage() {
++  const subAgents: any[] = [
++    {
++      id: 'task-search',
++      name: 'search',
++      displayName: '探索者',
++      prompt: '探索代码库并收集相关上下文，了解 Next.js Standalone 模式和 413 Payload Too Large 错误的原因',
++      status: 'running',
++      startedAt: Date.now() - 15000,
++      model: 'claude-3-5-sonnet-20241022',
++      progress: `分析目标：定位 413 Payload Too Large 的底层抛出位置
++> 准备执行检索工具：Grep 
++> 关键字 "Failed to send message"
++> 已获取相关路由 /api/chat
++
++正在检索相关 Nginx 和 Standalone server.js 限制配置...
++> 准备执行工具: browser_search
++> 结果: ✅ 找到 Next.js 官方关于 bodySizeLimit 的文档
++
++分析完毕：
++1. App Router 默认没有 1MB 限制
++2. Electron 中的 Standalone 模式使用了极简 HTTP Server
++3. Nginx / 反向代理默认限制会导致此问题`
++    },
++    {
++      id: 'task-execute',
++      name: 'executor',
++      displayName: '执行者',
++      prompt: '根据探索者的报告，修复前端 stream-session-manager 的错误捕获逻辑，增加 413 拦截',
++      status: 'completed',
++      startedAt: Date.now() - 45000,
++      completedAt: Date.now() - 12000,
++      model: 'claude-3-5-sonnet-20241022',
++      report: `**💭 思考过程：**
++已经定位到 \`src/lib/stream-session-manager.ts\`。需要在捕获 413 时提供友好的错误提示。
++
++**🛠️ 工具执行 (1 次)：**
++- ✅ 编辑了文件 stream-session-manager.ts，成功添加了状态码拦截判断。
++
++**📝 最终输出：**
++成功修复了 Frontend 捕获逻辑，413 错误现在会向用户提示"请求体积过大：发送的消息、附件或提及的文件过多"。`
++    }
++  ];
++
++  return (
++    <div className="p-8 max-w-3xl mx-auto bg-background min-h-screen">
++      <div className="mb-4 text-xl font-bold border-b pb-2">团队模式 UI 渲染预览</div>
++      <SubAgentTimeline subAgents={subAgents} />
++    </div>
++  );
++}
+diff --git a/src/components/ai-elements/tool-actions-group.tsx b/src/components/ai-elements/tool-actions-group.tsx
+index 9ecd03b..54bbc4d 100644
+--- a/src/components/ai-elements/tool-actions-group.tsx
++++ b/src/components/ai-elements/tool-actions-group.tsx
+@@ -22,7 +22,8 @@ import {
+   Play,
+   ListChecks,
+   ShieldCheck,
+-  PencilSimple
++  PencilSimple,
++  FolderOpen
+ } from '@phosphor-icons/react';
+ import { cn } from '@/lib/utils';
+ import { usePanel } from '@/hooks/usePanel';
+@@ -119,6 +120,7 @@ function truncatePath(path: string, maxLen = 50): string {
+ export const AGENT_META: Record<string, { icon: React.ElementType, color: string, bg: string, label: string }> = {
+   search: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '搜索者' },
+   explorer: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者' },
++  explore: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者' },
+   planner: { icon: ListChecks, color: 'text-purple-500', bg: 'bg-purple-500/10', label: '规划者' },
+   executor: { icon: PencilSimple, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '执行者' },
+   verifier: { icon: ShieldCheck, color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: '验证者' },
+@@ -1330,6 +1332,17 @@ export function CompletionBar({
+   const totalRemoved = changedFiles.reduce((acc, f) => acc + f.diff.removed, 0);
+   const pending = changedFiles.length;
+ 
++  // 在 Finder 中打开：打开第一个文件的目录
++  const openInFinder = () => {
++    if (changedFiles.length > 0 && changedFiles[0].diff.fullPath) {
++      const dir = changedFiles[0].diff.fullPath.substring(0, changedFiles[0].diff.fullPath.lastIndexOf('/'));
++      fetch('/api/open-file', {
++        method: 'POST', headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ path: dir, openInFinder: true }),
++      }).catch(() => {});
++    }
++  };
++
+   if (pending === 0) return null;
+ 
+   return (
+@@ -1346,6 +1359,14 @@ export function CompletionBar({
+               <span className="text-red-500 font-mono">-{totalRemoved}</span>
+             </div>
+           </div>
++          <button
++            type="button"
++            onClick={openInFinder}
++            className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-2 py-1 text-[12px] font-medium text-foreground/70 transition hover:bg-muted hover:text-foreground"
++            title="在 Finder 中打开"
++          >
++            <FolderOpen size={12} />
++          </button>
+           <button
+             type="button"
+             onClick={() => setExpanded((value) => !value)}
+diff --git a/src/components/chat/MessageInputParts.tsx b/src/components/chat/MessageInputParts.tsx
+index c2d04f8..12f48c2 100644
+--- a/src/components/chat/MessageInputParts.tsx
++++ b/src/components/chat/MessageInputParts.tsx
+@@ -1,6 +1,6 @@
+ 'use client';
+ 
+-import { useEffect, useCallback } from 'react';
++import { useEffect, useCallback, useState } from 'react';
+ import { ArrowUp, Plus, X, Stop, Toolbox, Brain, NotePencil, Lightning, File as FileIcon, Folder } from '@/components/ui/icon';
+ import { Button } from '@/components/ui/button';
+ import { useTranslation } from '@/hooks/useTranslation';
+@@ -13,6 +13,7 @@ import type { ChatStatus } from 'ai';
+ import { isSubmitEnabled } from '@/lib/message-input-logic';
+ import type { MentionRef, CommandBadge as CommandBadgeType } from '@/types';
+ import { isImageFile } from '@/types';
++import { ImageLightbox } from './ImageLightbox';
+ 
+ /**
+  * Submit button that's aware of file attachments. Must be rendered inside PromptInput.
+@@ -142,13 +143,26 @@ export function FileTreeAttachmentBridge() {
+  */
+ export function FileAttachmentsCapsules() {
+   const attachments = usePromptInputAttachments();
++  const [lightboxOpen, setLightboxOpen] = useState(false);
++  const [lightboxIndex, setLightboxIndex] = useState(0);
+ 
+   if (attachments.files.length === 0) return null;
+ 
++  const imageFiles = attachments.files.filter(file => 
++    file.mediaType?.startsWith('image/') || isImageFile(file.mediaType || file.filename || '')
++  );
++
++  const lightboxImages = imageFiles.map(f => ({
++    src: f.url || '',
++    alt: f.filename || 'image'
++  })).filter(img => img.src);
++
+   return (
+     <div className="flex w-full flex-wrap items-center gap-1.5 px-3 pt-2 pb-0 order-first">
+       {attachments.files.map((file) => {
+         const isImage = file.mediaType?.startsWith('image/') || isImageFile(file.mediaType || file.filename || '');
++        const imageIndex = isImage ? imageFiles.indexOf(file) : -1;
++        
+         return (
+           <span
+             key={file.id}
+@@ -159,7 +173,13 @@ export function FileAttachmentsCapsules() {
+               <img
+                 src={file.url}
+                 alt={file.filename || 'image'}
+-                className="h-5 w-5 rounded object-cover"
++                className="h-5 w-5 rounded object-cover cursor-pointer hover:opacity-80 transition-opacity"
++                onClick={() => {
++                  if (imageIndex !== -1) {
++                    setLightboxIndex(imageIndex);
++                    setLightboxOpen(true);
++                  }
++                }}
+               />
+             )}
+             <span className="max-w-[120px] truncate text-[11px]">
+@@ -177,6 +197,15 @@ export function FileAttachmentsCapsules() {
+           </span>
+         );
+       })}
++
++      {lightboxImages.length > 0 && (
++        <ImageLightbox
++          images={lightboxImages}
++          initialIndex={lightboxIndex}
++          open={lightboxOpen}
++          onOpenChange={setLightboxOpen}
++        />
++      )}
+     </div>
+   );
+ }
+diff --git a/src/components/chat/StreamingMessage.tsx b/src/components/chat/StreamingMessage.tsx
+index 4aadfe7..c13d329 100644
+--- a/src/components/chat/StreamingMessage.tsx
++++ b/src/components/chat/StreamingMessage.tsx
+@@ -329,7 +329,14 @@ function SubAgentTimelineStreamAdapter({ sessionId, isStreaming }: { sessionId?:
+             return prev.map(a => a.id === detail.id ? { ...a, status: 'completed', report: detail.report, completedAt: Date.now() } : a);
+           } else if (detail.detail) {
+             // Progress update (from subagent-progress event)
+-            return prev.map(a => a.id === detail.id ? { ...a, progress: detail.detail } : a);
++            return prev.map(a => {
++              if (a.id === detail.id) {
++                const newProgress = detail.append ? (a.progress || '') + detail.detail : detail.detail;
++                // Limit the buffer size to avoid memory issues (keep last 10000 chars)
++                return { ...a, progress: newProgress.length > 10000 ? '...' + newProgress.slice(-10000) : newProgress };
++              }
++              return a;
++            });
+           } else {
+             // It's a start event
+             if (prev.some(a => a.id === detail.id)) return prev;
+diff --git a/src/components/chat/SubAgentTimeline.tsx b/src/components/chat/SubAgentTimeline.tsx
+index e437ce8..f160f7d 100644
+--- a/src/components/chat/SubAgentTimeline.tsx
++++ b/src/components/chat/SubAgentTimeline.tsx
+@@ -21,23 +21,6 @@ import { SubAgentInfo } from '@/types';
+ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
+   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+   const [userInteractedAgents, setUserInteractedAgents] = useState<Set<string>>(new Set());
+-  const [agentProgress, setAgentProgress] = useState<Record<string, string>>({});
+-
+-  // 监听子Agent进度更新事件
+-  useEffect(() => {
+-    const handleProgress = (e: Event) => {
+-      const detail = (e as CustomEvent).detail;
+-      if (detail?.id) {
+-        setAgentProgress(prev => ({
+-          ...prev,
+-          [detail.id]: detail.detail || detail.status || '处理中...',
+-        }));
+-      }
+-    };
+-
+-    window.addEventListener('subagent-progress', handleProgress);
+-    return () => window.removeEventListener('subagent-progress', handleProgress);
+-  }, []);
+ 
+   // 自动展开/收起逻辑：
+   // - 新Agent启动时，自动展开
+@@ -120,6 +103,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
+     if (lowerName.includes('debug')) return '调试者';
+     if (lowerName.includes('plan')) return '规划者';
+     if (lowerName.includes('search')) return '搜索者';
++    if (lowerName.includes('explor')) return '探索者';
+     if (lowerName.includes('exec')) return '执行者';
+     
+     return displayName || name;
+@@ -141,7 +125,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
+       <div className="grid gap-2">
+         {subAgents.map((agent) => {
+           const isExpanded = expandedAgents.has(agent.id);
+-          const currentProgress = agent.progress || agentProgress[agent.id];
++          const currentProgress = agent.progress;
+ 
+           return (
+             <div
+@@ -203,19 +187,23 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
+ 
+                   {/* 运行进度 */}
+                   {agent.status === 'running' && currentProgress && (
+-                    <div className="flex items-center gap-2 text-[11px] text-blue-500/80">
+-                      <SpinnerGap size={10} className="animate-spin" />
+-                      <span className="italic">{currentProgress}</span>
++                    <div className="text-[11px] text-muted-foreground/80 p-2.5 rounded-md bg-blue-500/5 border border-blue-500/10 max-h-64 overflow-y-auto flex flex-col gap-1">
++                      <div className="flex items-center gap-1.5 text-blue-500/80 font-medium pb-1.5 border-b border-blue-500/10 mb-1">
++                        <SpinnerGap size={12} className="animate-spin" />
++                        执行过程实时记录...
++                      </div>
++                      <div className="whitespace-pre-wrap break-words text-[11px] leading-relaxed">
++                        {currentProgress}
++                      </div>
+                     </div>
+                   )}
+ 
+                   {/* 报告输出 */}
+                   {(agent.status === 'completed' || agent.status === 'error') && agent.report && (
+-                    <div className="text-[11px] text-muted-foreground/70 p-2 rounded bg-muted/30 border border-border/20 max-h-64 overflow-y-auto">
+-                      <span className="font-medium text-muted-foreground/60">报告：</span>
+-                      <pre className="whitespace-pre-wrap break-words mt-1 font-mono text-[10px]">
++                    <div className="text-[11px] text-muted-foreground/80 p-3 rounded-md bg-muted/30 border border-border/40 max-h-96 overflow-y-auto">
++                      <div className="whitespace-pre-wrap break-words leading-relaxed">
+                         {agent.report}
+-                      </pre>
++                      </div>
+                     </div>
+                   )}
+                   </div>
+@@ -230,7 +218,9 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
+       <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-muted/40 border border-border/30">
+         <div className="flex items-center gap-1.5">
+           <Robot size={14} className="text-primary" />
+-          <span className="text-xs font-medium text-foreground">Team Leader ｜ 监控中 ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个</span>
++          <span className="text-xs font-medium text-foreground">
++            Team Leader ｜ {runningCount > 0 ? <span className="font-mono text-[10px] bg-blue-500/10 text-blue-500/80 px-1.5 py-0.5 rounded border border-blue-500/20">{subAgents[0]?.model?.split('/').pop()?.split('-').slice(0, 2).join('-') || subAgents[0]?.model || 'haiku'}</span> : '监控中'} ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个
++          </span>
+         </div>
+         <div className="flex-1" />
+         <div className="flex items-center gap-3 text-[11px]">
+diff --git a/src/components/chat/TerminalReasonChip.tsx b/src/components/chat/TerminalReasonChip.tsx
+index 2e3395a..ad7cbd8 100644
+--- a/src/components/chat/TerminalReasonChip.tsx
++++ b/src/components/chat/TerminalReasonChip.tsx
+@@ -73,6 +73,9 @@ const ACTIONS_BY_REASON: Record<string, ActionDescriptor[]> = {
+   model_error: [
+     { id: 'retry_simple', labelKey: 'terminalAction.retry' as TranslationKey, variant: 'primary' },
+   ],
++  length: [
++    { id: 'retry_simple', labelKey: 'terminalAction.retry' as TranslationKey, variant: 'primary' },
++  ],
+   // tool_deferred handled by Phase 7b's deferred-tool card, no action here.
+ };
+ 
+@@ -86,6 +89,7 @@ const TONE_BY_REASON: Record<string, Tone> = {
+   stop_hook_prevented: 'muted',
+   hook_stopped: 'muted',
+   tool_deferred: 'info',
++  length: 'warning',
+ };
+ 
+ // Reasons that should render silently (no chip). Users either already know
+@@ -105,6 +109,7 @@ const KNOWN_REASONS = new Set([
+   'stop_hook_prevented',
+   'hook_stopped',
+   'tool_deferred',
++  'length',
+ ]);
+ 
+ const TONE_CLASSES: Record<Tone, string> = {
+diff --git a/src/components/chat/context-widget/ContextCompressionWidget.tsx b/src/components/chat/context-widget/ContextCompressionWidget.tsx
+index f37fc28..de979f4 100644
+--- a/src/components/chat/context-widget/ContextCompressionWidget.tsx
++++ b/src/components/chat/context-widget/ContextCompressionWidget.tsx
+@@ -113,7 +113,16 @@ export function ContextCompressionWidget({
+ 
+     // Add tool files from SSE events (AI actual file reads)
+     toolFiles?.forEach(f => {
+-      if (!filesMap.has(f)) {
++      // Categorize: URLs go to web, local file paths go to files
++      if (f.startsWith('http://') || f.startsWith('https://')) {
++        if (!webSet.has(f)) {
++          webSet.add(f);
++        }
++        // Also add to filesMap so it shows in the Files tab
++        if (!filesMap.has(f)) {
++          filesMap.set(f, { path: f, name: f });
++        }
++      } else if (!filesMap.has(f)) {
+         const name = f.split('/').pop() || f;
+         filesMap.set(f, { path: f, name });
+       }
+diff --git a/src/hooks/useSSEStream.ts b/src/hooks/useSSEStream.ts
+index bde6d02..3e432d8 100644
+--- a/src/hooks/useSSEStream.ts
++++ b/src/hooks/useSSEStream.ts
+@@ -423,6 +423,19 @@ function handleSSEEvent(
+       return accumulated;
+     }
+ 
++    case 'aborted': {
++      // 中文注释：功能名称「异常中断事件处理」，用法是当后端因错误或取消而中断流时，
++      // 不再将此视为正常完成，而是触发 onResult 以标记流结束，但附带 terminalReason='aborted'
++      // 让前端可以区分正常完成和异常中断
++      try {
++        const abortData = JSON.parse(event.data);
++        callbacks.onResult(null, { terminalReason: abortData.reason || 'aborted' });
++      } catch {
++        callbacks.onResult(null, { terminalReason: 'aborted' });
++      }
++      return accumulated;
++    }
++
+     case 'done': {
+       return accumulated;
+     }
+diff --git a/src/i18n/en.ts b/src/i18n/en.ts
+index 24e480e..7ddcb7d 100644
+--- a/src/i18n/en.ts
++++ b/src/i18n/en.ts
+@@ -1263,6 +1263,7 @@ const en = {
+   'terminal.stop_hook_prevented': 'Stop hook prevented',
+   'terminal.hook_stopped': 'Hook stopped this turn',
+   'terminal.tool_deferred': 'Tool awaiting response',
++  'terminal.length': 'Output truncated',
+   'terminal.unknown': 'Turn ended',
+ 
+   // ── TerminalReason action buttons (Phase 1b) ──
+diff --git a/src/i18n/zh.ts b/src/i18n/zh.ts
+index f82ad71..44e529e 100644
+--- a/src/i18n/zh.ts
++++ b/src/i18n/zh.ts
+@@ -1260,6 +1260,7 @@ const zh: Record<TranslationKey, string> = {
+   'terminal.stop_hook_prevented': 'Stop Hook 阻止了结束',
+   'terminal.hook_stopped': 'Hook 中断本轮',
+   'terminal.tool_deferred': '有工具等待响应',
++  'terminal.length': '输出被截断',
+   'terminal.unknown': '本轮已结束',
+ 
+   // ── TerminalReason action buttons (Phase 1b) ──
+diff --git a/src/lib/agent-loop.ts b/src/lib/agent-loop.ts
+index af59ea6..af1dd49 100644
+--- a/src/lib/agent-loop.ts
++++ b/src/lib/agent-loop.ts
+@@ -557,7 +557,8 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+           const stepToolCalls: string[] = [];
+           let stepText = '';
+ 
+-          // Extract file paths from tool calls
++          try {
++            // Extract file paths from tool calls
+           function extractFilePaths(toolName: string, input: unknown): string[] {
+             const files: string[] = [];
+             if (!input || typeof input !== 'object') return files;
+@@ -710,6 +711,14 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+                   }),
+                 }));
+ 
++                // Extract web search URLs from tool results for context stats
++                const toolName = (event as any).toolName;
++                if (toolName && /^(WebSearch|web_search|search|mcp__MiniMax__web_search|mcp__bailian-web-search__bailian_web_search|Browse|fetch|Fetch|getUrl|get_url|get_page)$/i.test(toolName)) {
++                  const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
++                  const urls = resultContent.match(urlPattern) || [];
++                  urls.forEach(url => toolFilesAccumulator.add(url));
++                }
++
+                 // Deferred TodoWrite sync: emit task_update after successful execution
+                 if (stepPendingTodoWrites.has(event.toolCallId)) {
+                   const todos = stepPendingTodoWrites.get(event.toolCallId)!;
+@@ -756,6 +765,36 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+                 break;
+             }
+           }
++          } catch (error: any) {
++            // Intercept SDK's internal "No output generated" error, which bypasses
++            // the loop logic entirely if the model sends invalid/missing tool calls
++            if (error?.message?.includes('No output generated') || error?.name === 'AI_NoOutputGeneratedError') {
++              console.warn(`[agent-loop] SDK aborted due to NoOutputGeneratedError (often caused by hallucinated or filtered tools). Model: ${modelId}`);
++              
++              if (!hasContent) {
++                reportNativeError('EMPTY_RESPONSE', error, { modelId, sessionId });
++                controller.enqueue(formatSSE({
++                  type: 'error',
++                  data: JSON.stringify({
++                    category: 'EMPTY_RESPONSE',
++                    userMessage: `模型未返回任何内容，或者试图调用不在权限列表内的工具（例如被过滤的 SearchCodebase）。模型 ID: "${modelId}"。`,
++                  }),
++                }));
++                break;
++              }
++            } else {
++              throw error; // re-throw genuine errors
++            }
++          }
++
++          // Emit accumulated file paths (from tool calls and web search results) for context stats
++          const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
++          if (allToolFiles.length > 0) {
++            controller.enqueue(formatSSE({
++              type: 'tool_files',
++              data: JSON.stringify({ files: allToolFiles }),
++            }));
++          }
+ 
+           // Usage is accumulated in onStepFinish callback above
+ 
+@@ -763,7 +802,12 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+           if (!hasToolCalls) {
+             // Detect truly empty response (no text, no thinking, no tools)
+             if (!hasContent) {
+-              const finishReason = await result.finishReason;
++              let finishReason = 'unknown_no_output';
++              try {
++                finishReason = await result.finishReason;
++              } catch (e) {
++                // Ignore NoOutputGeneratedError thrown by SDK when content is empty
++              }
+               console.error(`[agent-loop] Empty response: finishReason=${finishReason}, model=${modelId}`);
+               reportNativeError('EMPTY_RESPONSE', new Error(`Empty response: finishReason=${finishReason}`), { modelId, sessionId });
+               controller.enqueue(formatSSE({
+@@ -983,14 +1027,6 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
+           }
+         }
+ 
+-        // 6. Emit tool_files event with collected file paths from tool calls
+-        if (toolFilesAccumulator.size > 0) {
+-          controller.enqueue(formatSSE({
+-            type: 'tool_files',
+-            data: JSON.stringify({ files: Array.from(toolFilesAccumulator) }),
+-          }));
+-        }
+-
+         // 7. Emit result event
+         controller.enqueue(formatSSE({
+           type: 'result',
+@@ -1003,6 +1039,7 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
+ 
+         emitEvent('session:end', { sessionId, steps: step });
+         onRuntimeStatusChange?.('idle');
++        controller.enqueue(formatSSE({ type: 'done', data: '' }));
+       } catch (err: unknown) {
+         const isAbort = err instanceof Error && (
+           err.name === 'AbortError' ||
+@@ -1022,9 +1059,15 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
+         }
+ 
+         onRuntimeStatusChange?.('error');
++        controller.enqueue(formatSSE({
++          type: 'aborted',
++          data: JSON.stringify({
++            reason: isAbort ? 'user_cancel' : 'error',
++            message: isAbort ? 'User cancelled' : (err instanceof Error ? err.message : String(err)),
++          }),
++        }));
+       } finally {
+         clearInterval(keepAliveTimer);
+-        controller.enqueue(formatSSE({ type: 'done', data: '' }));
+         controller.close();
+       }
+     },
+diff --git a/src/lib/agent-registry.ts b/src/lib/agent-registry.ts
+index c865717..1c4c932 100644
+--- a/src/lib/agent-registry.ts
++++ b/src/lib/agent-registry.ts
+@@ -38,27 +38,27 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
+     displayName: 'Explore',
+     description: 'Fast agent for codebase exploration. Read-only tools, quick searches.',
+     mode: 'subagent',
+-    allowedTools: ['Read', 'Glob', 'Grep', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
++    allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'codepilot_kb_search', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory', 'mcp__MiniMax__web_search', 'mcp__bailian-web-search__bailian_web_search', 'webfetch__fetch_fetch_readable', 'mcp__fetch__fetch_html', 'codepilot_open_browser', 'web_search', 'WebSearch'],
+     maxSteps: 20,
+-    prompt: 'You are a fast codebase exploration agent. Search efficiently, report findings concisely. Do not modify any files.',
++    prompt: 'You are a fast codebase exploration agent. Search efficiently, report findings concisely. Do not modify any files. You can use Grep, Glob, Bash, or Read tools to search the codebase. If you need to search the internet, use web_search, WebSearch, or available MCP web search tools.',
+   },
+   {
+     id: 'search',
+     displayName: 'Search',
+     description: 'Deep codebase research and retrieval. Uses AI tools to find context.',
+     mode: 'subagent',
+-    allowedTools: ['Read', 'Glob', 'Grep', 'SearchCodebase', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
++    allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'codepilot_kb_search', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory', 'mcp__MiniMax__web_search', 'mcp__bailian-web-search__bailian_web_search', 'webfetch__fetch_fetch_readable', 'mcp__fetch__fetch_html', 'codepilot_open_browser', 'web_search', 'WebSearch'],
+     maxSteps: 25,
+-    prompt: 'You are an expert codebase search agent. Find and summarize relevant context thoroughly. Do not modify any files.',
++    prompt: 'You are an expert codebase search agent. Find and summarize relevant context thoroughly. Do not modify any files. You can use Grep, Glob, Bash, or Read tools to search the codebase. If you need to search the internet, use web_search, WebSearch, or available MCP web search tools.',
+   },
+   {
+     id: 'analyst',
+     displayName: 'Analyst',
+     description: 'Deep logic and architecture analysis. Analyzes complex code flows.',
+     mode: 'subagent',
+-    allowedTools: ['Read', 'Glob', 'Grep', 'codepilot_kb_search', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
++    allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'codepilot_kb_search', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory', 'mcp__MiniMax__web_search', 'mcp__bailian-web-search__bailian_web_search', 'webfetch__fetch_fetch_readable', 'mcp__fetch__fetch_html', 'codepilot_open_browser', 'web_search', 'WebSearch'],
+     maxSteps: 30,
+-    prompt: 'You are an architecture analyst. Analyze code flows and system design deeply. Provide structural insights. Do not modify files.',
++    prompt: 'You are an architecture analyst. Analyze code flows and system design deeply. Provide structural insights. Do not modify files. You can use Grep, Glob, Bash, or Read tools to search the codebase. If you need to search the internet, use web_search, WebSearch, or available MCP web search tools.',
+   },
+   {
+     id: 'planner',
+diff --git a/src/lib/claude-client.ts b/src/lib/claude-client.ts
+index 40e89b1..d8dc4d6 100644
+--- a/src/lib/claude-client.ts
++++ b/src/lib/claude-client.ts
+@@ -1659,6 +1659,8 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
+         // Track pending file modifications so we can record checkpoints
+         const pendingFileModifications = new Map<string, string>();
++        // Collect file paths and web URLs from tool calls/results for context stats
++        const toolFilesAccumulator = new Set<string>();
+         for await (const message of conversation) {
+           if (abortController?.signal.aborted) {
+             if (usingPersistentSession) {
+@@ -1731,6 +1733,50 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+                       console.warn('[claude-client] Failed to parse file modification input:', e);
+                     }
+                   }
++
++                  // Collect file paths for context stats (broader than just file modification tools)
++                  const inp = block.input as Record<string, unknown>;
++                  if (inp) {
++                    // Read tools
++                    if (/^Read$|^ReadFile$|^read_file$|^read$|^ReadMultipleFiles$|^read_text_file$|^str_replace_editor$|^View$|^Open$/i.test(block.name)) {
++                      if (inp.file_path && typeof inp.file_path === 'string') toolFilesAccumulator.add(inp.file_path);
++                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
++                      if (inp.files && Array.isArray(inp.files)) {
++                        (inp.files as string[]).forEach((f: string) => {
++                          if (typeof f === 'string') toolFilesAccumulator.add(f);
++                        });
++                      }
++                    }
++                    // Glob/Search tools
++                    else if (/^Glob$|^GlobFiles$|^search_files$|^find_files$|^Find$|^NotebookRead$/i.test(block.name)) {
++                      if (inp.pattern && typeof inp.pattern === 'string') toolFilesAccumulator.add(inp.pattern);
++                      if (inp.glob && typeof inp.glob === 'string') toolFilesAccumulator.add(inp.glob);
++                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
++                    }
++                    // Grep/Search tools
++                    else if (/^Grep$|^SearchCodebase$|^search$|^grep$|^NotebookEdit$/i.test(block.name)) {
++                      if (inp.pattern && typeof inp.pattern === 'string') toolFilesAccumulator.add(inp.pattern);
++                      if (inp.query && typeof inp.query === 'string') toolFilesAccumulator.add(inp.query);
++                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
++                    }
++                    // Write/Edit tools
++                    else if (/^Write$|^WriteFile$|^write_file$|^create_file$|^Edit$|^Patch$|^replace_in_file$|^EditFile$|^WriteEdit$/i.test(block.name)) {
++                      if (inp.file_path && typeof inp.file_path === 'string') toolFilesAccumulator.add(inp.file_path);
++                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
++                    }
++                    // Web search tools
++                    else if (/^WebSearch$|^web_search$|^search$|^Browse$|^Fetch$|^getUrl$|^get_url$|^mcp__MiniMax__web_search$|^mcp__bailian-web-search__bailian_web_search$/i.test(block.name)) {
++                      // Extract URLs from search query / input
++                      if (inp.query && typeof inp.query === 'string') {
++                        const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
++                        let match;
++                        while ((match = urlPattern.exec(inp.query)) !== null) {
++                          toolFilesAccumulator.add(match[0]);
++                        }
++                      }
++                      if (inp.url && typeof inp.url === 'string') toolFilesAccumulator.add(inp.url);
++                    }
++                  }
+                 }
+               }
+               break;
+@@ -1807,6 +1853,11 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+                       data: JSON.stringify(ssePayload),
+                     }));
+ 
++                    // Extract web search URLs from tool result content for context stats
++                    const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
++                    const urls = resultContent.match(urlPattern) || [];
++                    urls.forEach(url => toolFilesAccumulator.add(url));
++
+                                                             // Deferred TodoWrite sync: emit task_update after both success and error
+                     // (UI should reflect the attempted state even if tool failed)
+                     if (pendingTodoWrites.has(block.tool_use_id)) {
+@@ -2051,6 +2102,15 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+           }
+         }
+ 
++        // Emit accumulated file paths and web URLs for context stats
++        const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
++        if (allToolFiles.length > 0) {
++          controller.enqueue(formatSSE({
++            type: 'tool_files',
++            data: JSON.stringify({ files: allToolFiles }),
++          }));
++        }
++
+         controller.enqueue(formatSSE({ type: 'done', data: '' }));
+         controller.close();
+       } catch (error) {
+@@ -2331,7 +2391,13 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+             _formattedMessage: errorMessage,
+           }),
+         }));
+-        controller.enqueue(formatSSE({ type: 'done', data: '' }));
++        controller.enqueue(formatSSE({
++          type: 'aborted',
++          data: JSON.stringify({
++            reason: 'error',
++            message: classified.userMessage || classified.rawMessage || 'Unknown error',
++          }),
++        }));
+ 
+         // Always clear sdk_session_id on crash so the next message starts fresh.
+         // Even for fresh sessions — the SDK may emit a session_id via status
+diff --git a/src/lib/context-assembler.ts b/src/lib/context-assembler.ts
+index 2078396..b438885 100644
+--- a/src/lib/context-assembler.ts
++++ b/src/lib/context-assembler.ts
+@@ -277,6 +277,27 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
+     }
+   }
+ 
++  // [VOLATILE 6.5] Current Todo List State
++  try {
++    const { getTasksBySession } = await import('@/lib/db');
++    const tasks = getTasksBySession(session.id);
++    if (tasks && tasks.length > 0) {
++      const activeTasks = tasks.filter(t => t.status !== 'completed');
++      let taskPrompt = `<current-todo-list>\n`;
++      taskPrompt += `Here is the CURRENT state of the global Todo list for this session. It may be out of sync if you were interrupted or if a Team sub-agent finished a task.\n`;
++      taskPrompt += `CRITICAL: You MUST review these tasks. If any "in_progress" or "pending" tasks are actually completed, or if the plan needs updating based on recent findings, use the TodoWrite tool IMMEDIATELY to update their status.\n\n`;
++      tasks.forEach((t, i) => {
++        const check = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
++        const desc = t.description ? ` - ${t.description}` : '';
++        taskPrompt += `${i + 1}. ${check} (${t.status}) ${t.title}${desc}\n`;
++      });
++      taskPrompt += `</current-todo-list>`;
++      volatileParts.push(taskPrompt);
++    }
++  } catch {
++    // ignore
++  }
++
+   // [VOLATILE 7] Per-request append (image agent mode, skills, etc.)
+   if (systemPromptAppend) {
+     volatileParts.push(systemPromptAppend);
+diff --git a/src/lib/context-pruner.ts b/src/lib/context-pruner.ts
+index 5a0582e..9f0aba6 100644
+--- a/src/lib/context-pruner.ts
++++ b/src/lib/context-pruner.ts
+@@ -200,6 +200,21 @@ function buildToolResultMarker(part: { type: string; [k: string]: unknown }): st
+   return TRUNCATED_RESULT_MARKER;
+ }
+ 
++export function truncateToTokenBudget(text: string, maxTokens: number): string {
++  // Rough estimate: ~3.5 chars per token
++  const maxChars = Math.floor(maxTokens * 3.5);
++  if (text.length <= maxChars) return text;
++  
++  // Keep the beginning (usually contains important goals/instructions)
++  // and the end (most recent context), cutting out the middle.
++  const headChars = Math.floor(maxChars * 0.3);
++  const tailChars = Math.floor(maxChars * 0.7);
++  
++  return text.slice(0, headChars) + 
++         `\n\n... [${Math.floor((text.length - maxChars) / 3.5)} tokens omitted for context limits] ...\n\n` + 
++         text.slice(text.length - tailChars);
++}
++
+ // ── Token estimation ───────────────────────────────────────────────
+ 
+ /**
+diff --git a/src/lib/stream-session-manager.ts b/src/lib/stream-session-manager.ts
+index ed64d72..03d577a 100644
+--- a/src/lib/stream-session-manager.ts
++++ b/src/lib/stream-session-manager.ts
+@@ -94,6 +94,7 @@ export interface StartStreamParams {
+ const GLOBAL_KEY = '__streamSessionManager__' as const;
+ const LISTENERS_KEY = '__streamSessionListeners__' as const;
+ const STREAM_IDLE_TIMEOUT_MS = 330_000;
++const STREAM_THINKING_IDLE_TIMEOUT_MS = 600_000; // 中文注释：深度思考阶段允许更长的空闲超时（10分钟）
+ const GC_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+ 
+ function getStreamsMap(): Map<string, ActiveStream> {
+@@ -256,9 +257,11 @@ export function startStream(params: StartStreamParams): void {
+ async function runStream(stream: ActiveStream, params: StartStreamParams): Promise<void> {
+   const markActive = () => { stream.lastEventTime = Date.now(); };
+ 
+-  // Idle timeout checker
++  // 中文注释：空闲超时检测器 — 深度思考阶段使用更长的超时值
+   stream.idleCheckTimer = setInterval(() => {
+-    if (Date.now() - stream.lastEventTime >= STREAM_IDLE_TIMEOUT_MS) {
++    const isThinking = !stream.thinkingPhaseEnded && stream.accumulatedThinking.length > 0;
++    const timeoutMs = isThinking ? STREAM_THINKING_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
++    if (Date.now() - stream.lastEventTime >= timeoutMs) {
+       cleanupTimers(stream);
+       stream.isIdleTimeout = true;
+       stream.abortController.abort();
+@@ -689,9 +692,13 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
+     }
+ 
+     // Update snapshot with completion info
++    const isAborted = stream.snapshot.terminalReason === 'aborted' ||
++      stream.snapshot.terminalReason === 'user_cancel' ||
++      stream.snapshot.terminalReason === 'error';
++    const finalPhase = isAborted ? 'aborted' : 'completed';
+     stream.snapshot = {
+       ...buildSnapshot(stream),
+-      phase: 'completed',
++      phase: finalPhase,
+       completedAt: Date.now(),
+       tokenUsage: result.tokenUsage,
+       finalMessageContent: messageContent || null,
+@@ -742,11 +749,12 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
+ 
+     if (error instanceof DOMException && error.name === 'AbortError') {
+       if (stream.isIdleTimeout) {
+-        // Idle timeout
+-        const idleSecs = Math.round(STREAM_IDLE_TIMEOUT_MS / 1000);
++        const isThinking = !stream.thinkingPhaseEnded && stream.accumulatedThinking.length > 0;
++        const timeoutMs = isThinking ? STREAM_THINKING_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
++        const idleSecs = Math.round(timeoutMs / 1000);
+         const textPart = stream.accumulatedText.trim()
+-          ? stream.accumulatedText.trim() + `\n\n**Error:** Stream idle timeout — no response for ${idleSecs}s. The connection may have dropped.`
+-          : `**Error:** Stream idle timeout — no response for ${idleSecs}s. The connection may have dropped.`;
++          ? stream.accumulatedText.trim() + `\n\n**Error:** Stream idle timeout — no response for ${idleSecs}s${isThinking ? ' (extended thinking mode)' : ''}. The connection may have dropped.`
++          : `**Error:** Stream idle timeout — no response for ${idleSecs}s${isThinking ? ' (extended thinking mode)' : ''}. The connection may have dropped.`;
+ 
+         stream.snapshot = {
+           ...buildSnapshot(stream),
+diff --git a/src/lib/team-runner.ts b/src/lib/team-runner.ts
+index 420cbe3..a8eca90 100644
+--- a/src/lib/team-runner.ts
++++ b/src/lib/team-runner.ts
+@@ -3,6 +3,7 @@ import { runAgentLoop } from './agent-loop';
+ import { assembleTools } from './agent-tools';
+ import type { ToolSet } from 'ai';
+ import { resolveAgentModel } from './agent-routing';
++import { truncateToTokenBudget } from './context-pruner';
+ 
+ export interface TeamRunnerOptions {
+   goal: string;
+@@ -87,7 +88,11 @@ async function executeAgentTask(
+   });
+ 
+   const subAgentId = `team-${task.role}-${Date.now()}`;
+-  const prompt = `Your role is ${task.role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${accumulatedContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
++  
++  // 防止 Team 模式下的上下文溢出 (Truncate to reasonable token limit)
++  const safeContext = truncateToTokenBudget(accumulatedContext, 15000);
++  
++  const prompt = `Your role is ${task.role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${safeContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
+ 
+   const permissionContext = (options.parentSessionId && options.emitSSE && options.permissionMode)
+     ? {
+@@ -143,6 +148,8 @@ async function executeAgentTask(
+   const thinkingParts: string[] = [];
+   const toolResults: Array<{ content: string; isError: boolean }> = [];
+   let errorEvent: string | null = null;
++  let taskFailed = false;
++
+ 
+   try {
+     while (true) {
+@@ -163,6 +170,7 @@ async function executeAgentTask(
+               } else if (event.type === 'thinking') {
+                 thinkingParts.push(event.data);
+               } else if (event.type === 'error') {
++                taskFailed = true;
+                 try {
+                   const errData = JSON.parse(event.data);
+                   errorEvent = errData.userMessage || event.data;
+@@ -195,15 +203,27 @@ async function executeAgentTask(
+                 } catch { }
+               }
+               if (emitSSE) {
+-                let progressMsg = '';
+-                if (event.type === 'text') progressMsg = '正在思考与输出...';
+-                else if (event.type === 'tool_use') progressMsg = `执行工具...`;
+-                else if (event.type === 'thinking') progressMsg = '正在思考...';
++                  let progressMsg = '';
++                  if (event.type === 'text') progressMsg = event.data;
++                  else if (event.type === 'tool_use') {
++                    try {
++                      const toolData = JSON.parse(event.data);
++                      progressMsg = `\n🛠️ 准备执行工具: ${toolData.name}\n`;
++                    } catch { }
++                  }
++                  else if (event.type === 'tool_result') {
++                    try {
++                      const res = JSON.parse(event.data);
++                      const preview = String(res.content || '').slice(0, 200).replace(/\n/g, ' ');
++                      progressMsg = `\n📋 结果: ${res.is_error ? '❌' : '✅'} ${preview}${String(res.content || '').length > 200 ? '...' : ''}\n\n`;
++                    } catch { }
++                  }
++                  else if (event.type === 'thinking') progressMsg = event.data;
+                 
+                 if (progressMsg) {
+                   emitSSE({
+                     type: 'subagent_progress',
+-                    data: JSON.stringify({ id: subAgentId, detail: progressMsg })
++                    data: JSON.stringify({ id: subAgentId, detail: progressMsg, append: true })
+                   });
+                 }
+               }
+@@ -212,32 +232,45 @@ async function executeAgentTask(
+         }
+       }
+     }
++  } catch (streamErr: unknown) {
++    // Stream interrupted (network disconnect, client abort, etc.)
++    taskFailed = true;
++    const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
++    if (!errorEvent) {
++      errorEvent = `任务执行中断: ${errMsg}`;
++    }
++    console.warn(`[team-runner] executeAgentTask stream error for ${task.role}:`, errMsg);
+   } finally {
+     reader.releaseLock();
+   }
+ 
+-  let report: string;
+-  if (textParts.length > 0) {
+-    report = textParts.join('');
+-  } else if (errorEvent) {
+-    report = `**执行出错：** ${errorEvent}`;
+-  } else if (thinkingParts.length > 0 || toolResults.length > 0) {
+-    const parts: string[] = [];
+-    if (thinkingParts.length > 0) {
+-      const thinkingText = thinkingParts.join('').trim();
+-      if (thinkingText) {
+-        parts.push('**思考过程：**\n' + thinkingText.slice(0, 3000));
+-      }
++  const parts: string[] = [];
++  
++  if (errorEvent) {
++    parts.push(`**❌ 执行出错：**\n${errorEvent}\n`);
++  }
++
++  if (thinkingParts.length > 0) {
++    const thinkingText = thinkingParts.join('').trim();
++    if (thinkingText) {
++      parts.push('**💭 思考过程：**\n' + thinkingText);
+     }
+-    if (toolResults.length > 0) {
+-      parts.push(`**执行了 ${toolResults.length} 个工具：**`);
+-      for (const tr of toolResults.slice(0, 10)) {
+-        const preview = tr.content.slice(0, 500).replace(/\n/g, ' ');
+-        parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 500 ? '...' : ''}`);
+-      }
++  }
++
++  if (toolResults.length > 0) {
++    parts.push(`**🛠️ 工具执行 (${toolResults.length} 次)：**`);
++    for (const tr of toolResults) {
++      const preview = tr.content.slice(0, 800).replace(/\n/g, ' ');
++      parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 800 ? '...' : ''}`);
+     }
+-    report = parts.join('\n\n');
+-  } else {
++  }
++
++  if (textParts.length > 0) {
++    parts.push('**📝 最终输出：**\n' + textParts.join(''));
++  }
++
++  let report = parts.join('\n\n');
++  if (!report.trim()) {
+     report = '(No report provided)';
+   }
+ 
+@@ -327,6 +360,22 @@ Only output the JSON block, no other text.`;
+   try {
+     const dag = JSON.parse(jsonMatch[1] || jsonMatch[0]) as TeamDAG;
+     if (!dag.tasks || !Array.isArray(dag.tasks)) throw new Error('Invalid DAG format');
++    
++    // Validate DAG to prevent deadlocks (missing dependencies or circular deps)
++    const taskIds = new Set(dag.tasks.map(t => t.id));
++    for (const task of dag.tasks) {
++      if (task.dependsOn) {
++        for (const dep of task.dependsOn) {
++          if (!taskIds.has(dep)) {
++            throw new Error(`DAG Validation Error: Task ${task.id} depends on non-existent task ${dep}`);
++          }
++        }
++      }
++    }
++    
++    // A simple cycle detection could be added here, but for now we rely on 
++    // the deadlock detector in the while loop below to catch circular dependencies at runtime.
++    
+     return dag;
+   } catch (e) {
+     return {
+@@ -380,6 +429,15 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
+       !t.dependsOn || t.dependsOn.length === 0 || t.dependsOn.every(dep => completedTasks.has(dep))
+     );
+ 
++    // Deadlock detection: if there are pending tasks but none are ready AND no tasks are running,
++    // we have a circular dependency or unresolvable dependency in the DAG.
++    if (readyTasks.length === 0 && runningTasks.size === 0 && pendingTasks.length > 0) {
++      console.error('[team-runner] Deadlock detected in DAG:', pendingTasks);
++      const errMsg = `⚠️ **调度死锁错误**\n任务图中存在循环依赖或无法解析的前置条件。强制中止管线以防止系统卡死。\n剩余未执行任务: ${pendingTasks.map(t => t.id).join(', ')}`;
++      if (emitSSE) emitSSE({ type: 'error', data: JSON.stringify({ category: 'DAG_DEADLOCK', userMessage: errMsg }) });
++      throw new Error('DAG Execution Deadlock: Circular dependencies detected.');
++    }
++
+     // Start ready tasks
+     for (const task of readyTasks) {
+       // Remove from pending
+diff --git a/src/types/index.ts b/src/types/index.ts
+index 8683183..603118f 100644
+--- a/src/types/index.ts
++++ b/src/types/index.ts
+@@ -635,6 +635,7 @@ export type SSEEventType =
+   | 'subagent_start'     // 子Agent开始执行
+   | 'subagent_progress'  // 子Agent执行中进度更新
+   | 'subagent_complete'  // 子Agent执行完成
++  | 'aborted'            // 流被异常中断（区别于正常完成的 done）
+   | 'done';              // stream complete
+ 
+ export interface SSEEvent {
+@@ -1132,7 +1133,7 @@ export interface ToolResultInfo {
+   media?: MediaBlock[];
+ }
+ 
+-export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped';
++export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped' | 'aborted';
+ 
+ /**
+  * Sub-agent tracking info for nested timeline display

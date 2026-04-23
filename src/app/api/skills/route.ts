@@ -13,6 +13,7 @@ interface SkillFile {
   kind: SkillKind;
   installedSource?: "agents" | "claude";
   filePath: string;
+  autoExtracted?: boolean;
 }
 
 type InstalledSource = "agents" | "claude";
@@ -109,6 +110,7 @@ function scanProjectSkills(dir: string): SkillFile[] {
         source: "project",
         kind: "agent_skill",
         filePath: skillMdPath,
+        autoExtracted: meta.autoExtracted,
       });
     }
   } catch {
@@ -123,16 +125,16 @@ function computeContentHash(content: string): string {
 
 /**
  * Parse YAML front matter from SKILL.md content.
- * Extracts `name` and `description` fields from the --- delimited block.
+ * Extracts `name`, `description`, and `autoExtracted` fields from the --- delimited block.
  */
-function parseSkillFrontMatter(content: string): { name?: string; description?: string } {
+function parseSkillFrontMatter(content: string): { name?: string; description?: string; autoExtracted?: boolean } {
   // Extract front matter between --- delimiters
   const fmMatch = content.match(/^---\r?\n([\s\S]+?)\r?\n---/);
   if (!fmMatch) return {};
 
   const frontMatter = fmMatch[1];
   const lines = frontMatter.split(/\r?\n/);
-  const result: { name?: string; description?: string } = {};
+  const result: { name?: string; description?: string; autoExtracted?: boolean } = {};
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -141,6 +143,13 @@ function parseSkillFrontMatter(content: string): { name?: string; description?: 
     const nameMatch = line.match(/^name:\s*(.+)/);
     if (nameMatch) {
       result.name = nameMatch[1].trim();
+      continue;
+    }
+
+    // Match autoExtracted: true
+    const autoExtractedMatch = line.match(/^autoExtracted:\s*(true|false)/i);
+    if (autoExtractedMatch) {
+      result.autoExtracted = autoExtractedMatch[1].toLowerCase() === "true";
       continue;
     }
 

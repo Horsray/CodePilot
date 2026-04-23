@@ -788,7 +788,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           // normally hard-limits tools to just Bash/Read/Edit. Passing 'default'
           // bypasses this restriction and restores full functionality, including
           // all MCP tools.
-          tools: ['default'],
+          tools: ['default', 'Grep', 'Glob', 'Bash', 'Read', 'Write', 'Edit'],
         };
 
         if (skipPermissions) {

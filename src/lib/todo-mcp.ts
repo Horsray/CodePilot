@@ -83,6 +83,7 @@ export function createTodoMcpServer(workspacePath: string) {
 name: ${name}
 description: "${description.replace(/"/g, '\\"')}"
 whenToUse: "${whenToUse.replace(/"/g, '\\"')}"
+autoExtracted: true
 ---
 
 ${content}
@@ -95,7 +96,7 @@ ${content}
               await sendNotification({
                 title: '技能习得',
                 body: `已成功保存新技能：${name}`,
-                priority: 'low'
+                priority: 'normal'
               });
             } catch (e) {
               console.error('[todo-mcp] Failed to notify skill creation:', e);

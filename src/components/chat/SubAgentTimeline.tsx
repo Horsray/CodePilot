@@ -153,7 +153,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                 <span className="font-medium text-xs text-foreground/90 shrink-0 flex items-center gap-1">
                   {getAgentLabel(agent.name, agent.displayName)}
                   {agent.model && (
-                    <span className="text-[10px] text-muted-foreground/60 font-mono tracking-tighter ml-1">({agent.model.split('/').pop()?.split('-').slice(0, 2).join('-') || agent.model})</span>
+                    <span className="text-[10px] text-muted-foreground/60 font-mono tracking-tighter ml-1">({agent.model})</span>
                   )}
                 </span>
                 
@@ -219,7 +219,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
         <div className="flex items-center gap-1.5">
           <Robot size={14} className="text-primary" />
           <span className="text-xs font-medium text-foreground">
-            Team Leader ｜ {runningCount > 0 ? <span className="font-mono text-[10px] bg-blue-500/10 text-blue-500/80 px-1.5 py-0.5 rounded border border-blue-500/20">{subAgents[0]?.model?.split('/').pop()?.split('-').slice(0, 2).join('-') || subAgents[0]?.model || 'haiku'}</span> : '监控中'} ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个
+            Team Leader ｜ {runningCount > 0 ? <span className="font-mono text-[10px] bg-blue-500/10 text-blue-500/80 px-1.5 py-0.5 rounded border border-blue-500/20">{subAgents[0]?.model || 'Team'}</span> : '监控中'} ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个
           </span>
         </div>
         <div className="flex-1" />

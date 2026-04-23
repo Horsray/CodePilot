@@ -603,18 +603,23 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         // Dispatch window event for sub-agent timeline UI
         window.dispatchEvent(new CustomEvent('subagent-start', { detail: { sessionId: params.sessionId, ...data } }));
       },
-      onSubAgentProgress: (data) => {
+      onSubAgentProgress: (data: { id: string; status: string; detail?: string; append?: boolean }) => {
         markActive();
         const idx = stream.subAgents.findIndex(a => a.id === data.id);
         if (idx >= 0) {
           const updated = [...stream.subAgents];
-          updated[idx] = { ...updated[idx], progress: data.detail };
+          const oldProgress = updated[idx].progress || '';
+          const newProgress = data.append ? oldProgress + (data.detail || '') : (data.detail || '');
+          updated[idx] = { 
+            ...updated[idx], 
+            progress: newProgress.length > 10000 ? '...' + newProgress.slice(-10000) : newProgress 
+          };
           stream.subAgents = updated;
-        emit(stream, 'snapshot-updated');
-        window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updated } }));
-      }
-      window.dispatchEvent(new CustomEvent('subagent-progress', { detail: { sessionId: params.sessionId, ...data } }));
-    },
+          emit(stream, 'snapshot-updated');
+          window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updated } }));
+        }
+        window.dispatchEvent(new CustomEvent('subagent-progress', { detail: { sessionId: params.sessionId, ...data } }));
+      },
     onSubAgentComplete: (data) => {
       markActive();
       const idx = stream.subAgents.findIndex(a => a.id === data.id);

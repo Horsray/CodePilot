@@ -1,0 +1,455 @@
+commit 00d853385afc9e600e8eea1ae171dab6401e3fb1
+Author: Horsray <Horsray@users.noreply.github.com>
+Date:   Fri Apr 24 00:06:30 2026 +0800
+
+    feat: 新增流式会话异常中断处理及团队模式优化
+    
+    新增了流式会话异常中断处理逻辑，优化了团队模式的任务调度和报告展示
+    
+    修改了：
+    - 新增流式会话的异常中断状态处理
+    - 优化了团队模式的任务调度和死锁检测
+    - 改进了子任务报告展示格式
+    - 增加了文件路径和网页URL的收集统计
+    - 调整了空闲超时逻辑，支持深度思考模式更长的超时
+    
+    新增了：
+    - 新增了输出截断的国际化提示
+    - 新增了在Finder中打开文件的选项
+    - 新增了图片附件预览功能
+    - 新增了任务列表状态同步功能
+    
+    删除了：
+    - 移除了冗余的工具文件收集逻辑
+
+diff --git a/src/hooks/useSSEStream.ts b/src/hooks/useSSEStream.ts
+index bde6d02..3e432d8 100644
+--- a/src/hooks/useSSEStream.ts
++++ b/src/hooks/useSSEStream.ts
+@@ -423,6 +423,19 @@ function handleSSEEvent(
+       return accumulated;
+     }
+ 
++    case 'aborted': {
++      // 中文注释：功能名称「异常中断事件处理」，用法是当后端因错误或取消而中断流时，
++      // 不再将此视为正常完成，而是触发 onResult 以标记流结束，但附带 terminalReason='aborted'
++      // 让前端可以区分正常完成和异常中断
++      try {
++        const abortData = JSON.parse(event.data);
++        callbacks.onResult(null, { terminalReason: abortData.reason || 'aborted' });
++      } catch {
++        callbacks.onResult(null, { terminalReason: 'aborted' });
++      }
++      return accumulated;
++    }
++
+     case 'done': {
+       return accumulated;
+     }
+diff --git a/src/lib/agent-loop.ts b/src/lib/agent-loop.ts
+index af59ea6..af1dd49 100644
+--- a/src/lib/agent-loop.ts
++++ b/src/lib/agent-loop.ts
+@@ -557,7 +557,8 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+           const stepToolCalls: string[] = [];
+           let stepText = '';
+ 
+-          // Extract file paths from tool calls
++          try {
++            // Extract file paths from tool calls
+           function extractFilePaths(toolName: string, input: unknown): string[] {
+             const files: string[] = [];
+             if (!input || typeof input !== 'object') return files;
+@@ -710,6 +711,14 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+                   }),
+                 }));
+ 
++                // Extract web search URLs from tool results for context stats
++                const toolName = (event as any).toolName;
++                if (toolName && /^(WebSearch|web_search|search|mcp__MiniMax__web_search|mcp__bailian-web-search__bailian_web_search|Browse|fetch|Fetch|getUrl|get_url|get_page)$/i.test(toolName)) {
++                  const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
++                  const urls = resultContent.match(urlPattern) || [];
++                  urls.forEach(url => toolFilesAccumulator.add(url));
++                }
++
+                 // Deferred TodoWrite sync: emit task_update after successful execution
+                 if (stepPendingTodoWrites.has(event.toolCallId)) {
+                   const todos = stepPendingTodoWrites.get(event.toolCallId)!;
+@@ -756,6 +765,36 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+                 break;
+             }
+           }
++          } catch (error: any) {
++            // Intercept SDK's internal "No output generated" error, which bypasses
++            // the loop logic entirely if the model sends invalid/missing tool calls
++            if (error?.message?.includes('No output generated') || error?.name === 'AI_NoOutputGeneratedError') {
++              console.warn(`[agent-loop] SDK aborted due to NoOutputGeneratedError (often caused by hallucinated or filtered tools). Model: ${modelId}`);
++              
++              if (!hasContent) {
++                reportNativeError('EMPTY_RESPONSE', error, { modelId, sessionId });
++                controller.enqueue(formatSSE({
++                  type: 'error',
++                  data: JSON.stringify({
++                    category: 'EMPTY_RESPONSE',
++                    userMessage: `模型未返回任何内容，或者试图调用不在权限列表内的工具（例如被过滤的 SearchCodebase）。模型 ID: "${modelId}"。`,
++                  }),
++                }));
++                break;
++              }
++            } else {
++              throw error; // re-throw genuine errors
++            }
++          }
++
++          // Emit accumulated file paths (from tool calls and web search results) for context stats
++          const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
++          if (allToolFiles.length > 0) {
++            controller.enqueue(formatSSE({
++              type: 'tool_files',
++              data: JSON.stringify({ files: allToolFiles }),
++            }));
++          }
+ 
+           // Usage is accumulated in onStepFinish callback above
+ 
+@@ -763,7 +802,12 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+           if (!hasToolCalls) {
+             // Detect truly empty response (no text, no thinking, no tools)
+             if (!hasContent) {
+-              const finishReason = await result.finishReason;
++              let finishReason = 'unknown_no_output';
++              try {
++                finishReason = await result.finishReason;
++              } catch (e) {
++                // Ignore NoOutputGeneratedError thrown by SDK when content is empty
++              }
+               console.error(`[agent-loop] Empty response: finishReason=${finishReason}, model=${modelId}`);
+               reportNativeError('EMPTY_RESPONSE', new Error(`Empty response: finishReason=${finishReason}`), { modelId, sessionId });
+               controller.enqueue(formatSSE({
+@@ -983,14 +1027,6 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
+           }
+         }
+ 
+-        // 6. Emit tool_files event with collected file paths from tool calls
+-        if (toolFilesAccumulator.size > 0) {
+-          controller.enqueue(formatSSE({
+-            type: 'tool_files',
+-            data: JSON.stringify({ files: Array.from(toolFilesAccumulator) }),
+-          }));
+-        }
+-
+         // 7. Emit result event
+         controller.enqueue(formatSSE({
+           type: 'result',
+@@ -1003,6 +1039,7 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
+ 
+         emitEvent('session:end', { sessionId, steps: step });
+         onRuntimeStatusChange?.('idle');
++        controller.enqueue(formatSSE({ type: 'done', data: '' }));
+       } catch (err: unknown) {
+         const isAbort = err instanceof Error && (
+           err.name === 'AbortError' ||
+@@ -1022,9 +1059,15 @@ DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
+         }
+ 
+         onRuntimeStatusChange?.('error');
++        controller.enqueue(formatSSE({
++          type: 'aborted',
++          data: JSON.stringify({
++            reason: isAbort ? 'user_cancel' : 'error',
++            message: isAbort ? 'User cancelled' : (err instanceof Error ? err.message : String(err)),
++          }),
++        }));
+       } finally {
+         clearInterval(keepAliveTimer);
+-        controller.enqueue(formatSSE({ type: 'done', data: '' }));
+         controller.close();
+       }
+     },
+diff --git a/src/lib/claude-client.ts b/src/lib/claude-client.ts
+index 40e89b1..d8dc4d6 100644
+--- a/src/lib/claude-client.ts
++++ b/src/lib/claude-client.ts
+@@ -1659,6 +1659,8 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
+         // Track pending file modifications so we can record checkpoints
+         const pendingFileModifications = new Map<string, string>();
++        // Collect file paths and web URLs from tool calls/results for context stats
++        const toolFilesAccumulator = new Set<string>();
+         for await (const message of conversation) {
+           if (abortController?.signal.aborted) {
+             if (usingPersistentSession) {
+@@ -1731,6 +1733,50 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+                       console.warn('[claude-client] Failed to parse file modification input:', e);
+                     }
+                   }
++
++                  // Collect file paths for context stats (broader than just file modification tools)
++                  const inp = block.input as Record<string, unknown>;
++                  if (inp) {
++                    // Read tools
++                    if (/^Read$|^ReadFile$|^read_file$|^read$|^ReadMultipleFiles$|^read_text_file$|^str_replace_editor$|^View$|^Open$/i.test(block.name)) {
++                      if (inp.file_path && typeof inp.file_path === 'string') toolFilesAccumulator.add(inp.file_path);
++                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
++                      if (inp.files && Array.isArray(inp.files)) {
++                        (inp.files as string[]).forEach((f: string) => {
++                          if (typeof f === 'string') toolFilesAccumulator.add(f);
++                        });
++                      }
++                    }
++                    // Glob/Search tools
++                    else if (/^Glob$|^GlobFiles$|^search_files$|^find_files$|^Find$|^NotebookRead$/i.test(block.name)) {
++                      if (inp.pattern && typeof inp.pattern === 'string') toolFilesAccumulator.add(inp.pattern);
++                      if (inp.glob && typeof inp.glob === 'string') toolFilesAccumulator.add(inp.glob);
++                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
++                    }
++                    // Grep/Search tools
++                    else if (/^Grep$|^SearchCodebase$|^search$|^grep$|^NotebookEdit$/i.test(block.name)) {
++                      if (inp.pattern && typeof inp.pattern === 'string') toolFilesAccumulator.add(inp.pattern);
++                      if (inp.query && typeof inp.query === 'string') toolFilesAccumulator.add(inp.query);
++                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
++                    }
++                    // Write/Edit tools
++                    else if (/^Write$|^WriteFile$|^write_file$|^create_file$|^Edit$|^Patch$|^replace_in_file$|^EditFile$|^WriteEdit$/i.test(block.name)) {
++                      if (inp.file_path && typeof inp.file_path === 'string') toolFilesAccumulator.add(inp.file_path);
++                      if (inp.path && typeof inp.path === 'string') toolFilesAccumulator.add(inp.path);
++                    }
++                    // Web search tools
++                    else if (/^WebSearch$|^web_search$|^search$|^Browse$|^Fetch$|^getUrl$|^get_url$|^mcp__MiniMax__web_search$|^mcp__bailian-web-search__bailian_web_search$/i.test(block.name)) {
++                      // Extract URLs from search query / input
++                      if (inp.query && typeof inp.query === 'string') {
++                        const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
++                        let match;
++                        while ((match = urlPattern.exec(inp.query)) !== null) {
++                          toolFilesAccumulator.add(match[0]);
++                        }
++                      }
++                      if (inp.url && typeof inp.url === 'string') toolFilesAccumulator.add(inp.url);
++                    }
++                  }
+                 }
+               }
+               break;
+@@ -1807,6 +1853,11 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+                       data: JSON.stringify(ssePayload),
+                     }));
+ 
++                    // Extract web search URLs from tool result content for context stats
++                    const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
++                    const urls = resultContent.match(urlPattern) || [];
++                    urls.forEach(url => toolFilesAccumulator.add(url));
++
+                                                             // Deferred TodoWrite sync: emit task_update after both success and error
+                     // (UI should reflect the attempted state even if tool failed)
+                     if (pendingTodoWrites.has(block.tool_use_id)) {
+@@ -2051,6 +2102,15 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+           }
+         }
+ 
++        // Emit accumulated file paths and web URLs for context stats
++        const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
++        if (allToolFiles.length > 0) {
++          controller.enqueue(formatSSE({
++            type: 'tool_files',
++            data: JSON.stringify({ files: allToolFiles }),
++          }));
++        }
++
+         controller.enqueue(formatSSE({ type: 'done', data: '' }));
+         controller.close();
+       } catch (error) {
+@@ -2331,7 +2391,13 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
+             _formattedMessage: errorMessage,
+           }),
+         }));
+-        controller.enqueue(formatSSE({ type: 'done', data: '' }));
++        controller.enqueue(formatSSE({
++          type: 'aborted',
++          data: JSON.stringify({
++            reason: 'error',
++            message: classified.userMessage || classified.rawMessage || 'Unknown error',
++          }),
++        }));
+ 
+         // Always clear sdk_session_id on crash so the next message starts fresh.
+         // Even for fresh sessions — the SDK may emit a session_id via status
+diff --git a/src/lib/team-runner.ts b/src/lib/team-runner.ts
+index 420cbe3..a8eca90 100644
+--- a/src/lib/team-runner.ts
++++ b/src/lib/team-runner.ts
+@@ -3,6 +3,7 @@ import { runAgentLoop } from './agent-loop';
+ import { assembleTools } from './agent-tools';
+ import type { ToolSet } from 'ai';
+ import { resolveAgentModel } from './agent-routing';
++import { truncateToTokenBudget } from './context-pruner';
+ 
+ export interface TeamRunnerOptions {
+   goal: string;
+@@ -87,7 +88,11 @@ async function executeAgentTask(
+   });
+ 
+   const subAgentId = `team-${task.role}-${Date.now()}`;
+-  const prompt = `Your role is ${task.role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${accumulatedContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
++  
++  // 防止 Team 模式下的上下文溢出 (Truncate to reasonable token limit)
++  const safeContext = truncateToTokenBudget(accumulatedContext, 15000);
++  
++  const prompt = `Your role is ${task.role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${safeContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
+ 
+   const permissionContext = (options.parentSessionId && options.emitSSE && options.permissionMode)
+     ? {
+@@ -143,6 +148,8 @@ async function executeAgentTask(
+   const thinkingParts: string[] = [];
+   const toolResults: Array<{ content: string; isError: boolean }> = [];
+   let errorEvent: string | null = null;
++  let taskFailed = false;
++
+ 
+   try {
+     while (true) {
+@@ -163,6 +170,7 @@ async function executeAgentTask(
+               } else if (event.type === 'thinking') {
+                 thinkingParts.push(event.data);
+               } else if (event.type === 'error') {
++                taskFailed = true;
+                 try {
+                   const errData = JSON.parse(event.data);
+                   errorEvent = errData.userMessage || event.data;
+@@ -195,15 +203,27 @@ async function executeAgentTask(
+                 } catch { }
+               }
+               if (emitSSE) {
+-                let progressMsg = '';
+-                if (event.type === 'text') progressMsg = '正在思考与输出...';
+-                else if (event.type === 'tool_use') progressMsg = `执行工具...`;
+-                else if (event.type === 'thinking') progressMsg = '正在思考...';
++                  let progressMsg = '';
++                  if (event.type === 'text') progressMsg = event.data;
++                  else if (event.type === 'tool_use') {
++                    try {
++                      const toolData = JSON.parse(event.data);
++                      progressMsg = `\n🛠️ 准备执行工具: ${toolData.name}\n`;
++                    } catch { }
++                  }
++                  else if (event.type === 'tool_result') {
++                    try {
++                      const res = JSON.parse(event.data);
++                      const preview = String(res.content || '').slice(0, 200).replace(/\n/g, ' ');
++                      progressMsg = `\n📋 结果: ${res.is_error ? '❌' : '✅'} ${preview}${String(res.content || '').length > 200 ? '...' : ''}\n\n`;
++                    } catch { }
++                  }
++                  else if (event.type === 'thinking') progressMsg = event.data;
+                 
+                 if (progressMsg) {
+                   emitSSE({
+                     type: 'subagent_progress',
+-                    data: JSON.stringify({ id: subAgentId, detail: progressMsg })
++                    data: JSON.stringify({ id: subAgentId, detail: progressMsg, append: true })
+                   });
+                 }
+               }
+@@ -212,32 +232,45 @@ async function executeAgentTask(
+         }
+       }
+     }
++  } catch (streamErr: unknown) {
++    // Stream interrupted (network disconnect, client abort, etc.)
++    taskFailed = true;
++    const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
++    if (!errorEvent) {
++      errorEvent = `任务执行中断: ${errMsg}`;
++    }
++    console.warn(`[team-runner] executeAgentTask stream error for ${task.role}:`, errMsg);
+   } finally {
+     reader.releaseLock();
+   }
+ 
+-  let report: string;
+-  if (textParts.length > 0) {
+-    report = textParts.join('');
+-  } else if (errorEvent) {
+-    report = `**执行出错：** ${errorEvent}`;
+-  } else if (thinkingParts.length > 0 || toolResults.length > 0) {
+-    const parts: string[] = [];
+-    if (thinkingParts.length > 0) {
+-      const thinkingText = thinkingParts.join('').trim();
+-      if (thinkingText) {
+-        parts.push('**思考过程：**\n' + thinkingText.slice(0, 3000));
+-      }
++  const parts: string[] = [];
++  
++  if (errorEvent) {
++    parts.push(`**❌ 执行出错：**\n${errorEvent}\n`);
++  }
++
++  if (thinkingParts.length > 0) {
++    const thinkingText = thinkingParts.join('').trim();
++    if (thinkingText) {
++      parts.push('**💭 思考过程：**\n' + thinkingText);
+     }
+-    if (toolResults.length > 0) {
+-      parts.push(`**执行了 ${toolResults.length} 个工具：**`);
+-      for (const tr of toolResults.slice(0, 10)) {
+-        const preview = tr.content.slice(0, 500).replace(/\n/g, ' ');
+-        parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 500 ? '...' : ''}`);
+-      }
++  }
++
++  if (toolResults.length > 0) {
++    parts.push(`**🛠️ 工具执行 (${toolResults.length} 次)：**`);
++    for (const tr of toolResults) {
++      const preview = tr.content.slice(0, 800).replace(/\n/g, ' ');
++      parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 800 ? '...' : ''}`);
+     }
+-    report = parts.join('\n\n');
+-  } else {
++  }
++
++  if (textParts.length > 0) {
++    parts.push('**📝 最终输出：**\n' + textParts.join(''));
++  }
++
++  let report = parts.join('\n\n');
++  if (!report.trim()) {
+     report = '(No report provided)';
+   }
+ 
+@@ -327,6 +360,22 @@ Only output the JSON block, no other text.`;
+   try {
+     const dag = JSON.parse(jsonMatch[1] || jsonMatch[0]) as TeamDAG;
+     if (!dag.tasks || !Array.isArray(dag.tasks)) throw new Error('Invalid DAG format');
++    
++    // Validate DAG to prevent deadlocks (missing dependencies or circular deps)
++    const taskIds = new Set(dag.tasks.map(t => t.id));
++    for (const task of dag.tasks) {
++      if (task.dependsOn) {
++        for (const dep of task.dependsOn) {
++          if (!taskIds.has(dep)) {
++            throw new Error(`DAG Validation Error: Task ${task.id} depends on non-existent task ${dep}`);
++          }
++        }
++      }
++    }
++    
++    // A simple cycle detection could be added here, but for now we rely on 
++    // the deadlock detector in the while loop below to catch circular dependencies at runtime.
++    
+     return dag;
+   } catch (e) {
+     return {
+@@ -380,6 +429,15 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
+       !t.dependsOn || t.dependsOn.length === 0 || t.dependsOn.every(dep => completedTasks.has(dep))
+     );
+ 
++    // Deadlock detection: if there are pending tasks but none are ready AND no tasks are running,
++    // we have a circular dependency or unresolvable dependency in the DAG.
++    if (readyTasks.length === 0 && runningTasks.size === 0 && pendingTasks.length > 0) {
++      console.error('[team-runner] Deadlock detected in DAG:', pendingTasks);
++      const errMsg = `⚠️ **调度死锁错误**\n任务图中存在循环依赖或无法解析的前置条件。强制中止管线以防止系统卡死。\n剩余未执行任务: ${pendingTasks.map(t => t.id).join(', ')}`;
++      if (emitSSE) emitSSE({ type: 'error', data: JSON.stringify({ category: 'DAG_DEADLOCK', userMessage: errMsg }) });
++      throw new Error('DAG Execution Deadlock: Circular dependencies detected.');
++    }
++
+     // Start ready tasks
+     for (const task of readyTasks) {
+       // Remove from pending
