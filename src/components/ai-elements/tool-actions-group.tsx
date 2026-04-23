@@ -1336,10 +1336,10 @@ export function CompletionBar({
   const openInFinder = () => {
     if (changedFiles.length > 0 && changedFiles[0].diff.fullPath) {
       const dir = changedFiles[0].diff.fullPath.substring(0, changedFiles[0].diff.fullPath.lastIndexOf('/'));
-      fetch('/api/open-file', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: dir, openInFinder: true }),
-      }).catch(() => {});
+      // 使用 Electron IPC 打开文件管理器 (macOS Finder / Windows Explorer)
+      if (typeof window !== 'undefined' && (window as any).electronAPI?.shell?.openPath) {
+        (window as any).electronAPI.shell.openPath(dir).catch(() => {});
+      }
     }
   };
 

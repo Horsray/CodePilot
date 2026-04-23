@@ -501,11 +501,11 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
             if (emitSSE) {
               emitSSE({ type: 'text', data: `\n\n⚠️ **验证失败**\n触发自动重试闭环 (Retry ${retries}/${MAX_RETRIES})...\n` });
             }
-            
+
             const debugId = `debug-${retries}`;
             const execId = `exec-${retries}`;
             const verifyId = `verify-${retries}`;
-            
+
             pendingTasks.push({
               id: debugId,
               role: 'debugger',
@@ -526,21 +526,43 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
             });
           }
         }
+      }).catch((err: unknown) => {
+        // Handle unexpected errors from executeAgentTask
+        const errMsg = err instanceof Error ? err.message : String(err);
+        taskReports.set(task.id, `**❌ 执行异常**: ${errMsg}`);
+        completedTasks.add(task.id);
+        accumulatedContext += `\n\n--- Report from ${task.role} (${task.id}) ---\n**❌ 执行异常**: ${errMsg}\n`;
+        console.error(`[team-runner] Task ${task.id} threw error:`, err);
       });
 
       runningTasks.set(task.id, taskPromise);
     }
 
-    // Wait for at least one running task to finish before checking again
+    // Wait for all running tasks to settle (resolved or rejected)
     if (runningTasks.size > 0) {
-      await Promise.race(runningTasks.values());
-      // Clean up finished tasks from runningTasks
-      for (const [id, promise] of runningTasks.entries()) {
-        // A little trick to check if promise is resolved: we remove it since it's already in completedTasks
-        if (completedTasks.has(id)) {
-          runningTasks.delete(id);
+      const settled = await Promise.allSettled(Array.from(runningTasks.values()));
+
+      // Process each settled result and clean up
+      for (const [id, _promise] of runningTasks.entries()) {
+        runningTasks.delete(id);
+
+        // If task was rejected (not in completedTasks), mark as failed
+        if (!completedTasks.has(id)) {
+          // Find the task that failed
+          const failedTask = dag.tasks.find(t => t.id === id);
+          if (failedTask) {
+            const errorMsg = `Task ${id} (${failedTask.role}) failed with unhandled error.`;
+            taskReports.set(id, `**❌ 任务执行失败**: ${errorMsg}`);
+            accumulatedContext += `\n\n--- Report from ${failedTask.role} (${id}) ---\n**❌ 任务执行失败**: ${errorMsg}\n`;
+            console.error(`[team-runner] Unhandled rejection for task ${id}:`, settled);
+          }
+          // Add to completedTasks to prevent deadlock
+          completedTasks.add(id);
         }
       }
+
+      // Re-check for newly ready tasks after all settled
+      continue;
     }
   }
 
