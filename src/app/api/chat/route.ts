@@ -730,6 +730,9 @@ async function collectStreamResponse(
   let hasError = false;
   let errorMessage = '';
   let lastSavedAssistantMsgId: string | null = null;
+  // 中文注释：功能名称「工具文件收集」，用法是收集AI实际读取/写入的文件路径和网页URL，
+  // 从SSE tool_files事件中获取，持久化到DB的tool_files列
+  let collectedToolFiles: string[] = [];
   // Dedup layer: skip duplicate tool_result events by tool_use_id
   const seenToolResultIds = new Set<string>();
 
@@ -871,7 +874,17 @@ async function collectStreamResponse(
               try {
                 const data = JSON.parse(event.data);
                 const idx = subAgents.findIndex(a => a.id === data.id);
-                if (idx >= 0) subAgents[idx].progress = data.detail;
+                if (idx >= 0) {
+                  // 中文注释：功能名称「子Agent进度追加」，用法是处理append模式的进度更新，
+                  // 追加而非替换进度文本，与agent.ts中emitSSE的append标志保持一致
+                  if (data.append) {
+                    const oldProgress = subAgents[idx].progress || '';
+                    const newProgress = oldProgress + (data.detail || '');
+                    subAgents[idx].progress = newProgress.length > 10000 ? '...' + newProgress.slice(-10000) : newProgress;
+                  } else {
+                    subAgents[idx].progress = data.detail;
+                  }
+                }
               } catch {}
             } else if (event.type === 'subagent_complete') {
               try {
@@ -882,6 +895,15 @@ async function collectStreamResponse(
                   subAgents[idx].report = data.report;
                   subAgents[idx].error = data.error;
                   subAgents[idx].completedAt = Date.now();
+                }
+              } catch {}
+            } else if (event.type === 'tool_files') {
+              // 中文注释：功能名称「工具文件事件捕获」，用法是从SSE流中捕获AI访问的文件/网页列表，
+              // 持久化到DB以解决会话切换后上下文统计丢失的问题
+              try {
+                const data = JSON.parse(event.data);
+                if (Array.isArray(data.files)) {
+                  collectedToolFiles = data.files.filter((f: unknown) => typeof f === 'string');
                 }
               } catch {}
             } else if (event.type === 'result') {
@@ -984,7 +1006,10 @@ async function collectStreamResponse(
           'assistant',
           content,
           JSON.stringify(finalTokenUsage),
-          opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined
+          opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined,
+          // 中文注释：功能名称「工具文件持久化」，用法是将AI访问的文件/网页列表保存到DB，
+          // 使会话切换后上下文统计仍能显示完整的文件和网页信息
+          collectedToolFiles.length > 0 ? JSON.stringify(collectedToolFiles) : undefined
         );
         lastSavedAssistantMsgId = savedMsg.id;
 
@@ -1059,7 +1084,8 @@ async function collectStreamResponse(
           'assistant',
           content,
           tokenUsage ? JSON.stringify(tokenUsage) : null,
-          opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined
+          opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined,
+          collectedToolFiles.length > 0 ? JSON.stringify(collectedToolFiles) : undefined
         );
       }
     }

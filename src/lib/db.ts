@@ -502,6 +502,12 @@ function migrateDb(db: Database.Database): void {
     safeAddColumn(db, "ALTER TABLE messages ADD COLUMN referenced_contexts TEXT");
   }
 
+  // 中文注释：功能名称「工具文件追踪列」，用法是持久化AI实际读取/写入的文件和访问的网页URL，
+  // 解决会话切换后上下文统计丢失文件/网页信息的问题
+  if (!msgColNames.includes('tool_files')) {
+    safeAddColumn(db, "ALTER TABLE messages ADD COLUMN tool_files TEXT");
+  }
+
   // Ensure tasks table exists for databases created before this migration
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
@@ -1320,14 +1326,17 @@ export function addMessage(
   content: string,
   tokenUsage?: string | null,
   referencedContexts?: string | null,
+  // 中文注释：功能名称「工具文件持久化」，用法是保存AI实际读取/写入的文件路径和网页URL，
+  // JSON字符串数组格式，使会话切换后上下文统计仍能显示文件/网页信息
+  toolFiles?: string | null,
 ): Message {
   const db = getDb();
   const id = crypto.randomBytes(16).toString('hex');
   const now = new Date().toISOString().replace('T', ' ').split('.')[0];
 
   db.prepare(
-    'INSERT INTO messages (id, session_id, role, content, created_at, token_usage, referenced_contexts) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, sessionId, role, content, now, tokenUsage || null, referencedContexts || null);
+    'INSERT INTO messages (id, session_id, role, content, created_at, token_usage, referenced_contexts, tool_files) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, sessionId, role, content, now, tokenUsage || null, referencedContexts || null, toolFiles || null);
 
   updateSessionTimestamp(sessionId);
 

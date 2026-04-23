@@ -1661,6 +1661,9 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
         const pendingFileModifications = new Map<string, string>();
         // Collect file paths and web URLs from tool calls/results for context stats
         const toolFilesAccumulator = new Set<string>();
+        // 中文注释：功能名称「SDK子Agent追踪」，用法是追踪SDK runtime中Agent工具的调用，
+        // 发射合成的subagent_start/complete SSE事件，使子Agent卡片在会话切换后仍能恢复渲染
+        const pendingAgentToolUse = new Map<string, { id: string; name: string; displayName: string; prompt: string; model?: string }>();
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
             if (usingPersistentSession) {
@@ -1706,6 +1709,42 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                       }
                     } catch (e) {
                       console.warn('[claude-client] Failed to parse TodoWrite input:', e);
+                    }
+                  }
+
+                  // 中文注释：功能名称「Agent工具检测」，用法是检测SDK runtime中的Agent/Team工具调用，
+                  // 发射合成的subagent_start SSE事件，使子Agent卡片能实时显示并在会话切换后恢复
+                  const agentToolNames = ['Agent', 'mcp__codepilot-agent__Agent', 'Team', 'mcp__codepilot-team__Team'];
+                  if (agentToolNames.includes(block.name)) {
+                    try {
+                      const toolInput = block.input as {
+                        agentId?: string;
+                        agent_id?: string;
+                        id?: string;
+                        prompt?: string;
+                        task?: string;
+                        displayName?: string;
+                        display_name?: string;
+                        model?: string;
+                      };
+                      const agentId = toolInput?.agentId || toolInput?.agent_id || toolInput?.id || block.id;
+                      const agentPrompt = toolInput?.prompt || toolInput?.task || '';
+                      const agentDisplayName = toolInput?.displayName || toolInput?.display_name || agentId;
+                      const subAgentId = `subagent-${agentId}-${Date.now()}`;
+                      const agentInfo = {
+                        id: subAgentId,
+                        name: agentId,
+                        displayName: agentDisplayName,
+                        prompt: agentPrompt.length > 200 ? agentPrompt.slice(0, 197) + '...' : agentPrompt,
+                        model: toolInput?.model,
+                      };
+                      pendingAgentToolUse.set(block.id, agentInfo);
+                      controller.enqueue(formatSSE({
+                        type: 'subagent_start',
+                        data: JSON.stringify(agentInfo),
+                      }));
+                    } catch (e) {
+                      console.warn('[claude-client] Failed to emit synthetic subagent_start:', e);
                     }
                   }
 
@@ -1857,6 +1896,24 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                     const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
                     const urls = resultContent.match(urlPattern) || [];
                     urls.forEach(url => toolFilesAccumulator.add(url));
+
+                    // 中文注释：功能名称「Agent工具完成检测」，用法是检测SDK runtime中Agent/Team工具的
+                    // tool_result，发射合成的subagent_complete SSE事件，使子Agent卡片能正确显示完成状态
+                    if (pendingAgentToolUse.has(block.tool_use_id)) {
+                      const agentInfo = pendingAgentToolUse.get(block.tool_use_id)!;
+                      pendingAgentToolUse.delete(block.tool_use_id);
+                      const reportText = resultContent.length > 500
+                        ? resultContent.slice(0, 497) + '...'
+                        : resultContent;
+                      controller.enqueue(formatSSE({
+                        type: 'subagent_complete',
+                        data: JSON.stringify({
+                          id: agentInfo.id,
+                          report: block.is_error ? undefined : reportText,
+                          error: block.is_error ? reportText : undefined,
+                        }),
+                      }));
+                    }
 
                                                             // Deferred TodoWrite sync: emit task_update after both success and error
                     // (UI should reflect the attempted state even if tool failed)

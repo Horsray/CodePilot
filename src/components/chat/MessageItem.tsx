@@ -746,7 +746,43 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       const parsed = JSON.parse(message.content);
       if (Array.isArray(parsed)) {
         const subAgentsBlock = parsed.find(b => b.type === 'sub_agents');
-        return subAgentsBlock ? subAgentsBlock.subAgents : null;
+        if (subAgentsBlock?.subAgents?.length) return subAgentsBlock.subAgents;
+
+        // 中文注释：功能名称「子Agent回退提取」，用法是当消息中没有sub_agents块时，
+        // 从Agent/Team tool_use和tool_result对中提取子Agent信息，确保会话切换后卡片仍能渲染
+        const agentToolNames = ['Agent', 'mcp__codepilot-agent__Agent', 'Team', 'mcp__codepilot-team__Team'];
+        const toolUseBlocks = parsed.filter(b => b.type === 'tool_use' && agentToolNames.includes(b.name));
+        if (toolUseBlocks.length > 0) {
+          const toolResultMap = new Map<string, { content: string; isError?: boolean }>();
+          parsed.filter(b => b.type === 'tool_result').forEach(b => {
+            if (b.tool_use_id) toolResultMap.set(b.tool_use_id, { content: b.content || '', isError: b.is_error });
+          });
+          return toolUseBlocks.map((block, i) => {
+            const input = block.input || {};
+            const result = toolResultMap.get(block.id);
+            const agentId = input.agentId || input.agent_id || input.id || block.id;
+            const prompt = input.prompt || input.task || '';
+            const displayName = input.displayName || input.display_name || agentId;
+            const report = result && !result.isError
+              ? (typeof result.content === 'string' ? result.content.slice(0, 500) : String(result.content).slice(0, 500))
+              : undefined;
+            const error = result?.isError
+              ? (typeof result.content === 'string' ? result.content.slice(0, 500) : String(result.content).slice(0, 500))
+              : undefined;
+            return {
+              id: `subagent-${agentId}-${i}`,
+              name: agentId,
+              displayName,
+              prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
+              model: input.model,
+              status: result ? (result.isError ? 'error' : 'completed') : 'running' as const,
+              report,
+              error,
+              startedAt: Date.now() - (toolUseBlocks.length - i) * 1000,
+              ...(result ? { completedAt: Date.now() - (toolUseBlocks.length - i - 1) * 1000 } : {}),
+            };
+          });
+        }
       }
     } catch {
       // not JSON

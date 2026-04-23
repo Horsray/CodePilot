@@ -113,18 +113,39 @@ export function ContextCompressionWidget({
 
     // Add tool files from SSE events (AI actual file reads)
     toolFiles?.forEach(f => {
-      // Categorize: URLs go to web, local file paths go to files
       if (f.startsWith('http://') || f.startsWith('https://')) {
         if (!webSet.has(f)) {
           webSet.add(f);
         }
-        // Also add to filesMap so it shows in the Files tab
         if (!filesMap.has(f)) {
           filesMap.set(f, { path: f, name: f });
         }
       } else if (!filesMap.has(f)) {
         const name = f.split('/').pop() || f;
         filesMap.set(f, { path: f, name });
+      }
+    });
+
+    // 中文注释：功能名称「持久化工具文件读取」，用法是从消息的tool_files字段中读取
+    // AI实际访问的文件和网页数据，解决会话切换后上下文统计丢失文件/网页信息的问题
+    messages.forEach((msg) => {
+      if (msg.role === 'assistant' && msg.tool_files) {
+        try {
+          const persistedFiles = JSON.parse(msg.tool_files) as string[];
+          persistedFiles.forEach(f => {
+            if (f.startsWith('http://') || f.startsWith('https://')) {
+              if (!webSet.has(f)) {
+                webSet.add(f);
+              }
+              if (!filesMap.has(f)) {
+                filesMap.set(f, { path: f, name: f });
+              }
+            } else if (!filesMap.has(f)) {
+              const name = f.split('/').pop() || f;
+              filesMap.set(f, { path: f, name });
+            }
+          });
+        } catch {}
       }
     });
 

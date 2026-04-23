@@ -362,7 +362,13 @@ You must output a valid JSON block containing the execution plan. The JSON shoul
     }
   ]
 }
-Make sure to include a verifier or qa-tester step at the end.
+
+CRITICAL RULES FOR MULTI-AGENT PARALLELISM:
+1. MAXIMIZE PARALLELISM: If a complex task can be split into 2-5 independent sub-tasks (e.g., analyzing different modules, modifying separate files, researching different topics), you MUST split them into separate tasks with NO overlapping dependencies.
+2. INDEPENDENT TASKS: Tasks that have an empty \`dependsOn\` array \`[]\` will run in background concurrently.
+3. CONVERGENCE: Only sequentialize tasks (using \`dependsOn\`) when one task STRICTLY requires the output of another.
+4. MAKE SURE to include a final verifier or qa-tester step at the end that depends on all the parallel execution tasks.
+
 Only output the JSON block, no other text.`;
 
   if (options.emitSSE) {

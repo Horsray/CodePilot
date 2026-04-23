@@ -565,7 +565,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
             const inp = input as Record<string, unknown>;
 
             // Read tools
-            if (/^Read$|^ReadFile$|^read_file$|^read$|^ReadMultipleFiles$|^read_text_file$/i.test(toolName)) {
+            if (/^Read$|^ReadFile$|^read_file$|^read$|^ReadMultipleFiles$|^read_text_file$|^str_replace_editor$|^View$|^Open$|^NotebookRead$/i.test(toolName)) {
               if (inp.file_path && typeof inp.file_path === 'string') files.push(inp.file_path);
               if (inp.path && typeof inp.path === 'string') files.push(inp.path);
               if (inp.files && Array.isArray(inp.files)) {
@@ -591,28 +591,36 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
               if (inp.path && typeof inp.path === 'string') files.push(inp.path);
             }
             // Write tools
-            else if (/^Write$|^WriteFile$|^write_file$|^create_file$/i.test(toolName)) {
+            else if (/^Write$|^WriteFile$|^write_file$|^create_file$|^WriteEdit$/i.test(toolName)) {
               if (inp.file_path && typeof inp.file_path === 'string') files.push(inp.file_path);
               if (inp.path && typeof inp.path === 'string') files.push(inp.path);
             }
             // Edit tools
-            else if (/^Edit$|^Patch$|^replace_in_file$/i.test(toolName)) {
+            else if (/^Edit$|^Patch$|^replace_in_file$|^EditFile$/i.test(toolName)) {
               if (inp.file_path && typeof inp.file_path === 'string') files.push(inp.file_path);
               if (inp.path && typeof inp.path === 'string') files.push(inp.path);
             }
-            // Bash with cd/ls/read etc.
+            // 中文注释：功能名称「Web工具文件提取」，用法是从Web搜索/抓取工具中提取URL，
+            // 使上下文统计能显示AI访问过的网页
+            else if (/^WebSearch$|^web_search$|^Browse$|^Fetch$|^WebFetch$|^getUrl$|^get_url$|^mcp__fetch__|^mcp__MiniMax__web_search$|^mcp__bailian-web-search__/i.test(toolName)) {
+              if (inp.url && typeof inp.url === 'string') files.push(inp.url);
+              if (inp.query && typeof inp.query === 'string') {
+                const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
+                let match;
+                while ((match = urlPattern.exec(inp.query)) !== null) {
+                  files.push(match[0]);
+                }
+              }
+            }
+            // Bash with file-related commands
             else if (/^Bash$|^shell$|^Execute$|^run$/i.test(toolName)) {
               if (inp.command && typeof inp.command === 'string') {
-                // Try to extract file paths from common patterns
                 const cmd = inp.command;
-                const filePattern = /(?:^|\s)([a-zA-Z0-9\/\-_.]+(?:\.[a-zA-Z0-9]+)?)(?:\s|$)/g;
-                let match;
-                while ((match = filePattern.exec(cmd)) !== null) {
-                  const candidate = match[1];
-                  // Skip obvious commands/keywords
-                  if (!/^(cd|ls|grep|find|cat|head|tail|awk|sed|rm|mkdir|chmod|chown|pwd|mv|cp|touch)$/i.test(candidate)) {
-                    files.push(candidate);
-                  }
+                // 中文注释：功能名称「Bash命令URL提取」，用法是从Bash命令中提取URL
+                const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
+                let urlMatch;
+                while ((urlMatch = urlPattern.exec(cmd)) !== null) {
+                  files.push(urlMatch[0]);
                 }
               }
             }

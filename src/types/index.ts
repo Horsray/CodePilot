@@ -159,6 +159,9 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string; // JSON string of MessageContentBlock[] for structured content
   referenced_contexts?: string; // JSON string of string[]
+  // 中文注释：功能名称「工具文件追踪」，用法是持久化AI实际读取/写入的文件路径和访问的网页URL，
+  // JSON字符串数组格式，解决会话切换后上下文统计丢失文件/网页信息的问题
+  tool_files?: string; // JSON string of string[]
   created_at: string;
   token_usage: string | null; // JSON string of TokenUsage
   is_heartbeat_ack?: number; // 1 = heartbeat ack (prunable from transcript), 0 = normal
