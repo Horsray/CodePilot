@@ -58,6 +58,8 @@ export function useStreamSubscription({
                 created_at: new Date().toISOString(),
                 token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
                 referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
+                // 中文注释：功能名称「工具文件快照恢复」，用法是从快照恢复toolFiles到临时消息
+                tool_files: existing.toolFiles && existing.toolFiles.length > 0 ? JSON.stringify(existing.toolFiles) : undefined,
               };
               transferPendingToMessage(assistantMessage.id);
               setMessages((prev) => [...prev, assistantMessage]);
@@ -73,6 +75,8 @@ export function useStreamSubscription({
             created_at: new Date().toISOString(),
             token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
             referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
+            // 中文注释：功能名称「工具文件快照恢复」，用法是从快照恢复toolFiles到临时消息
+            tool_files: existing.toolFiles && existing.toolFiles.length > 0 ? JSON.stringify(existing.toolFiles) : undefined,
           };
           transferPendingToMessage(assistantMessage.id);
           setMessages((prev) => [...prev, assistantMessage]);
@@ -113,6 +117,9 @@ export function useStreamSubscription({
             created_at: new Date().toISOString(),
             token_usage: event.snapshot.tokenUsage ? JSON.stringify(event.snapshot.tokenUsage) : null,
             referenced_contexts: event.snapshot.referencedContexts && event.snapshot.referencedContexts.length > 0 ? JSON.stringify(event.snapshot.referencedContexts) : undefined,
+            // 中文注释：功能名称「工具文件快照传递」，用法是将streamSnapshot中的toolFiles
+            // 传递给临时消息，使上下文统计在流结束后仍能显示文件/网页信息
+            tool_files: event.snapshot.toolFiles && event.snapshot.toolFiles.length > 0 ? JSON.stringify(event.snapshot.toolFiles) : undefined,
           };
           // Transfer pending reference images to this message ID
           transferPendingToMessage(assistantMessage.id);

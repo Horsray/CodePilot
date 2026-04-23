@@ -1720,29 +1720,40 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                       const toolInput = block.input as {
                         agentId?: string;
                         agent_id?: string;
+                        agent?: string;
+                        subagent_type?: string;
                         id?: string;
                         prompt?: string;
                         task?: string;
+                        description?: string;
                         displayName?: string;
                         display_name?: string;
                         model?: string;
                       };
-                      const agentId = toolInput?.agentId || toolInput?.agent_id || toolInput?.id || block.id;
-                      const agentPrompt = toolInput?.prompt || toolInput?.task || '';
+                      // 中文注释：功能名称「Agent输入解析」，用法是正确解析Agent/Team工具的input字段，
+                      // 优先使用agent/subagent_type（MCP schema定义的字段），避免回退到block.id产生call_function_xxx乱码
+                      const agentId = toolInput?.agentId || toolInput?.agent_id || toolInput?.agent || toolInput?.subagent_type || 'general';
+                      const agentPrompt = toolInput?.prompt || toolInput?.task || toolInput?.description || '';
                       const agentDisplayName = toolInput?.displayName || toolInput?.display_name || agentId;
-                      const subAgentId = `subagent-${agentId}-${Date.now()}`;
-                      const agentInfo = {
-                        id: subAgentId,
-                        name: agentId,
-                        displayName: agentDisplayName,
-                        prompt: agentPrompt.length > 200 ? agentPrompt.slice(0, 197) + '...' : agentPrompt,
-                        model: toolInput?.model,
-                      };
-                      pendingAgentToolUse.set(block.id, agentInfo);
-                      controller.enqueue(formatSSE({
-                        type: 'subagent_start',
-                        data: JSON.stringify(agentInfo),
-                      }));
+                      // 中文注释：功能名称「空智能体过滤」，用法是当Agent工具调用没有prompt/task时，
+                      // 不发射subagent_start事件，避免产生无任务的空智能体卡片
+                      if (!agentPrompt.trim()) {
+                        console.warn('[claude-client] Skipping Agent tool_use with empty prompt:', block.id);
+                      } else {
+                        const subAgentId = `subagent-${agentId}-${Date.now()}`;
+                        const agentInfo = {
+                          id: subAgentId,
+                          name: agentId,
+                          displayName: agentDisplayName,
+                          prompt: agentPrompt.length > 200 ? agentPrompt.slice(0, 197) + '...' : agentPrompt,
+                          model: toolInput?.model,
+                        };
+                        pendingAgentToolUse.set(block.id, agentInfo);
+                        controller.enqueue(formatSSE({
+                          type: 'subagent_start',
+                          data: JSON.stringify(agentInfo),
+                        }));
+                      }
                     } catch (e) {
                       console.warn('[claude-client] Failed to emit synthetic subagent_start:', e);
                     }
@@ -1817,6 +1828,15 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                     }
                   }
                 }
+              }
+              // 中文注释：功能名称「SDK工具文件实时发射」，用法是每次工具调用后立即发射tool_files事件，
+              // 使上下文统计在流式期间就能显示AI访问的文件和网页
+              if (toolFilesAccumulator.size > 0) {
+                const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
+                controller.enqueue(formatSSE({
+                  type: 'tool_files',
+                  data: JSON.stringify({ files: allToolFiles }),
+                }));
               }
               break;
             }
@@ -1896,6 +1916,14 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                     const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
                     const urls = resultContent.match(urlPattern) || [];
                     urls.forEach(url => toolFilesAccumulator.add(url));
+                    // 中文注释：功能名称「SDK URL实时发射」，用法是工具结果中的URL提取后立即发射tool_files事件
+                    if (urls.length > 0) {
+                      const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
+                      controller.enqueue(formatSSE({
+                        type: 'tool_files',
+                        data: JSON.stringify({ files: allToolFiles }),
+                      }));
+                    }
 
                     // 中文注释：功能名称「Agent工具完成检测」，用法是检测SDK runtime中Agent/Team工具的
                     // tool_result，发射合成的subagent_complete SSE事件，使子Agent卡片能正确显示完成状态

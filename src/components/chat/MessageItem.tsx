@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
 import { cn } from '@/lib/utils';
-import type { Message, TokenUsage, FileAttachment, MediaBlock } from '@/types';
+import type { Message, TokenUsage, FileAttachment, MediaBlock, SubAgentInfo } from '@/types';
 import {
   Message as AIMessage,
   MessageContent,
@@ -760,9 +760,14 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           return toolUseBlocks.map((block, i) => {
             const input = block.input || {};
             const result = toolResultMap.get(block.id);
-            const agentId = input.agentId || input.agent_id || input.id || block.id;
-            const prompt = input.prompt || input.task || '';
+            // 中文注释：功能名称「Agent输入解析」，用法是正确解析Agent/Team工具的input字段，
+            // 优先使用agent/subagent_type，避免回退到block.id产生call_function_xxx乱码
+            const agentId = input.agentId || input.agent_id || input.agent || input.subagent_type || 'general';
+            const prompt = input.prompt || input.task || input.description || '';
             const displayName = input.displayName || input.display_name || agentId;
+            // 中文注释：功能名称「空智能体过滤」，用法是跳过没有prompt的Agent工具调用，
+            // 避免产生无任务的空智能体卡片
+            if (!prompt.trim()) return null;
             const report = result && !result.isError
               ? (typeof result.content === 'string' ? result.content.slice(0, 500) : String(result.content).slice(0, 500))
               : undefined;
@@ -781,7 +786,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
               startedAt: Date.now() - (toolUseBlocks.length - i) * 1000,
               ...(result ? { completedAt: Date.now() - (toolUseBlocks.length - i - 1) * 1000 } : {}),
             };
-          });
+          }).filter(Boolean) as SubAgentInfo[];
         }
       }
     } catch {

@@ -182,6 +182,9 @@ interface MessageListProps {
   hasSummary?: boolean;
   summaryBoundaryRowid?: number;
   isContextCompressing?: boolean;
+  // 中文注释：功能名称「子Agent快照数据」，用法是从streamSnapshot传入子Agent数据，
+  // 使StreamingMessage在切换会话后能恢复卡片渲染
+  subAgents?: any[];
 }
 
 function getRewindTargetForMessage(messages: Message[], rewindPoints: RewindPoint[], message: Message): string | undefined {
@@ -253,6 +256,7 @@ export function MessageList({
   hasSummary,
   summaryBoundaryRowid,
   isContextCompressing,
+  subAgents,
 }: MessageListProps) {
   const { t } = useTranslation();
   // Scroll anchor: preserve position when older messages are prepended
@@ -398,6 +402,7 @@ export function MessageList({
             thinkingContent={streamingThinkingContent}
             statusText={statusText}
             onForceStop={onForceStop}
+            subAgents={subAgents}
           />
         )}
       </ConversationContent>

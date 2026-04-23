@@ -132,6 +132,9 @@ interface StreamingMessageProps {
   statusText?: string;
   statusPayload?: Record<string, any>;
   onForceStop?: () => void;
+  // 中文注释：功能名称「子Agent快照数据」，用法是从streamSnapshot传入子Agent数据，
+  // 使SubAgentTimelineStreamAdapter在切换会话后能恢复卡片渲染
+  subAgents?: any[];
 }
 
 function splitThinkingPhases(raw?: string): string[] {
@@ -312,8 +315,18 @@ function StreamingStatusBar({ statusText, onForceStop, startedAt }: { statusText
 // ---------------------------------------------------------------------------
 // Component to subscribe to team events and show SubAgentTimeline during streaming
 // ---------------------------------------------------------------------------
-function SubAgentTimelineStreamAdapter({ sessionId, isStreaming }: { sessionId?: string, isStreaming?: boolean }) {
-  const [subAgents, setSubAgents] = useState<any[]>([]);
+// 中文注释：功能名称「子Agent时间线流适配器」，用法是在流式期间显示子Agent卡片，
+// 支持从streamSnapshot恢复初始数据，解决切换会话后卡片丢失的问题
+function SubAgentTimelineStreamAdapter({ sessionId, isStreaming, initialSubAgents }: { sessionId?: string, isStreaming?: boolean, initialSubAgents?: any[] }) {
+  const [subAgents, setSubAgents] = useState<any[]>(() => initialSubAgents ?? []);
+
+  // 中文注释：功能名称「子Agent快照同步」，用法是当initialSubAgents变化时（如切换会话恢复快照），
+  // 同步到本地状态，确保卡片始终显示
+  useEffect(() => {
+    if (initialSubAgents && initialSubAgents.length > 0 && subAgents.length === 0) {
+      setSubAgents(initialSubAgents);
+    }
+  }, [initialSubAgents]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -400,6 +413,7 @@ export function StreamingMessage({
   statusText,
   statusPayload,
   onForceStop,
+  subAgents: streamingSubAgents,
 }: StreamingMessageProps) {
   const { t } = useTranslation();
   const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
@@ -804,7 +818,7 @@ export function StreamingMessage({
         {mediaPreview}
 
         {/* SubAgentTimeline for active team workflows during streaming (before text) */}
-        <SubAgentTimelineStreamAdapter sessionId={sessionId} isStreaming={isStreaming} />
+        <SubAgentTimelineStreamAdapter sessionId={sessionId} isStreaming={isStreaming} initialSubAgents={streamingSubAgents} />
 
         {/* Streaming text content rendered via Streamdown */}
         {renderedContent}

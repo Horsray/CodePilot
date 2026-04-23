@@ -75,19 +75,11 @@ export function ContextCompressionWidget({
             if (ref.startsWith('http://') || ref.startsWith('https://')) {
               webSet.add(ref);
             } else {
-              // We want to pass the EXACT string ref down to handleOpenItem
-              // because it might need custom parsing or resolution from the backend, 
-              // but we still clean it up for the visual display name.
+              // 中文注释：功能名称「上下文文件分类」，用法是referenced_contexts中的文件
+              // 都是系统提示词引用的文件，统一归入rules分类，而非files分类
               const name = ref.split('/').pop() || ref;
-              // Remove suffixes like (Global) or (user) for cleaner display name, but don't strip "Rule: " here
               const cleanName = name.replace(/\s*\([^)]*\)$/, '').trim();
-              const nameLower = cleanName.toLowerCase();
-              
-              if (nameLower.includes('rule') || nameLower.includes('agents.md') || nameLower.includes('claude.md')) {
-                rulesMap.set(ref, { path: ref, name: cleanName });
-              } else {
-                filesMap.set(ref, { path: ref, name: cleanName });
-              }
+              rulesMap.set(ref, { path: ref, name: cleanName });
             }
           });
         } catch {}
@@ -107,19 +99,73 @@ export function ContextCompressionWidget({
         }
       }
 
+      // 中文注释：功能名称「工具调用文件提取」，用法是从assistant消息的content中解析tool_use块，
+      // 提取AI实际读取/写入的文件路径和访问的URL，使上下文统计能如实显示文件和网页信息
+      if (msg.role === 'assistant' && msg.content) {
+        try {
+          const parsed = JSON.parse(msg.content);
+          if (Array.isArray(parsed)) {
+            for (const block of parsed) {
+              if (block.type === 'tool_use' && block.input) {
+                const inp = block.input as Record<string, unknown>;
+                const name = block.name as string;
+                // Read tools
+                if (/^Read$|^ReadFile$|^read_file$|^read$|^ReadMultipleFiles$|^read_text_file$|^str_replace_editor$|^View$|^Open$|^NotebookRead$/i.test(name)) {
+                  if (inp.file_path && typeof inp.file_path === 'string') filesMap.set(inp.file_path, { path: inp.file_path, name: inp.file_path.split('/').pop() || inp.file_path });
+                  if (inp.path && typeof inp.path === 'string') filesMap.set(inp.path, { path: inp.path, name: inp.path.split('/').pop() || inp.path });
+                  if (inp.files && Array.isArray(inp.files)) {
+                    (inp.files as string[]).forEach((f: string) => {
+                      if (typeof f === 'string') filesMap.set(f, { path: f, name: f.split('/').pop() || f });
+                    });
+                  }
+                }
+                // Write/Edit tools
+                else if (/^Write$|^WriteFile$|^write_file$|^create_file$|^Edit$|^Patch$|^replace_in_file$|^EditFile$|^WriteEdit$/i.test(name)) {
+                  if (inp.file_path && typeof inp.file_path === 'string') filesMap.set(inp.file_path, { path: inp.file_path, name: inp.file_path.split('/').pop() || inp.file_path });
+                  if (inp.path && typeof inp.path === 'string') filesMap.set(inp.path, { path: inp.path, name: inp.path.split('/').pop() || inp.path });
+                }
+                // Web tools
+                else if (/^WebSearch$|^web_search$|^Browse$|^Fetch$|^WebFetch$|^getUrl$|^get_url$|^mcp__fetch__/i.test(name)) {
+                  if (inp.url && typeof inp.url === 'string') webSet.add(inp.url);
+                  if (inp.query && typeof inp.query === 'string') {
+                    const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
+                    let match;
+                    while ((match = urlPattern.exec(inp.query as string)) !== null) {
+                      webSet.add(match[0]);
+                    }
+                  }
+                }
+              }
+              // 中文注释：功能名称「Web工具结果URL提取」，用法是只在Web搜索/抓取工具的result中提取URL
+              if (block.type === 'tool_result' && block.content && typeof block.content === 'string') {
+                // Only extract URLs from web-related tool results to avoid false positives
+                const toolUseId = block.tool_use_id as string | undefined;
+                const isWebResult = parsed.some((b: any) =>
+                  b.type === 'tool_use' && b.id === toolUseId &&
+                  /^WebSearch$|^web_search$|^Browse$|^Fetch$|^WebFetch$|^getUrl$|^get_url$|^mcp__fetch__/i.test(b.name)
+                );
+                if (isWebResult) {
+                  const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
+                  let match;
+                  while ((match = urlPattern.exec(block.content as string)) !== null) {
+                    webSet.add(match[0]);
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
       // Count messages as others
       if (msg.content) othersCount++;
     });
 
     // Add tool files from SSE events (AI actual file reads)
     toolFiles?.forEach(f => {
+      // 中文注释：功能名称「工具文件分类」，用法是URL只归入web分类，本地路径只归入files分类
       if (f.startsWith('http://') || f.startsWith('https://')) {
-        if (!webSet.has(f)) {
-          webSet.add(f);
-        }
-        if (!filesMap.has(f)) {
-          filesMap.set(f, { path: f, name: f });
-        }
+        webSet.add(f);
       } else if (!filesMap.has(f)) {
         const name = f.split('/').pop() || f;
         filesMap.set(f, { path: f, name });
@@ -133,13 +179,9 @@ export function ContextCompressionWidget({
         try {
           const persistedFiles = JSON.parse(msg.tool_files) as string[];
           persistedFiles.forEach(f => {
+            // 中文注释：功能名称「持久化文件分类」，用法是URL只归入web分类，本地路径只归入files分类
             if (f.startsWith('http://') || f.startsWith('https://')) {
-              if (!webSet.has(f)) {
-                webSet.add(f);
-              }
-              if (!filesMap.has(f)) {
-                filesMap.set(f, { path: f, name: f });
-              }
+              webSet.add(f);
             } else if (!filesMap.has(f)) {
               const name = f.split('/').pop() || f;
               filesMap.set(f, { path: f, name });

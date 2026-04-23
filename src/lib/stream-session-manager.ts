@@ -57,6 +57,9 @@ interface ActiveStream {
   rewindPoints: Array<{ userMessageId: string }>;
   /** Active sub-agents being tracked for nested timeline display */
   subAgents: SubAgentInfo[];
+  /** 中文注释：功能名称「子Agent超时定时器」，用法是跟踪每个子Agent的空闲超时定时器，
+   * 收到进度更新时重置，超时未收到任何活动则自动标记为超时完成 */
+  subAgentTimers: Map<string, ReturnType<typeof setTimeout>>;
 }
 
 export interface StartStreamParams {
@@ -245,6 +248,7 @@ export function startStream(params: StartStreamParams): void {
     sendMessageFn: params.sendMessageFn ?? null,
     rewindPoints: [],
     subAgents: [],
+    subAgentTimers: new Map(),
   };
 
   map.set(params.sessionId, stream);
@@ -602,9 +606,73 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updated } }));
         // Dispatch window event for sub-agent timeline UI
         window.dispatchEvent(new CustomEvent('subagent-start', { detail: { sessionId: params.sessionId, ...data } }));
+        // 中文注释：功能名称「子Agent超时清理」，用法是为每个子Agent设置空闲超时定时器，
+        // 如果60秒内没有收到任何进度更新或完成事件，自动标记为超时完成，
+        // 避免空智能体或卡死的子Agent导致主Agent无限等待
+        const SUBAGENT_IDLE_TIMEOUT_MS = 60_000;
+        const startTimer = () => {
+          const existing = stream.subAgentTimers.get(data.id);
+          if (existing) {
+            clearTimeout(existing);
+            stream.pendingTimers.delete(existing);
+          }
+          const timer = setTimeout(() => {
+            const idx = stream.subAgents.findIndex(a => a.id === data.id);
+            if (idx >= 0 && stream.subAgents[idx].status === 'running') {
+              const updatedAgents = [...stream.subAgents];
+              updatedAgents[idx] = {
+                ...updatedAgents[idx],
+                status: 'error',
+                error: '超时：60秒内无活动，已自动清理',
+                completedAt: Date.now(),
+              };
+              stream.subAgents = updatedAgents;
+              emit(stream, 'snapshot-updated');
+              window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updatedAgents } }));
+              window.dispatchEvent(new CustomEvent('subagent-complete', {
+                detail: { sessionId: params.sessionId, id: data.id, error: '超时：60秒内无活动，已自动清理' },
+              }));
+            }
+            stream.subAgentTimers.delete(data.id);
+            stream.pendingTimers.delete(timer);
+          }, SUBAGENT_IDLE_TIMEOUT_MS);
+          stream.subAgentTimers.set(data.id, timer);
+          stream.pendingTimers.add(timer);
+        };
+        startTimer();
       },
       onSubAgentProgress: (data: { id: string; status: string; detail?: string; append?: boolean }) => {
         markActive();
+        // 中文注释：功能名称「子Agent进度超时重置」，用法是收到进度更新时重置空闲超时定时器，
+        // 确保正常工作的子Agent不会被误清理
+        const existingTimer = stream.subAgentTimers.get(data.id);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          stream.pendingTimers.delete(existingTimer);
+          const SUBAGENT_IDLE_TIMEOUT_MS = 60_000;
+          const timer = setTimeout(() => {
+            const idx = stream.subAgents.findIndex(a => a.id === data.id);
+            if (idx >= 0 && stream.subAgents[idx].status === 'running') {
+              const updatedAgents = [...stream.subAgents];
+              updatedAgents[idx] = {
+                ...updatedAgents[idx],
+                status: 'error',
+                error: '超时：60秒内无活动，已自动清理',
+                completedAt: Date.now(),
+              };
+              stream.subAgents = updatedAgents;
+              emit(stream, 'snapshot-updated');
+              window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updatedAgents } }));
+              window.dispatchEvent(new CustomEvent('subagent-complete', {
+                detail: { sessionId: params.sessionId, id: data.id, error: '超时：60秒内无活动，已自动清理' },
+              }));
+            }
+            stream.subAgentTimers.delete(data.id);
+            stream.pendingTimers.delete(timer);
+          }, SUBAGENT_IDLE_TIMEOUT_MS);
+          stream.subAgentTimers.set(data.id, timer);
+          stream.pendingTimers.add(timer);
+        }
         const idx = stream.subAgents.findIndex(a => a.id === data.id);
         if (idx >= 0) {
           const updated = [...stream.subAgents];
@@ -622,6 +690,13 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
     onSubAgentComplete: (data) => {
       markActive();
+      // 中文注释：功能名称「子Agent完成清理定时器」，用法是子Agent完成时清除其空闲超时定时器
+      const existingTimer = stream.subAgentTimers.get(data.id);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        stream.pendingTimers.delete(existingTimer);
+        stream.subAgentTimers.delete(data.id);
+      }
       const idx = stream.subAgents.findIndex(a => a.id === data.id);
       if (idx >= 0) {
         const updated = [...stream.subAgents];
@@ -1093,6 +1168,7 @@ export function seedSnapshotPatch(
     sendMessageFn: null,
     rewindPoints: [],
     subAgents: [],
+    subAgentTimers: new Map(),
     snapshot: {
       sessionId,
       phase: 'completed',

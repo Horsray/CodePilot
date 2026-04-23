@@ -959,6 +959,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         hasSummary={hasSummary}
         summaryBoundaryRowid={summaryBoundaryRowid}
         isContextCompressing={isContextCompressing}
+        subAgents={subAgents}
       />
       {/* End-of-turn terminal reason chip (only shown when stream is not active) */}
       {!isStreaming && (

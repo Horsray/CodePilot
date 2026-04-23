@@ -947,6 +947,15 @@ async function collectStreamResponse(
     flushThinking();
     
     if (subAgents.length > 0) {
+      // 中文注释：功能名称「子Agent超时清理」，用法是流结束时将所有仍在running状态的子Agent
+      // 标记为超时错误，避免前端渲染永远运行中的空智能体卡片
+      subAgents.forEach(sa => {
+        if (sa.status === 'running') {
+          sa.status = 'error';
+          sa.error = '流结束但子Agent未完成，已自动清理';
+          sa.completedAt = Date.now();
+        }
+      });
       contentBlocks.push({ type: 'sub_agents', subAgents });
     }
 

@@ -657,6 +657,15 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 // Collect file paths for context stats
                 const extracted = extractFilePaths(event.toolName, event.input);
                 extracted.forEach(f => toolFilesAccumulator.add(f));
+                // 中文注释：功能名称「工具文件实时发射」，用法是每次工具调用后立即发射tool_files事件，
+                // 使上下文统计在流式期间就能显示AI访问的文件和网页
+                if (extracted.length > 0) {
+                  const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
+                  controller.enqueue(formatSSE({
+                    type: 'tool_files',
+                    data: JSON.stringify({ files: allToolFiles }),
+                  }));
+                }
 
                 // Track TodoWrite tool calls for deferred task_update sync
                 if (event.toolName === 'TodoWrite' || event.toolName === 'mcp__codepilot-todo__TodoWrite') {
@@ -725,6 +734,14 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                   const urlPattern = /https?:\/\/[^\s"')>\]]+/g;
                   const urls = resultContent.match(urlPattern) || [];
                   urls.forEach(url => toolFilesAccumulator.add(url));
+                  // 中文注释：功能名称「URL实时发射」，用法是Web工具结果中的URL提取后立即发射tool_files事件
+                  if (urls.length > 0) {
+                    const allToolFiles = Array.from(toolFilesAccumulator).filter((f): f is string => typeof f === 'string');
+                    controller.enqueue(formatSSE({
+                      type: 'tool_files',
+                      data: JSON.stringify({ files: allToolFiles }),
+                    }));
+                  }
                 }
 
                 // Deferred TodoWrite sync: emit task_update after successful execution
