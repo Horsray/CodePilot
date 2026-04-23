@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { streamClaude } from '@/lib/claude-client';
-import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTitle, updateSdkSessionId, updateSessionModel, updateSessionProvider, updateSessionProviderId, getSetting, acquireSessionLock, renewSessionLock, releaseSessionLock, setSessionRuntimeStatus, syncSdkTasks } from '@/lib/db';
+import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTitle, updateSdkSessionId, updateSessionModel, updateSessionProvider, updateSessionProviderId, getSetting, acquireSessionLock, renewSessionLock, releaseSessionLock, setSessionRuntimeStatus, syncSdkTasks, getProvider } from '@/lib/db';
 import { resolveProvider as resolveProviderUnified } from '@/lib/provider-resolver';
 import { notifySessionStart, notifySessionComplete, notifySessionError } from '@/lib/telegram-bot';
 import { extractCompletion } from '@/lib/onboarding-completion';
@@ -661,7 +661,7 @@ ORCHESTRATION RULES (CRITICAL):
             clearInterval(lockRenewalInterval);
             releaseSessionLock(session_id, lockId);
             setSessionRuntimeStatus(session_id, 'idle');
-          }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts });
+          }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts, persistProviderId });
 
           const reader = streamForClient.getReader();
           while (true) {
@@ -709,7 +709,7 @@ async function collectStreamResponse(
   sessionId: string,
   telegramOpts: { sessionId?: string; sessionTitle?: string; workingDirectory?: string },
   onComplete?: () => void,
-  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean; referencedContexts?: string[] },
+  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean; referencedContexts?: string[]; persistProviderId?: string },
 ) {
   const reader = stream.getReader();
   const contentBlocks: MessageContentBlock[] = [];
@@ -837,7 +837,11 @@ async function collectStreamResponse(
                   updateSdkSessionId(sessionId, statusData.session_id);
                 }
                 if (statusData.model) {
-                  updateSessionModel(sessionId, statusData.model);
+                  // 中文注释：如果原始服务商是多头（multi_head），不要用 SDK 返回的裸模型名覆盖 session，否则会导致 UI 模型列表匹配失败并回退到 default/opus。
+                  const originProvider = opts?.persistProviderId ? getProvider(opts.persistProviderId) : null;
+                  if (originProvider?.protocol !== 'multi_head') {
+                    updateSessionModel(sessionId, statusData.model);
+                  }
                 }
               } catch {
                 // skip malformed status data
