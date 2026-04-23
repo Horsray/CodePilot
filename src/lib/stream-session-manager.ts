@@ -137,6 +137,9 @@ function buildSnapshot(stream: ActiveStream): SessionStreamSnapshot {
     completedAt: stream.snapshot.completedAt,
     error: stream.snapshot.error,
     referencedContexts: stream.snapshot.referencedContexts,
+    // 中文注释：功能名称「工具文件快照传递」，用法是将累积的toolFiles传递到新快照中，
+    // 避免每次emit时buildSnapshot丢失toolFiles数据，导致上下文统计无法显示文件/网页信息
+    toolFiles: stream.snapshot.toolFiles,
     finalMessageContent: stream.snapshot.finalMessageContent,
     terminalReason: stream.snapshot.terminalReason,
     rateLimitInfo: stream.snapshot.rateLimitInfo,
@@ -229,6 +232,9 @@ export function startStream(params: StartStreamParams): void {
       completedAt: null,
       error: null,
       referencedContexts: [],
+      // 中文注释：功能名称「工具文件初始化」，用法是初始化toolFiles为空数组，
+      // 后续由onToolFiles回调累积填充AI访问的文件和网页
+      toolFiles: [],
       finalMessageContent: null,
     },
     idleCheckTimer: null,
@@ -1184,6 +1190,8 @@ export function seedSnapshotPatch(
       startedAt: Date.now(),
       completedAt: Date.now(),
       error: null,
+      // 中文注释：功能名称「工具文件占位初始化」，用法是占位快照中初始化toolFiles为空数组
+      toolFiles: [],
       finalMessageContent: null,
       ...patch,
     },
