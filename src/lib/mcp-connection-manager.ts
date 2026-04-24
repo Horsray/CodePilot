@@ -67,7 +67,7 @@ function getMcpToolTimeoutMs(serverName: string, toolName: string): number {
 
 // ── Singleton pool ──────────────────────────────────────────────
 
-const connections = new Map<string, McpConnection>();
+export const connections = new Map<string, McpConnection>();
 
 /**
  * Sync the connection pool with desired configurations.

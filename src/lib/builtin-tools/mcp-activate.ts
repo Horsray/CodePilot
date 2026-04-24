@@ -37,7 +37,14 @@ export const createMcpActivateTool = (workspacePath: string) => {
         return `Failed to find MCP server configuration for "${serverName}". Please check the exact name from the <available_mcp_servers> list.`;
       }
       
-      await mcpConnectionManager.syncMcpConnections(newMcps);
+      // Merge with existing connections instead of overriding them all
+      const existingConfigs = Object.fromEntries(
+        Array.from(mcpConnectionManager.connections.entries())
+          .filter(([, conn]) => conn.config)
+          .map(([name, conn]) => [name, conn.config!])
+      );
+      
+      await mcpConnectionManager.syncMcpConnections({ ...existingConfigs, ...newMcps });
       return `Successfully activated MCP server "${serverName}". Its tools are now loaded and available in this conversation. You MUST now proceed to use the newly available tools to complete the user's request in the next step.`;
     } catch (e) {
       return `Failed to activate MCP server: ${e instanceof Error ? e.message : String(e)}`;

@@ -71,9 +71,16 @@ async function executeAgentTask(
 ): Promise<{ report: string; errorEvent: string | null; role: string }> {
   const { workingDirectory, emitSSE, abortSignal } = options;
   const role = normalizeAgentId(task.role);
-  const agentDef = getAgent(role);
+  let agentDef = getAgent(role);
   if (!agentDef) {
-    return { report: `Error: Agent ${role} not found.`, errorEvent: 'Agent not found', role };
+    // 中文注释：如果找不到注册的 Agent（比如大模型幻觉了 call_function_xxx），不要直接报错中断，而是降级使用通用的 subagent 执行。
+    console.warn(`[team-runner] Unknown agent role: ${role}. Falling back to general subagent.`);
+    agentDef = getAgent('general') || getAgent('subagent') || {
+      id: role,
+      displayName: '智能体',
+      description: '通用任务执行智能体',
+      mode: 'subagent',
+    };
   }
   const profile = buildSubAgentExecutionProfile(agentDef, task.desc);
 
@@ -97,7 +104,7 @@ async function executeAgentTask(
   // 防止 Team 模式下的上下文溢出 (Truncate to reasonable token limit)
   const safeContext = truncateToTokenBudget(accumulatedContext, 15000);
   
-  const prompt = `Your role is ${role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${safeContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
+  const prompt = `Your role is ${role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${safeContext}\n\nWorking Directory: ${workingDirectory}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
 
   const permissionContext = (options.parentSessionId && options.emitSSE && options.permissionMode)
     ? {
