@@ -18,6 +18,7 @@ import { checkPermission, type PermissionMode } from './permission-checker';
 import { registerPendingPermission } from './permission-registry';
 import { emit as emitEvent } from './runtime/event-bus';
 import { createPermissionRequest } from './db';
+import { getSessionSemaphore, isToolConcurrencySafe } from './tool-concurrency';
 import crypto from 'crypto';
 
 export interface AssembleToolsOptions {
@@ -40,6 +41,8 @@ export interface AssembleToolsOptions {
   };
   /** Optional allow-list to avoid instantiating unrelated MCP tool wrappers */
   allowedToolNames?: string[];
+  /** Bash execution mode: 'pty' for primary agent, 'spawn' for sub-agents */
+  executionMode?: 'pty' | 'spawn';
 }
 
 export interface AssembleToolsResult {
@@ -67,6 +70,7 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
     permissionMode: options.permissionContext?.permissionMode,
     emitSSE: options.permissionContext?.emitSSE,
     abortSignal: options.permissionContext?.abortSignal,
+    executionMode: options.executionMode,
   });
 
   // In 'plan' mode, restrict to read-only tools
@@ -92,12 +96,58 @@ export function assembleTools(options: AssembleToolsOptions = {}): AssembleTools
     ? Object.fromEntries(Object.entries(allTools).filter(([toolName]) => allowedToolNames.includes(toolName)))
     : allTools) as ToolSet;
 
+  // Wrap with concurrency control (prevents write conflicts across parallel tool calls)
+  const concurrencyWrapped = wrapWithConcurrency(filteredTools, options.permissionContext?.sessionId);
+
   // Wrap with permission checks if context provided
   if (options.permissionContext) {
-    return { tools: wrapWithPermissions(filteredTools, options.permissionContext), systemPrompts };
+    return { tools: wrapWithPermissions(concurrencyWrapped, options.permissionContext), systemPrompts };
   }
 
-  return { tools: filteredTools, systemPrompts };
+  return { tools: concurrencyWrapped, systemPrompts };
+}
+
+// ── Concurrency wrapper ─────────────────────────────────────────
+
+/**
+ * Wrap tools with concurrency control. Non-parallel-safe tools (Write, Edit,
+ * Bash, etc.) acquire a session-level semaphore before executing, preventing
+ * write conflicts when the model issues multiple tool calls in one step.
+ *
+ * Safe tools (Read, Glob, Grep, WebFetch) bypass the semaphore entirely.
+ */
+function wrapWithConcurrency(tools: ToolSet, sessionId?: string): ToolSet {
+  if (!sessionId) return tools; // no session = no concurrency control needed
+
+  const wrapped: ToolSet = {};
+
+  for (const [name, t] of Object.entries(tools)) {
+    if (isToolConcurrencySafe(name)) {
+      // Read-only tools — always safe to run concurrently
+      wrapped[name] = t;
+      continue;
+    }
+
+    const original = t as { description?: string; inputSchema?: unknown; execute?: (...args: unknown[]) => unknown };
+    wrapped[name] = tool({
+      description: original.description || name,
+      inputSchema: (original.inputSchema || z.object({})) as z.ZodType,
+      execute: async (input: unknown, execOptions: unknown) => {
+        const semaphore = getSessionSemaphore(sessionId);
+        const release = await semaphore.acquire();
+        try {
+          if (original.execute) {
+            return await original.execute(input, execOptions);
+          }
+          return '(tool has no execute function)';
+        } finally {
+          release();
+        }
+      },
+    });
+  }
+
+  return wrapped;
 }
 
 // ── Permission wrapper ──────────────────────────────────────────

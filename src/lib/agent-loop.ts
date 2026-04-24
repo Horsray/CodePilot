@@ -76,6 +76,7 @@ export interface AgentLoopOptions {
 
 const DEFAULT_MAX_STEPS = 50;
 const DOOM_LOOP_THRESHOLD = 3; // same tool called 3 times in a row
+const DOOM_LOOP_ERROR_THRESHOLD = 2; // same failing tool called 2 times in a row
 const KEEPALIVE_INTERVAL_MS = 15_000;
 
 // ── Main ────────────────────────────────────────────────────────
@@ -554,6 +555,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           // Consume the fullStream
           let hasToolCalls = false;
           let hasContent = false; // tracks whether any actual content was produced
+          let stepToolErrors = 0; // track tool errors for adaptive doom loop detection
           const stepToolCalls: string[] = [];
           let stepText = '';
 
@@ -764,6 +766,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 break;
 
               case 'tool-error':
+                stepToolErrors++;
                 // Clear pending TodoWrite on error
                 if (stepPendingTodoWrites.has((event as any).toolCallId)) {
                   stepPendingTodoWrites.delete((event as any).toolCallId);
@@ -905,13 +908,15 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
             break;
           }
 
-          // Doom loop detection: exact same tool(s) with identical inputs called 3 times in a row
+          // Doom loop detection: exact same tool(s) with identical inputs called N times in a row.
+          // Use a lower threshold when tools are producing errors (model is stuck on a failing approach).
           const toolKey = stepToolCalls.sort().join('|');
           const lastKey = lastToolNames.sort().join('|');
-          
+          const effectiveThreshold = stepToolErrors > 0 ? DOOM_LOOP_ERROR_THRESHOLD : DOOM_LOOP_THRESHOLD;
+
           if (step > 1 && toolKey && toolKey === lastKey) {
             doomLoopCounter++;
-            if (doomLoopCounter >= DOOM_LOOP_THRESHOLD - 1) {
+            if (doomLoopCounter >= effectiveThreshold - 1) {
               const summaryToolNames = [...distinctTools].join(', ');
               console.error(`[agent-loop] Doom loop detected: ${summaryToolNames} called ${doomLoopCounter + 1} times with identical inputs. Breaking.`);
               reportNativeError('UNKNOWN', new Error(`Doom loop detected with tools: ${summaryToolNames}`), { modelId, sessionId });
@@ -1014,16 +1019,16 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 const result = await generateTextFromProvider({
                   providerId: resolved.provider?.id || '',
                   model: resolved.upstreamModel || resolved.model || 'haiku',
-                  system: `You are an AI skill extraction agent. Analyze the provided chat history of a successful workflow and generate a reusable skill definition.
-Format your output STRICTLY as a JSON object with these keys:
+                  system: `你是一个 AI 技能提取助手。分析提供的聊天记录，提取可复用的技能定义。
+所有输出必须使用中文（name 字段除外，name 必须为英文小写加连字符格式）。
+严格按以下 JSON 格式输出，不要包裹在 \`\`\`json 代码块中：
 {
-  "name": "lowercase-with-dashes-name",
-  "description": "Short 1-sentence description",
-  "whenToUse": "When the user asks to...",
-  "content": "Markdown content with exact steps, commands, or code snippets"
-}
-DO NOT wrap in markdown \`\`\`json block, just return raw JSON.`,
-                  prompt: `Chat History:\n\n${recentHistory}`,
+  "name": "英文小写连字符名称",
+  "description": "一句话中文描述",
+  "whenToUse": "当用户需要...时使用",
+  "content": "Markdown 格式的详细步骤、命令或代码片段（中文）"
+}`,
+                  prompt: `聊天记录：\n\n${recentHistory}`,
                   maxTokens: 2000,
                 });
 

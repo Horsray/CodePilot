@@ -71,6 +71,7 @@ export function createAgentTool(ctx: {
         sessionProviderId: ctx.sessionProviderId,
         model: ctx.parentModel,
         permissionContext,
+        executionMode: 'spawn', // Sub-agents use isolated spawn, no PTY contention
       });
       const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
 

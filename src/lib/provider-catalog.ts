@@ -90,6 +90,7 @@ const MODEL_CONTEXT = {
   GLM_4_7: 169_984,
   MINIMAX_M2_7: 204_800,
   MINIMAX_M2_5: 196_608,
+  MIMO_V2_5_PRO: 1_048_576,
 } as const;
 
 // ── Vendor preset definition ────────────────────────────────────
@@ -566,22 +567,22 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   {
     key: 'xiaomi-mimo',
     name: 'Xiaomi MiMo',
-    description: 'Xiaomi MiMo Pay-as-you-go API — MiMo-V2-Pro',
-    descriptionZh: '小米 MiMo 按量付费 — MiMo-V2-Pro',
+    description: 'Xiaomi MiMo Pay-as-you-go API — MiMo-V2.5-Pro',
+    descriptionZh: '小米 MiMo 按量付费 — MiMo-V2.5-Pro',
     protocol: 'anthropic',
     authStyle: 'auth_token',
     baseUrl: 'https://api.xiaomimimo.com/anthropic',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'mimo-v2-pro', displayName: 'MiMo-V2-Pro', role: 'default' },
+      { modelId: 'MiMo-V2.5-Pro', upstreamModelId: 'MiMo-V2.5-Pro', displayName: 'MiMo-V2.5-Pro', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.MIMO_V2_5_PRO } },
     ],
     defaultRoleModels: {
-      default: 'mimo-v2-pro',
-      sonnet: 'mimo-v2-pro',
-      opus: 'mimo-v2-pro',
-      haiku: 'mimo-v2-pro',
+      default: 'MiMo-V2.5-Pro',
+      sonnet: 'MiMo-V2.5-Pro',
+      opus: 'MiMo-V2.5-Pro',
+      haiku: 'MiMo-V2.5-Pro',
     },
-    fields: ['api_key'],
+    fields: ['api_key', 'base_url', 'model_names', 'model_mapping'],
     iconKey: 'xiaomi-mimo',
     sdkProxyOnly: true,
     meta: {
@@ -596,22 +597,22 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   {
     key: 'xiaomi-mimo-token-plan',
     name: 'Xiaomi MiMo Token Plan',
-    description: 'Xiaomi MiMo Token Plan subscription — MiMo-V2-Pro',
-    descriptionZh: '小米 MiMo Token Plan 订阅套餐 — MiMo-V2-Pro',
+    description: 'Xiaomi MiMo Token Plan subscription — MiMo-V2.5-Pro',
+    descriptionZh: '小米 MiMo Token Plan 订阅套餐 — MiMo-V2.5-Pro',
     protocol: 'anthropic',
     authStyle: 'auth_token',
     baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'mimo-v2-pro', displayName: 'MiMo-V2-Pro', role: 'default' },
+      { modelId: 'MiMo-V2.5-Pro', upstreamModelId: 'MiMo-V2.5-Pro', displayName: 'MiMo-V2.5-Pro', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.MIMO_V2_5_PRO } },
     ],
     defaultRoleModels: {
-      default: 'mimo-v2-pro',
-      sonnet: 'mimo-v2-pro',
-      opus: 'mimo-v2-pro',
-      haiku: 'mimo-v2-pro',
+      default: 'MiMo-V2.5-Pro',
+      sonnet: 'MiMo-V2.5-Pro',
+      opus: 'MiMo-V2.5-Pro',
+      haiku: 'MiMo-V2.5-Pro',
     },
-    fields: ['api_key'],
+    fields: ['api_key', 'base_url', 'model_names', 'model_mapping'],
     iconKey: 'xiaomi-mimo',
     sdkProxyOnly: true,
     meta: {

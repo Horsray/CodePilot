@@ -52,6 +52,7 @@ export function ModelSelectorDropdown({
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set([currentProviderIdValue]));
 
   const currentModelOption = modelOptions.find((m) => m.value === currentModelValue) || modelOptions[0];
 
@@ -66,6 +67,7 @@ export function ModelSelectorDropdown({
   // Click outside to close model menu
   useEffect(() => {
     if (!modelMenuOpen) return;
+    setExpandedGroups(new Set([currentProviderIdValue]));
     const handler = (e: MouseEvent) => {
       if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
         setModelMenuOpen(false);
@@ -74,7 +76,7 @@ export function ModelSelectorDropdown({
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [modelMenuOpen]);
+  }, [modelMenuOpen, currentProviderIdValue]);
 
   const handleModelSelect = useCallback((providerId: string, modelValue: string) => {
     onModelChange?.(modelValue);
@@ -86,12 +88,41 @@ export function ModelSelectorDropdown({
   }, [onModelChange, onProviderModelChange]);
 
   const mq = modelSearch.toLowerCase();
-  const filteredGroups = providerGroups.map(group => ({
+  
+  const sortedGroups = providerGroups.slice().sort((a, b) => {
+    // Multi-head provider first
+    const aIsMulti = a.protocol === 'multi_head';
+    const bIsMulti = b.protocol === 'multi_head';
+    if (aIsMulti && !bIsMulti) return -1;
+    if (!aIsMulti && bIsMulti) return 1;
+
+    // Claude Code provider last
+    const aIsEnv = a.provider_id === 'env';
+    const bIsEnv = b.provider_id === 'env';
+    if (aIsEnv && !bIsEnv) return 1;
+    if (!aIsEnv && bIsEnv) return -1;
+
+    return 0;
+  });
+
+  const filteredGroups = sortedGroups.map(group => ({
     ...group,
     models: group.models.filter(opt =>
       !mq || opt.label.toLowerCase().includes(mq) || group.provider_name.toLowerCase().includes(mq)
     ),
   })).filter(group => group.models.length > 0);
+
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="relative" ref={modelMenuRef}>
@@ -122,12 +153,18 @@ export function ModelSelectorDropdown({
             }}
           />
           <CommandListItems>
-            {filteredGroups.map((group, groupIdx) => (
+            {filteredGroups.map((group, groupIdx) => {
+              const isExpanded = !!mq || expandedGroups.has(group.provider_id);
+              return (
               <CommandListGroup
                 key={group.provider_id}
                 label={group.provider_name}
                 separator={groupIdx > 0}
+                expandable={true}
+                expanded={isExpanded}
+                onToggle={() => toggleGroup(group.provider_id)}
               >
+                {isExpanded && (
                 <div className="py-0.5">
                   {group.models.map((opt) => {
                     const isActive = opt.value === currentModelValue && group.provider_id === currentProviderIdValue;
@@ -157,8 +194,9 @@ export function ModelSelectorDropdown({
                     );
                   })}
                 </div>
+                )}
               </CommandListGroup>
-            ))}
+            )})}
             {filteredGroups.length === 0 && (
               <div className="px-3 py-3 text-center text-xs text-muted-foreground">
                 No models found

@@ -31,7 +31,7 @@ describe('subagent performance profile', () => {
 
     assert.equal(profile.mode, 'local_code_search');
     assert.equal(profile.initialStatus, '准备代码检索');
-    assert.deepEqual(profile.sla, { softMs: 20_000, hardMs: 60_000 });
+    assert.deepEqual(profile.sla, { softMs: 30_000, hardMs: 90_000 });
   });
 
   it('keeps analysis prompts on the normal model loop even when a file path is present', async () => {
@@ -47,7 +47,7 @@ describe('subagent performance profile', () => {
 
     assert.equal(profile.mode, 'default');
     assert.equal(profile.initialStatus, '等待模型响应');
-    assert.deepEqual(profile.sla, { softMs: 30_000, hardMs: 120_000 });
+    assert.deepEqual(profile.sla, { softMs: 45_000, hardMs: 150_000 });
   });
 
   it('uses a web-lookup SLA profile for simple web searches', async () => {
@@ -63,7 +63,7 @@ describe('subagent performance profile', () => {
 
     assert.equal(profile.mode, 'web_lookup');
     assert.equal(profile.initialStatus, '准备网页检索');
-    assert.deepEqual(profile.sla, { softMs: 20_000, hardMs: 75_000 });
+    assert.deepEqual(profile.sla, { softMs: 30_000, hardMs: 90_000 });
   });
 
   it('keeps default profile for non-search executors', async () => {
@@ -79,6 +79,6 @@ describe('subagent performance profile', () => {
 
     assert.equal(profile.mode, 'default');
     assert.equal(profile.initialStatus, '等待模型响应');
-    assert.deepEqual(profile.sla, { softMs: 60_000, hardMs: 180_000 });
+    assert.deepEqual(profile.sla, { softMs: 90_000, hardMs: 300_000 });
   });
 });

@@ -71,7 +71,7 @@ export function CreateSkillDialog({
       setError(t('skills.nameRequired'));
       return;
     }
-    if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+    if (!/^[一-鿿㐀-䶿a-zA-Z0-9_-]+$/.test(trimmed)) {
       setError(t('skills.nameInvalid'));
       return;
     }

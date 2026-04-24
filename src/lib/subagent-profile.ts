@@ -47,34 +47,37 @@ const EXTERNAL_RESEARCH_SIGNALS = [
 ];
 
 function getSubAgentSla(agentId: string, mode: 'default' | 'local_code_search' | 'web_lookup') {
+  // SLA timeouts are warning thresholds, not hard kills — they emit progress
+  // warnings so the user knows an agent is slow. They should be generous
+  // enough to accommodate real-world API latency and complex tool chains.
   if (mode === 'local_code_search') {
-    return { softMs: 20_000, hardMs: 60_000 };
+    return { softMs: 30_000, hardMs: 90_000 };
   }
   if (mode === 'web_lookup') {
-    return { softMs: 20_000, hardMs: 75_000 };
+    return { softMs: 30_000, hardMs: 90_000 };
   }
 
   switch (agentId) {
     case 'planner':
-      return { softMs: 30_000, hardMs: 90_000 };
+      return { softMs: 45_000, hardMs: 120_000 };
     case 'explore':
     case 'search':
     case 'document-specialist':
-      return { softMs: 30_000, hardMs: 120_000 };
+      return { softMs: 45_000, hardMs: 150_000 };
     case 'analyst':
     case 'architect':
     case 'critic':
     case 'code-reviewer':
     case 'security-reviewer':
-      return { softMs: 45_000, hardMs: 150_000 };
+      return { softMs: 60_000, hardMs: 180_000 };
     case 'executor':
     case 'debugger':
     case 'test-engineer':
     case 'qa-tester':
     case 'verifier':
-      return { softMs: 60_000, hardMs: 180_000 };
+      return { softMs: 90_000, hardMs: 300_000 };
     default:
-      return { softMs: 45_000, hardMs: 150_000 };
+      return { softMs: 60_000, hardMs: 180_000 };
   }
 }
 

@@ -2,6 +2,7 @@ import { type ReactNode, type RefObject, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CaretDown } from "@/components/ui/icon";
 
 /* ------------------------------------------------------------------ */
 /*  CommandList — shared popover/command-list pattern                  */
@@ -119,14 +120,23 @@ interface CommandListGroupProps {
   label?: string;
   separator?: boolean;
   children: ReactNode;
+  expandable?: boolean;
+  expanded?: boolean;
+  onToggle?: () => void;
 }
 
-export function CommandListGroup({ label, separator, children }: CommandListGroupProps) {
+export function CommandListGroup({ label, separator, children, expandable, expanded, onToggle }: CommandListGroupProps) {
   return (
     <div className={cn(separator && "border-t")}>
       {label && (
-        <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">
-          {label}
+        <div 
+          className={cn("px-3 py-1.5 text-[10px] font-medium text-muted-foreground flex justify-between items-center", expandable && "cursor-pointer hover:bg-accent/50")}
+          onClick={expandable ? onToggle : undefined}
+        >
+          <span>{label}</span>
+          {expandable && (
+            <CaretDown size={10} className={cn("transition-transform duration-200", expanded ? "rotate-180" : "rotate-0")} />
+          )}
         </div>
       )}
       {children}

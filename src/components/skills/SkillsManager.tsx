@@ -33,7 +33,7 @@ export function SkillsManager() {
       const res = await fetch(`/api/skills${cwdParam}`);
       if (res.ok) {
         const data = await res.json();
-        setSkills((data.skills || []).filter((s: SkillItem) => s.source !== "project"));
+        setSkills(data.skills || []);
       }
     } catch {
       // ignore
@@ -136,6 +136,8 @@ export function SkillsManager() {
       s.description.toLowerCase().includes(search.toLowerCase())
   );
 
+  // Project skills (auto-extracted from workflows) — shown first as they're most relevant
+  const projectSkills = filtered.filter((s) => s.source === "project");
   const globalSkills = filtered.filter((s) => s.source === "global");
   const installedSkills = filtered.filter((s) => s.source === "installed");
   const pluginSkills = filtered.filter((s) => s.source === "plugin");
@@ -218,6 +220,25 @@ export function SkillsManager() {
           </div>
           <div className="flex-1 overflow-y-auto min-h-0">
             <div className="p-1">
+              {projectSkills.length > 0 && (
+                <div className="mb-1">
+                  <span className="px-3 py-1 text-[10px] font-medium uppercase text-muted-foreground">
+                    Project {projectSkills.some(s => s.autoExtracted) ? `(${projectSkills.filter(s => s.autoExtracted).length} auto-extracted)` : ''}
+                  </span>
+                  {projectSkills.map((skill) => (
+                    <SkillListItem
+                      key={`${skill.source}:${skill.name}`}
+                      skill={skill}
+                      selected={
+                        selected?.name === skill.name &&
+                        selected?.source === skill.source
+                      }
+                      onSelect={() => setSelected(skill)}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </div>
+              )}
               {globalSkills.length > 0 && (
                 <div className="mb-1">
                   <span className="px-3 py-1 text-[10px] font-medium uppercase text-muted-foreground">

@@ -122,6 +122,7 @@ async function executeAgentTask(
     sessionProviderId: options.sessionProviderId,
     model: finalModel,
     permissionContext,
+    executionMode: 'spawn', // Team agents use isolated spawn, no PTY contention
   });
 
   const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
@@ -399,6 +400,98 @@ async function executeAgentTask(
 }
 
 /**
+ * buildFallbackDAG - 智能 fallback DAG 生成器
+ * 当 planner 输出无效 JSON 时，根据用户目标关键词动态构建合理的任务图
+ */
+function buildFallbackDAG(goal: string): TeamDAG {
+  const lower = goal.toLowerCase();
+
+  // Detect task type from goal keywords
+  const isBugFix = /bug|fix|修复|错误|报错|崩溃|crash|error|broken|不工作/i.test(goal);
+  const isFeature = /feature|feat|新增|添加|实现|功能|implement|add|create/i.test(goal);
+  const isRefactor = /refactor|重构|优化|整理|simplify|clean/i.test(goal);
+  const isTest = /test|测试|验证|检查|check|verify/i.test(goal);
+  const isReview = /review|审查|评审|分析|analyze/i.test(goal);
+  const needsSearch = !/仅|只|just|only/i.test(goal); // Almost always need search
+
+  const tasks: Array<{ id: string; role: string; desc: string; dependsOn: string[] }> = [];
+  let taskNum = 0;
+
+  // Phase 1: Research (parallel if multiple angles)
+  if (needsSearch) {
+    taskNum++;
+    tasks.push({
+      id: `t${taskNum}`,
+      role: 'search',
+      desc: `探索代码库，收集与以下目标相关的上下文和代码位置：${goal}`,
+      dependsOn: [],
+    });
+
+    // For bug fixes, add a parallel analyst to understand the error pattern
+    if (isBugFix) {
+      taskNum++;
+      tasks.push({
+        id: `t${taskNum}`,
+        role: 'analyst',
+        desc: `分析错误模式和可能的根因：${goal}`,
+        dependsOn: [],
+      });
+    }
+  }
+
+  // Phase 2: Execution (depends on research)
+  const researchTaskIds = tasks.map(t => t.id);
+  if (isBugFix) {
+    taskNum++;
+    tasks.push({
+      id: `t${taskNum}`,
+      role: 'debugger',
+      desc: `根据搜索和分析结果，定位并修复问题：${goal}`,
+      dependsOn: researchTaskIds,
+    });
+  } else if (isRefactor) {
+    taskNum++;
+    tasks.push({
+      id: `t${taskNum}`,
+      role: 'code-simplifier',
+      desc: `根据搜索结果执行重构：${goal}`,
+      dependsOn: researchTaskIds,
+    });
+  } else if (isReview) {
+    taskNum++;
+    tasks.push({
+      id: `t${taskNum}`,
+      role: 'code-reviewer',
+      desc: `根据搜索结果进行深度代码审查：${goal}`,
+      dependsOn: researchTaskIds,
+    });
+  } else {
+    // Feature or generic
+    taskNum++;
+    tasks.push({
+      id: `t${taskNum}`,
+      role: 'executor',
+      desc: `根据搜索结果执行代码修改：${goal}`,
+      dependsOn: researchTaskIds,
+    });
+  }
+
+  // Phase 3: Verification (depends on execution)
+  const executionTaskIds = tasks.filter(t => t.role !== 'search' && t.role !== 'analyst').map(t => t.id);
+  if (!isReview) {
+    taskNum++;
+    tasks.push({
+      id: `t${taskNum}`,
+      role: isTest ? 'test-engineer' : 'verifier',
+      desc: `验证修改结果的正确性和完整性：${goal}`,
+      dependsOn: executionTaskIds,
+    });
+  }
+
+  return { tasks };
+}
+
+/**
  * generateTeamDAG - 动态 DAG 计划生成器
  * 功能：调用 planner 根据系统可用智能体列表和用户目标生成包含执行依赖树的 DAG JSON
  * 用法：在执行管线前调用，替换固定的串行编排数组
@@ -462,14 +555,7 @@ Only output the JSON block, no other text.`;
 
   const jsonMatch = report.match(/```json\n([\s\S]*?)\n```/) || report.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    // Fallback to default pipeline if planner fails to output JSON
-    return {
-      tasks: [
-        { id: 't1', role: 'search', desc: '探索代码库并收集相关上下文', dependsOn: [] },
-        { id: 't2', role: 'executor', desc: '执行代码修改', dependsOn: ['t1'] },
-        { id: 't3', role: 'verifier', desc: '验证修改结果并进行复核', dependsOn: ['t2'] }
-      ]
-    };
+    return buildFallbackDAG(options.goal);
   }
 
   try {
@@ -480,7 +566,7 @@ Only output the JSON block, no other text.`;
       role: normalizeAgentId(task.role),
       dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : [],
     }));
-    
+
     // Validate DAG to prevent deadlocks (missing dependencies or circular deps)
     const taskIds = new Set(dag.tasks.map(t => t.id));
     for (const task of dag.tasks) {
@@ -492,19 +578,10 @@ Only output the JSON block, no other text.`;
         }
       }
     }
-    
-    // A simple cycle detection could be added here, but for now we rely on 
-    // the deadlock detector in the while loop below to catch circular dependencies at runtime.
-    
+
     return dag;
   } catch (e) {
-    return {
-      tasks: [
-        { id: 't1', role: 'search', desc: '探索代码库并收集相关上下文', dependsOn: [] },
-        { id: 't2', role: 'executor', desc: '执行代码修改', dependsOn: ['t1'] },
-        { id: 't3', role: 'verifier', desc: '验证修改结果并进行复核', dependsOn: ['t2'] }
-      ]
-    };
+    return buildFallbackDAG(options.goal);
   }
 }
 

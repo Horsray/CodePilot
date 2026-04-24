@@ -447,8 +447,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // Sanitize name: only allow alphanumeric, hyphens, underscores
-    const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "-");
+    // Sanitize name: allow alphanumeric, hyphens, underscores, and CJK characters
+    const safeName = name.replace(/[^一-鿿㐀-䶿a-zA-Z0-9_-]/g, "-");
     if (!safeName) {
       return NextResponse.json(
         { error: "Invalid skill name" },

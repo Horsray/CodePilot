@@ -1,8 +1,11 @@
 /**
- * tools/bash.ts — 通过 PTY 会话执行 shell 命令，支持终端面板镜像显示。
- * 中文注释：功能名称「Bash 工具」，用法是执行 shell 命令并返回输出，
- * 同时通过 SSE 将命令和输出镜像到终端面板，让用户可以实时看到 AI 执行的命令。
- * 优先使用 PTY 会话执行（与用户终端共享同一个 shell），回退到 spawn 独立执行。
+ * tools/bash.ts — Bash tool with dual execution strategy.
+ *
+ * - Primary agent (executionMode='pty'): uses shared PTY session for terminal mirroring
+ * - Sub-agent (executionMode='spawn'): uses isolated child_process.spawn —
+ *   no shared state, no contention, each command is an independent process
+ *
+ * Smart timeout: detects command complexity and adjusts timeout automatically.
  */
 
 import { tool } from 'ai';
@@ -13,12 +16,196 @@ import type { ToolContext } from './index';
 
 const MAX_OUTPUT_BYTES = 1024 * 1024; // 1MB
 const DEFAULT_TIMEOUT_MS = 120_000;   // 2 minutes
+const MAX_TIMEOUT_MS = 300_000;       // 5 minutes
 
-// 中文注释：功能名称「AI 专用 PTY 会话 ID」，用法是为 AI Bash 工具创建专用的 PTY 会话，
-// 与用户手动操作的终端会话区分开来，避免干扰用户输入。
 const AI_PTY_SESSION_ID = '__codepilot_ai_bash__';
 
+// ── Smart timeout detection ──────────────────────────────────────
+
+/** Commands that are known to be slow — matched against the first token(s). */
+const SLOW_COMMAND_TIMEOUTS: Array<{ pattern: RegExp; timeoutMs: number }> = [
+  // Package managers (install, update, audit)
+  { pattern: /\b(npm|yarn|pnpm|bun)\s+(install|i|add|update|audit|ci)\b/, timeoutMs: 300_000 },
+  // Build tools
+  { pattern: /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(build|compile|package)\b/, timeoutMs: 300_000 },
+  { pattern: /\b(make|cmake|ninja|gradle|mvn|cargo)\b/, timeoutMs: 300_000 },
+  // Test suites
+  { pattern: /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(test|e2e|smoke)\b/, timeoutMs: 300_000 },
+  { pattern: /\b(jest|vitest|mocha|pytest|go\s+test|cargo\s+test)\b/, timeoutMs: 300_000 },
+  // Docker
+  { pattern: /\b(docker)\s+(build|pull|push)\b/, timeoutMs: 300_000 },
+  // Git operations on large repos
+  { pattern: /\b(git)\s+(clone|fetch|pull|push|rebase)\b/, timeoutMs: 180_000 },
+  // Linting / formatting large codebases
+  { pattern: /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(lint|format|check)\b/, timeoutMs: 180_000 },
+  { pattern: /\b(eslint|prettier|tsc|typecheck)\b/, timeoutMs: 180_000 },
+];
+
+function detectSmartTimeout(command: string, userTimeout?: number): number {
+  if (userTimeout) return userTimeout;
+  for (const { pattern, timeoutMs } of SLOW_COMMAND_TIMEOUTS) {
+    if (pattern.test(command)) return timeoutMs;
+  }
+  return DEFAULT_TIMEOUT_MS;
+}
+
+// ── Sub-agent spawn execution (isolated, no PTY) ────────────────
+
+function executeViaSpawn(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  abortSignal: AbortSignal | undefined,
+  emitSSE: ToolContext['emitSSE'],
+): Promise<string> {
+  return new Promise<string>((resolve) => {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let truncated = false;
+    let isResolved = false;
+
+    const proc = spawn('bash', ['-c', command], {
+      cwd,
+      env: {
+        ...process.env,
+        TERM: 'dumb',
+        PAGER: 'cat',
+        GIT_PAGER: 'cat',
+        DEBIAN_FRONTEND: 'noninteractive',
+        NPM_CONFIG_YES: 'true',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+
+    const collect = (data: Buffer) => {
+      if (truncated) return;
+      totalBytes += data.length;
+      let chunkStr = '';
+      if (totalBytes > MAX_OUTPUT_BYTES) {
+        truncated = true;
+        const allowedLen = MAX_OUTPUT_BYTES - (totalBytes - data.length);
+        const allowed = allowedLen > 0 ? data.subarray(0, allowedLen) : Buffer.alloc(0);
+        chunks.push(allowed);
+        chunkStr = allowed.toString('utf-8');
+      } else {
+        chunks.push(data);
+        chunkStr = data.toString('utf-8');
+      }
+      if (emitSSE && chunkStr) {
+        emitSSE({ type: 'tool_output', data: chunkStr });
+      }
+    };
+
+    proc.stdout?.on('data', collect);
+    proc.stderr?.on('data', collect);
+
+    const killProc = () => {
+      try {
+        if (proc.pid && process.platform !== 'win32') {
+          process.kill(-proc.pid, 'SIGTERM');
+          setTimeout(() => {
+            try { process.kill(-proc.pid!, 'SIGKILL'); } catch {}
+          }, 2000);
+        } else {
+          proc.kill('SIGTERM');
+        }
+      } catch {
+        try { proc.kill('SIGKILL'); } catch {}
+      }
+    };
+
+    const onAbort = () => { if (!isResolved) { killProc(); } };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+    const finish = (output: string) => {
+      if (isResolved) return;
+      isResolved = true;
+      clearTimeout(absoluteTimer);
+      abortSignal?.removeEventListener('abort', onAbort);
+      resolve(output);
+    };
+
+    const absoluteTimer = setTimeout(() => {
+      killProc();
+      proc.stdout?.destroy();
+      proc.stderr?.destroy();
+      let output = Buffer.concat(chunks).toString('utf-8');
+      if (truncated) output += '\n\n[Output truncated — exceeded 1MB limit]';
+      output += `\n\n[Process killed: Timeout after ${timeoutMs}ms]`;
+      if (emitSSE) {
+        emitSSE({
+          type: 'terminal_mirror',
+          data: JSON.stringify({ action: 'exit', exitCode: -1, signal: 'SIGTERM' }),
+        });
+      }
+      finish(output);
+    }, timeoutMs + 1000);
+
+    proc.on('close', (code, signal) => {
+      let output = Buffer.concat(chunks).toString('utf-8');
+      if (truncated) output += '\n\n[Output truncated — exceeded 1MB limit]';
+      if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+        output += `\n\n[Process killed: ${signal}]`;
+      }
+      if (code !== null && code !== 0) {
+        output += `\n\n[Exit code: ${code}]`;
+      }
+      if (emitSSE) {
+        emitSSE({
+          type: 'terminal_mirror',
+          data: JSON.stringify({ action: 'exit', exitCode: code ?? 0, signal: signal || undefined }),
+        });
+      }
+      finish(output || '(no output)');
+    });
+
+    proc.on('error', (err) => {
+      finish(`Error executing command: ${err.message}`);
+    });
+  });
+}
+
+// ── PTY execution (primary agent, shared session) ───────────────
+
+async function executeViaPty(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  abortSignal: AbortSignal | undefined,
+  emitSSE: ToolContext['emitSSE'],
+): Promise<string> {
+  ensurePtySession(AI_PTY_SESSION_ID, cwd);
+  ensurePtyOutputBuffered(AI_PTY_SESSION_ID);
+
+  const output = await executeCommandInPtySession(
+    AI_PTY_SESSION_ID,
+    cwd,
+    command,
+    timeoutMs,
+    abortSignal,
+    (chunkStr) => {
+      if (emitSSE && chunkStr) {
+        emitSSE({ type: 'tool_output', data: chunkStr });
+      }
+    },
+  );
+
+  if (emitSSE) {
+    emitSSE({
+      type: 'terminal_mirror',
+      data: JSON.stringify({ action: 'exit', exitCode: 0 }),
+    });
+  }
+
+  return output;
+}
+
+// ── Tool factory ─────────────────────────────────────────────────
+
 export function createBashTool(ctx: ToolContext) {
+  const isSpawnMode = ctx.executionMode === 'spawn';
+
   return tool({
     description:
       'Execute a bash command and return its output (stdout + stderr combined). ' +
@@ -28,16 +215,13 @@ export function createBashTool(ctx: ToolContext) {
       'IMPORTANT: Commands are run non-interactively. NEVER run commands that require user input or open a pager (e.g., use `git log --no-pager` or `PAGER=cat`).',
     inputSchema: z.object({
       command: z.string().describe('The bash command to execute'),
-      timeout: z.number().int().positive().max(300000).optional()
-        .describe('Timeout in milliseconds (default 120000)'),
+      timeout: z.number().int().positive().max(MAX_TIMEOUT_MS).optional()
+        .describe('Timeout in milliseconds (default 120000, auto-detected for slow commands)'),
     }),
-    // 中文注释：功能名称「Bash 工具执行」，用法是优先通过 PTY 会话执行命令，
-    // 同时通过 SSE 将命令和输出镜像到终端面板，让用户可以实时看到 AI 执行的命令。
-    // PTY 执行失败时回退到 spawn 独立执行。
     execute: async ({ command, timeout }, { abortSignal }) => {
-      const timeoutMs = timeout ?? DEFAULT_TIMEOUT_MS;
+      const timeoutMs = detectSmartTimeout(command, timeout);
 
-      // 通过 SSE 将命令发送到终端面板显示
+      // Emit command to terminal panel
       if (ctx.emitSSE) {
         ctx.emitSSE({
           type: 'terminal_mirror',
@@ -49,176 +233,18 @@ export function createBashTool(ctx: ToolContext) {
         });
       }
 
-      // 中文注释：优先通过 PTY 会话执行命令，这样命令和输出会自动出现在终端面板中。
-      // PTY 会话与用户终端共享同一个 shell 进程，保证环境一致性。
-      try {
-        ensurePtySession(AI_PTY_SESSION_ID, ctx.workingDirectory);
-        ensurePtyOutputBuffered(AI_PTY_SESSION_ID);
-
-        const output = await executeCommandInPtySession(
-          AI_PTY_SESSION_ID,
-          ctx.workingDirectory,
-          command,
-          timeoutMs,
-          abortSignal,
-          (chunkStr) => {
-            if (ctx.emitSSE && chunkStr) {
-              ctx.emitSSE({
-                type: 'tool_output',
-                data: chunkStr,
-              });
-            }
-          }
-        );
-
-        // 通过 SSE 将退出码发送到终端面板
-        if (ctx.emitSSE) {
-          ctx.emitSSE({
-            type: 'terminal_mirror',
-            data: JSON.stringify({
-              action: 'exit',
-              exitCode: 0,
-            }),
-          });
-        }
-
-        return output;
-      } catch (ptyError) {
-        // 中文注释：PTY 执行失败时回退到 spawn 独立执行，保证功能可用性。
-        console.warn('[bash-tool] PTY execution failed, falling back to spawn:', ptyError);
+      // Sub-agent path: direct spawn, no PTY contention
+      if (isSpawnMode) {
+        return executeViaSpawn(command, ctx.workingDirectory, timeoutMs, abortSignal, ctx.emitSSE);
       }
 
-      // 回退路径：使用 child_process.spawn 独立执行
-      return new Promise<string>((resolve) => {
-        const chunks: Buffer[] = [];
-        let totalBytes = 0;
-        let truncated = false;
-
-        const proc = spawn('bash', ['-c', command], {
-          cwd: ctx.workingDirectory,
-          env: { ...process.env, TERM: 'dumb' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: timeoutMs,
-          detached: process.platform !== 'win32',
-        });
-
-        const collect = (data: Buffer) => {
-          if (truncated) return;
-          totalBytes += data.length;
-          let chunkStr = '';
-          if (totalBytes > MAX_OUTPUT_BYTES) {
-            truncated = true;
-            const allowedBuffer = data.subarray(0, MAX_OUTPUT_BYTES - (totalBytes - data.length));
-            chunks.push(allowedBuffer);
-            chunkStr = allowedBuffer.toString('utf-8');
-          } else {
-            chunks.push(data);
-            chunkStr = data.toString('utf-8');
-          }
-          
-          if (ctx.emitSSE && chunkStr) {
-            ctx.emitSSE({
-              type: 'tool_output',
-              data: chunkStr,
-            });
-            // 中文注释：同时将输出镜像到终端面板
-            ctx.emitSSE({
-              type: 'terminal_mirror',
-              data: JSON.stringify({
-                action: 'output',
-                output: chunkStr,
-              }),
-            });
-          }
-        };
-
-        proc.stdout?.on('data', collect);
-        proc.stderr?.on('data', collect);
-
-        const killProc = () => {
-          try {
-            if (proc.pid && process.platform !== 'win32') {
-              process.kill(-proc.pid, 'SIGTERM');
-              setTimeout(() => {
-                try { process.kill(-proc.pid!, 'SIGKILL'); } catch {}
-              }, 2000);
-            } else {
-              proc.kill('SIGTERM');
-            }
-          } catch {
-            proc.kill('SIGTERM');
-          }
-        };
-
-        const onAbort = () => {
-          killProc();
-        };
-        abortSignal?.addEventListener('abort', onAbort, { once: true });
-
-        let isResolved = false;
-        const absoluteTimeout = setTimeout(() => {
-          if (isResolved) return;
-          isResolved = true;
-          killProc();
-          proc.stdout?.destroy();
-          proc.stderr?.destroy();
-          
-          let output = Buffer.concat(chunks).toString('utf-8');
-          if (truncated) {
-            output += '\n\n[Output truncated — exceeded 1MB limit]';
-          }
-          output += `\n\n[Process killed: Timeout after ${timeoutMs}ms]`;
-          
-          if (ctx.emitSSE) {
-            ctx.emitSSE({
-              type: 'terminal_mirror',
-              data: JSON.stringify({ action: 'exit', exitCode: 1, signal: 'SIGTERM' }),
-            });
-          }
-          resolve(output);
-        }, timeoutMs + 1000); // Add 1s buffer over native spawn timeout
-
-        proc.on('close', (code, signal) => {
-          if (isResolved) return;
-          isResolved = true;
-          clearTimeout(absoluteTimeout);
-          abortSignal?.removeEventListener('abort', onAbort);
-
-          let output = Buffer.concat(chunks).toString('utf-8');
-          if (truncated) {
-            output += '\n\n[Output truncated — exceeded 1MB limit]';
-          }
-
-          if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-            output += `\n\n[Process killed: ${signal}]`;
-          }
-
-          if (code !== null && code !== 0) {
-            output += `\n\n[Exit code: ${code}]`;
-          }
-
-          // 中文注释：通过 SSE 将退出码发送到终端面板
-          if (ctx.emitSSE) {
-            ctx.emitSSE({
-              type: 'terminal_mirror',
-              data: JSON.stringify({
-                action: 'exit',
-                exitCode: code ?? 0,
-                signal: signal || undefined,
-              }),
-            });
-          }
-
-          resolve(output || '(no output)');
-        });
-
-        proc.on('error', (err) => {
-          if (isResolved) return;
-          isResolved = true;
-          clearTimeout(absoluteTimeout);
-          resolve(`Error executing command: ${err.message}`);
-        });
-      });
+      // Primary agent path: PTY first, fallback to spawn
+      try {
+        return await executeViaPty(command, ctx.workingDirectory, timeoutMs, abortSignal, ctx.emitSSE);
+      } catch (ptyError) {
+        console.warn('[bash-tool] PTY execution failed, falling back to spawn:', ptyError);
+        return executeViaSpawn(command, ctx.workingDirectory, timeoutMs, abortSignal, ctx.emitSSE);
+      }
     },
   });
 }

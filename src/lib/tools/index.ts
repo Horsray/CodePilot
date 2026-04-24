@@ -37,6 +37,12 @@ export interface ToolContext {
   emitSSE?: (event: { type: string; data: string }) => void;
   /** Abort signal from parent */
   abortSignal?: AbortSignal;
+  /**
+   * Bash execution mode:
+   * - 'pty': use shared PTY session (default, for primary agent)
+   * - 'spawn': use isolated child_process.spawn (for sub-agents, no contention)
+   */
+  executionMode?: 'pty' | 'spawn';
 }
 
 /**

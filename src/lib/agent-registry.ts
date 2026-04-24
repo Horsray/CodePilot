@@ -107,11 +107,11 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
   },
   {
     id: 'general',
-    displayName: 'General',
-    description: 'General-purpose sub-agent for complex multi-step tasks.',
+    displayName: 'General Subagent',
+    description: 'General purpose subagent with full capabilities.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
     maxSteps: 30,
+    prompt: 'You are a general-purpose coding sub-agent. Complete the assigned task effectively. Provide a clear final report when done.',
   },
   {
     id: 'tracer',
