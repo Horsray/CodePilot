@@ -530,6 +530,41 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
+  // ── DeepSeek ──
+  {
+    key: 'deepseek',
+    name: 'DeepSeek',
+    description: 'DeepSeek Anthropic-compatible API — V4 Pro / V4 Flash',
+    descriptionZh: 'DeepSeek Anthropic 兼容 API — V4 Pro / V4 Flash',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    defaultEnvOverrides: {
+      CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-v4-pro',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+      CLAUDE_CODE_EFFORT_LEVEL: 'max',
+    },
+    defaultModels: [
+      { modelId: 'sonnet', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'default' },
+      { modelId: 'opus', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'opus' },
+      { modelId: 'haiku', upstreamModelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', role: 'haiku' },
+    ],
+    defaultRoleModels: {
+      default: 'deepseek-v4-pro',
+      sonnet: 'deepseek-v4-pro',
+      opus: 'deepseek-v4-pro',
+      haiku: 'deepseek-v4-flash',
+    },
+    fields: ['api_key'],
+    iconKey: 'deepseek',
+    meta: {
+      apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+      docsUrl: 'https://platform.deepseek.com/docs',
+      billingModel: 'pay_as_you_go',
+    },
+  },
+
   // ── Volcengine Ark ──
   {
     key: 'volcengine',
@@ -556,20 +591,20 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   {
     key: 'xiaomi-mimo',
     name: 'Xiaomi MiMo',
-    description: 'Xiaomi MiMo Pay-as-you-go API — MiMo-V2-Pro',
-    descriptionZh: '小米 MiMo 按量付费 — MiMo-V2-Pro',
+    description: 'Xiaomi MiMo Pay-as-you-go API — MiMo-V2.5-Pro',
+    descriptionZh: '小米 MiMo 按量付费 — MiMo-V2.5-Pro',
     protocol: 'anthropic',
     authStyle: 'auth_token',
     baseUrl: 'https://api.xiaomimimo.com/anthropic',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'mimo-v2-pro', displayName: 'MiMo-V2-Pro', role: 'default' },
+      { modelId: 'sonnet', upstreamModelId: 'mimo-v2.5-pro', displayName: 'MiMo-V2.5-Pro', role: 'default' },
     ],
     defaultRoleModels: {
-      default: 'mimo-v2-pro',
-      sonnet: 'mimo-v2-pro',
-      opus: 'mimo-v2-pro',
-      haiku: 'mimo-v2-pro',
+      default: 'mimo-v2.5-pro',
+      sonnet: 'mimo-v2.5-pro',
+      opus: 'mimo-v2.5-pro',
+      haiku: 'mimo-v2.5-pro',
     },
     fields: ['api_key'],
     iconKey: 'xiaomi-mimo',
@@ -586,20 +621,20 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   {
     key: 'xiaomi-mimo-token-plan',
     name: 'Xiaomi MiMo Token Plan',
-    description: 'Xiaomi MiMo Token Plan subscription — MiMo-V2-Pro',
-    descriptionZh: '小米 MiMo Token Plan 订阅套餐 — MiMo-V2-Pro',
+    description: 'Xiaomi MiMo Token Plan subscription — MiMo-V2.5-Pro',
+    descriptionZh: '小米 MiMo Token Plan 订阅套餐 — MiMo-V2.5-Pro',
     protocol: 'anthropic',
     authStyle: 'auth_token',
     baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'mimo-v2-pro', displayName: 'MiMo-V2-Pro', role: 'default' },
+      { modelId: 'sonnet', upstreamModelId: 'mimo-v2.5-pro', displayName: 'MiMo-V2.5-Pro', role: 'default' },
     ],
     defaultRoleModels: {
-      default: 'mimo-v2-pro',
-      sonnet: 'mimo-v2-pro',
-      opus: 'mimo-v2-pro',
-      haiku: 'mimo-v2-pro',
+      default: 'mimo-v2.5-pro',
+      sonnet: 'mimo-v2.5-pro',
+      opus: 'mimo-v2.5-pro',
+      haiku: 'mimo-v2.5-pro',
     },
     fields: ['api_key'],
     iconKey: 'xiaomi-mimo',

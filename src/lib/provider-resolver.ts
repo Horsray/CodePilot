@@ -219,6 +219,8 @@ export function toClaudeCodeEnv(
     'CLAUDE_CODE_SKIP_BEDROCK_AUTH',
     'CLAUDE_CODE_SKIP_VERTEX_AUTH',
     'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+    'CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK',
+    'CLAUDE_CODE_EFFORT_LEVEL',
     'ENABLE_TOOL_SEARCH',
     'AWS_REGION',
     'AWS_ACCESS_KEY_ID',
@@ -623,6 +625,7 @@ export function toAiSdkConfig(
 
 // OpenAI Codex API models available through ChatGPT Plus/Pro OAuth
 const OPENAI_CODEX_MODELS: CatalogModel[] = [
+  { modelId: 'gpt-5.5', displayName: 'GPT-5.5' },
   { modelId: 'gpt-5.4', displayName: 'GPT-5.4' },
   { modelId: 'gpt-5.4-mini', displayName: 'GPT-5.4-Mini' },
   { modelId: 'gpt-5.3-codex', displayName: 'GPT-5.3-Codex' },
@@ -634,7 +637,7 @@ const OPENAI_CODEX_MODELS: CatalogModel[] = [
  * Uses OAuth Bearer token + Codex API endpoint.
  */
 function buildOpenAIOAuthResolution(opts: ResolveOptions): ResolvedProvider {
-  const model = opts.model || opts.sessionModel || 'gpt-5.4';
+  const model = opts.model || opts.sessionModel || 'gpt-5.5';
 
   const catalogEntry = OPENAI_CODEX_MODELS.find(m => m.modelId === model);
 

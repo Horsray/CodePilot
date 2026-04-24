@@ -9,6 +9,7 @@ import { getOAuthStatus } from '@/lib/openai-oauth-manager';
 // OpenAI models available through ChatGPT Plus/Pro OAuth (Codex API)
 // Reasoning effort defaults to 'medium' server-side (not user-configurable)
 const OPENAI_OAUTH_MODELS = [
+  { value: 'gpt-5.5', label: 'GPT-5.5' },
   { value: 'gpt-5.4', label: 'GPT-5.4' },
   { value: 'gpt-5.4-mini', label: 'GPT-5.4-Mini' },
   { value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' },
@@ -222,7 +223,7 @@ export async function GET() {
 
       // Legacy: inject ANTHROPIC_MODEL from env overrides if not already present
       // Also check upstreamModelId to avoid duplicates (e.g. catalog has modelId='sonnet'
-      // with upstreamModelId='mimo-v2-pro', and env has ANTHROPIC_MODEL='mimo-v2-pro')
+      // with upstreamModelId='mimo-v2.5-pro', and env has ANTHROPIC_MODEL='mimo-v2.5-pro')
       try {
         const envOverrides = provider.env_overrides_json || provider.extra_env || '{}';
         const envObj = JSON.parse(envOverrides);
