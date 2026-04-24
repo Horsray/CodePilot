@@ -189,6 +189,7 @@ export function ensurePtyOutputBuffered(id: string): void {
     proc.onExit(({ exitCode }: { exitCode: number }) => {
       appendTerminalOutput(id, `\r\n[Process exited with code ${exitCode}]\r\n`);
       wired.delete(id);
+      getSessionStore().delete(id);
     });
   } else {
     const proc = session.process as ChildProcessWithoutNullStreams;
@@ -201,6 +202,7 @@ export function ensurePtyOutputBuffered(id: string): void {
     proc.on('exit', (code) => {
       appendTerminalOutput(id, `\r\n[Process exited with code ${code}]\r\n`);
       wired.delete(id);
+      getSessionStore().delete(id);
     });
   }
 }
@@ -396,25 +398,21 @@ export async function executeCommandInPtySession(
         finalize('[Process killed: SIGTERM (Timeout)]');
       }, timeoutMs);
 
-      const wrappedCommand = [
-        'export PAGER=cat',
-        'export GIT_PAGER=cat',
-        'export DEBIAN_FRONTEND=noninteractive',
-        'export NPM_CONFIG_YES=true',
-        // 中文注释：仅在交互式终端里关闭回显，避免非 TTY 下出现 "stdin isn\'t a terminal"。
-        '__codepilot_has_tty=0',
-        '[ -t 0 ] && __codepilot_has_tty=1 || true',
-        '[ "$__codepilot_has_tty" = "1" ] && __codepilot_prev_stty="$(stty -g 2>/dev/null || true)" || true',
-        '[ "$__codepilot_has_tty" = "1" ] && stty -echo 2>/dev/null || true',
-        `printf '\\n${startMarker}\\n'`,
-        command,
-        '__codepilot_status=$?',
-        `printf '\\n${endMarker}:%s__\\n' "$__codepilot_status"`,
-        // 中文注释：优先恢复原始 stty 状态；拿不到原状态时退化为 stty echo，且始终静默失败。
-        '[ "$__codepilot_has_tty" = "1" ] && { [ -n "$__codepilot_prev_stty" ] && stty "$__codepilot_prev_stty" 2>/dev/null || stty echo 2>/dev/null; } || true',
-      ].join('\n') + '\n';
+      const eofMarker = `EOF_CODEPILOT_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      
+      const wrappedCommand = `__codepilot_script=$(mktemp 2>/dev/null || echo "/tmp/codepilot_script_$RANDOM.sh")
+cat << '${eofMarker}' > "$__codepilot_script"
+export PAGER=cat
+export GIT_PAGER=cat
+export DEBIAN_FRONTEND=noninteractive
+export NPM_CONFIG_YES=true
+${command}
+${eofMarker}
+{ printf '\\n${startMarker}\\n'; source "$__codepilot_script"; __codepilot_status=$?; printf '\\n${endMarker}:%s__\\n' "$__codepilot_status"; }
+rm -f "$__codepilot_script"
+`;
 
-      writePtySession(id, `${wrappedCommand}\n`);
+      writePtySession(id, wrappedCommand + '\n');
     });
   });
 }
