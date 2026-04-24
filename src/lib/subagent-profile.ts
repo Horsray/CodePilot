@@ -1,5 +1,5 @@
 import type { AgentDefinition } from './agent-registry';
-import { isSimpleWebLookupTask } from './subagent-fast-path';
+import { isSimpleLocalLookupTask, isSimpleWebLookupTask } from './subagent-fast-path';
 
 export interface SubAgentExecutionProfile {
   initialStatus: string;
@@ -87,7 +87,7 @@ export function isLocalCodeSearchTask(prompt: string): boolean {
 
 export function buildSubAgentExecutionProfile(agentDef: AgentDefinition, prompt: string): SubAgentExecutionProfile {
   const mode = SEARCH_LIKE_AGENT_IDS.has(agentDef.id)
-    ? (isLocalCodeSearchTask(prompt)
+    ? (isSimpleLocalLookupTask(prompt)
         ? 'local_code_search'
         : (isSimpleWebLookupTask(prompt) ? 'web_lookup' : 'default'))
     : 'default';

@@ -7,6 +7,7 @@ import type { ToolSet } from 'ai';
 import { resolveAgentModel } from './agent-routing';
 import { buildSubAgentExecutionProfile } from './subagent-profile';
 import { createSubAgentProgressTracker } from './subagent-progress';
+import { tryExecuteSubAgentFastPath } from './subagent-fast-path';
 
 export const AGENT_MCP_SYSTEM_PROMPT = `
 - **Agent Delegation (CRITICAL)**: You have access to the \`mcp__codepilot-agent__Agent\` (or \`Agent\`) tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent, you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
@@ -123,19 +124,6 @@ export function createAgentMcpServer(ctx: {
 
           const subAgentId = `subagent-${agentDef.id}-${Date.now()}`;
 
-          const stream = runAgentLoop({
-            prompt,
-            sessionId: subAgentId,
-            providerId: finalProviderId,
-            sessionProviderId: ctx.sessionProviderId,
-            model: finalModel,
-            systemPrompt,
-            workingDirectory: ctx.workingDirectory,
-            tools: subTools,
-            maxSteps: agentDef.maxSteps || 30,
-            permissionMode: ctx.permissionMode,
-          });
-
           if (ctx.emitSSE) {
             ctx.emitSSE({
               type: 'subagent_start',
@@ -155,6 +143,65 @@ export function createAgentMcpServer(ctx: {
             emitSSE: ctx.emitSSE,
             initialStage: profile.initialStatus,
             sla: profile.sla,
+          });
+
+          const fastPathResult = await tryExecuteSubAgentFastPath({
+            agentId: agentDef.id,
+            prompt,
+            workingDirectory: ctx.workingDirectory,
+            tools: subTools,
+            abortSignal: ctx.abortSignal,
+            onStage: (stage, detail) => {
+              progress.setStage(stage);
+              if (ctx.emitSSE && detail) {
+                ctx.emitSSE({
+                  type: 'subagent_progress',
+                  data: JSON.stringify({
+                    id: subAgentId,
+                    detail: `${detail}\n`,
+                    append: true,
+                  }),
+                });
+              }
+            },
+            onProgress: (detail) => {
+              ctx.emitSSE?.({
+                type: 'subagent_progress',
+                data: JSON.stringify({
+                  id: subAgentId,
+                  detail,
+                  append: true,
+                }),
+              });
+            },
+          });
+
+          if (fastPathResult) {
+            progress.setStage('整理子任务结果');
+            progress.close();
+            if (ctx.emitSSE) {
+              ctx.emitSSE({
+                type: 'subagent_complete',
+                data: JSON.stringify({
+                  id: subAgentId,
+                  report: fastPathResult.report,
+                }),
+              });
+            }
+            return { content: [{ type: 'text' as const, text: fastPathResult.report }] };
+          }
+
+          const stream = runAgentLoop({
+            prompt,
+            sessionId: subAgentId,
+            providerId: finalProviderId,
+            sessionProviderId: ctx.sessionProviderId,
+            model: finalModel,
+            systemPrompt,
+            workingDirectory: ctx.workingDirectory,
+            tools: subTools,
+            maxSteps: agentDef.maxSteps || 30,
+            permissionMode: ctx.permissionMode,
           });
 
           const reader = stream.getReader();

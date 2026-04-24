@@ -131,6 +131,16 @@ export function createAgentTool(ctx: {
             });
           }
         },
+        onProgress: (detail) => {
+          ctx.emitSSE?.({
+            type: 'subagent_progress',
+            data: JSON.stringify({
+              id: subAgentId,
+              detail,
+              append: true,
+            }),
+          });
+        },
       });
 
       if (fastPathResult) {

@@ -227,6 +227,31 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
 
 const agents = new Map<string, AgentDefinition>();
 
+const AGENT_ALIASES: Record<string, string> = {
+  tester: 'qa-tester',
+  testing: 'qa-tester',
+  test: 'qa-tester',
+  qa: 'qa-tester',
+  reviewer: 'code-reviewer',
+  review: 'code-reviewer',
+  'code-review': 'code-reviewer',
+  security: 'security-reviewer',
+  'security-review': 'security-reviewer',
+  doc: 'document-specialist',
+  docs: 'document-specialist',
+  document: 'document-specialist',
+  researcher: 'search',
+  finder: 'search',
+  developer: 'executor',
+  coder: 'executor',
+  engineer: 'executor',
+};
+
+export function normalizeAgentId(id: string): string {
+  const normalized = id.trim().toLowerCase().replace(/_/g, '-').replace(/\s+/g, '-');
+  return AGENT_ALIASES[normalized] || normalized;
+}
+
 // Register built-ins
 for (const agent of BUILTIN_AGENTS) {
   agents.set(agent.id, agent);
@@ -266,11 +291,14 @@ function enhanceAgentPrompt(agent: AgentDefinition): AgentDefinition {
 }
 
 export function registerAgent(definition: AgentDefinition): void {
-  agents.set(definition.id, definition);
+  agents.set(normalizeAgentId(definition.id), {
+    ...definition,
+    id: normalizeAgentId(definition.id),
+  });
 }
 
 export function getAgent(id: string): AgentDefinition | undefined {
-  const agent = agents.get(id);
+  const agent = agents.get(normalizeAgentId(id));
   if (!agent) return undefined;
   return enhanceAgentPrompt(agent);
 }

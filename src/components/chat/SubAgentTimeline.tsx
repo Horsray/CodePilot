@@ -150,6 +150,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
         {subAgents.map((agent) => {
           const isExpanded = expandedAgents.has(agent.id);
           const currentProgress = agent.progress;
+          const terminalReport = agent.report || (agent.error ? `错误:\n${agent.error}` : '');
 
           return (
             <div
@@ -215,10 +216,10 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                   )}
 
                   {/* 报告输出 */}
-                  {(agent.status === 'completed' || agent.status === 'error') && agent.report && (
+                  {(agent.status === 'completed' || agent.status === 'error') && terminalReport && (
                     <div className="text-[11px] text-muted-foreground/80 p-3 rounded-md bg-muted/30 border border-border/40 max-h-96 overflow-y-auto">
                       <div className="whitespace-pre-wrap break-words leading-relaxed">
-                        {agent.report}
+                        {terminalReport}
                       </div>
                     </div>
                   )}

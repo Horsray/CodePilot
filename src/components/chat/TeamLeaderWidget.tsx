@@ -112,7 +112,7 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
             ? {
                 ...a,
                 status: detail.error ? 'error' as const : 'completed' as const,
-                report: detail.report,
+                report: detail.report || (detail.error ? `错误:\n${detail.error}` : undefined),
                 error: detail.error,
                 completedAt: Date.now(),
               }
@@ -299,13 +299,13 @@ export function TeamLeaderWidget({ sessionId }: TeamLeaderWidgetProps) {
               {agent.status === 'running' && agent.progress && (
                 <p className="text-xs text-blue-500/80 truncate">{agent.progress}</p>
               )}
-              {agent.status === 'completed' && agent.report && (
+              {(agent.status === 'completed' || agent.status === 'error') && agent.report && (
                 <p className="text-xs text-muted-foreground/70 line-clamp-2">
                   {agent.report.slice(0, 200)}
                   {agent.report.length > 200 ? '...' : ''}
                 </p>
               )}
-              {agent.status === 'error' && agent.error && (
+              {agent.status === 'error' && agent.error && !agent.report && (
                 <p className="text-xs text-red-500/80 line-clamp-2">{agent.error}</p>
               )}
               {agent.status === 'pending' && (

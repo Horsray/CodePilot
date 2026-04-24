@@ -1,4 +1,5 @@
 import type { ToolSet } from 'ai';
+import type { MCPServerConfig } from '@/types';
 
 type FastPathKind = 'local_code_search' | 'web_fetch' | 'web_search';
 
@@ -24,6 +25,7 @@ interface ExecuteSubAgentFastPathOptions {
   tools: ToolSet;
   abortSignal?: AbortSignal;
   onStage?: (stage: string, detail?: string) => void;
+  onProgress?: (detail: string) => void;
 }
 
 const FAST_PATH_AGENT_IDS = new Set(['explore', 'search', 'document-specialist']);
@@ -45,6 +47,56 @@ const LOCAL_CODE_SIGNALS = [
   '.tsx',
   '.js',
   '.jsx',
+];
+const LOCAL_LOOKUP_INTENT_SIGNALS = [
+  '搜索',
+  '查找',
+  '找出',
+  '搜',
+  'grep',
+  'glob',
+  'find',
+  'search',
+  'lookup',
+  '出现在哪些文件',
+  '在哪些文件',
+  '在哪个文件',
+  '哪个文件',
+  '文件路径',
+  '代码片段',
+  '关键字',
+  '关键词',
+  '匹配',
+  '列出',
+];
+const LOCAL_ANALYSIS_BLOCKING_SIGNALS = [
+  '分析',
+  '测试',
+  '验证',
+  'schema',
+  '表结构',
+  '表定义',
+  '数据库',
+  '设计',
+  '架构',
+  '原因',
+  '根因',
+  '报告',
+  '总结',
+  '可用性',
+  '响应时间',
+  '性能基准',
+  'benchmark',
+  'available',
+  'availability',
+  'analyze',
+  'analysis',
+  'design',
+  'architecture',
+  'database',
+  'report',
+  'summarize',
+  'verify',
 ];
 const EXTERNAL_RESEARCH_SIGNALS = [
   '联网',
@@ -115,6 +167,21 @@ function isLocalCodeSearchTask(prompt: string): boolean {
   return localHits > 0 && externalHits === 0;
 }
 
+export function isSimpleLocalLookupTask(prompt: string): boolean {
+  if (!isLocalCodeSearchTask(prompt)) return false;
+
+  const normalized = prompt.toLowerCase();
+  const hasLookupIntent = LOCAL_LOOKUP_INTENT_SIGNALS.some((signal) =>
+    normalized.includes(signal.toLowerCase()),
+  );
+  if (!hasLookupIntent) return false;
+
+  const hasAnalysisIntent = LOCAL_ANALYSIS_BLOCKING_SIGNALS.some((signal) =>
+    normalized.includes(signal.toLowerCase()),
+  );
+  return !hasAnalysisIntent;
+}
+
 export async function tryExecuteSubAgentFastPath(
   options: ExecuteSubAgentFastPathOptions,
 ): Promise<SubAgentFastPathResult | null> {
@@ -158,7 +225,7 @@ export async function tryExecuteSubAgentFastPath(
 function detectFastPathRequest(agentId: string, prompt: string): FastPathRequest | null {
   if (!FAST_PATH_AGENT_IDS.has(agentId)) return null;
 
-  if (isLocalCodeSearchTask(prompt)) {
+  if (isSimpleLocalLookupTask(prompt)) {
     const keywords = extractKeywords(prompt);
     const filePatterns = extractFilePatterns(prompt);
     if (keywords.length === 0 && filePatterns.length === 0) {
@@ -218,11 +285,11 @@ async function executeLocalCodeSearch(
   const keywordReports: string[] = [];
   const snippetReports: string[] = [];
   const seenSnippetKeys = new Set<string>();
-  const keywordMatches = new Map<string, Array<{ file: string; line: number; text: string }>>();
   const fileReports: string[] = [];
 
   if (request.filePatterns && request.filePatterns.length > 0 && globTool) {
     options.onStage?.('执行快速文件检索', request.filePatterns.join(', '));
+    options.onProgress?.(`工具调用: Glob\n输入: ${request.filePatterns.slice(0, 3).join(', ')}\n`);
     for (const rawPattern of request.filePatterns.slice(0, 3)) {
       const pattern = toGlobPattern(rawPattern);
       const output = await invokeTool(globTool, { pattern }, options.abortSignal);
@@ -236,6 +303,7 @@ async function executeLocalCodeSearch(
   if (request.keywords && request.keywords.length > 0 && grepTool) {
     for (const keyword of request.keywords.slice(0, 3)) {
       options.onStage?.('执行快速关键词检索', keyword);
+      options.onProgress?.(`工具调用: Grep\n输入: ${keyword}\n`);
       const output = await invokeTool(
         grepTool,
         {
@@ -248,7 +316,6 @@ async function executeLocalCodeSearch(
       const matches = parseGrepMatches(output).slice(0, 8);
       if (matches.length === 0) continue;
 
-      keywordMatches.set(keyword, matches);
       const uniqueFiles = [...new Set(matches.map((match) => match.file))];
       keywordReports.push(`- "${keyword}": ${uniqueFiles.join(', ')}`);
 
@@ -267,6 +334,7 @@ async function executeLocalCodeSearch(
             options.abortSignal,
           );
           if (typeof snippet === 'string' && !snippet.startsWith('Error:')) {
+            options.onProgress?.(`工具调用: Read\n输入: ${match.file}:${match.line}\n`);
             snippetReports.push(`- ${match.file}:${match.line}\n${snippet}`);
           }
         }
@@ -278,11 +346,20 @@ async function executeLocalCodeSearch(
     return {
       kind: 'local_code_search',
       cacheHit: false,
-      report: `未找到与该检索任务相关的结果。\nPrompt: ${request.prompt}`,
+      report: [
+        `任务目标:\n${request.prompt}`,
+        '思考过程:\n识别为简单本地代码检索任务，直接调用本地检索工具，跳过模型循环。',
+        '工具调用:\nGrep / Glob / Read',
+        '结论:\n未找到与该检索任务相关的结果。',
+      ].join('\n\n'),
     };
   }
 
-  const sections: string[] = ['已通过快速检索通道直接完成本地搜索。'];
+  const sections: string[] = [
+    `任务目标:\n${request.prompt}`,
+    '思考过程:\n识别为简单本地代码检索任务，直接调用本地检索工具，跳过模型循环。',
+    '工具调用:\nGrep / Glob / Read',
+  ];
   if (fileReports.length > 0) {
     sections.push(`文件命中:\n${fileReports.join('\n')}`);
   }
@@ -292,6 +369,7 @@ async function executeLocalCodeSearch(
   if (snippetReports.length > 0) {
     sections.push(`关键片段:\n${snippetReports.join('\n\n')}`);
   }
+  sections.push('结论:\n已完成本地代码检索，以上是命中的文件路径和关键代码片段。');
 
   return {
     kind: 'local_code_search',
@@ -308,12 +386,21 @@ async function executeWebFetch(
   if (!url) return null;
 
   options.onStage?.('抓取网页内容', url);
+  options.onProgress?.(`工具调用: WebFetch\n输入: ${url}\n`);
 
   const fetchTool = getTool(options.tools, [
     'webfetch__fetch_fetch_readable',
     'mcp__fetch__fetch_readable',
     'mcp__fetch__fetch_html',
-  ]);
+  ]) || await getActivatedMcpTool(
+    options.workingDirectory,
+    [
+      'webfetch__fetch_fetch_readable',
+      'mcp__fetch__fetch_readable',
+      'mcp__fetch__fetch_html',
+    ],
+    ['fetch', 'webfetch'],
+  );
 
   let output: string | null = null;
   if (fetchTool) {
@@ -337,7 +424,13 @@ async function executeWebFetch(
   return {
     kind: 'web_fetch',
     cacheHit: false,
-    report: `已通过快速网页抓取通道完成任务。\nURL: ${url}\n\n${trimOutput(output, 6000)}`,
+    report: [
+      `任务目标:\n${request.prompt}`,
+      '思考过程:\n识别为简单网页抓取任务，直接调用网页抓取工具，跳过模型循环。',
+      `工具调用:\nWebFetch\nURL: ${url}`,
+      `工具结果:\n${trimOutput(output, 6000)}`,
+      '结论:\n已完成网页内容抓取。',
+    ].join('\n\n'),
   };
 }
 
@@ -349,13 +442,19 @@ async function executeWebSearch(
   if (!query) return null;
 
   options.onStage?.('执行快速网页搜索', query);
+  options.onProgress?.(`工具调用: WebSearch\n输入: ${query}\n`);
 
-  const searchTool = getTool(options.tools, [
+  const searchCandidates = [
     'web_search',
     'WebSearch',
     'mcp__MiniMax__web_search',
     'mcp__bailian-web-search__bailian_web_search',
-  ]);
+  ];
+  const searchTool = getTool(options.tools, searchCandidates) || await getActivatedMcpTool(
+    options.workingDirectory,
+    searchCandidates,
+    ['WebSearch', 'web-search', 'bailian-web-search', 'MiniMax', 'minimax'],
+  );
 
   if (!searchTool) return null;
 
@@ -377,7 +476,13 @@ async function executeWebSearch(
   return {
     kind: 'web_search',
     cacheHit: false,
-    report: `已通过快速网页搜索通道完成任务。\nQuery: ${query}\n\n${trimOutput(output, 5000)}`,
+    report: [
+      `任务目标:\n${request.prompt}`,
+      '思考过程:\n识别为简单网页搜索任务，直接调用搜索工具，跳过模型循环。',
+      `工具调用:\nWebSearch\nQuery: ${query}`,
+      `工具结果:\n${trimOutput(output, 5000)}`,
+      '结论:\n已完成网页搜索，以上是搜索工具返回的结果。',
+    ].join('\n\n'),
   };
 }
 
@@ -390,6 +495,34 @@ function getTool(tools: ToolSet, candidates: string[]) {
     }
   }
   return null;
+}
+
+async function getActivatedMcpTool(
+  workingDirectory: string,
+  candidates: string[],
+  serverNames: string[],
+) {
+  try {
+    const { loadAllMcpServers } = await import('./mcp-loader');
+    const { syncMcpConnections } = await import('./mcp-connection-manager');
+    const { buildMcpToolSet } = await import('./mcp-tool-adapter');
+    const allServers = loadAllMcpServers(workingDirectory) || {};
+    const requestedServers: Record<string, MCPServerConfig> = {};
+
+    for (const serverName of serverNames) {
+      const config = allServers[serverName];
+      if (config && config.enabled !== false) {
+        requestedServers[serverName] = config;
+      }
+    }
+
+    if (Object.keys(requestedServers).length === 0) return null;
+
+    await syncMcpConnections(requestedServers);
+    return getTool(buildMcpToolSet(candidates), candidates);
+  } catch {
+    return null;
+  }
 }
 
 async function invokeTool(
@@ -459,8 +592,11 @@ function extractKeywords(prompt: string): string[] {
   const quoted = [...prompt.matchAll(/["“'`](.{1,120}?)["”'`]/g)]
     .map((match) => match[1].trim())
     .filter(Boolean);
-  const keywordMatch = prompt.match(/(?:关键字|关键词|keyword)\s*[:：]?\s*([^\s，。；,;]+)/i);
-  const inferred = keywordMatch ? [keywordMatch[1].trim()] : [];
+  const afterKeywordMatch = prompt.match(/(?:关键字|关键词|keyword)\s*(?:是|为|=|:|：)\s*([^\s，。；,;]+)/i);
+  const beforeKeywordMatch = prompt.match(/([A-Za-z0-9_.$/-]{2,120})\s*(?:关键字|关键词)/i);
+  const inferred = [afterKeywordMatch?.[1], beforeKeywordMatch?.[1]]
+    .map((value) => value?.trim())
+    .filter(Boolean) as string[];
   return [...new Set([...quoted, ...inferred])].slice(0, 4);
 }
 

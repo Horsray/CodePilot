@@ -1,11 +1,12 @@
-import { getAgent, getSubAgents } from './agent-registry';
+import { getAgent, getSubAgents, normalizeAgentId } from './agent-registry';
 import { runAgentLoop } from './agent-loop';
 import { assembleTools } from './agent-tools';
 import type { ToolSet } from 'ai';
 import { resolveAgentModel } from './agent-routing';
 import { truncateToTokenBudget } from './context-pruner';
-import { buildSubAgentExecutionProfile, isLocalCodeSearchTask } from './subagent-profile';
+import { buildSubAgentExecutionProfile } from './subagent-profile';
 import { createSubAgentProgressTracker } from './subagent-progress';
+import { isSimpleLocalLookupTask, isSimpleWebLookupTask, tryExecuteSubAgentFastPath } from './subagent-fast-path';
 
 export interface TeamRunnerOptions {
   goal: string;
@@ -69,9 +70,10 @@ async function executeAgentTask(
   accumulatedContext: string
 ): Promise<{ report: string; errorEvent: string | null; role: string }> {
   const { workingDirectory, emitSSE, abortSignal } = options;
-  const agentDef = getAgent(task.role);
+  const role = normalizeAgentId(task.role);
+  const agentDef = getAgent(role);
   if (!agentDef) {
-    return { report: `Error: Agent ${task.role} not found.`, errorEvent: 'Agent not found', role: task.role };
+    return { report: `Error: Agent ${role} not found.`, errorEvent: 'Agent not found', role };
   }
   const profile = buildSubAgentExecutionProfile(agentDef, task.desc);
 
@@ -83,19 +85,19 @@ async function executeAgentTask(
 
   emitTeamEvent('team_agent_start', {
     id: task.id,
-    name: task.role,
-    displayName: agentDef.displayName || task.role,
+    name: role,
+    displayName: agentDef.displayName || role,
     prompt: task.desc,
     model: finalModel,
     startedAt: Date.now(),
   });
 
-  const subAgentId = `team-${task.role}-${Date.now()}`;
+  const subAgentId = `team-${role}-${Date.now()}`;
   
   // 防止 Team 模式下的上下文溢出 (Truncate to reasonable token limit)
   const safeContext = truncateToTokenBudget(accumulatedContext, 15000);
   
-  const prompt = `Your role is ${task.role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${safeContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
+  const prompt = `Your role is ${role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${safeContext}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
 
   const permissionContext = (options.parentSessionId && options.emitSSE && options.permissionMode)
     ? {
@@ -125,13 +127,81 @@ async function executeAgentTask(
       type: 'subagent_start',
       data: JSON.stringify({
         id: subAgentId,
-        name: task.role,
-        displayName: agentDef.displayName || task.role,
+        name: role,
+        displayName: agentDef.displayName || role,
         prompt: task.desc,
         model: finalModel,
       }),
     });
-    emitSSE({ type: 'tool_output', data: `[subagent:${task.role}] ${task.desc}\n` });
+    emitSSE({ type: 'tool_output', data: `[subagent:${role}] ${task.desc}\n` });
+  }
+
+  const progress = createSubAgentProgressTracker({
+    id: subAgentId,
+    emitSSE,
+    initialStage: profile.initialStatus,
+    sla: profile.sla,
+  });
+
+  const fastPathResult = await tryExecuteSubAgentFastPath({
+    agentId: agentDef.id,
+    prompt: task.desc,
+    workingDirectory,
+    tools: subTools,
+    abortSignal,
+    onStage: (stage, detail) => {
+      progress.setStage(stage);
+      emitTeamEvent('team_agent_update', {
+        id: task.id,
+        name: role,
+        status: 'running',
+        progress: detail ? `${stage}: ${detail}` : stage,
+      });
+      if (emitSSE && detail) {
+        emitSSE({
+          type: 'subagent_progress',
+          data: JSON.stringify({ id: subAgentId, detail: `${detail}\n`, append: true }),
+        });
+      }
+    },
+    onProgress: (detail) => {
+      if (emitSSE) {
+        emitSSE({
+          type: 'subagent_progress',
+          data: JSON.stringify({ id: subAgentId, detail, append: true }),
+        });
+      }
+    },
+  });
+
+  if (fastPathResult) {
+    const report = `**📝 最终输出：**\n${fastPathResult.report}`;
+    progress.setStage('整理子任务结果');
+    progress.close();
+
+    emitTeamEvent('team_agent_done', {
+      id: task.id,
+      name: role,
+      displayName: agentDef.displayName || role,
+      prompt: task.desc,
+      model: finalModel,
+      status: 'completed',
+      report,
+      completedAt: Date.now(),
+    });
+
+    if (emitSSE) {
+      emitSSE({
+        type: 'subagent_complete',
+        data: JSON.stringify({
+          id: subAgentId,
+          report,
+        }),
+      });
+      emitSSE({ type: 'tool_output', data: `[+] done\n\n` });
+    }
+
+    return { report, errorEvent: null, role };
   }
 
   const stream = runAgentLoop({
@@ -145,13 +215,6 @@ async function executeAgentTask(
     tools: subTools,
     maxSteps: agentDef.maxSteps || 30,
     permissionMode: options.permissionMode,
-  });
-
-  const progress = createSubAgentProgressTracker({
-    id: subAgentId,
-    emitSSE,
-    initialStage: profile.initialStatus,
-    sla: profile.sla,
   });
 
   const reader = stream.getReader();
@@ -220,7 +283,7 @@ async function executeAgentTask(
                   progress.setStage(`执行工具: ${toolData.name}`);
                   emitTeamEvent('team_agent_update', {
                     id: task.id,
-                    name: task.role,
+                    name: role,
                     status: 'running',
                     progress: `执行工具: ${toolData.name}`,
                   });
@@ -265,7 +328,7 @@ async function executeAgentTask(
     if (!errorEvent) {
       errorEvent = `任务执行中断: ${errMsg}`;
     }
-    console.warn(`[team-runner] executeAgentTask stream error for ${task.role}:`, errMsg);
+    console.warn(`[team-runner] executeAgentTask stream error for ${role}:`, errMsg);
   } finally {
     progress.close();
     reader.releaseLock();
@@ -303,8 +366,8 @@ async function executeAgentTask(
 
   emitTeamEvent('team_agent_done', {
     id: task.id,
-    name: task.role,
-    displayName: agentDef.displayName || task.role,
+    name: role,
+    displayName: agentDef.displayName || role,
     prompt: task.desc,
     model: finalModel,
     status: errorEvent ? 'error' : 'completed',
@@ -325,7 +388,7 @@ async function executeAgentTask(
     emitSSE({ type: 'tool_output', data: `[+] done\n\n` });
   }
 
-  return { report, errorEvent, role: task.role };
+  return { report, errorEvent, role };
 }
 
 /**
@@ -334,9 +397,9 @@ async function executeAgentTask(
  * 用法：在执行管线前调用，替换固定的串行编排数组
  */
 async function generateTeamDAG(options: TeamRunnerOptions): Promise<TeamDAG> {
-  if (isLocalCodeSearchTask(options.goal)) {
+  if (isSimpleLocalLookupTask(options.goal) || isSimpleWebLookupTask(options.goal)) {
     if (options.emitSSE) {
-      options.emitSSE({ type: 'text', data: `\n\n⚡ **启用轻量检索编排**\n检测到这是本地代码检索任务，跳过 DAG 规划子任务，直接派发搜索智能体。\n` });
+      options.emitSSE({ type: 'text', data: `\n\n⚡ **启用轻量检索编排**\n检测到这是简单检索任务，跳过 DAG 规划子任务，直接派发搜索智能体。\n` });
     }
     return {
       tasks: [
@@ -371,6 +434,7 @@ CRITICAL RULES FOR MULTI-AGENT PARALLELISM:
 2. INDEPENDENT TASKS: Tasks that have an empty \`dependsOn\` array \`[]\` will run in background concurrently.
 3. CONVERGENCE: Only sequentialize tasks (using \`dependsOn\`) when one task STRICTLY requires the output of another.
 4. MAKE SURE to include a final verifier or qa-tester step at the end that depends on all the parallel execution tasks.
+5. Use ONLY exact role ids from the Available agents list. For testing use qa-tester or test-engineer; never output tester.
 
 Only output the JSON block, no other text.`;
 
@@ -404,6 +468,11 @@ Only output the JSON block, no other text.`;
   try {
     const dag = JSON.parse(jsonMatch[1] || jsonMatch[0]) as TeamDAG;
     if (!dag.tasks || !Array.isArray(dag.tasks)) throw new Error('Invalid DAG format');
+    dag.tasks = dag.tasks.map((task) => ({
+      ...task,
+      role: normalizeAgentId(task.role),
+      dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : [],
+    }));
     
     // Validate DAG to prevent deadlocks (missing dependencies or circular deps)
     const taskIds = new Set(dag.tasks.map(t => t.id));
@@ -461,7 +530,7 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
 
   // Phase 2 & 4: Execute DAG with Parallel Execution and Verification Loop
   const pendingTasks = [...dag.tasks];
-  const runningTasks = new Map<string, Promise<void>>();
+  const runningTasks = new Map<string, Promise<{ id: string }>>();
   const completedTasks = new Set<string>();
   const taskReports = new Map<string, string>();
   let retries = 0;
@@ -539,42 +608,27 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
             });
           }
         }
+        return { id: task.id };
       }).catch((err: unknown) => {
         // Handle unexpected errors from executeAgentTask
         const errMsg = err instanceof Error ? err.message : String(err);
+        const role = normalizeAgentId(task.role);
         taskReports.set(task.id, `**❌ 执行异常**: ${errMsg}`);
         completedTasks.add(task.id);
-        accumulatedContext += `\n\n--- Report from ${task.role} (${task.id}) ---\n**❌ 执行异常**: ${errMsg}\n`;
+        accumulatedContext += `\n\n--- Report from ${role} (${task.id}) ---\n**❌ 执行异常**: ${errMsg}\n`;
         console.error(`[team-runner] Task ${task.id} threw error:`, err);
+        return { id: task.id };
       });
 
       runningTasks.set(task.id, taskPromise);
     }
 
-    // Wait for all running tasks to settle (resolved or rejected)
+    // Let completed branches advance immediately instead of waiting for the
+    // whole current batch. One slow sub-agent should not stall unrelated DAG
+    // branches that already have their dependencies satisfied.
     if (runningTasks.size > 0) {
-      const settled = await Promise.allSettled(Array.from(runningTasks.values()));
-
-      // Process each settled result and clean up
-      for (const [id, _promise] of runningTasks.entries()) {
-        runningTasks.delete(id);
-
-        // If task was rejected (not in completedTasks), mark as failed
-        if (!completedTasks.has(id)) {
-          // Find the task that failed
-          const failedTask = dag.tasks.find(t => t.id === id);
-          if (failedTask) {
-            const errorMsg = `Task ${id} (${failedTask.role}) failed with unhandled error.`;
-            taskReports.set(id, `**❌ 任务执行失败**: ${errorMsg}`);
-            accumulatedContext += `\n\n--- Report from ${failedTask.role} (${id}) ---\n**❌ 任务执行失败**: ${errorMsg}\n`;
-            console.error(`[team-runner] Unhandled rejection for task ${id}:`, settled);
-          }
-          // Add to completedTasks to prevent deadlock
-          completedTasks.add(id);
-        }
-      }
-
-      // Re-check for newly ready tasks after all settled
+      const settled = await Promise.race(runningTasks.values());
+      runningTasks.delete(settled.id);
       continue;
     }
   }
