@@ -42,7 +42,7 @@ export function ContextCompressionWidget({
   // 中文注释：上下文统计详情默认展开，用户可手动收起
   const [detailsExpanded, setDetailsExpanded] = useState(true);
   const [listExpanded, setListExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState<'rules' | 'web' | 'files' | 'others'>('rules');
+  const [activeTab, setActiveTab] = useState<'rules' | 'web' | 'files' | 'others' | 'stats'>('rules');
   const { setPreviewFile, setPreviewOpen, openBrowserTab } = usePanel();
 
   const handleOpenItem = (item: string) => {
@@ -383,12 +383,12 @@ export function ContextCompressionWidget({
             文件
           </button>
           <button
-            onClick={() => setActiveTab('others')}
+            onClick={() => setActiveTab('stats')}
             className={cn(
               "flex items-center gap-1 border-b pb-0.5 transition-colors whitespace-nowrap",
-              activeTab === 'others' ? "border-foreground/80 text-foreground/90 font-medium" : "border-transparent hover:text-foreground/70"
+              activeTab === 'stats' ? "border-foreground/80 text-foreground/90 font-medium" : "border-transparent hover:text-foreground/70"
             )}
-            title={`统计数据`}
+            title={`数据统计`}
           >
             <div className="w-1.5 h-1.5 bg-muted-foreground/30 rounded-[1px]" />
             数据统计
@@ -399,11 +399,16 @@ export function ContextCompressionWidget({
         {detailsExpanded && (
           activeTab === 'others' ? (
             <div className="flex flex-col items-center justify-center py-6 text-center">
-              <p className="text-[12px] font-medium text-foreground/80 mb-1">会话数据统计</p>
-              <div className="text-[11px] text-muted-foreground/60 space-y-1 mt-2">
-                <p>token消耗：<span className="font-mono text-foreground/80">{sessionTokens.total.toLocaleString()}</span></p>
-                <p>输入：<span className="font-mono text-foreground/80">{sessionTokens.input.toLocaleString()}</span> &nbsp;&nbsp; 输出：<span className="font-mono text-foreground/80">{sessionTokens.output.toLocaleString()}</span> &nbsp;&nbsp; cache：<span className="font-mono text-foreground/80">{sessionTokens.cache.toLocaleString()}</span></p>
-                {sessionTokens.cost > 0 && <p className="mt-1">预估成本：<span className="font-mono text-foreground/80">${sessionTokens.cost.toFixed(4)}</span></p>}
+              <p className="text-[13px] font-medium text-foreground/80 mb-2">其他上下文</p>
+              <p className="text-[12px] text-muted-foreground/60">对话中产生的系统指令及上下文</p>
+            </div>
+          ) : activeTab === 'stats' ? (
+            <div className="flex flex-col py-4">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px] text-muted-foreground/70">
+                <p>输入token：<span className="font-mono text-foreground/80">{(sessionTokens.input / 1_000_000).toFixed(2)}M</span></p>
+                <p>输出token：<span className="font-mono text-foreground/80">{(sessionTokens.output / 1_000_000).toFixed(2)}M</span></p>
+                <p>缓存读取：<span className="font-mono text-foreground/80">{(sessionTokens.cache / 1_000_000).toFixed(2)}M</span></p>
+                <p>总计消耗：<span className="font-mono text-foreground/80">{(sessionTokens.total / 1_000_000).toFixed(2)}M</span></p>
               </div>
             </div>
           ) : (

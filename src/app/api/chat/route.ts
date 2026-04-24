@@ -311,6 +311,64 @@ export async function POST(request: NextRequest) {
       abortController.abort();
     });
 
+    const trimmedContent = content.trim();
+    const isTeamCommand = /^\/team(?:\s|$)/i.test(trimmedContent);
+    if (isTeamCommand) {
+      const goal = trimmedContent.replace(/^\/team\s*/i, '').trim() || content;
+      const teamStream = new ReadableStream<string>({
+        async start(controllerRaw) {
+          const controller = wrapController(controllerRaw);
+          const emitSSE = (event: { type: string; data: string }) => {
+            controller.enqueue(`data: ${JSON.stringify(event)}\n\n`);
+          };
+
+          try {
+            const { runTeamPipeline } = await import('@/lib/team-runner');
+            const report = await runTeamPipeline({
+              goal,
+              workingDirectory: session.sdk_cwd || session.working_directory || process.cwd(),
+              providerId: effectiveProviderId || undefined,
+              sessionProviderId: session.provider_id || undefined,
+              parentModel: resolved.upstreamModel || resolved.model || effectiveModel,
+              permissionMode,
+              parentSessionId: session_id,
+              emitSSE,
+              abortSignal: abortController.signal,
+            });
+            if (report.trim()) {
+              emitSSE({ type: 'text', data: report.trim().startsWith('Team Goal:') ? '' : `\n\n${report.trim()}` });
+            }
+            controller.enqueue(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Team orchestration failed';
+            emitSSE({ type: 'error', data: message });
+            emitSSE({ type: 'aborted', data: JSON.stringify({ reason: 'error', message }) });
+          } finally {
+            controller.close();
+          }
+        },
+      });
+
+      const [streamForClient, streamForCollect] = teamStream.tee();
+      const lockRenewalInterval = setInterval(() => {
+        try { renewSessionLock(session_id, lockId, 600); } catch { /* best effort */ }
+      }, 60_000);
+
+      collectStreamResponse(streamForCollect, session_id, telegramNotifyOpts, () => {
+        clearInterval(lockRenewalInterval);
+        releaseSessionLock(session_id, lockId);
+        setSessionRuntimeStatus(session_id, 'idle');
+      }, { suppressNotifications: !!autoTrigger, persistProviderId });
+
+      return new Response(streamForClient, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
     // Convert file attachments to the format expected by streamClaude.
     // Include filePath from the already-saved files so claude-client can
     // reference the on-disk copies instead of writing them again.

@@ -53,7 +53,7 @@
 | active/unified-context-layer.md | 统一上下文层 + 浮窗助理 + 产品架构演进 | Phase 1-3 已完成，Phase 4-5 待开始 |
 | active/omc-team-orchestration-refactor.md | OMC Team 多智能体动态编排重构（并行执行 + 动态路由 + 验证闭环） | ✅ Phase 0-5 已完成（V1 基础） |
 | active/multi-agent-orchestration-v2.md | 多Agent编排架构重构 V2 — 对齐 OMC 策略（去除 planner LLM、非嵌套约束、验证协议、熔断升级） | Phase 0 完成，Phase 1-5 待开始 |
-| active/multi-agent-commercial-runtime.md | 多Agent商用级编排能力补齐：确定性 Team 入口、持久 runtime、stage/handoff、验证闭环 | Phase 1 进行中 |
+| active/multi-agent-commercial-runtime.md | 多Agent商用级编排能力补齐：确定性 Team 入口、持久 runtime、stage/handoff、验证闭环 | Phase 1-4 已完成（V1 runtime） |
 | active/provider-governance.md | 服务商系统治理：Preset Schema 校验、宿主接管、连通性验证、引导 UX、错误治理 | Phase 0 完成，Phase 1-6 待开始 |
 | active/decouple-claude-code.md | 脱离 Claude Code 依赖 — 自建 Agent Runtime（Provider/Loop/Tools/MCP/Permission/Session/Skills/SubAgent） | Phase 0 完成，Phase 1-8 待开始 |
 | active/runtime-auto-and-onboarding.md | Runtime auto 简化（CLI binary check 代替凭据推断）+ Chat 入口拦截 + 错误归一翻译（复用现有 SetupCenter）+ FileTree hotfix + 百炼 catalog 替换 | Phase 0-4 已完成（commits bc308e9/2d06f50/d1fac18/3e03919/a32837e），Phase 5 待发版 |

@@ -25,4 +25,12 @@ describe('subagent stream resilience', () => {
     assert.match(route, /event\.type === 'aborted'/);
     assert.match(route, /b\.type === 'tool_use' \|\| b\.type === 'tool_result' \|\| b\.type === 'thinking' \|\| b\.type === 'sub_agents'/);
   });
+
+  it('routes /team deterministically through runTeamPipeline instead of prompt-only orchestration', () => {
+    const route = read('src/app/api/chat/route.ts');
+    const teamRunner = read('src/lib/team-runner.ts');
+    assert.match(route, /isTeamCommand/);
+    assert.match(route, /runTeamPipeline/);
+    assert.match(teamRunner, /Team Job/);
+  });
 });

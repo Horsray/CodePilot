@@ -4,10 +4,21 @@ import { assembleTools } from './agent-tools';
 import type { ToolSet } from 'ai';
 import { resolveAgentModel } from './agent-routing';
 import { truncateToTokenBudget } from './context-pruner';
+import { roughTokenEstimate } from './context-estimator';
 import { buildSubAgentExecutionProfile } from './subagent-profile';
 import { createSubAgentProgressTracker } from './subagent-progress';
 import { isSimpleLocalLookupTask, isSimpleWebLookupTask, tryExecuteSubAgentFastPath } from './subagent-fast-path';
 import { buildTeamOrchestrationPrompt } from './team-orchestration-prompt';
+import {
+  appendTeamEvent,
+  completeTeamRuntime,
+  createTeamRuntime,
+  setTeamTasks,
+  updateTeamStage,
+  updateTeamTask,
+  writeTeamHandoff,
+  type TeamRuntimeHandle,
+} from './team-runtime';
 
 export interface TeamRunnerOptions {
   goal: string;
@@ -19,6 +30,7 @@ export interface TeamRunnerOptions {
   parentSessionId?: string;
   emitSSE?: (event: { type: string; data: string }) => void;
   abortSignal?: AbortSignal;
+  teamRuntime?: TeamRuntimeHandle;
 }
 
 interface DAGTask {
@@ -34,6 +46,17 @@ interface TeamDAG {
 
 /** Hard cap on DAG task count — prevents planner from generating excessive tasks */
 const MAX_DAG_TASKS = 6;
+
+function stageForRole(role: string): 'team-exec' | 'team-verify' | 'team-fix' {
+  const normalized = normalizeAgentId(role);
+  if (['verifier', 'code-reviewer', 'security-reviewer', 'qa-tester'].includes(normalized)) return 'team-verify';
+  if (normalized === 'debugger') return 'team-fix';
+  return 'team-exec';
+}
+
+function estimateTaskPromptTokens(task: DAGTask, context: string): number {
+  return roughTokenEstimate(`${task.role}\n${task.desc}\n${context}`);
+}
 
 function filterTools(allTools: ToolSet, allowedTools?: string[], disallowedTools?: string[]): ToolSet {
   if (allowedTools && allowedTools.length > 0) {
@@ -104,6 +127,12 @@ async function executeAgentTask(
   });
 
   const subAgentId = `team-${role}-${Date.now()}`;
+  if (options.teamRuntime) {
+    updateTeamTask(options.teamRuntime, task.id, {
+      status: 'running',
+      startedAt: new Date().toISOString(),
+    });
+  }
   
   // 防止 Team 模式下的上下文溢出 (Truncate to reasonable token limit)
   const safeContext = truncateToTokenBudget(accumulatedContext, 8000); // Reduced from 15000 to cut token cost
@@ -216,6 +245,12 @@ async function executeAgentTask(
         }),
       });
       emitSSE({ type: 'tool_output', data: `[+] done\n\n` });
+    }
+    if (options.teamRuntime) {
+      updateTeamTask(options.teamRuntime, task.id, {
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+      });
     }
 
     return { report, errorEvent: null, role };
@@ -417,6 +452,13 @@ async function executeAgentTask(
       });
       emitSSE({ type: 'tool_output', data: `[+] done (timeout)\n\n` });
     }
+    if (options.teamRuntime) {
+      updateTeamTask(options.teamRuntime, task.id, {
+        status: 'failed',
+        completedAt: new Date().toISOString(),
+        error: 'Sub-agent timed out after 60s of inactivity',
+      });
+    }
 
     return { report: timeoutReport, errorEvent: null, role };
   }
@@ -526,6 +568,13 @@ async function executeAgentTask(
       }),
     });
     emitSSE({ type: 'tool_output', data: `[+] done\n\n` });
+  }
+  if (options.teamRuntime) {
+    updateTeamTask(options.teamRuntime, task.id, {
+      status: errorEvent ? 'failed' : 'completed',
+      completedAt: new Date().toISOString(),
+      error: errorEvent || undefined,
+    });
   }
 
   return { report, errorEvent, role };
@@ -759,18 +808,32 @@ Only output the JSON block, no other text.`;
  * 如果父 agent 无法正常编排（模型不支持工具调用等），降级到 DAG 模式。
  */
 export async function runTeamPipeline(options: TeamRunnerOptions): Promise<string> {
-  const { goal, workingDirectory, emitSSE, abortSignal } = options;
+  const { goal, workingDirectory, abortSignal } = options;
+  const runtime = options.teamRuntime || createTeamRuntime({
+    goal,
+    cwd: workingDirectory,
+    sessionId: options.parentSessionId,
+  });
+  const emitSSE = (event: { type: string; data: string }) => {
+    try {
+      let parsedData: unknown = event.data;
+      try { parsedData = JSON.parse(event.data); } catch { /* plain text */ }
+      appendTeamEvent(runtime, { type: event.type, data: parsedData });
+    } catch { /* best effort */ }
+    options.emitSSE?.(event);
+  };
+  const runtimeOptions: TeamRunnerOptions = { ...options, emitSSE, teamRuntime: runtime };
 
   // Phase 0: 触发前端 UI 渲染
   emitTeamEvent('team_start', {
     goal,
     agents: [],
     startedAt: Date.now(),
+    jobId: runtime.jobId,
   });
 
-  if (emitSSE) {
-    emitSSE({ type: 'text', data: `🚀 **启动智能体团队协作**\n正在分析任务并编排智能体...\n\n` });
-  }
+  emitSSE({ type: 'text', data: `🚀 **启动智能体团队协作**\nTeam Job: \`${runtime.jobId}\`\n正在分析任务并编排智能体...\n\n` });
+  updateTeamStage(runtime, 'team-plan');
 
   // Phase 1: 父 agent 直接编排（OMC 策略）
   const orchestrationPrompt = buildTeamOrchestrationPrompt(goal, workingDirectory);
@@ -778,20 +841,20 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
 
   const { providerId: finalProviderId, model: finalModel } = resolveAgentModel(
     { id: 'orchestrator', displayName: 'Team Leader', description: 'Team orchestrator', mode: 'subagent' },
-    options.providerId,
-    options.parentModel
+    runtimeOptions.providerId,
+    runtimeOptions.parentModel
   );
 
   const { tools: allTools } = assembleTools({
     workingDirectory,
     prompt: goal,
     providerId: finalProviderId,
-    sessionProviderId: options.sessionProviderId,
+    sessionProviderId: runtimeOptions.sessionProviderId,
     model: finalModel,
-    permissionContext: (options.parentSessionId && emitSSE && options.permissionMode)
+    permissionContext: (runtimeOptions.parentSessionId && runtimeOptions.permissionMode)
       ? {
-          sessionId: options.parentSessionId,
-          permissionMode: (options.permissionMode || 'trust') as import('./permission-checker').PermissionMode,
+          sessionId: runtimeOptions.parentSessionId,
+          permissionMode: (runtimeOptions.permissionMode || 'trust') as import('./permission-checker').PermissionMode,
           emitSSE,
           abortSignal,
         }
@@ -799,6 +862,7 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
     // Parent agent needs Agent/Team tools to orchestrate sub-agents.
     // Only sub-agents use executionMode: 'spawn' to prevent nesting.
   });
+  delete allTools.Team;
 
   // DEBUG: log parent agent's available tools
   const toolNames = Object.keys(allTools);
@@ -809,13 +873,13 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
     prompt: goal,
     sessionId,
     providerId: finalProviderId,
-    sessionProviderId: options.sessionProviderId,
+    sessionProviderId: runtimeOptions.sessionProviderId,
     model: finalModel,
     systemPrompt: orchestrationPrompt,
     workingDirectory,
     tools: allTools,
     maxSteps: 30,
-    permissionMode: options.permissionMode,
+    permissionMode: runtimeOptions.permissionMode,
   });
 
   // Phase 2: 消费父 agent 流，转发所有 SSE 事件到前端
@@ -851,6 +915,7 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
   } catch (streamErr: unknown) {
     const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
     console.warn('[team-runner] Parent agent stream error:', errMsg);
+    appendTeamEvent(runtime, { type: 'team_leader_error', data: { error: errMsg } });
   } finally {
     reader.releaseLock();
   }
@@ -859,11 +924,11 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
   // 降级到 DAG 模式确保子 agent 卡片正常渲染。
   if (!hasSpawnedSubAgents) {
     console.warn('[team-runner] Parent agent did not spawn sub-agents, falling back to DAG execution');
-    if (emitSSE) {
-      emitSSE({ type: 'text', data: `\n\n⚡ **切换到 DAG 调度模式**\n启用多智能体并行编排...\n\n` });
-    }
-    const result = await runDAGFallback(options);
+    emitSSE({ type: 'text', data: `\n\n⚡ **切换到 DAG 调度模式**\n启用多智能体并行编排...\n\n` });
+    const result = await runDAGFallback(runtimeOptions);
     emitTeamEvent('team_done', { summary: 'Team pipeline completed (DAG fallback)', completedAt: Date.now() });
+    const failed = result.includes('**❌') || result.includes('**Error**') || abortSignal?.aborted;
+    completeTeamRuntime(runtime, result, failed ? 'Team pipeline completed with failed or aborted tasks' : undefined);
     return result;
   }
 
@@ -872,9 +937,12 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
     completedAt: Date.now(),
   });
 
-  if (emitSSE) {
-    emitSSE({ type: 'text', data: `\n\n🎉 **团队协作完成**\n请查阅上方各智能体的执行报告。` });
-  }
+  writeTeamHandoff(runtime, 'team-verify', `## Handoff: team-verify -> complete
+- Decided: Parent orchestrator spawned sub-agents directly.
+- Files: See sub-agent reports in the chat timeline.
+- Remaining: Review individual sub-agent reports for residual risks.`);
+  completeTeamRuntime(runtime, collectedText.join('').trim() || 'Team orchestration completed');
+  emitSSE({ type: 'text', data: `\n\n🎉 **团队协作完成**\n请查阅上方各智能体的执行报告。` });
 
   return collectedText.join('');
 }
@@ -888,6 +956,21 @@ async function runDAGFallback(options: TeamRunnerOptions): Promise<string> {
   let accumulatedContext = `Team Goal: ${goal}\n\n`;
 
   const dag = buildFallbackDAG(goal);
+  if (options.teamRuntime) {
+    setTeamTasks(options.teamRuntime, dag.tasks.map((task) => ({
+      id: task.id,
+      role: normalizeAgentId(task.role),
+      desc: task.desc,
+      dependsOn: task.dependsOn || [],
+      status: 'pending',
+    })));
+    writeTeamHandoff(options.teamRuntime, 'team-plan', `## Handoff: team-plan -> team-exec
+- Decided: Use deterministic DAG fallback because the leader did not spawn sub-agents directly.
+- Tasks: ${dag.tasks.map((task) => `${task.id}:${normalizeAgentId(task.role)}`).join(', ')}
+- Risks: File ownership is task-scoped by prompt; overlapping edits still require verifier review.
+- Remaining: Execute ready tasks, then run verifier.`);
+    updateTeamStage(options.teamRuntime, 'team-exec');
+  }
 
   emitTeamEvent('team_dag_ready', { agents: dag.tasks });
 
@@ -923,12 +1006,32 @@ async function runDAGFallback(options: TeamRunnerOptions): Promise<string> {
           }
         }
       }
+      if (options.teamRuntime) {
+        const stage = stageForRole(task.role);
+        updateTeamStage(options.teamRuntime, stage);
+        appendTeamEvent(options.teamRuntime, {
+          type: 'team_task_scheduled',
+          data: {
+            taskId: task.id,
+            role: normalizeAgentId(task.role),
+            stage,
+            estimatedInputTokens: estimateTaskPromptTokens(task, taskContext),
+          },
+        });
+      }
 
       const taskPromise = executeAgentTask(task, options, taskContext).then(({ report, errorEvent, role }) => {
         const fullReport = errorEvent ? `**Error**: ${errorEvent}` : report;
         taskReports.set(task.id, fullReport);
         completedTasks.add(task.id);
         accumulatedContext += `\n\n--- Report from ${role} (${task.id}) ---\n${fullReport}\n`;
+        if (options.teamRuntime) {
+          writeTeamHandoff(options.teamRuntime, role === 'verifier' ? 'team-verify' : 'team-exec', `## Handoff: ${role} ${task.id}
+- Decided: ${role} completed assigned task ${task.id}.
+- Task: ${task.desc}
+- Report: ${truncateToTokenBudget(fullReport, 1200)}
+- Remaining: Continue dependency graph and verification.`);
+        }
         return { id: task.id };
       }).catch((err: unknown) => {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -936,6 +1039,17 @@ async function runDAGFallback(options: TeamRunnerOptions): Promise<string> {
         taskReports.set(task.id, `**❌ 执行异常**: ${errMsg}`);
         completedTasks.add(task.id);
         accumulatedContext += `\n\n--- Report from ${role} (${task.id}) ---\n**❌ 执行异常**: ${errMsg}\n`;
+        if (options.teamRuntime) {
+          updateTeamTask(options.teamRuntime, task.id, {
+            status: 'failed',
+            completedAt: new Date().toISOString(),
+            error: errMsg,
+          });
+          writeTeamHandoff(options.teamRuntime, 'team-fix', `## Handoff: team-exec -> team-fix
+- Failed: ${role} task ${task.id}
+- Error: ${errMsg}
+- Remaining: Re-run with debugger or simplify the task.`);
+        }
         return { id: task.id };
       });
 
@@ -949,5 +1063,13 @@ async function runDAGFallback(options: TeamRunnerOptions): Promise<string> {
     }
   }
 
+  if (options.teamRuntime) {
+    updateTeamStage(options.teamRuntime, abortSignal?.aborted ? 'cancelled' : 'team-verify');
+    writeTeamHandoff(options.teamRuntime, 'team-verify', `## Handoff: team-verify -> complete
+- Decided: DAG execution reached terminal queue state.
+- Completed: ${Array.from(completedTasks).join(', ')}
+- Failed: ${Array.from(taskReports.entries()).filter(([, report]) => report.includes('**❌') || report.includes('**Error**')).map(([id]) => id).join(', ') || 'none'}
+- Remaining: Read accumulated reports for pass/fail evidence.`);
+  }
   return accumulatedContext;
 }

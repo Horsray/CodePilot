@@ -7,16 +7,17 @@
 
 | Phase | 内容 | 状态 | 备注 |
 |-------|------|------|------|
-| Phase 1 | `/team` 确定性入口与 Agent/Team 入口收敛 | 进行中 | 避免只更新 Todo 卡片但未启动子 agent |
-| Phase 2 | 持久化 Team Job / Task / Event runtime | 待开始 | 使用 `.omc/state/team-jobs/` 保存状态、事件、handoff |
-| Phase 3 | Stage pipeline、handoff、token/模型路由与验证闭环 | 待开始 | 对齐 OMC 的 plan -> exec -> verify -> fix 语义 |
-| Phase 4 | 统一测试与回归验证 | 待开始 | 完成后统一运行测试 |
+| Phase 1 | `/team` 确定性入口与 Agent/Team 入口收敛 | 已完成 | `/team` 直接进入 Team pipeline |
+| Phase 2 | 持久化 Team Job / Task / Event runtime | 已完成 | `.omc/state/team-jobs/` 保存状态、事件、handoff |
+| Phase 3 | Stage pipeline、handoff、token/模型路由与验证闭环 | 已完成 | DAG fallback 按 stage 写入 handoff 和 token 估算事件 |
+| Phase 4 | 统一测试与回归验证 | 已完成 | `npm run test` + `npm run test:smoke` 通过 |
 
 ## 决策日志
 
 - 2026-04-25: 先采用文件型 runtime 而非 DB migration，原因是当前工作区已有大量改动，文件状态可恢复、可审计，且更接近 OMC 的 `.omc/state` 设计。
 - 2026-04-25: `/team` 必须进入确定性 Team pipeline，不能只依赖 system prompt 诱导模型调用 `Agent`。
 - 2026-04-25: 子 agent 进度用于 UI，父 agent 汇总只消费结构化报告与 handoff，降低 token 噪音。
+- 2026-04-25: 验证通过 `npm run test` 和 `npm run test:smoke`，本阶段收敛为可恢复的 V1 runtime。
 
 ## 详细设计
 
