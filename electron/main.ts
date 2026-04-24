@@ -26,8 +26,6 @@ import net from 'net';
 import os from 'os';
 import { TerminalManager } from './terminal-manager';
 
-const terminalManager = new TerminalManager();
-
 /**
  * Return a copy of process.env without __NEXT_PRIVATE_* variables.
  *
@@ -82,6 +80,8 @@ let installState: InstallState = {
 };
 
 let installProcess: ChildProcess | null = null;
+
+const terminalManager = new TerminalManager();
 
 const isDev = !app.isPackaged;
 
@@ -140,7 +140,7 @@ async function isBridgeActive(): Promise<boolean> {
     return await new Promise<boolean>((resolve) => {
       const req = http.get(`http://127.0.0.1:${serverPort}/api/bridge`, (res: { statusCode?: number; on: (event: string, cb: (data?: Buffer) => void) => void }) => {
         let body = '';
-        res.on('data', (chunk?: Buffer) => { if (chunk) body += chunk.toString(); });
+        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
         res.on('end', () => {
           try {
             const data = JSON.parse(body);
@@ -251,10 +251,10 @@ function destroyTray(): void {
 /**
  * Parse notification API response. Canonical version: src/lib/bg-notify-parser.ts
  */
-function parseBgNotifications(json: string): Array<{ title: string; body: string; priority: string; sound?: boolean }> {
+function parseBgNotifications(json: string): Array<{ title: string; body: string; priority: string }> {
   try {
     const parsed = JSON.parse(json);
-    const notifications: Array<{ title: string; body: string; priority: string; sound?: boolean }> = parsed.notifications || [];
+    const notifications: Array<{ title: string; body: string; priority: string }> = parsed.notifications || [];
     return notifications.filter((n: { title: string }) => n.title);
   } catch {
     return [];
@@ -291,9 +291,6 @@ function startBgNotifyPoll(): void {
 
       const notifications = parseBgNotifications(data);
       for (const notif of notifications) {
-        if (notif.sound) {
-          shell.beep();
-        }
         try {
           const notification = new Notification({
             title: notif.title,
@@ -682,11 +679,7 @@ function startServer(port: number): Electron.UtilityProcess {
     // Ensure user shell env vars override (especially API keys)
     ...userShellEnv,
     // Inject system proxy (only if not already set in shell env)
-  ...(!userShellEnv.HTTP_PROXY && !userShellEnv.HTTPS_PROXY ? {
-    ...resolvedProxyEnv,
-    // Add common domestic AI API domains to NO_PROXY to prevent bun/proxy hangs
-    NO_PROXY: userShellEnv.NO_PROXY || process.env.NO_PROXY || 'localhost,127.0.0.1,::1,.aliyuncs.com,.aliyun.com,.deepseek.com,.bigmodel.cn,.volces.com,.baidubce.com,.tencentcloudapi.com,.moonshot.cn,.siliconflow.cn',
-  } : {}),
+    ...(!userShellEnv.HTTP_PROXY && !userShellEnv.HTTPS_PROXY ? resolvedProxyEnv : {}),
     PORT: String(port),
     HOSTNAME: '127.0.0.1',
     CLAUDE_GUI_DATA_DIR: path.join(home, '.codepilot'),
@@ -783,7 +776,6 @@ function createWindow(url?: string) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webviewTag: true,
     },
   };
 
@@ -864,36 +856,6 @@ app.whenReady().then(async () => {
     const iconPath = getIconPath();
     app.dock.setIcon(nativeImage.createFromPath(iconPath));
   }
-
-  // --- Terminal IPC handlers ---
-  ipcMain.handle('terminal:create', (e, opts) => {
-    terminalManager.create(opts.id, opts);
-  });
-
-  ipcMain.handle('terminal:write', (e, id, data) => {
-    terminalManager.write(id, data);
-    return true;
-  });
-
-  ipcMain.handle('terminal:resize', (e, id, cols, rows) => {
-    terminalManager.resize(id, cols, rows);
-  });
-
-  ipcMain.handle('terminal:kill', (e, id) => {
-    terminalManager.kill(id);
-  });
-
-  terminalManager.setOnData((id, data) => {
-    BrowserWindow.getAllWindows().forEach((w) => {
-      w.webContents.send('terminal:data', { id, data });
-    });
-  });
-
-  terminalManager.setOnExit((id, exitCode) => {
-    BrowserWindow.getAllWindows().forEach((w) => {
-      w.webContents.send('terminal:exit', { id, exitCode });
-    });
-  });
 
   // --- Install wizard IPC handlers ---
 
@@ -1444,6 +1406,183 @@ app.whenReady().then(async () => {
     }
   });
 
+  // --- Artifact long-shot export (Phase 3) ---
+  // Captures an arbitrary HTML source as a single full-page PNG, using
+  // Chromium's CDP captureBeyondViewport so we can exceed the viewport
+  // height without manual stitching. Runs in an isolated hidden
+  // BrowserWindow with its own session partition (mirrors
+  // widget:export-png's security envelope).
+  //
+  // Module-level export lock serializes concurrent calls; capturePage +
+  // debugger.attach don't play nicely with a second export starting on
+  // the same machine before the first finishes.
+  let exportLongShotBusy = false;
+
+  ipcMain.handle('artifact:export-long-shot', async (_event, params: {
+    html: string;
+    width: number;
+    pixelRatio?: number;
+    outPath?: string;
+    maxHeightPx?: number;
+    timeoutMs?: number;
+  }) => {
+    if (exportLongShotBusy) {
+      return { error: 'busy' as const };
+    }
+    exportLongShotBusy = true;
+
+    const {
+      html,
+      width,
+      pixelRatio = 2,
+      outPath,
+      maxHeightPx = 50000,
+      timeoutMs = 30000,
+    } = params;
+
+    const exportWindow = new BrowserWindow({
+      show: false,
+      width,
+      height: 2000,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        partition: `artifact-export-${Date.now()}`,
+      },
+    });
+    exportWindow.webContents.on('will-navigate', (e) => e.preventDefault());
+    exportWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
+
+    try {
+      await exportWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+
+      // Give the document a chance to finish layout + image loading. We
+      // race a scriptsReady console signal against a fixed ceiling.
+      const readyRace = Promise.race([
+        new Promise<'ready'>((resolve) => {
+          exportWindow.webContents.on('console-message', (_e, _level, message) => {
+            if (message === '__scriptsReady__') resolve('ready');
+          });
+          // Unconditional floor — even if the page never emits scriptsReady,
+          // we still resolve after 3s so simple HTML artifacts render.
+          setTimeout(() => resolve('ready'), 3000);
+        }),
+        deadline,
+      ]);
+      const readyResult = await readyRace;
+      if (readyResult === 'timeout') {
+        return { error: 'timeout' as const };
+      }
+      // Small extra delay so image repaints settle before we measure height.
+      await new Promise((r) => setTimeout(r, 200));
+
+      const contentHeight: number = await exportWindow.webContents.executeJavaScript(
+        'document.body.scrollHeight',
+      );
+      if (contentHeight > maxHeightPx) {
+        return {
+          error: 'canvas_limit' as const,
+          meta: { contentHeight, maxHeightPx },
+        };
+      }
+
+      // Use CDP Page.captureScreenshot with captureBeyondViewport so we
+      // don't need to size the window up to the content or stitch segments.
+      // debugger.attach is independent of DevTools; the export window
+      // itself is hidden so DevTools never attach to it.
+      try {
+        exportWindow.webContents.debugger.attach('1.3');
+      } catch (err) {
+        return {
+          error: 'debugger_busy' as const,
+          meta: { detail: String(err) },
+        };
+      }
+
+      let pngBase64: string;
+      try {
+        const result = await exportWindow.webContents.debugger.sendCommand(
+          'Page.captureScreenshot',
+          {
+            format: 'png',
+            captureBeyondViewport: true,
+            // Force device-pixel ratio so the produced image matches the
+            // user's monitor scale — without this, retina users get a
+            // half-resolution PNG.
+            // Note: CDP doesn't take pixelRatio directly; we size via
+            // clip + deviceScaleFactor below if needed.
+          },
+        );
+        pngBase64 = (result as { data: string }).data;
+      } finally {
+        try {
+          exportWindow.webContents.debugger.detach();
+        } catch {
+          // Detach failures are harmless — the window destroy below
+          // tears everything down regardless.
+        }
+      }
+
+      if (outPath) {
+        const fs = await import('fs/promises');
+        const buf = Buffer.from(pngBase64, 'base64');
+        await fs.writeFile(outPath, buf);
+        return { path: outPath, bytes: buf.length };
+      }
+      return { base64: pngBase64, bytes: Buffer.from(pngBase64, 'base64').length };
+    } catch (err) {
+      return {
+        error: 'oom' as const,
+        meta: { detail: err instanceof Error ? err.message : String(err) },
+      };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      exportWindow.destroy();
+      exportLongShotBusy = false;
+      // Unused here but kept to signal we didn't forget the pixelRatio
+      // param — Phase 3 follow-up may wire it via deviceScaleFactor emu.
+      void pixelRatio;
+    }
+  });
+
+  // --- Terminal IPC handlers ---
+  terminalManager.setOnData((id, data) => {
+    mainWindow?.webContents.send('terminal:data', { id, data });
+  });
+
+  terminalManager.setOnExit((id, code) => {
+    mainWindow?.webContents.send('terminal:exit', { id, code });
+  });
+
+  ipcMain.handle('terminal:create', async (_event, opts: { id: string; cwd: string; cols: number; rows: number }) => {
+    terminalManager.create(opts.id, {
+      cwd: opts.cwd,
+      cols: opts.cols,
+      rows: opts.rows,
+      env: userShellEnv,
+    });
+  });
+
+  ipcMain.on('terminal:write', (_event, data: { id: string; data: string }) => {
+    terminalManager.write(data.id, data.data);
+  });
+
+  ipcMain.handle('terminal:resize', async (_event, data: { id: string; cols: number; rows: number }) => {
+    terminalManager.resize(data.id, data.cols, data.rows);
+  });
+
+  ipcMain.handle('terminal:kill', async (_event, id: string) => {
+    terminalManager.kill(id);
+  });
+
+  // --- End terminal IPC handlers ---
+
   // --- Notification IPC handler ---
   ipcMain.handle('notification:show', async (_event, options: {
     title: string;
@@ -1575,6 +1714,9 @@ app.on('activate', async () => {
 });
 
 app.on('before-quit', async (e) => {
+  // Kill all terminal processes
+  terminalManager.killAll();
+
   // Kill any running install process (tree-kill on Windows)
   if (installProcess) {
     const pid = installProcess.pid;

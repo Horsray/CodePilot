@@ -279,7 +279,7 @@ describe('getDefaultModelsForProvider — provider-catalog flow', () => {
     // pair with the VALID_PROTOCOLS set update in provider-catalog.ts.
     const members: string[] = [
       'anthropic', 'openai-compatible', 'openrouter',
-      'bedrock', 'vertex', 'google', 'gemini-image',
+      'bedrock', 'vertex', 'google', 'gemini-image', 'openai-image',
     ];
     for (const m of members) {
       assert.equal(isValidProtocol(m), true, `'${m}' must be valid`);
@@ -289,6 +289,31 @@ describe('getDefaultModelsForProvider — provider-catalog flow', () => {
     assert.equal(isValidProtocol(undefined), false);
     assert.equal(isValidProtocol(null), false);
     assert.equal(isValidProtocol(123), false);
+  });
+
+  it('openai-compatible chat provider at https://api.openai.com/v1 does NOT inherit GPT Image catalog', () => {
+    // Regression: adding the openai-image preset made api.openai.com/v1 an
+    // exact-match URL for a media preset. Without the protocol guard, any
+    // chat provider configured with the same URL (e.g. openai-compatible)
+    // would silently fetch the GPT Image model list into the chat model
+    // selector.
+    const chatModels = getDefaultModelsForProvider(
+      'openai-compatible',
+      'https://api.openai.com/v1',
+    );
+    const hasImageModel = chatModels.some(m => /^gpt-image/i.test(m.modelId));
+    assert.equal(hasImageModel, false, 'openai-compatible must not inherit GPT Image catalog');
+
+    // And the happy path — the same URL with protocol='openai-image' still
+    // resolves to GPT Image models.
+    const imageModels = getDefaultModelsForProvider(
+      'openai-image',
+      'https://api.openai.com/v1',
+    );
+    assert.ok(
+      imageModels.some(m => /^gpt-image/i.test(m.modelId)),
+      'openai-image at the canonical URL must still return GPT Image models',
+    );
   });
 
   it('missing providerType with empty baseUrl stays alias-only (no accidental first-party promotion)', () => {

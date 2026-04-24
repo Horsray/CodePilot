@@ -4,12 +4,13 @@ import { generateSingleImage, NoImageGeneratedError } from '@/lib/image-generato
 interface GenerateRequest {
   prompt: string;
   model?: string;
+  /** Optional explicit provider row id; overrides the model-family + active-setting fallback chain. */
+  providerId?: string;
   aspectRatio?: string;
   imageSize?: string;
   referenceImages?: { mimeType: string; data: string }[];
   referenceImagePaths?: string[];
   sessionId?: string;
-  providerId?: string;
 }
 
 export const runtime = 'nodejs';
@@ -30,12 +31,12 @@ export async function POST(request: NextRequest) {
     const result = await generateSingleImage({
       prompt: body.prompt,
       model: body.model,
+      providerId: body.providerId,
       aspectRatio: body.aspectRatio,
       imageSize: body.imageSize,
       referenceImages: body.referenceImages,
       referenceImagePaths: body.referenceImagePaths,
       sessionId: body.sessionId,
-      providerId: body.providerId,
     });
 
     return new Response(
@@ -43,7 +44,8 @@ export async function POST(request: NextRequest) {
         id: result.mediaGenerationId,
         text: '',
         images: result.images,
-        model: body.model || 'gemini-3-pro-image-preview',
+        model: result.model,
+        family: result.family,
         imageSize: body.imageSize || '1K',
         elapsedMs: result.elapsedMs,
       }),

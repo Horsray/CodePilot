@@ -315,6 +315,35 @@ const zh: Record<TranslationKey, string> = {
   'filePreview.linesApprox': '约 {count} 行',
   'filePreview.copyPath': '复制路径',
   'filePreview.failedToLoad': '加载文件失败',
+  'filePreview.truncated': '已显示前 {lines} 行（{bytesReadMb} MB / 共 {bytesTotalMb} MB）',
+  'filePreview.tooLarge': '文件过大，无法预览（上限 10 MB）',
+  'filePreview.binaryNotPreviewable': '二进制文件，无法预览',
+  'filePreview.notFound': '文件不存在',
+  'filePreview.sandpackLoading': '正在加载沙箱…',
+  'filePreview.sandpackError': '沙箱加载失败：{error}',
+  'filePreview.aliasNotSupported': '此文件使用了 `@/` 路径别名，预览仅编译外部 npm 依赖。',
+  'filePreview.viewMode.edit': '编辑',
+  'filePreview.viewMode.source': '源码',
+  'filePreview.viewMode.preview': '预览',
+  'filePreview.save.idle': '保存',
+  'filePreview.save.saving': '保存中',
+  'filePreview.save.saved': '已保存',
+  'filePreview.save.unsaved': '未保存修改',
+  'filePreview.copyContent': '复制内容',
+  'filePreview.exportLongScreenshot': '导出长图',
+  'filePreview.closePreview': '关闭预览',
+  'diffSummary.openPreview': '预览',
+  'diffSummary.exportLongShot': '导出长图',
+
+  // ── File tree actions (Phase 4) ─────────────────────────────
+  'fileTree.sectionTitle': '文件',
+  'fileTree.newMarkdown': '新建 Markdown 文件',
+  'fileTree.newFolder': '新建文件夹',
+  'fileTree.createButton': '创建',
+  'fileTree.newFileHint': '回车创建 · Esc 取消',
+  'fileTree.newFileErrorEmpty': '名称不能为空',
+  'fileTree.newFileErrorNoWorkspace': '当前会话未选择 workspace',
+  'fileTree.newFileErrorGeneric': '创建失败',
 
   // ── Doc preview ─────────────────────────────────────────────
   'docPreview.htmlPreview': 'HTML 预览',
@@ -559,6 +588,9 @@ const zh: Record<TranslationKey, string> = {
   'imageGen.retryButton': '重试',
   'imageGen.generatingStatus': '正在生成...',
   'imageGen.stopButton': '停止',
+  'imageGen.noActiveProvider': '未设置图片生成服务商',
+  'imageGen.activeProviderStale': '图片生成服务商不可用',
+  'imageGen.activeProviderStaleHint': '当前默认图片服务商缺少密钥或类型已变更，请前往设置页调整',
 
   // ── Batch Image Generation ─────────────────────────────────
   'batchImageGen.toggle': '批量生图',
@@ -1698,6 +1730,8 @@ const zh: Record<TranslationKey, string> = {
   'setup.provider.noProvider': '未配置服务商。选择一个预设开始。',
   'setup.provider.configured': '服务商已配置',
   'setup.provider.skip': '跳过',
+  'setup.provider.skipped': '已跳过，可在 设置 › 服务商 里随时添加。',
+  'setup.provider.openSettings': '打开服务商设置',
 
   // Setup: Project directory card
   'setup.project.title': '项目目录',

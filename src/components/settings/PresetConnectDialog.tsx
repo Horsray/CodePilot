@@ -392,6 +392,19 @@ export function PresetConnectDialog({
         : 'Please specify a base URL (use https://api.anthropic.com for the official API)');
       return;
     }
+    // Third-party media presets: empty baseUrl would silently resolve to the
+    // official endpoint server-side. Mirror the anthropic-thirdparty rule so
+    // the user gets a clear error before saving.
+    if (
+      (preset.protocol === 'openai-image' || preset.protocol === 'gemini-image')
+      && !preset.base_url
+      && !baseUrl.trim()
+    ) {
+      setError(isZh
+        ? '请填写 Base URL（留空会回落到官方服务，无法作为第三方生效）'
+        : 'Please specify a base URL (leaving this blank falls back to the official endpoint)');
+      return;
+    }
 
     // If auth style changed in edit mode, require a new key.
     // hasStoredKey is cleared when the user switches away from the stored

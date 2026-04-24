@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
+import { MarkdownEditor } from "@/components/editor/MarkdownEditor.lazy";
 import {
   FloppyDisk,
   Trash,
@@ -40,7 +40,6 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isDirty = content !== skill.content;
 
@@ -62,31 +61,14 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
     }
   }, [skill, content, onSave]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Tab indentation
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const textarea = e.currentTarget;
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const newContent =
-          content.substring(0, start) + "  " + content.substring(end);
-        setContent(newContent);
-        // Restore cursor position after React re-render
-        requestAnimationFrame(() => {
-          textarea.selectionStart = start + 2;
-          textarea.selectionEnd = start + 2;
-        });
-      }
-      // Ctrl/Cmd + S to save
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        if (isDirty) handleSave();
-      }
-    },
-    [content, isDirty, handleSave]
-  );
+  // Mod-s is now handled inside MarkdownEditor's keymap extension; this
+  // wrapper forwards it to handleSave via the onSave prop. Tab indentation
+  // is CodeMirror's indentWithTab command — behaves identically to the
+  // old 2-space manual insert the textarea did, but also handles multi-
+  // line selections and shift-tab outdent for free.
+  const handleEditorSave = useCallback(() => {
+    if (isDirty) void handleSave();
+  }, [isDirty, handleSave]);
 
   const handleDelete = () => {
     if (confirmDelete) {
@@ -212,12 +194,11 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {viewMode === "edit" && (
-          <Textarea
-            ref={textareaRef}
+          <MarkdownEditor
             value={content}
-            onChange={(e) => setContent(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="h-full w-full resize-none rounded-none border-0 font-mono text-sm focus-visible:ring-0 focus-visible:ring-offset-0 min-h-[400px]"
+            onChange={setContent}
+            onSave={handleEditorSave}
+            filename={skill.filePath}
             placeholder={t('skills.placeholder')}
           />
         )}
@@ -227,11 +208,11 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
         {viewMode === "split" && (
           <div className="flex h-full divide-x divide-border">
             <div className="flex-1 min-w-0">
-              <Textarea
+              <MarkdownEditor
                 value={content}
-                onChange={(e) => setContent(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="h-full w-full resize-none rounded-none border-0 font-mono text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+                onChange={setContent}
+                onSave={handleEditorSave}
+                filename={skill.filePath}
                 placeholder={t('skills.placeholder')}
               />
             </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { SetupCard } from './SetupCard';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -9,10 +10,20 @@ import type { SetupCardStatus, ApiProvider } from '@/types';
 interface ProviderCardProps {
   status: SetupCardStatus;
   onStatusChange: (status: SetupCardStatus) => void;
+  /**
+   * Invoked before navigating away to /settings#providers. SetupCenter passes
+   * its `persistAndClose` so clicking "Add Provider" / "Open provider
+   * settings" closes the modal + marks setup_completed=true atomically,
+   * avoiding the historical ping-pong where /settings re-opened SetupCenter
+   * on arrival. Must be awaited — the PUT round-trip has to complete before
+   * the page unloads or the setup_completed flag gets lost to fetch abort.
+   */
+  onBeforeNavigate?: () => Promise<void> | void;
 }
 
-export function ProviderCard({ status, onStatusChange }: ProviderCardProps) {
+export function ProviderCard({ status, onStatusChange, onBeforeNavigate }: ProviderCardProps) {
   const { t } = useTranslation();
+  const router = useRouter();
   const [providers, setProviders] = useState<ApiProvider[]>([]);
   const [envDetected, setEnvDetected] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -99,10 +110,19 @@ export function ProviderCard({ status, onStatusChange }: ProviderCardProps) {
     } catch { /* ignore */ }
   }, [onStatusChange]);
 
-  const handleOpenProviders = useCallback(() => {
-    // Navigate to settings providers section (SettingsLayout uses hash routing)
-    window.location.href = '/settings#providers';
-  }, []);
+  const handleOpenProviders = useCallback(async () => {
+    // Await persistAndClose so the /api/setup PUT has landed before we
+    // navigate — fire-and-forget used to race against the page unload when
+    // ProviderCard was in `not-configured` (the path where backend
+    // normalization CAN'T heal the state, since 3/3 isn't reached yet).
+    await onBeforeNavigate?.();
+    // router.push keeps the navigation inside the SPA so in-flight requests
+    // triggered by handlers that fire after onBeforeNavigate aren't aborted
+    // by a hard page unload. SettingsLayout's hashchange listener still
+    // picks up #providers for section routing (AppShell's hash bridge early-
+    // returns on /settings to avoid swallowing it).
+    router.push('/settings#providers');
+  }, [onBeforeNavigate, router]);
 
   const description = status === 'completed'
     ? t('setup.provider.configured')
@@ -125,6 +145,18 @@ export function ProviderCard({ status, onStatusChange }: ProviderCardProps) {
               ? 'Using Claude Code environment'
               : ''}
         </p>
+      ) : status === 'skipped' ? (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">{t('setup.provider.skipped')}</p>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-xs h-auto p-0 text-muted-foreground hover:text-foreground"
+            onClick={handleOpenProviders}
+          >
+            {t('setup.provider.openSettings')} →
+          </Button>
+        </div>
       ) : (
         <div className="space-y-2">
           {envDetected ? (

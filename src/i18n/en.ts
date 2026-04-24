@@ -318,6 +318,35 @@ const en = {
   'filePreview.linesApprox': '~{count} lines',
   'filePreview.copyPath': 'Copy path',
   'filePreview.failedToLoad': 'Failed to load file',
+  'filePreview.truncated': 'Showing first {lines} lines ({bytesReadMb} MB of {bytesTotalMb} MB)',
+  'filePreview.tooLarge': 'File too large to preview (>10 MB)',
+  'filePreview.binaryNotPreviewable': 'Binary file, cannot preview',
+  'filePreview.notFound': 'File not found',
+  'filePreview.sandpackLoading': 'Loading sandbox…',
+  'filePreview.sandpackError': 'Sandbox failed to load: {error}',
+  'filePreview.aliasNotSupported': 'This file uses `@/` path aliases; preview compiles external npm deps only.',
+  'filePreview.viewMode.edit': 'Edit',
+  'filePreview.viewMode.source': 'Source',
+  'filePreview.viewMode.preview': 'Preview',
+  'filePreview.save.idle': 'Save',
+  'filePreview.save.saving': 'Saving',
+  'filePreview.save.saved': 'Saved',
+  'filePreview.save.unsaved': 'Unsaved changes',
+  'filePreview.copyContent': 'Copy content',
+  'filePreview.exportLongScreenshot': 'Export long screenshot',
+  'filePreview.closePreview': 'Close preview',
+  'diffSummary.openPreview': 'Open preview',
+  'diffSummary.exportLongShot': 'Export long shot',
+
+  // ── File tree actions (Phase 4) ─────────────────────────────
+  'fileTree.sectionTitle': 'Files',
+  'fileTree.newMarkdown': 'New Markdown file',
+  'fileTree.newFolder': 'New folder',
+  'fileTree.createButton': 'Create',
+  'fileTree.newFileHint': 'Enter ⏎ to create · Esc to cancel',
+  'fileTree.newFileErrorEmpty': 'Name cannot be empty',
+  'fileTree.newFileErrorNoWorkspace': 'No workspace selected for this session',
+  'fileTree.newFileErrorGeneric': 'Failed to create',
 
   // ── Doc preview ─────────────────────────────────────────────
   'docPreview.htmlPreview': 'HTML Preview',
@@ -562,6 +591,9 @@ const en = {
   'imageGen.retryButton': 'Retry',
   'imageGen.generatingStatus': 'Generating...',
   'imageGen.stopButton': 'Stop',
+  'imageGen.noActiveProvider': 'No image provider set',
+  'imageGen.activeProviderStale': 'Image provider unavailable',
+  'imageGen.activeProviderStaleHint': 'The active image provider is missing its key or was changed. Open Settings to reconfigure.',
 
   // ── Batch Image Generation ─────────────────────────────────
   'batchImageGen.toggle': 'Batch Generate',
@@ -1701,6 +1733,8 @@ const en = {
   'setup.provider.noProvider': 'No provider configured. Select a preset to get started.',
   'setup.provider.configured': 'Provider configured',
   'setup.provider.skip': 'Skip',
+  'setup.provider.skipped': 'Skipped. Add a provider anytime in Settings › Providers.',
+  'setup.provider.openSettings': 'Open provider settings',
 
   // Setup: Project directory card
   'setup.project.title': 'Project Directory',

@@ -28,6 +28,13 @@ interface FileTreeContextType {
   selectedPath?: string;
   onSelect?: (path: string) => void;
   onAdd?: (path: string) => void;
+  /**
+   * Separate selected-folder channel from selectedPath so folder and file
+   * selection can coexist without one stomping the other. Folder
+   * selection is what drives the "create in this folder" default target.
+   */
+  selectedFolderPath?: string;
+  onSelectFolder?: (folderPath: string) => void;
 }
 
 // Module-scope immutable empty Set. Inlining `new Set()` as a destructuring
@@ -51,6 +58,8 @@ export type FileTreeProps = HTMLAttributes<HTMLDivElement> & {
   selectedPath?: string;
   onSelect?: (path: string) => void;
   onAdd?: (path: string) => void;
+  selectedFolderPath?: string;
+  onSelectFolder?: (folderPath: string) => void;
   onExpandedChange?: (expanded: Set<string>) => void;
 };
 
@@ -60,6 +69,8 @@ export const FileTree = ({
   selectedPath,
   onSelect,
   onAdd,
+  selectedFolderPath,
+  onSelectFolder,
   onExpandedChange,
   className,
   children,
@@ -83,8 +94,8 @@ export const FileTree = ({
   );
 
   const contextValue = useMemo(
-    () => ({ expandedPaths, onAdd, onSelect, selectedPath, togglePath }),
-    [expandedPaths, onAdd, onSelect, selectedPath, togglePath]
+    () => ({ expandedPaths, onAdd, onSelect, selectedPath, togglePath, selectedFolderPath, onSelectFolder }),
+    [expandedPaths, onAdd, onSelect, selectedPath, togglePath, selectedFolderPath, onSelectFolder]
   );
 
   return (
@@ -127,13 +138,19 @@ export const FileTreeFolder = ({
   children,
   ...props
 }: FileTreeFolderProps) => {
-  const { expandedPaths, togglePath } =
+  const { expandedPaths, togglePath, selectedFolderPath, onSelectFolder } =
     useContext(FileTreeContext);
   const isExpanded = expandedPaths.has(path);
+  const isSelected = selectedFolderPath === path;
 
   const handleToggle = useCallback(() => {
     togglePath(path);
-  }, [togglePath, path]);
+    // Clicking a folder row both toggles expand/collapse and marks it
+    // selected — matches VS Code's Explorer behavior. Selection drives
+    // the "create inside this folder" default target in the panel's
+    // new-item flow.
+    onSelectFolder?.(path);
+  }, [togglePath, onSelectFolder, path]);
 
   const folderContextValue = useMemo(
     () => ({ isExpanded, name, path }),
@@ -150,7 +167,10 @@ export const FileTreeFolder = ({
         >
           <CollapsibleTrigger asChild>
             <div
-              className="flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left transition-colors hover:bg-muted/50"
+              className={cn(
+                "flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left transition-colors hover:bg-muted/50",
+                isSelected && "bg-muted",
+              )}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => {

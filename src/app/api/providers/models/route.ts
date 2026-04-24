@@ -5,11 +5,11 @@ import { getDefaultModelsForProvider, getEffectiveProviderProtocol, findPresetFo
 import type { Protocol } from '@/lib/provider-catalog';
 import type { ErrorResponse, ProviderModelGroup } from '@/types';
 import { getOAuthStatus } from '@/lib/openai-oauth-manager';
-import { readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 
 // OpenAI models available through ChatGPT Plus/Pro OAuth (Codex API)
 // Reasoning effort defaults to 'medium' server-side (not user-configurable)
 const OPENAI_OAUTH_MODELS = [
+  { value: 'gpt-5.5', label: 'GPT-5.5' },
   { value: 'gpt-5.4', label: 'GPT-5.4' },
   { value: 'gpt-5.4-mini', label: 'GPT-5.4-Mini' },
   { value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' },
@@ -61,82 +61,8 @@ interface ModelEntry {
   value: string;
   label: string;
   upstreamModelId?: string;
-  contextWindow?: number;
   capabilities?: Record<string, unknown>;
   variants?: Record<string, unknown>;
-}
-
-function normalizeContextWindow(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? value
-    : undefined;
-}
-
-function getModelContextWindow(entry: ModelEntry): number | undefined {
-  return normalizeContextWindow(entry.contextWindow)
-    ?? normalizeContextWindow(entry.capabilities?.contextWindow)
-    ?? getContextWindow(entry.value, { upstream: entry.upstreamModelId })
-    ?? undefined;
-}
-
-function isCCSwitchProvider(provider: ReturnType<typeof getAllProviders>[number]): boolean {
-  if (provider.provider_type === 'cc-switch') return true;
-  const normalizedName = (provider.name || '').trim().toLowerCase();
-  return normalizedName === 'cc switch' || normalizedName === 'cc-switch';
-}
-
-function hydrateCCSwitchProviderForModels(provider: ReturnType<typeof getAllProviders>[number]) {
-  if (!isCCSwitchProvider(provider)) return provider;
-
-  const resolved = readCCSwitchClaudeSettings();
-  if (!resolved) return provider;
-
-  const parseObj = (json: string | undefined | null): Record<string, string> => {
-    if (!json) return {};
-    try {
-      const parsed = JSON.parse(json);
-      if (typeof parsed === 'object' && parsed !== null) {
-        return parsed as Record<string, string>;
-      }
-    } catch {
-      // Ignore invalid JSON and keep existing values.
-    }
-    return {};
-  };
-
-  const roleModels = parseObj(provider.role_models_json);
-  const liveRoles: Record<string, string> = {};
-  if (typeof resolved.roleModels.default === 'string' && resolved.roleModels.default.trim()) {
-    liveRoles.default = resolved.roleModels.default.trim();
-  } else if (typeof resolved.currentModel === 'string' && resolved.currentModel.trim()) {
-    liveRoles.default = resolved.currentModel.trim();
-  }
-  if (typeof resolved.roleModels.sonnet === 'string' && resolved.roleModels.sonnet.trim()) {
-    liveRoles.sonnet = resolved.roleModels.sonnet.trim();
-  }
-  if (typeof resolved.roleModels.opus === 'string' && resolved.roleModels.opus.trim()) {
-    liveRoles.opus = resolved.roleModels.opus.trim();
-  }
-  if (typeof resolved.roleModels.haiku === 'string' && resolved.roleModels.haiku.trim()) {
-    liveRoles.haiku = resolved.roleModels.haiku.trim();
-  }
-
-  const envOverrides = parseObj(provider.env_overrides_json || provider.extra_env);
-  const liveModels = Array.isArray(resolved.models)
-    ? resolved.models.map(v => v.trim()).filter(Boolean)
-    : [];
-  if (liveModels.length > 0) {
-    envOverrides.model_names = liveModels.join(',');
-  }
-
-  // 中文注释：功能名称「CC Switch 模型列表实时同步」，用法是在读取 providers/models 时优先使用 ~/.claude/settings.json 的当前模型配置。
-  return {
-    ...provider,
-    base_url: resolved.baseUrl,
-    api_key: resolved.apiKey,
-    role_models_json: JSON.stringify({ ...roleModels, ...liveRoles }),
-    env_overrides_json: JSON.stringify(envOverrides),
-  };
 }
 
 /**
@@ -154,15 +80,12 @@ function deduplicateModels(models: ModelEntry[]): ModelEntry[] {
   return result;
 }
 
-/** Media-only provider protocols — skip in chat model selector unless explicitly requested */
-const MEDIA_PROTOCOLS = new Set<string>(['gemini-image']);
-const MEDIA_PROVIDER_TYPES = new Set(['gemini-image', 'generic-image']);
+/** Media-only provider protocols — skip in chat model selector */
+const MEDIA_PROTOCOLS = new Set<string>(['gemini-image', 'openai-image']);
+const MEDIA_PROVIDER_TYPES = new Set(['gemini-image', 'openai-image']);
 
-export async function GET(req: Request) {
+export async function GET() {
   try {
-    const { searchParams } = new URL(req.url);
-    const includeMedia = searchParams.get('includeMedia') === 'true';
-
     const providers = getAllProviders();
     const groups: ProviderModelGroup[] = [];
 
@@ -171,7 +94,7 @@ export async function GET(req: Request) {
     const runtimeSetting = getSetting('agent_runtime') || 'auto';
     const cliEnabled = runtimeSetting !== 'native';
 
-    if (cliEnabled && !includeMedia) {
+    if (cliEnabled) {
       // Mark as sdkProxyOnly if no direct API credentials exist — in that case
       // the env provider only works through the Claude Code SDK subprocess.
       const envHasDirectCredentials = !!(
@@ -187,7 +110,7 @@ export async function GET(req: Request) {
         // Use upstreamModelId for context-window lookup so the bare `opus`
         // alias doesn't get clamped to the 200K Bedrock/Vertex value.
         models: DEFAULT_MODELS.map(m => {
-          const cw = getModelContextWindow(m);
+          const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
           return cw != null ? { ...m, contextWindow: cw } : m;
         }),
       });
@@ -205,7 +128,7 @@ export async function GET(req: Request) {
             // the concrete upstream so context window and downstream
             // sanitizer checks agree with the env provider's resolver.
             const upstream = ENV_ALIAS_TO_UPSTREAM[m.value];
-            const cw = getModelContextWindow({ value: m.value, label: m.displayName, upstreamModelId: upstream });
+            const cw = getContextWindow(m.value, { upstream });
             return {
               value: m.value,
               label: m.displayName,
@@ -224,8 +147,7 @@ export async function GET(req: Request) {
     }
 
     // Build a group for each configured provider
-    for (const providerRaw of providers) {
-      const provider = hydrateCCSwitchProviderForModels(providerRaw);
+    for (const provider of providers) {
       // Determine protocol — use new field if present, otherwise infer from legacy
       const protocol: Protocol = getEffectiveProviderProtocol(
         provider.provider_type,
@@ -233,17 +155,14 @@ export async function GET(req: Request) {
         provider.base_url,
       );
 
-      // Skip media-only providers in chat model selector unless explicitly requested
-      if (!includeMedia && (MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type))) continue;
-
-      // When includeMedia is true, only include media providers
-      if (includeMedia && !MEDIA_PROTOCOLS.has(protocol) && !MEDIA_PROVIDER_TYPES.has(provider.provider_type)) continue;
+      // Skip media-only providers in chat model selector
+      if (MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type)) continue;
 
       // Get models: DB provider_models first, then catalog defaults, then env fallback
       let rawModels: ModelEntry[];
 
       // 1) Check DB provider_models table
-      let dbModels: ModelEntry[] = [];
+      let dbModels: { value: string; label: string; upstreamModelId?: string; capabilities?: Record<string, unknown> }[] = [];
       try {
         const provModels = getModelsForProvider(provider.id);
         if (provModels.length > 0) {
@@ -264,11 +183,7 @@ export async function GET(req: Request) {
       } catch { /* table may not exist in old DBs */ }
 
       // 2) Catalog defaults
-      // Prefer preset-matched defaults (can be intentionally empty, e.g. cc-switch/custom providers).
-      const matchedPreset = findPresetForLegacy(provider.base_url, provider.provider_type, protocol);
-      const catalogModels = matchedPreset
-        ? matchedPreset.defaultModels
-        : getDefaultModelsForProvider(protocol, provider.base_url, provider.provider_type);
+      const catalogModels = getDefaultModelsForProvider(protocol, provider.base_url, provider.provider_type);
       const catalogRaw = catalogModels.map(m => ({
         value: m.modelId,
         label: m.displayName,
@@ -277,6 +192,8 @@ export async function GET(req: Request) {
       }));
 
       // Start with DB models + catalog defaults.
+      // If both are empty (e.g. Volcengine where user must specify model names),
+      // leave rawModels empty — do NOT fall back to DEFAULT_MODELS (Sonnet/Opus/Haiku).
       if (dbModels.length > 0) {
         const dbIds = new Set(dbModels.map(m => m.value));
         rawModels = [...dbModels, ...catalogRaw.filter(m => !dbIds.has(m.value))];
@@ -285,31 +202,28 @@ export async function GET(req: Request) {
       }
 
       // Inject models from role_models_json into the list if not already present
+      // (e.g. user configured "ark-code-latest" for a Volcengine or anthropic-thirdparty provider)
       try {
         const rm = JSON.parse(provider.role_models_json || '{}');
+        // Collect unique model IDs from all role fields (default, reasoning, small, haiku, sonnet, opus)
         const roleEntries: { id: string; role: string }[] = [];
         for (const role of ['default', 'reasoning', 'small', 'haiku', 'sonnet', 'opus'] as const) {
           if (rm[role] && !roleEntries.some(e => e.id === rm[role])) {
             roleEntries.push({ id: rm[role], role });
           }
         }
+        // Add each role model to the list (default role first, so it appears at the top)
         for (const entry of roleEntries) {
           if (!rawModels.some(m => m.value === entry.id || m.upstreamModelId === entry.id)) {
-            let displayId = entry.id;
-            
-            if (protocol === 'multi_head' && entry.id.includes(':')) {
-              // Extract the modelId part from providerId:modelId, completely discarding providerId and parentheses
-              displayId = entry.id.split(':').slice(1).join(':');
-              rawModels.unshift({ value: entry.id, label: displayId });
-            } else {
-              const label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
-              rawModels.unshift({ value: entry.id, label });
-            }
+            const label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
+            rawModels.unshift({ value: entry.id, label });
           }
         }
       } catch { /* ignore */ }
 
       // Legacy: inject ANTHROPIC_MODEL from env overrides if not already present
+      // Also check upstreamModelId to avoid duplicates (e.g. catalog has modelId='sonnet'
+      // with upstreamModelId='mimo-v2.5-pro', and env has ANTHROPIC_MODEL='mimo-v2.5-pro')
       try {
         const envOverrides = provider.env_overrides_json || provider.extra_env || '{}';
         const envObj = JSON.parse(envOverrides);
@@ -323,7 +237,7 @@ export async function GET(req: Request) {
         // first-party opus → 1M (Opus 4.7) vs Bedrock/Vertex opus → 200K
         // (Opus 4.6). The model API is per-provider, so the correct
         // upstream is whatever catalog declared for this provider group.
-        const cw = getModelContextWindow(m);
+        const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
         // Lift effort/thinking capability flags from nested `capabilities` to top-level
         // so MessageInput / EffortSelectorDropdown can read them without unwrapping.
         const caps = (m.capabilities || {}) as Record<string, unknown>;
@@ -347,30 +261,28 @@ export async function GET(req: Request) {
         provider_id: provider.id,
         provider_name: provider.name,
         provider_type: provider.provider_type,
-        protocol: protocol,
         ...(sdkProxyOnly ? { sdkProxyOnly: true } : {}),
         models,
       });
     }
 
     // Add OpenAI OAuth virtual provider when authenticated
-    if (!includeMedia) {
-      try {
-        const oauthStatus = getOAuthStatus();
-        if (oauthStatus.authenticated) {
-          groups.push({
-            provider_id: 'openai-oauth',
-            provider_name: `OpenAI${oauthStatus.plan ? ` (${oauthStatus.plan})` : ''}`,
-            provider_type: 'openai-oauth',
-            models: OPENAI_OAUTH_MODELS,
-          });
-        }
-      } catch { /* OpenAI OAuth module not available */ }
-    }
+    try {
+      const oauthStatus = getOAuthStatus();
+      if (oauthStatus.authenticated) {
+        groups.push({
+          provider_id: 'openai-oauth',
+          provider_name: `OpenAI${oauthStatus.plan ? ` (${oauthStatus.plan})` : ''}`,
+          provider_type: 'openai-oauth',
+          models: OPENAI_OAUTH_MODELS,
+        });
+      }
+    } catch { /* OpenAI OAuth module not available */ }
 
     // Determine default provider — auto-heal stale references on read
     let defaultProviderId = getDefaultProviderId();
     if (defaultProviderId && !getProvider(defaultProviderId)) {
+      // Stale default (provider was deleted). Fix it now.
       const firstValid = groups.find(g => g.provider_id !== 'env');
       defaultProviderId = firstValid?.provider_id || '';
       setDefaultProviderId(defaultProviderId);

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getProvider, updateProvider, deleteProvider, getDefaultProviderId, setDefaultProviderId, getAllProviders } from '@/lib/db';
+import { getProvider, updateProvider, deleteProvider, getDefaultProviderId, setDefaultProviderId, getAllProviders, getSetting, setSetting } from '@/lib/db';
 import { getEffectiveProviderProtocol, isValidProtocol } from '@/lib/provider-catalog';
 import type { ProviderResponse, ErrorResponse, UpdateProviderRequest, ApiProvider } from '@/types';
 
@@ -104,6 +104,23 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         { status: 400 }
       );
     }
+    // Same guard for media providers — a PUT that clears base_url on an
+    // openai-image/gemini-image row would silently redirect to the official
+    // endpoint.
+    if (
+      (effectiveProtocol === 'openai-image' || effectiveProtocol === 'gemini-image')
+      && !mergedBaseUrl?.trim()
+    ) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: effectiveProtocol === 'openai-image'
+            ? 'OpenAI Image providers must specify a base URL'
+            : 'Gemini Image providers must specify a base URL',
+          code: 'MEDIA_BASE_URL_REQUIRED',
+        },
+        { status: 400 }
+      );
+    }
 
     const updated = updateProvider(id, body);
     if (!updated) {
@@ -111,6 +128,16 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         { error: 'Failed to update provider' },
         { status: 500 }
       );
+    }
+
+    // Defensive: if the active-image row's type just moved out of media
+    // (e.g. someone edits gemini-image → anthropic), clear the setting.
+    // The ProviderManager banner already surfaces this post-hoc, but
+    // clearing here keeps /api/providers/active-image GET honest and
+    // ensures pickImageProvider falls through cleanly on the next call.
+    const updatedIsMedia = updated.provider_type === 'gemini-image' || updated.provider_type === 'openai-image';
+    if (!updatedIsMedia && getSetting('active_image_provider_id') === id) {
+      setSetting('active_image_provider_id', '');
     }
 
     return NextResponse.json<ProviderResponse>({ provider: maskApiKey(updated) });
@@ -144,6 +171,14 @@ export async function DELETE(_request: NextRequest, context: RouteContext) {
       } else {
         setDefaultProviderId('');
       }
+    }
+
+    // If the deleted provider was the active image-generation provider,
+    // clear the setting so the UI's "active" badge doesn't linger on a
+    // non-existent row and pickImageProvider falls back cleanly.
+    const activeImageId = getSetting('active_image_provider_id');
+    if (activeImageId === id) {
+      setSetting('active_image_provider_id', '');
     }
 
     return NextResponse.json({ success: true });

@@ -43,6 +43,7 @@ function inferTransport(resolved: ResolvedProvider): TransportCapability {
   // Non-anthropic protocols → standard
   if (protocol === 'openrouter' || protocol === 'openai-compatible') return 'standard-messages';
   if (protocol === 'google' || protocol === 'gemini-image') return 'standard-messages';
+  if (protocol === 'openai-image') return 'standard-messages';
 
   // Anthropic protocol: official API vs third-party proxy
   if (protocol === 'anthropic') {

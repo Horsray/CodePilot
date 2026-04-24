@@ -1,31 +1,28 @@
-## CodePilot v0.51.1
+## CodePilot v0.54.0
 
-> 修复长会话在上下文压缩之后 Claude Code 引擎下的严重行为异常：工具调用被模型以纯文本形式写入聊天、反复触发自动压缩、压缩状态不更新等问题。强烈建议所有使用 Claude Code 引擎且会话偏长的用户升级。
+> 本版本补齐服务商生态：新增 DeepSeek 独立预设，OpenAI OAuth 加入 GPT-5.5，小米 MiMo 两个套餐升级到 V2.5-Pro，同时修掉切换服务商时的环境变量残留问题。
+
+### 新增功能
+
+- **DeepSeek 服务商** — 在服务商列表里新增 DeepSeek 独立预设，走官方 Anthropic 兼容端点 `api.deepseek.com/anthropic`，只需填 Key 即用。默认主模型 DeepSeek V4 Pro，Haiku 档位映射到更便宜的 DeepSeek V4 Flash，压缩/总结这类辅助调用能自动走便宜档
+- **OpenAI OAuth 支持 GPT-5.5** — ChatGPT Plus/Pro 授权登录后，模型下拉里新增 GPT-5.5（排在 GPT-5.4 之上），新会话未指定模型时默认用 GPT-5.5
 
 ### 修复问题
 
-- **压缩后模型不再调用工具，而是把工具调用写成文本** — 这是最严重的一个问题。到会话中段（通常是第一次自动压缩或手动 `/compact` 之后），模型会开始输出类似 `(used Read: {"file_path":"..."})` 这样的纯文本，工具实际上没有执行，聊天气泡里只是在"叙述"它本该做的事情。本版从压缩时的历史重写机制入手彻底修复
-- **手动 `/compact` 之后反复被自动压缩** — 之前压缩只是把摘要写入数据库，但 Claude Code SDK 会继续用它自己的完整历史做 resume，摘要实际上没有被模型看到，下一轮又会命中上下文上限再次触发压缩。现在压缩成功后会强制切换到"摘要 + 最近消息 + 当前提问"的新会话，SDK 会从干净的状态继续
-- **`/compact` 的"上下文已压缩..."系统提示被错误写入对话历史** — 这条本意是给用户看的消息被保存成了 assistant 消息，之后模型每轮都会看到它，多次压缩后甚至会被下一次压缩连同正文一起总结进新摘要。现在这条提示只在当轮通过 SSE 推给前端，不再进数据库
-- **对话很短时使用 `/compact` 的"新消息不多"提示同样被错误持久化** — 同上处理，只推前端不入库
-- **压缩成功后前端"已压缩"指示器偶尔不翻转** — 之前反应式压缩（上下文超长时后台自动触发的压缩重试）走的状态事件格式与前端期待的不一致，导致 `hasSummary` 不更新。三条压缩路径的事件格式现在收敛到同一个 helper，前端一致识别
-- **反应式压缩成功后新 SDK 会话未持久化** — 超长上下文触发的自动压缩重试如果成功，下一轮应该走新的 SDK 会话继续；之前没有把新 session id 写回数据库，下一轮又会走 fallback 全量历史，等于压缩白做。现在反应式压缩也会持久化新 session id
-- **二次手动 `/compact` 重复总结已压缩内容** — 第二次 `/compact` 之前会把已经被上次压缩覆盖过的全部历史再喂给摘要器一次，不仅浪费 token，还可能让新摘要里重复或偏移原内容。现在只会压缩"上次 boundary 之后的新消息"
+- **切换服务商时环境变量残留** — 之前如果用户在系统环境里设过 DeepSeek 文档里的 `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK` / `CLAUDE_CODE_EFFORT_LEVEL`，切到其它服务商后这两个变量仍会带到子进程里，影响其它服务商的请求行为。现在切换服务商时会连同这两个 key 一起清掉，避免跨服务商污染
 
 ### 优化改进
 
-- **压缩覆盖边界改用 SQLite rowid**，不再用秒级时间戳。之前在消息写入速度足够快时（比如自动压缩和当前用户消息同秒落库），基于时间戳的边界判断可能把一条未被摘要的用户消息当成"已覆盖"误丢；rowid 是单调递增的，彻底消除了这类歧义
-- **长会话再次压缩时覆盖边界只会前进、不会回退**。任何"降级路径"（比如拿不到消息元数据时）都会保留原有边界而非重置为 0，避免之前刚建立的边界被意外清除
-- **新增技术交接文档** `docs/handover/compact-coverage-boundary.md`，记录压缩覆盖边界的所有不变量、数据库 schema、三条压缩路径的写法，供后续维护
+- **小米 MiMo 升级到 V2.5-Pro** — 按量付费和 Token Plan 两个预设里的默认模型从 `mimo-v2-pro` 全部切到 `mimo-v2.5-pro`，界面上显示名也同步更新为 MiMo-V2.5-Pro
 
 ## 下载地址
 
 ### macOS
-- [Apple Silicon (M1/M2/M3/M4)](https://github.com/op7418/CodePilot/releases/download/v0.51.1/CodePilot-0.51.1-arm64.dmg)
-- [Intel](https://github.com/op7418/CodePilot/releases/download/v0.51.1/CodePilot-0.51.1-x64.dmg)
+- [Apple Silicon (M1/M2/M3/M4)](https://github.com/op7418/CodePilot/releases/download/v0.54.0/CodePilot-0.54.0-arm64.dmg)
+- [Intel](https://github.com/op7418/CodePilot/releases/download/v0.54.0/CodePilot-0.54.0-x64.dmg)
 
 ### Windows
-- [Windows 安装包](https://github.com/op7418/CodePilot/releases/download/v0.51.1/CodePilot.Setup.0.51.1.exe)
+- [Windows 安装包](https://github.com/op7418/CodePilot/releases/download/v0.54.0/CodePilot.Setup.0.54.0.exe)
 
 ## 安装说明
 

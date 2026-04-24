@@ -7,7 +7,7 @@ export async function GET() {
   try {
     // Check if setup was already completed
     const completedRaw = getSetting('setup_completed');
-    const completed = completedRaw === 'true';
+    let completed = completedRaw === 'true';
 
     // Claude status
     let claude: 'not-configured' | 'completed' | 'skipped' | 'needs-fix' = 'not-configured';
@@ -54,6 +54,20 @@ export async function GET() {
       } catch {
         project = 'needs-fix';
       }
+    }
+
+    // Normalize stale per-card state: if every card is already completed or
+    // skipped but the top-level setup_completed flag never got written, write
+    // it now. Fixes users whose three cards landed at 3/3 without ever
+    // triggering the frontend auto-close path (e.g. initial GET returned 3/3,
+    // so SetupCenter's `initialCompletedCount < 3` gate never fired).
+    const allCardsDone =
+      (claude === 'completed' || claude === 'skipped') &&
+      (provider === 'completed' || provider === 'skipped') &&
+      (project === 'completed' || project === 'skipped');
+    if (allCardsDone && !completed) {
+      setSetting('setup_completed', 'true');
+      completed = true;
     }
 
     return NextResponse.json({

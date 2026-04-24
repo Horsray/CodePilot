@@ -18,6 +18,8 @@ import Volcengine from "@lobehub/icons/es/Volcengine";
 import Bailian from "@lobehub/icons/es/Bailian";
 import XiaomiMiMo from "@lobehub/icons/es/XiaomiMiMo";
 import Ollama from "@lobehub/icons/es/Ollama";
+import OpenAI from "@lobehub/icons/es/OpenAI";
+import DeepSeek from "@lobehub/icons/es/DeepSeek";
 
 // ---------------------------------------------------------------------------
 // Brand icon resolver
@@ -41,7 +43,8 @@ export function getProviderIcon(name: string, baseUrl: string): ReactNode {
   if (url.includes("xiaomimimo") || lower.includes("mimo") || lower.includes("小米"))
     return <XiaomiMiMo size={18} />;
   if (url.includes("11434") || lower.includes("ollama")) return <Ollama size={18} />;
-  if (url.includes("127.0.0.1:8000") || lower.includes("olmx")) return <HardDrives size={18} />;
+  if (url.includes("api.openai.com") || lower.includes("openai") || lower.includes("gpt image")) return <OpenAI size={18} />;
+  if (url.includes("deepseek") || lower.includes("deepseek")) return <DeepSeek size={18} />;
   if (lower.includes("bedrock")) return <Bedrock size={18} />;
   if (lower.includes("vertex") || lower.includes("google")) return <Google size={18} />;
   if (lower.includes("aws")) return <Aws size={18} />;
@@ -87,7 +90,8 @@ function resolveIcon(iconKey: string): ReactNode {
     bailian: <Bailian size={18} />,
     'xiaomi-mimo': <XiaomiMiMo size={18} />,
     ollama: <Ollama size={18} />,
-    olmx: <HardDrives size={18} />,
+    openai: <OpenAI size={18} />,
+    deepseek: <DeepSeek size={18} />,
     server: <HardDrives size={18} className="text-muted-foreground" />,
   };
   return ICON_MAP[iconKey] || <HardDrives size={18} className="text-muted-foreground" />;
@@ -95,29 +99,18 @@ function resolveIcon(iconKey: string): ReactNode {
 
 /** Convert a VendorPreset to the frontend QuickPreset format */
 function toQuickPreset(vp: VendorPreset): QuickPreset {
-  const providerType = vp.key === 'custom-media'
-    ? 'generic-image'
-    : vp.key === 'cc-switch'
-      ? 'cc-switch'
-      : vp.protocol === 'openrouter'
-        ? 'openrouter'
-        : vp.protocol === 'bedrock'
-          ? 'bedrock'
-          : vp.protocol === 'vertex'
-          ? 'vertex'
-          : vp.protocol === 'openai-compatible'
-            ? 'openai-compatible'
-            : vp.protocol === 'gemini-image'
-              ? 'gemini-image'
-              : 'anthropic';
-
   return {
     key: vp.key,
     name: vp.name,
     description: vp.description,
     descriptionZh: vp.descriptionZh,
     icon: resolveIcon(vp.iconKey),
-    provider_type: providerType,
+    provider_type: vp.protocol === 'openrouter' ? 'openrouter'
+      : vp.protocol === 'bedrock' ? 'bedrock'
+      : vp.protocol === 'vertex' ? 'vertex'
+      : vp.protocol === 'gemini-image' ? 'gemini-image'
+      : vp.protocol === 'openai-image' ? 'openai-image'
+      : 'anthropic',
     protocol: vp.protocol,
     authStyle: vp.authStyle,
     base_url: vp.baseUrl,
@@ -142,6 +135,15 @@ export const GEMINI_IMAGE_MODELS = [
 
 export const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 
+export const OPENAI_IMAGE_MODELS = [
+  { value: 'gpt-image-2', label: 'GPT Image 2' },
+  { value: 'gpt-image-1.5', label: 'GPT Image 1.5' },
+  { value: 'gpt-image-1', label: 'GPT Image 1' },
+  { value: 'gpt-image-1-mini', label: 'GPT Image 1 Mini' },
+];
+
+export const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2';
+
 export function getGeminiImageModel(provider: ApiProvider): string {
   try {
     const env = JSON.parse(provider.extra_env || '{}');
@@ -151,14 +153,20 @@ export function getGeminiImageModel(provider: ApiProvider): string {
   }
 }
 
+export function getOpenAIImageModel(provider: ApiProvider): string {
+  try {
+    const env = JSON.parse(provider.extra_env || '{}');
+    return env.OPENAI_IMAGE_MODEL || DEFAULT_OPENAI_IMAGE_MODEL;
+  } catch {
+    return DEFAULT_OPENAI_IMAGE_MODEL;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Preset matcher — find which quick preset a provider was created from
 // ---------------------------------------------------------------------------
 
 export function findMatchingPreset(provider: ApiProvider): QuickPreset | undefined {
-  if (provider.protocol === "multi_head") {
-    return QUICK_PRESETS.find(p => p.key === "multi-head-router");
-  }
   // Exact base_url match (most specific)
   if (provider.base_url) {
     const match = QUICK_PRESETS.find(p => p.base_url && p.base_url === provider.base_url);
@@ -168,11 +176,22 @@ export function findMatchingPreset(provider: ApiProvider): QuickPreset | undefin
   if (provider.provider_type === "bedrock") return QUICK_PRESETS.find(p => p.key === "bedrock");
   if (provider.provider_type === "vertex") return QUICK_PRESETS.find(p => p.key === "vertex");
   if (provider.provider_type === "openrouter") return QUICK_PRESETS.find(p => p.key === "openrouter");
-  if (provider.provider_type === "gemini-image") return QUICK_PRESETS.find(p => p.key === "gemini-image");
-  if (provider.provider_type === "generic-image") return QUICK_PRESETS.find(p => p.key === "custom-media");
-  if (provider.provider_type === "cc-switch") return QUICK_PRESETS.find(p => p.key === "cc-switch");
-  if (provider.provider_type === "openai-compatible" && (provider.base_url?.includes("127.0.0.1:8000") || provider.base_url?.includes("olmx"))) {
-    return QUICK_PRESETS.find(p => p.key === "olmx");
+  // Media providers: official vs third-party share provider_type; tie-break
+  // by whether the stored base_url is the official one. Anything else goes to
+  // the third-party preset so the edit dialog exposes the base_url field.
+  if (provider.provider_type === "gemini-image") {
+    const official = QUICK_PRESETS.find(p => p.key === "gemini-image");
+    if (official && provider.base_url && provider.base_url !== official.base_url) {
+      return QUICK_PRESETS.find(p => p.key === "gemini-image-thirdparty");
+    }
+    return official;
+  }
+  if (provider.provider_type === "openai-image") {
+    const official = QUICK_PRESETS.find(p => p.key === "openai-image");
+    if (official && provider.base_url && provider.base_url !== official.base_url) {
+      return QUICK_PRESETS.find(p => p.key === "openai-image-thirdparty");
+    }
+    return official;
   }
   if (provider.provider_type === "anthropic" && provider.base_url === "https://api.anthropic.com") {
     return QUICK_PRESETS.find(p => p.key === "anthropic-official");

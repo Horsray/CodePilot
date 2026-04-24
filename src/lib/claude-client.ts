@@ -2565,6 +2565,17 @@ export async function testProviderConnection(config: {
     };
   }
 
+  // Media-only protocols: the rest of this function builds an Anthropic
+  // /v1/messages probe with anthropic-version + x-api-key. That endpoint
+  // doesn't exist for GPT Image or Nano Banana, so the generic probe would
+  // always report failure even for correctly-configured providers. Route
+  // them to a minimal image-API probe instead (both endpoints return a
+  // 401/403 for bad auth and a 400/422 for a valid-but-rejected request,
+  // which is enough to verify that the key reaches the right service).
+  if (config.protocol === 'openai-image' || config.protocol === 'gemini-image') {
+    return testMediaProviderConnection(config);
+  }
+
   // Reject third-party / custom Anthropic providers without a base URL.
   // Otherwise the fallback to https://api.anthropic.com would test the
   // official endpoint, giving a misleading green signal before saving a
@@ -2662,6 +2673,91 @@ export async function testProviderConnection(config: {
       providerMeta: config.providerMeta,
     });
 
+    return {
+      success: false,
+      error: {
+        code: classified.category,
+        message: classified.userMessage,
+        suggestion: classified.actionHint,
+        recoveryActions: classified.recoveryActions,
+      },
+    };
+  }
+}
+
+/**
+ * Connection probe for media providers (Gemini image, OpenAI image). Each
+ * provider has a different authentication scheme and endpoint shape:
+ *
+ *   OpenAI Image:   Bearer auth, GET /v1/models is the cheapest reachable
+ *                   probe (no body; returns 401 for bad keys, 200 for good).
+ *   Gemini Image:   Google uses an API key query parameter, not a header.
+ *                   GET /v1beta/models?key=... mirrors the same 401/200 shape.
+ *
+ * Using these instead of the Anthropic /v1/messages probe means a valid
+ * media configuration no longer reports a false failure because it never
+ * had /v1/messages to hit.
+ */
+async function testMediaProviderConnection(config: {
+  apiKey: string;
+  baseUrl: string;
+  protocol: string;
+  providerName?: string;
+  providerMeta?: { apiKeyUrl?: string; docsUrl?: string; pricingUrl?: string };
+}): Promise<ConnectionTestResult> {
+  const DEFAULT_OPENAI_BASE = 'https://api.openai.com/v1';
+  const DEFAULT_GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+  const trimmed = (config.baseUrl || '').replace(/\/+$/, '');
+
+  let apiUrl: string;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+
+  if (config.protocol === 'openai-image') {
+    const base = trimmed || DEFAULT_OPENAI_BASE;
+    apiUrl = `${base}/models`;
+    headers['Authorization'] = `Bearer ${config.apiKey}`;
+  } else {
+    // gemini-image: Google AI Studio uses ?key=... query-string auth.
+    const base = trimmed || DEFAULT_GEMINI_BASE;
+    apiUrl = `${base}/models?key=${encodeURIComponent(config.apiKey)}`;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15_000);
+
+  try {
+    const response = await fetch(apiUrl, { method: 'GET', headers, signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (response.ok) return { success: true };
+
+    let errorBody = '';
+    try { errorBody = await response.text(); } catch { /* ignore */ }
+
+    const classified = classifyError({
+      error: new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`),
+      providerName: config.providerName,
+      baseUrl: config.baseUrl,
+      providerMeta: config.providerMeta,
+    });
+
+    return {
+      success: false,
+      error: {
+        code: classified.category,
+        message: classified.userMessage,
+        suggestion: classified.actionHint,
+        recoveryActions: classified.recoveryActions,
+      },
+    };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    const classified = classifyError({
+      error: err,
+      providerName: config.providerName,
+      baseUrl: config.baseUrl,
+      providerMeta: config.providerMeta,
+    });
     return {
       success: false,
       error: {

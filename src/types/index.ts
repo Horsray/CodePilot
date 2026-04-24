@@ -72,6 +72,12 @@ export interface FilePreview {
   line_count: number;
   /** When true, line_count is exact; when false it is a best-effort estimate. */
   line_count_exact: boolean;
+  /** When true, content is only the first N lines/bytes of a larger file. */
+  truncated: boolean;
+  /** Actual bytes read into content (UTF-8 byte length). */
+  bytes_read: number;
+  /** Total file size in bytes (from fs.stat). */
+  bytes_total: number;
 }
 
 // ==========================================
@@ -158,10 +164,6 @@ export interface Message {
   session_id: string;
   role: 'user' | 'assistant';
   content: string; // JSON string of MessageContentBlock[] for structured content
-  referenced_contexts?: string; // JSON string of string[]
-  // 中文注释：功能名称「工具文件追踪」，用法是持久化AI实际读取/写入的文件路径和访问的网页URL，
-  // JSON字符串数组格式，解决会话切换后上下文统计丢失文件/网页信息的问题
-  tool_files?: string; // JSON string of string[]
   created_at: string;
   token_usage: string | null; // JSON string of TokenUsage
   is_heartbeat_ack?: number; // 1 = heartbeat ack (prunable from transcript), 0 = normal
@@ -172,6 +174,8 @@ export interface Message {
    * because some code paths synthesize Message-like objects without DB origin.
    */
   _rowid?: number;
+  referenced_contexts?: string; // JSON string of string[]
+  tool_files?: string; // JSON string of string[]
 }
 
 // Media content block (MCP-compatible: image/audio/video in tool results)
@@ -212,7 +216,6 @@ export type TimelineEvent =
   | { type: 'text'; content: string; timestamp: number }
   | { type: 'tool'; toolCallId: string; timestamp: number };
 
-// 中文注释：功能名称「子Agent状态追踪」，用法是在主Agent时间线中嵌套显示子Agent的执行状态、进度和最终报告。
 export interface SubAgentState {
   id: string;
   name: string;
@@ -243,17 +246,11 @@ export interface TimelineStep {
   error: string | null;
   retryCount: number;
   model?: string;
-  // 中文注释：当前步骤命中的角色名称，用法是在时间线中显示 Lead / Researcher / Executor 等实际执行者。
   agent?: string;
-  // 中文注释：当前步骤命中的 Provider ID，用法是在运行时面板中判断模型来自哪个渠道。
   providerId?: string;
-  // 中文注释：当前步骤命中的 Provider 名称，用法是在时间线中给用户展示更易读的渠道名称。
   providerName?: string;
-  // 中文注释：请求的目标角色，用法是在时间线中区分“想调谁”和“实际命中谁”。
   requestedAgent?: string;
-  // 中文注释：当前步骤使用的多模型配置名称，用法是在时间线中显示来自哪套 profile。
   orchestrationProfileName?: string;
-  // 中文注释：子Agent状态列表，用法是在时间线步骤中嵌套显示子Agent的执行过程和结果。
   subAgents?: SubAgentState[];
 }
 
@@ -293,7 +290,7 @@ export interface ApiProvider {
   name: string;
   provider_type: string; // legacy: 'anthropic' | 'openrouter' | 'bedrock' | 'vertex' | 'custom'
   /** Wire protocol — new field, takes precedence over provider_type for dispatch */
-  protocol: string; // 'anthropic' | 'openai-compatible' | 'openrouter' | 'bedrock' | 'vertex' | 'google' | 'gemini-image' | 'multi_head'
+  protocol: string; // 'anthropic' | 'openai-compatible' | 'openrouter' | 'bedrock' | 'vertex' | 'google' | 'gemini-image' | 'openai-image'
   base_url: string;
   api_key: string;
   is_active: number; // SQLite boolean: 0 or 1
@@ -402,12 +399,10 @@ export interface ProviderResponse {
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
-  /** Last request input size, used for active context percentage when input_tokens is cumulative across agent steps. */
-  context_input_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  context_input_tokens?: number;
   cost_usd?: number;
-  duration_sec?: number;
 }
 
 // ==========================================
@@ -423,7 +418,6 @@ export interface CreateSessionRequest {
   provider_id?: string;
   permission_profile?: string;
   team_mode?: 'off' | 'on' | 'auto';
-  // 中文注释：会话编排层级，用法是在新建会话时持久化 single/multi 选择。
   orchestration_tier?: 'single' | 'multi';
   orchestration_profile_id?: string;
 }
@@ -434,7 +428,6 @@ export interface SendMessageRequest {
   model?: string;
   mode?: string;
   provider_id?: string;
-  orchestration_profile_id?: string;
   mentions?: MentionRef[];
 }
 
@@ -622,6 +615,7 @@ export type SSEEventType =
   | 'tool_result'        // tool execution result
   | 'tool_output'        // streaming tool output (stderr from SDK process)
   | 'tool_timeout'       // tool execution timed out
+  | 'tool_files'         // files referenced by tool calls
   | 'status'             // status update (compacting, etc.)
   | 'result'             // final result with usage stats
   | 'error'              // error occurred
@@ -630,21 +624,20 @@ export type SSEEventType =
   | 'task_update'        // SDK TodoWrite task sync
   | 'keep_alive'         // SDK keep-alive heartbeat (resets idle timer)
   | 'rewind_point'       // SDK user message with rewind checkpoint
-  | 'referenced_contexts' // List of files referenced in system prompt
-  | 'tool_files'         // List of files read/written by tool calls
   | 'rate_limit'         // SDK 0.2.111 subscription rate-limit telemetry
   | 'context_usage'      // SDK 0.2.111 post-turn context usage snapshot
-  | 'terminal_mirror'    // AI Bash tool command/output mirror to terminal panel
-  | 'subagent_start'     // 子Agent开始执行
-  | 'subagent_progress'  // 子Agent执行中进度更新
-  | 'subagent_complete'  // 子Agent执行完成
-  | 'aborted'            // 流被异常中断（区别于正常完成的 done）
+  | 'referenced_contexts' // files referenced in system prompt
+  | 'subagent_start'     // sub-agent started
+  | 'subagent_complete'  // sub-agent completed
+  | 'subagent_progress'  // sub-agent progress update
+  | 'terminal_mirror'    // terminal output mirror
+  | 'timeline'           // agent timeline update
+  | 'aborted'            // stream aborted
   | 'done';              // stream complete
 
 export interface SSEEvent {
   type: SSEEventType;
   data: string;
-  model?: string;
 }
 
 // ==========================================
@@ -733,11 +726,6 @@ export const SETTING_KEYS = {
   PERMISSION_MODE: 'permission_mode',
   MAX_THINKING_TOKENS: 'max_thinking_tokens',
   ASSISTANT_WORKSPACE_PATH: 'assistant_workspace_path',
-  INCLUDE_AGENTS_MD: 'include_agents_md',
-  INCLUDE_CLAUDE_MD: 'include_claude_md',
-  ENABLE_AGENTS_SKILLS: 'enable_agents_skills',
-  SYNC_PROJECT_RULES: 'sync_project_rules',
-  KNOWLEDGE_BASE_ENABLED: 'knowledge_base_enabled',
 } as const;
 
 // ==========================================
@@ -943,24 +931,17 @@ export interface FileAttachment {
 
 // Check if a MIME type is an image
 export function isImageFile(type: string): boolean {
-  if (!type) return false;
-  if (type.startsWith('image/')) return true;
-  // Fallback for missing MIME types: check common extensions
-  const ext = type.split('.').pop()?.toLowerCase();
-  return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic'].includes(ext || '');
+  return type.startsWith('image/');
 }
 
 // Check if a MIME type is a video
 export function isVideoFile(type: string): boolean {
-  if (!type) return false;
-  if (type.startsWith('video/')) return true;
-  const ext = type.split('.').pop()?.toLowerCase();
-  return ['mp4', 'webm', 'mov', 'ogg'].includes(ext || '');
+  return type.startsWith('video/');
 }
 
 // Check if a MIME type is any visual media (image or video)
 export function isMediaFile(type: string): boolean {
-  return isImageFile(type) || isVideoFile(type) || type.startsWith('audio/');
+  return type.startsWith('image/') || type.startsWith('video/') || type.startsWith('audio/');
 }
 
 // Format bytes into human-readable size
@@ -1138,22 +1119,6 @@ export interface ToolResultInfo {
 
 export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped' | 'aborted';
 
-/**
- * Sub-agent tracking info for nested timeline display
- */
-export interface SubAgentInfo {
-  id: string;
-  name: string;
-  displayName: string;
-  prompt: string;
-  status: 'running' | 'completed' | 'error';
-  report?: string;
-  error?: string;
-  startedAt: number;
-  completedAt?: number;
-  progress?: string; // current activity
-}
-
 export interface SessionStreamSnapshot {
   sessionId: string;
   phase: StreamPhase;
@@ -1170,14 +1135,8 @@ export interface SessionStreamSnapshot {
   startedAt: number;
   completedAt: number | null;
   error: string | null;
-  /** Files referenced in the system prompt for this turn */
-  referencedContexts?: string[];
-  /** Files read/written by tool calls during this session (for context stats) */
-  toolFiles?: string[];
   /** Final message content built at stream completion for ChatView to consume */
   finalMessageContent: string | null;
-  /** Active sub-agents being tracked for nested timeline display */
-  subAgents?: SubAgentInfo[];
   /**
    * Optional terminal reason emitted by SDK 0.2.111 on SDKResultMessage.
    * Used by ChatView to render a contextual end-of-turn chip (Phase 1 of
@@ -1185,6 +1144,12 @@ export interface SessionStreamSnapshot {
    * message — those continue to flow through error-classifier.ts.
    */
   terminalReason?: string;
+  /** Files referenced in the system prompt for this turn */
+  referencedContexts?: string[];
+  /** Files read/written by tool calls during this session (for context stats) */
+  toolFiles?: string[];
+  /** Active sub-agents being tracked for nested timeline display */
+  subAgents?: SubAgentInfo[];
   /**
    * SDK 0.2.111 subscription rate-limit telemetry (Phase 2 of
    * agent-sdk-0-2-111-adoption). Populated from rate_limit_event
@@ -1244,11 +1209,9 @@ export type ConversationHistoryItem = {
 export interface ClaudeStreamOptions {
   prompt: string;
   sessionId: string;
-  traceId?: string;
   sdkSessionId?: string; // SDK session ID for resuming conversations
   model?: string;
   systemPrompt?: string;
-  referencedContexts?: string[];
   workingDirectory?: string;
   mcpServers?: Record<string, MCPServerConfig>;
   abortController?: AbortController;
@@ -1292,11 +1255,8 @@ export interface ClaudeStreamOptions {
   context1m?: boolean;
   /** Enable generative UI widget guidelines MCP server (default: true) */
   generativeUI?: boolean;
-  includeAgentsMd?: boolean;
-  includeClaudeMd?: boolean;
-  enableAgentsSkills?: boolean;
-  syncProjectRules?: boolean;
-  knowledgeBaseEnabled?: boolean;
+  /** Files referenced in the system prompt for this turn */
+  referencedContexts?: string[];
 }
 
 // ==========================================
@@ -1495,13 +1455,13 @@ export type NotificationChannel = 'toast' | 'system' | 'telegram' | 'email' | 's
 // 工具授权类型
 export interface ToolAuthorization {
   type: 'full_access' | 'web_search' | 'cli_tools' | 'mcp';
-  tool_ids?: string[];  // MCP 时指定具体工具 ID
+  tool_ids?: string[];
 }
 
 // 会话绑定信息
 export interface SessionBinding {
   session_id: string;
-  project_name?: string;  // 所属项目名称，用于前端显示
+  project_name?: string;
 }
 
 export interface ScheduledTask {
@@ -1520,11 +1480,8 @@ export interface ScheduledTask {
   priority: 'low' | 'normal' | 'urgent';
   notify_on_complete: number;
   session_id?: string;
-  // 新增：通知渠道（多选）
   notification_channels?: NotificationChannel[];
-  // 新增：会话绑定（可以指定写入哪个 session）
   session_binding?: SessionBinding;
-  // 新增：工具授权
   tool_authorization?: ToolAuthorization;
   working_directory?: string;
   permanent: number;

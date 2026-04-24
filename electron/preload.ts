@@ -48,6 +48,39 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportPng: (html: string, width: number, isDark: boolean) =>
       ipcRenderer.invoke('widget:export-png', { html, width, isDark }),
   },
+  artifact: {
+    // Phase 3 long-shot export: render HTML in a hidden BrowserWindow and
+    // capture a full-page PNG via CDP captureBeyondViewport. Returns a
+    // discriminated result — callers pattern-match on `.error` vs `.base64`.
+    exportLongShot: (params: {
+      html: string;
+      width: number;
+      pixelRatio?: number;
+      outPath?: string;
+      maxHeightPx?: number;
+      timeoutMs?: number;
+    }) => ipcRenderer.invoke('artifact:export-long-shot', params),
+  },
+  terminal: {
+    create: (opts: { id: string; cwd: string; cols: number; rows: number }) =>
+      ipcRenderer.invoke('terminal:create', opts),
+    write: (id: string, data: string) =>
+      ipcRenderer.send('terminal:write', { id, data }),
+    resize: (id: string, cols: number, rows: number) =>
+      ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
+    kill: (id: string) =>
+      ipcRenderer.invoke('terminal:kill', id),
+    onData: (callback: (data: { id: string; data: string }) => void) => {
+      const listener = (_event: unknown, data: { id: string; data: string }) => callback(data);
+      ipcRenderer.on('terminal:data', listener);
+      return () => { ipcRenderer.removeListener('terminal:data', listener); };
+    },
+    onExit: (callback: (data: { id: string; code: number }) => void) => {
+      const listener = (_event: unknown, data: { id: string; code: number }) => callback(data);
+      ipcRenderer.on('terminal:exit', listener);
+      return () => { ipcRenderer.removeListener('terminal:exit', listener); };
+    },
+  },
   notification: {
     show: (options: { title: string; body: string; onClick?: unknown }) =>
       ipcRenderer.invoke('notification:show', options),
@@ -55,24 +88,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const listener = (_event: unknown, action: { type: string; payload: string }) => callback(action);
       ipcRenderer.on('notification:click', listener);
       return () => { ipcRenderer.removeListener('notification:click', listener); };
-    },
-  },
-  terminal: {
-    create: (opts: any) => ipcRenderer.invoke('terminal:create', opts),
-    write: (id: string, data: string) => {
-      return ipcRenderer.invoke('terminal:write', id, data);
-    },
-    resize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
-    kill: (id: string) => ipcRenderer.invoke('terminal:kill', id),
-    onData: (callback: (data: { id: string; data: string }) => void) => {
-      const listener = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('terminal:data', listener);
-      return () => { ipcRenderer.removeListener('terminal:data', listener); };
-    },
-    onExit: (callback: (data: { id: string; exitCode: number }) => void) => {
-      const listener = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('terminal:exit', listener);
-      return () => { ipcRenderer.removeListener('terminal:exit', listener); };
     },
   },
 });

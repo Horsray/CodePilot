@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
-import { createCodePlugin } from "@streamdown/code";
+import { createSharedCodePlugin } from "./code-block";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { CaretLeft, CaretRight } from "@phosphor-icons/react";
@@ -325,18 +325,14 @@ export const MessageBranchPage = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
-// Wrap @streamdown/code to silently skip unsupported languages instead of throwing
-const _codePlugin = createCodePlugin();
-const safeCode: typeof _codePlugin = {
-  ..._codePlugin,
-  highlight(params, callback) {
-    if (!_codePlugin.supportsLanguage(params.language)) {
-      return null; // Let Streamdown render as plain text
-    }
-    return _codePlugin.highlight(params, callback);
-  },
-};
-const streamdownPlugins = { cjk, code: safeCode, math, mermaid };
+// Phase 5.5 — use the shared-LRU plugin from code-block.tsx so chat
+// messages and file-preview rendering hit the same Shiki highlighter /
+// token caches instead of each running its own unbounded pool. See
+// POC 0.2. supportsLanguage is intentionally permissive (true) because
+// highlightCode() itself normalizes unknown languages to "text" via
+// getHighlighter's fallback path.
+const _codePlugin = createSharedCodePlugin();
+const streamdownPlugins = { cjk, code: _codePlugin, math, mermaid };
 
 export const MessageResponse = memo(
   ({ className, components, ...props }: MessageResponseProps) => (

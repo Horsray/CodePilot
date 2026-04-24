@@ -1,7 +1,7 @@
 import { generateImage, NoImageGeneratedError } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { getDb, getSession } from '@/lib/db';
-import { getDefaultConfiguredImageModel, getMediaRelayProtocol, resolveMediaRelayEndpoint } from '@/lib/image-provider-utils';
+import { createOpenAI } from '@ai-sdk/openai';
+import { getDb, getSession, getSetting } from '@/lib/db';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -13,12 +13,13 @@ const MEDIA_DIR = path.join(dataDir, '.codepilot-media');
 export interface GenerateSingleImageParams {
   prompt: string;
   model?: string;
+  /** Optional explicit provider row id. When present, forces that provider and overrides family inference. */
+  providerId?: string;
   aspectRatio?: string;
   imageSize?: string;
   referenceImages?: { mimeType: string; data: string }[];
   referenceImagePaths?: string[];
   sessionId?: string;
-  providerId?: string;
   abortSignal?: AbortSignal;
   /** When true, skip disk write / project copy / DB insert — caller (MCP pipeline) handles persistence */
   skipSave?: boolean;
@@ -30,111 +31,263 @@ export interface GenerateSingleImageResult {
   mediaGenerationId: string;
   images: Array<{ mimeType: string; localPath: string; rawData?: Buffer }>;
   elapsedMs: number;
+  /** Actual upstream model id used (resolved from params / extra_env / default) */
+  model: string;
+  /** Which provider family actually ran */
+  family: 'gemini' | 'openai';
+}
+
+type ImageFamily = 'gemini' | 'openai';
+
+/** Infer which image family a model id belongs to. gpt-image-* / chatgpt-image-* → OpenAI; otherwise Gemini. */
+function detectFamily(modelId: string | undefined): ImageFamily | undefined {
+  if (!modelId) return undefined;
+  if (/^gpt-image|^chatgpt-image/i.test(modelId)) return 'openai';
+  if (/^gemini/i.test(modelId)) return 'gemini';
+  return undefined;
+}
+
+// GPT Image 2 hard constraints from the OpenAI docs. Every WxH the mapper
+// returns must satisfy all four; the test suite asserts this exhaustively.
+const GPT_IMAGE_2_MAX_EDGE = 3840;
+const GPT_IMAGE_2_MIN_PIXELS = 655_360;
+const GPT_IMAGE_2_MAX_PIXELS = 8_294_400;
+const GPT_IMAGE_2_EDGE_STEP = 16;
+
+// Per-tier anchors matching the "popular sizes" table in the Image generation
+// guide. Non-square uses LONG edge (so "2K landscape" keeps long=2048, short
+// derives from the selected ratio — e.g. 2048x1152 for 16:9, 2048x1536 for
+// 4:3). Square uses a separate anchor because the popular sizes diverge
+// there (1024/2048 at 1K/2K but 2880 at 4K to stay inside the pixel budget).
+const TIER_LONG_EDGE: Record<string, number> = {
+  '1K': 1536,
+  '2K': 2048,
+  '4K': GPT_IMAGE_2_MAX_EDGE,
+};
+const TIER_SQUARE_EDGE: Record<string, number> = {
+  '1K': 1024,
+  '2K': 2048,
+  '4K': 2880, // 2880² = 8,294,400 — exactly the pixel-budget ceiling.
+};
+
+function parseRatio(aspectRatio: string): { w: number; h: number } | null {
+  const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(aspectRatio);
+  if (!m) return null;
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+  // GPT Image 2 rejects anything wider than 3:1 — same threshold the UI
+  // ratios stay within (max is 21:9 = 2.33). If a future UI value violates
+  // this, we fall through to the square default rather than send a size the
+  // API will reject.
+  const ratio = Math.max(w, h) / Math.min(w, h);
+  if (ratio > 3) return null;
+  return { w, h };
+}
+
+const snap = (v: number) => Math.round(v / GPT_IMAGE_2_EDGE_STEP) * GPT_IMAGE_2_EDGE_STEP;
+
+/**
+ * Compute a valid GPT Image 2 size as close to the requested ratio + tier as
+ * the constraints allow. Guarantees the returned pair is:
+ *  • each edge a multiple of 16
+ *  • each edge ≤ 3840
+ *  • total pixels within [655,360, 8,294,400]
+ *
+ * Returns null if no valid size exists (shouldn't happen for UI inputs).
+ */
+function computeGptImage2Size(
+  ratio: { w: number; h: number },
+  tier: string,
+): { width: number; height: number } | null {
+  const r = ratio.w / ratio.h;
+  const aspect = Math.max(r, 1 / r); // long:short, always ≥ 1
+
+  // Square fast path — uses a separate tier table because the popular
+  // square sizes don't follow the non-square anchors.
+  if (aspect === 1) {
+    const s = TIER_SQUARE_EDGE[tier] ?? TIER_SQUARE_EDGE['1K'];
+    return { width: s, height: s };
+  }
+
+  // Non-square: anchor the long edge to the tier's long-edge target, derive
+  // the short edge from the requested aspect.
+  let longEdge = TIER_LONG_EDGE[tier] ?? TIER_LONG_EDGE['1K'];
+  let shortEdge = longEdge / aspect;
+
+  // Pixel-budget cap before snapping — at 4K, aspects close to 1:1 (e.g.
+  // 4:3 / 4:5) drive long*short above 8,294,400. Scale both down
+  // proportionally so the ratio is preserved.
+  if (longEdge * shortEdge > GPT_IMAGE_2_MAX_PIXELS) {
+    const scale = Math.sqrt(GPT_IMAGE_2_MAX_PIXELS / (longEdge * shortEdge));
+    longEdge = longEdge * scale;
+    shortEdge = shortEdge * scale;
+  }
+
+  let long = Math.max(GPT_IMAGE_2_EDGE_STEP, snap(longEdge));
+  let short = Math.max(GPT_IMAGE_2_EDGE_STEP, snap(shortEdge));
+  if (long > GPT_IMAGE_2_MAX_EDGE) long = GPT_IMAGE_2_MAX_EDGE;
+  if (short > GPT_IMAGE_2_MAX_EDGE) short = GPT_IMAGE_2_MAX_EDGE;
+
+  // Claw back if snap-up overshot the pixel budget — shrink whichever edge
+  // is further above its ideal (keeps output ratio close to the request).
+  while (long * short > GPT_IMAGE_2_MAX_PIXELS) {
+    if (long > short) long -= GPT_IMAGE_2_EDGE_STEP;
+    else short -= GPT_IMAGE_2_EDGE_STEP;
+    if (long < GPT_IMAGE_2_EDGE_STEP || short < GPT_IMAGE_2_EDGE_STEP) return null;
+  }
+  // Grow if snap-down pushed us below the minimum pixel count. Bias growth
+  // toward whichever edge is shorter relative to the target ratio.
+  while (long * short < GPT_IMAGE_2_MIN_PIXELS) {
+    if (short < GPT_IMAGE_2_MAX_EDGE) short += GPT_IMAGE_2_EDGE_STEP;
+    else if (long < GPT_IMAGE_2_MAX_EDGE) long += GPT_IMAGE_2_EDGE_STEP;
+    else return null;
+  }
+
+  // Orient based on the original ratio (portrait keeps the long edge vertical).
+  if (r < 1) return { width: short, height: long };
+  return { width: long, height: short };
+}
+
+/**
+ * Map UI aspectRatio + imageSize to a GPT Image size string "WxH".
+ *
+ * GPT Image 2 computes a ratio-faithful size per the constraints above —
+ * 3:2 / 4:5 / 5:4 / 21:9 each get a distinct, valid output rather than
+ * collapsing to landscape/portrait/square buckets.
+ *
+ * GPT Image 1 / 1-mini / 1.5 only accept the legacy trio
+ * (1024x1024 / 1536x1024 / 1024x1536), so any other ratio/tier collapses to
+ * the trio entry whose aspect is closest to the request.
+ */
+export function mapAspectToOpenAISize(
+  aspectRatio: string,
+  imageSize: string,
+  modelId?: string,
+): `${number}x${number}` {
+  // Legacy matches: gpt-image-1, gpt-image-1-mini, gpt-image-1.5.
+  // Unknown model ids assume the latest (gpt-image-2) to avoid silently
+  // stripping 2K/4K from a correctly-configured new provider.
+  const isLegacy = !!modelId && /^gpt-image-1(?:$|[-.])/i.test(modelId);
+
+  const parsed = parseRatio(aspectRatio);
+
+  if (isLegacy) {
+    if (!parsed) return '1024x1024';
+    const r = parsed.w / parsed.h;
+    // Use 1.1 / 0.91 as a soft deadband around square — 4:3 / 3:4 still
+    // round to the rectangular trio entries (4/3 ≈ 1.33, 3/4 ≈ 0.75).
+    if (r > 1.1) return '1536x1024';
+    if (r < 0.91) return '1024x1536';
+    return '1024x1024';
+  }
+
+  if (!parsed) {
+    // Unrecognized ratio string — fall through to a safe square at tier.
+    if (imageSize === '4K') return '2880x2880';
+    if (imageSize === '2K') return '2048x2048';
+    return '1024x1024';
+  }
+
+  const size = computeGptImage2Size(parsed, imageSize);
+  if (!size) {
+    // Should be unreachable for any UI input; fall back to a safe default.
+    return '1024x1024';
+  }
+  return `${size.width}x${size.height}` as `${number}x${number}`;
+}
+
+interface ProviderRow {
+  id: string;
+  provider_type: string;
+  api_key: string;
+  base_url: string;
+  extra_env?: string;
+}
+
+/**
+ * Select an image-generation provider row.
+ *
+ * Resolution order:
+ *   1. If `providerId` is provided, match by id (must match a media provider with a key).
+ *   2. If `family` is known (model prefix disambiguates OpenAI vs Gemini), match by provider_type.
+ *   3. Fall back to the `active_image_provider_id` setting (user's explicit choice in settings).
+ *   4. Prefer whichever family is configured, with Gemini winning when both exist (back-compat).
+ */
+function pickImageProvider(
+  family: ImageFamily | undefined,
+  providerId: string | undefined,
+): { row: ProviderRow; family: ImageFamily } {
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT id, provider_type, api_key, base_url, extra_env FROM api_providers WHERE provider_type IN ('gemini-image', 'openai-image') AND api_key != ''"
+  ).all() as ProviderRow[];
+
+  if (rows.length === 0) {
+    throw new Error('No image provider configured. Please add a Gemini Image or OpenAI Image provider in Settings.');
+  }
+
+  const toFamily = (pt: string): ImageFamily => (pt === 'openai-image' ? 'openai' : 'gemini');
+  const byFamily = (f: ImageFamily) => rows.find(r => toFamily(r.provider_type) === f);
+
+  // 1) Explicit provider id takes precedence over everything else.
+  if (providerId) {
+    const match = rows.find(r => r.id === providerId);
+    if (!match) {
+      throw new Error(`Image provider '${providerId}' is not configured or has no API key. Check Settings → Media Providers.`);
+    }
+    return { row: match, family: toFamily(match.provider_type) };
+  }
+
+  // 2) Family hint from the model id (e.g. user passed model='gpt-image-2').
+  if (family) {
+    const match = byFamily(family);
+    if (match) return { row: match, family };
+    throw new Error(`No ${family === 'openai' ? 'OpenAI Image' : 'Gemini Image'} provider configured. Please add one in Settings.`);
+  }
+
+  // 3) User-chosen active provider from settings.
+  const activeId = getSetting('active_image_provider_id');
+  if (activeId) {
+    const match = rows.find(r => r.id === activeId);
+    if (match) return { row: match, family: toFamily(match.provider_type) };
+    // Stored id no longer valid (provider deleted / key cleared) — fall through
+    // to the implicit picker rather than throwing, so callers aren't broken.
+  }
+
+  // 4) Fallback: prefer gemini for back-compat when both are configured.
+  const gemini = byFamily('gemini');
+  if (gemini) return { row: gemini, family: 'gemini' };
+  const openai = byFamily('openai');
+  if (openai) return { row: openai, family: 'openai' };
+  // rows.length > 0 guarantees we won't reach here, but TypeScript wants it
+  return { row: rows[0], family: toFamily(rows[0].provider_type) };
 }
 
 /**
  * Shared image generation function.
- * Handles: Provider lookup → Gemini API call → file save → project dir copy → DB record.
+ * Handles: Provider lookup → Gemini / OpenAI API call → file save → project dir copy → DB record.
  */
 export async function generateSingleImage(params: GenerateSingleImageParams): Promise<GenerateSingleImageResult> {
   const startTime = Date.now();
 
-  const db = getDb();
+  const requestedFamily = detectFamily(params.model);
+  const { row: provider, family } = pickImageProvider(requestedFamily, params.providerId);
 
-  // Helper to get a provider by ID
-  const getProviderById = (id: string) => db.prepare(
-    "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE id = ? LIMIT 1"
-  ).get(id) as {
-    id: string;
-    name: string;
-    provider_type: string;
-    api_key: string;
-    base_url?: string;
-    extra_env?: string;
-    env_overrides_json?: string;
-    role_models_json?: string;
-    options_json?: string;
-  } | undefined;
-
-  // When providerId is explicitly specified, use it directly
-  if (params.providerId) {
-    const provider = getProviderById(params.providerId);
-    if (!provider) {
-      throw new Error('Specified provider not found.');
-    }
-    return generateWithProvider(provider, params, startTime);
-  }
-
-  // No provider specified: check which providers are enabled and select based on user preference
-  // Priority: if gemini-image is enabled, use it; otherwise use generic-image (relay)
-  const geminiProvider = db.prepare(
-    "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE provider_type = 'gemini-image' AND api_key != '' LIMIT 1"
-  ).get() as {
-    id: string;
-    name: string;
-    provider_type: string;
-    api_key: string;
-    base_url?: string;
-    extra_env?: string;
-    env_overrides_json?: string;
-    role_models_json?: string;
-    options_json?: string;
-  } | undefined;
-
-  // If gemini-image is enabled, use it (respects user's explicit enable/disable choice)
-  if (geminiProvider) {
-    return generateWithProvider(geminiProvider, params, startTime);
-  }
-
-  // Otherwise, fall back to generic-image (relay) if enabled
-  const genericProvider = db.prepare(
-    "SELECT id, name, provider_type, api_key, base_url, extra_env, env_overrides_json, role_models_json, options_json FROM api_providers WHERE provider_type = 'generic-image' AND api_key != '' LIMIT 1"
-  ).get() as {
-    id: string;
-    name: string;
-    provider_type: string;
-    api_key: string;
-    base_url?: string;
-    extra_env?: string;
-    env_overrides_json?: string;
-    role_models_json?: string;
-    options_json?: string;
-  } | undefined;
-
-  if (!genericProvider) {
-    throw new Error('No image provider configured. Please add a media provider in Settings.');
-  }
-
-  return generateWithProvider(genericProvider, params, startTime);
-}
-
-/**
- * Generate image with a specific provider
- */
-async function generateWithProvider(
-  provider: {
-    id: string;
-    name: string;
-    provider_type: string;
-    api_key: string;
-    base_url?: string;
-    extra_env?: string;
-    env_overrides_json?: string;
-    role_models_json?: string;
-    options_json?: string;
-  },
-  params: GenerateSingleImageParams,
-  startTime: number
-): Promise<GenerateSingleImageResult> {
-  const configuredModel = getDefaultConfiguredImageModel(provider);
+  // Read configured model from extra_env, fall back to family default
+  let configuredModel = family === 'openai' ? 'gpt-image-2' : 'gemini-3.1-flash-image-preview';
+  try {
+    const env = JSON.parse(provider.extra_env || '{}');
+    const key = family === 'openai' ? 'OPENAI_IMAGE_MODEL' : 'GEMINI_IMAGE_MODEL';
+    if (env[key]) configuredModel = env[key];
+  } catch { /* use default */ }
 
   const requestedModel = params.model || configuredModel;
   const aspectRatio = (params.aspectRatio || '1:1') as `${number}:${number}`;
   const imageSize = params.imageSize || '1K';
-  const google = createGoogleGenerativeAI({ apiKey: provider.api_key });
 
-  // Build prompt: plain string or { text, images } for reference images
-  // Combine both base64 data and file paths — both can be provided simultaneously
+  // Collect reference images (base64 strings). Both referenceImagePaths and
+  // referenceImages may be provided together.
   const refImageData: string[] = [];
   if (params.referenceImagePaths && params.referenceImagePaths.length > 0) {
     for (const fp of params.referenceImagePaths) {
@@ -149,115 +302,38 @@ async function generateWithProvider(
   if (params.referenceImages && params.referenceImages.length > 0) {
     refImageData.push(...params.referenceImages.map(img => img.data));
   }
-  const prompt = refImageData.length > 0
-    ? { text: params.prompt, images: refImageData }
-    : params.prompt;
 
-  const images = await (async () => {
-    const relayProtocol = getMediaRelayProtocol(provider);
-    const useRelay = provider.provider_type === 'generic-image' || relayProtocol === 'openai-images';
-    if (useRelay) {
-      const endpoint = resolveMediaRelayEndpoint(provider);
-      // Support for relay platforms that use Chat Completion API for image generation
-      // This is common for Gemini models or certain DALL-E 3 relay implementations
-      // We check for /chat/completions or if the model name suggests a chat-based generator
-      const isChatEndpoint = endpoint.includes('/chat/completions') || 
-                            endpoint.includes('/v1/chat') || 
-                            requestedModel.toLowerCase().includes('gemini') || 
-                            requestedModel.toLowerCase().includes('gpt-4');
-      
-      const requestBody = isChatEndpoint ? {
-        model: requestedModel,
-        messages: [{ role: 'user', content: params.prompt }],
-      } : {
-        model: requestedModel,
-        prompt: params.prompt,
-        size: imageSize === '2K' ? '1536x1536' : '1024x1024',
-      };
+  let images: { mediaType: string; uint8Array: Uint8Array }[];
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${provider.api_key}`,
-        },
-        body: JSON.stringify(requestBody),
-        signal: params.abortSignal || AbortSignal.timeout(300_000),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
-        throw new Error(`Image relay request failed: ${message}`);
-      }
-
-      let b64: string | undefined;
-      if (isChatEndpoint) {
-        // Handle Chat Completion response: extract image URL or base64 from message content
-        // Some relays return markdown: ![image](data:image/png;base64,...)
-        // or just the raw base64/URL
-        const content = payload?.choices?.[0]?.message?.content || '';
-        
-        // Try to find a URL in the content
-        const urlMatch = content.match(/https?:\/\/[^\s\)]+/);
-        // Try to find base64 in the content
-        const b64Match = content.match(/base64,([a-zA-Z0-9+/=]+)/);
-        
-        if (b64Match) {
-          b64 = b64Match[1];
-        } else if (urlMatch) {
-          b64 = urlMatch[0];
-        } else {
-          // Fallback: check if the whole content is base64 or a URL
-          const trimmed = content.trim();
-          if (trimmed.startsWith('http') || /^[a-zA-Z0-9+/=]+$/.test(trimmed)) {
-            b64 = trimmed;
-          }
-        }
-
-        // If still not found, check if it returned a standard data array even though it was a chat endpoint
-        if (!b64 && payload?.data?.[0]?.url) {
-          b64 = payload.data[0].url;
-        }
-        if (!b64 && payload?.data?.[0]?.b64_json) {
-          b64 = payload.data[0].b64_json;
-        }
-      } else {
-        b64 = payload?.data?.[0]?.b64_json || payload?.data?.[0]?.url;
-      }
-
-      if (!b64 || typeof b64 !== 'string') {
-        throw new Error('Image relay did not return valid image data');
-      }
-
-      // If it's a URL or a data URI instead of base64, we need to handle it
-      if (b64.startsWith('http') || b64.startsWith('data:')) {
-        let buf: ArrayBuffer;
-        let mimeType = 'image/png';
-
-        if (b64.startsWith('data:')) {
-          const match = b64.match(/^data:([^;]+);base64,(.+)$/);
-          if (match) {
-            mimeType = match[1];
-            buf = Buffer.from(match[2], 'base64').buffer;
-          } else {
-            throw new Error('Invalid data URI format from image relay');
-          }
-        } else {
-          const imgRes = await fetch(b64);
-          if (!imgRes.ok) {
-            throw new Error(`Failed to download image from relay URL: ${imgRes.statusText}`);
-          }
-          buf = await imgRes.arrayBuffer();
-          const contentType = imgRes.headers.get('content-type');
-          if (contentType) mimeType = contentType;
-        }
-
-        return [{ mediaType: mimeType, uint8Array: new Uint8Array(buf) }];
-      }
-
-      return [{ mediaType: 'image/png', uint8Array: Uint8Array.from(Buffer.from(b64, 'base64')) }];
-    }
-    const generated = await generateImage({
+  if (family === 'openai') {
+    const openai = createOpenAI({
+      apiKey: provider.api_key,
+      baseURL: provider.base_url || undefined,
+    });
+    const size = mapAspectToOpenAISize(aspectRatio, imageSize, requestedModel);
+    // When reference images are present, pass them as `prompt.images` — the
+    // ai SDK routes this to /images/edits for OpenAI (see @ai-sdk/openai
+    // image doGenerate) and supplies them as `input_image` for Gemini.
+    const prompt = refImageData.length > 0
+      ? { text: params.prompt, images: refImageData }
+      : params.prompt;
+    const result = await generateImage({
+      model: openai.image(requestedModel),
+      prompt,
+      size,
+      maxRetries: 3,
+      abortSignal: params.abortSignal || AbortSignal.timeout(300_000),
+    });
+    images = result.images.map(img => ({ mediaType: img.mediaType, uint8Array: img.uint8Array }));
+  } else {
+    const google = createGoogleGenerativeAI({
+      apiKey: provider.api_key,
+      baseURL: provider.base_url || undefined,
+    });
+    const prompt = refImageData.length > 0
+      ? { text: params.prompt, images: refImageData }
+      : params.prompt;
+    const result = await generateImage({
       model: google.image(requestedModel),
       prompt,
       providerOptions: {
@@ -268,11 +344,11 @@ async function generateWithProvider(
       maxRetries: 3,
       abortSignal: params.abortSignal || AbortSignal.timeout(300_000),
     });
-    return generated.images;
-  })();
+    images = result.images.map(img => ({ mediaType: img.mediaType, uint8Array: img.uint8Array }));
+  }
 
   const elapsed = Date.now() - startTime;
-  console.log(`[image-generator] ${requestedModel} ${imageSize} completed in ${elapsed}ms`);
+  console.log(`[image-generator] ${family}:${requestedModel} ${imageSize} completed in ${elapsed}ms`);
 
   // skipSave mode: return raw image data without writing to disk or DB.
   // The MCP media pipeline (collectStreamResponse → saveMediaToLibrary) handles persistence.
@@ -282,7 +358,7 @@ async function generateWithProvider(
       localPath: '',
       rawData: Buffer.from(img.uint8Array),
     }));
-    return { mediaGenerationId: '', images: rawImages, elapsedMs: elapsed };
+    return { mediaGenerationId: '', images: rawImages, elapsedMs: elapsed, model: requestedModel, family };
   }
 
   // Ensure media directory exists
@@ -354,12 +430,11 @@ async function generateWithProvider(
     metadata.referenceImages = savedRefImages;
   }
 
-  const dbForInsert = getDb();
-  dbForInsert.prepare(
+  getDb().prepare(
     `INSERT INTO media_generations (id, type, status, provider, model, prompt, aspect_ratio, image_size, local_path, thumbnail_path, session_id, message_id, tags, metadata, error, created_at, completed_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    id, 'image', 'completed', 'gemini', requestedModel, params.prompt,
+    id, 'image', 'completed', family, requestedModel, params.prompt,
     aspectRatio, imageSize, localPath, '',
     params.sessionId || null, null,
     '[]', JSON.stringify(metadata),
@@ -370,6 +445,8 @@ async function generateWithProvider(
     mediaGenerationId: id,
     images: savedImages,
     elapsedMs: elapsed,
+    model: requestedModel,
+    family,
   };
 }
 
