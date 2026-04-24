@@ -37,6 +37,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { resolveKeyAction, cycleIndex, resolveDirectSlash, dispatchBadge, buildCliAppend, parseMentionRefs, dedupeMentionsByPath } from '@/lib/message-input-logic';
 import { QuickActions } from './QuickActions';
 import { ImageGenToggle } from './ImageGenToggle';
+import { SkillUsageIndicator } from './SkillUsageIndicator';
 
 const MAX_MENTION_FILE_BYTES = 256 * 1024; // 256KB per @file mention
 const MAX_MENTION_FILE_COUNT = 6;
@@ -67,6 +68,10 @@ interface MessageInputProps {
   isAssistantProject?: boolean;
   /** Whether the session already has messages */
   hasMessages?: boolean;
+  /** 当前轮次的工具调用列表（用于技能调用指示器） */
+  toolUses?: Array<{ id: string; name: string; input: unknown }>;
+  /** 当前轮次的工具调用结果列表 */
+  toolResults?: Array<{ tool_use_id: string; content: string; is_error?: boolean }>;
 }
 
 function joinPath(base: string, rel: string): string {
@@ -121,6 +126,8 @@ export function MessageInput({
   initialValue,
   isAssistantProject,
   hasMessages,
+  toolUses,
+  toolResults,
 }: MessageInputProps) {
   const { t, locale } = useTranslation();
   const isZh = t('nav.chats') === '对话';
@@ -780,6 +787,9 @@ export function MessageInput({
     <div className="bg-background/80 backdrop-blur-lg px-4 pt-2 pb-1">
       <div className="mx-auto">
         <div className="relative">
+          {/* 技能调用指示器 — 显示在输入框右上角 */}
+          <SkillUsageIndicator toolUses={toolUses} toolResults={toolResults} />
+
           {/* Slash Command / File Popover */}
           <SlashCommandPopover
             popoverMode={popover.popoverMode}

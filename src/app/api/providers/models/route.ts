@@ -213,12 +213,21 @@ export async function GET() {
           }
         }
         // Add each role model to the list (default role first, so it appears at the top)
-        for (const entry of roleEntries) {
-          if (!rawModels.some(m => m.value === entry.id || m.upstreamModelId === entry.id)) {
-            const label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
-            rawModels.unshift({ value: entry.id, label });
+      for (const entry of roleEntries) {
+        if (!rawModels.some(m => m.value === entry.id || m.upstreamModelId === entry.id)) {
+          let label = entry.id;
+          if (provider.protocol === 'multi_head') {
+            // For multi_head, entry.id is like "providerId:modelId"
+            // We want to show only the "modelId" part
+            const parts = entry.id.split(':');
+            label = parts.length > 1 ? parts.slice(1).join(':') : entry.id;
+            label = entry.role === 'default' ? label : `${label} (${entry.role})`;
+          } else {
+            label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
           }
+          rawModels.unshift({ value: entry.id, label });
         }
+      }
       } catch { /* ignore */ }
 
       // Legacy: inject ANTHROPIC_MODEL from env overrides if not already present

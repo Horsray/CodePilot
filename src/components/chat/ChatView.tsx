@@ -1125,6 +1125,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         sdkInitMeta={initMetaRef.current}
         isAssistantProject={isAssistantProject}
         hasMessages={messages.length > 0}
+        toolUses={toolUses}
+        toolResults={toolResults}
       />
       <ChatComposerActionBar
         left={
