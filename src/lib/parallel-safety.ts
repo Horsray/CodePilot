@@ -48,6 +48,8 @@ export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set<string>([
   'Glob',
   'Grep',
   'WebFetch',
+  'Agent',
+  'Team',
   'codepilot_memory_search',
   'codepilot_memory_get',
   'codepilot_memory_recent',

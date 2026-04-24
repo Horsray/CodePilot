@@ -7,6 +7,7 @@ import { truncateToTokenBudget } from './context-pruner';
 import { buildSubAgentExecutionProfile } from './subagent-profile';
 import { createSubAgentProgressTracker } from './subagent-progress';
 import { isSimpleLocalLookupTask, isSimpleWebLookupTask, tryExecuteSubAgentFastPath } from './subagent-fast-path';
+import { buildTeamOrchestrationPrompt } from './team-orchestration-prompt';
 
 export interface TeamRunnerOptions {
   goal: string;
@@ -30,6 +31,9 @@ interface DAGTask {
 interface TeamDAG {
   tasks: DAGTask[];
 }
+
+/** Hard cap on DAG task count — prevents planner from generating excessive tasks */
+const MAX_DAG_TASKS = 6;
 
 function filterTools(allTools: ToolSet, allowedTools?: string[], disallowedTools?: string[]): ToolSet {
   if (allowedTools && allowedTools.length > 0) {
@@ -102,7 +106,7 @@ async function executeAgentTask(
   const subAgentId = `team-${role}-${Date.now()}`;
   
   // 防止 Team 模式下的上下文溢出 (Truncate to reasonable token limit)
-  const safeContext = truncateToTokenBudget(accumulatedContext, 15000);
+  const safeContext = truncateToTokenBudget(accumulatedContext, 8000); // Reduced from 15000 to cut token cost
   
   const prompt = `Your role is ${role}. Your task is: ${task.desc}.\n\nOverall Team Goal: ${options.goal}\n\nContext from previous steps:\n${safeContext}\n\nWorking Directory: ${workingDirectory}\n\nPlease perform your specialized task. You MUST output a clear, detailed summary of your findings or actions when you finish.`;
 
@@ -126,9 +130,14 @@ async function executeAgentTask(
   });
 
   const subTools = filterTools(allTools, agentDef.allowedTools, agentDef.disallowedTools);
+  // OMC-style: non-nesting constraints for sub-agents
+  const SUBAGENT_CONSTRAINTS = `\n\nCONSTRAINTS (CRITICAL):
+- You are a sub-agent in a team. You CANNOT spawn sub-agents or use the Agent/Team tools.
+- Work directly with your available tools. Do NOT delegate.
+- You MUST provide a clear, detailed final report of your findings or actions before you finish.`;
   const systemPrompt = agentDef.prompt
-    ? `${agentDef.prompt}\n\nWorking directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do not just output your internal thoughts.`
-    : `You are a helpful sub-agent in a team. Working directory: ${workingDirectory}\n\nCRITICAL RULE: You are a sub-agent in a team. You MUST provide a clear, detailed final report of your findings or actions before you finish. Do not just output your internal thoughts.`;
+    ? `${agentDef.prompt}\n\nWorking directory: ${workingDirectory}${SUBAGENT_CONSTRAINTS}`
+    : `You are a helpful sub-agent in a team. Working directory: ${workingDirectory}${SUBAGENT_CONSTRAINTS}`;
 
   if (emitSSE) {
     emitSSE({
@@ -231,12 +240,35 @@ async function executeAgentTask(
   const toolResults: Array<{ content: string; isError: boolean }> = [];
   let errorEvent: string | null = null;
   let taskFailed = false;
+  let timedOut = false;
 
+  // 中文注释：功能名称「子agent超时检测」，用法是当子agent在60秒内没有任何活动
+  // （文本输出、工具调用、思考等）时，自动终止流并生成报告，防止无限等待
+  const SUBAGENT_TIMEOUT_MS = 60_000; // 60秒超时
+  let lastActivityAt = Date.now();
+
+  const checkTimeout = () => {
+    const elapsed = Date.now() - lastActivityAt;
+    if (elapsed > SUBAGENT_TIMEOUT_MS) {
+      console.warn(`[team-runner] Sub-agent "${role}" timed out after ${Math.round(elapsed / 1000)}s of inactivity`);
+      return true;
+    }
+    return false;
+  };
+
+  // 定期检测超时的定时器
+  const timeoutTimer = setInterval(() => {
+    if (checkTimeout()) {
+      timedOut = true;
+      reader.cancel().catch(() => {});
+    }
+  }, 5_000); // 每5秒检测一次
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (timedOut) break;
 
       if (value) {
         const lines = value.split('\n');
@@ -244,6 +276,7 @@ async function executeAgentTask(
           if (!line.startsWith('data: ')) continue;
           try {
             const event = JSON.parse(line.slice(6));
+            lastActivityAt = Date.now(); // 更新活动时间戳
             if (event.type !== 'keep_alive') {
               progress.touch();
             }
@@ -338,8 +371,54 @@ async function executeAgentTask(
     }
     console.warn(`[team-runner] executeAgentTask stream error for ${role}:`, errMsg);
   } finally {
+    clearInterval(timeoutTimer);
     progress.close();
     reader.releaseLock();
+  }
+
+  // 超时处理：基于已收集的工具结果和thinking生成报告
+  if (timedOut) {
+    const parts: string[] = [];
+    parts.push(`**⏱️ 子Agent执行超时（60秒无活动），已自动终止。**`);
+    if (toolResults.length > 0) {
+      parts.push(`\n**已执行 ${toolResults.length} 个工具：**`);
+      for (const tr of toolResults.slice(0, 10)) {
+        const preview = tr.content.slice(0, 800).replace(/\n/g, ' ');
+        parts.push(`- ${tr.isError ? '❌' : '✅'} ${preview}${tr.content.length > 800 ? '...' : ''}`);
+      }
+    }
+    if (thinkingParts.length > 0) {
+      const thinkingText = thinkingParts.join('').trim();
+      if (thinkingText) {
+        parts.push('\n**思考过程：**\n' + thinkingText.slice(0, 3000));
+      }
+    }
+    parts.push('\n> 子Agent可能因模型响应缓慢或陷入循环而超时。建议检查任务复杂度或更换模型。');
+    const timeoutReport = parts.join('\n');
+    
+    emitTeamEvent('team_agent_done', {
+      id: task.id,
+      name: role,
+      displayName: agentDef.displayName || role,
+      prompt: task.desc,
+      model: finalModel,
+      status: 'completed',
+      report: timeoutReport,
+      completedAt: Date.now(),
+    });
+
+    if (emitSSE) {
+      emitSSE({
+        type: 'subagent_complete',
+        data: JSON.stringify({
+          id: subAgentId,
+          report: timeoutReport,
+        }),
+      });
+      emitSSE({ type: 'tool_output', data: `[+] done (timeout)\n\n` });
+    }
+
+    return { report: timeoutReport, errorEvent: null, role };
   }
 
   // EMPTY_RESPONSE fallback: if routed model returned nothing, retry with parent model
@@ -453,6 +532,20 @@ async function executeAgentTask(
 }
 
 /**
+ * isSingleAgentTask - 检测是否为简单的单 agent 任务
+ * 分析、审查、解释类任务通常不需要多 agent 协作
+ */
+function isSingleAgentTask(goal: string): boolean {
+  // Short goals (under 80 chars) that are primarily analysis/review/explanation
+  if (goal.length < 80) {
+    const isAnalysis = /分析|审查|评审|解释|说明|review|analyze|explain|summarize|总结|describe|描述/i.test(goal);
+    const isLookup = /查找|搜索|找到|哪里|哪个|find|where|search|locate/i.test(goal);
+    if (isAnalysis || isLookup) return true;
+  }
+  return false;
+}
+
+/**
  * buildFallbackDAG - 智能 fallback DAG 生成器
  * 当 planner 输出无效 JSON 时，根据用户目标关键词动态构建合理的任务图
  */
@@ -561,6 +654,18 @@ async function generateTeamDAG(options: TeamRunnerOptions): Promise<TeamDAG> {
     };
   }
 
+  // Single-agent bypass: analysis/review tasks don't need multi-agent DAG planning
+  if (isSingleAgentTask(options.goal)) {
+    if (options.emitSSE) {
+      options.emitSSE({ type: 'text', data: `\n\n⚡ **轻量单智能体模式**\n检测到这是分析/审查任务，跳过多智能体编排，直接派发专用智能体。\n` });
+    }
+    return {
+      tasks: [
+        { id: 'analysis-1', role: 'analyst', desc: options.goal, dependsOn: [] },
+      ],
+    };
+  }
+
   const subAgents = getSubAgents();
   const subAgentsList = subAgents.map(a => `- ${a.id}: ${a.description}`).join('\n');
 
@@ -582,12 +687,12 @@ You must output a valid JSON block containing the execution plan. The JSON shoul
   ]
 }
 
-CRITICAL RULES FOR MULTI-AGENT PARALLELISM:
-1. MAXIMIZE PARALLELISM: If a complex task can be split into 2-5 independent sub-tasks (e.g., analyzing different modules, modifying separate files, researching different topics), you MUST split them into separate tasks with NO overlapping dependencies.
-2. INDEPENDENT TASKS: Tasks that have an empty \`dependsOn\` array \`[]\` will run in background concurrently.
-3. CONVERGENCE: Only sequentialize tasks (using \`dependsOn\`) when one task STRICTLY requires the output of another.
-4. MAKE SURE to include a final verifier or qa-tester step at the end that depends on all the parallel execution tasks.
-5. Use ONLY exact role ids from the Available agents list. For testing use qa-tester or test-engineer; never output tester.
+CRITICAL RULES:
+1. TASK COUNT: Output AT MOST 5 tasks total (including verifier). Fewer is better — prefer 2-4 well-scoped tasks over many tiny ones. Do NOT split tasks that can be done by a single agent.
+2. INDEPENDENT TASKS: Tasks with empty \`dependsOn\` \`[]\` run in parallel.
+3. CONVERGENCE: Only sequentialize when one task STRICTLY requires the output of another.
+4. Include ONE final verifier step that depends on all execution tasks.
+5. Use ONLY exact role ids from the Available agents list.
 
 Only output the JSON block, no other text.`;
 
@@ -632,6 +737,12 @@ Only output the JSON block, no other text.`;
       }
     }
 
+    // Hard cap: if planner generated too many tasks, fall back to simpler DAG
+    if (dag.tasks.length > MAX_DAG_TASKS) {
+      console.warn(`[team-runner] Planner generated ${dag.tasks.length} tasks (max ${MAX_DAG_TASKS}), falling back to simplified DAG`);
+      return buildFallbackDAG(options.goal);
+    }
+
     return dag;
   } catch (e) {
     return buildFallbackDAG(options.goal);
@@ -640,61 +751,169 @@ Only output the JSON block, no other text.`;
 
 /**
  * runTeamPipeline - 多智能体团队调度引擎主入口
- * 功能：接收用户的团队目标，触发 DAG 计划生成，随后以并发方式和反馈闭环（失败重试）调度各个子智能体
- * 用法：OMC Team 模式下，供 /team 指令调用执行完整的任务链路
+ *
+ * OMC-style: 父 agent 直接编排，不再通过单独的 planner LLM 生成 DAG。
+ * 父 agent 在自己的推理循环中决定是否/如何 spawn 子 agent。
+ * 子 agent 通过 Agent tool 自然并行，SSE 事件流式传输到前端。
+ *
+ * 如果父 agent 无法正常编排（模型不支持工具调用等），降级到 DAG 模式。
  */
 export async function runTeamPipeline(options: TeamRunnerOptions): Promise<string> {
-  const { goal, emitSSE, abortSignal } = options;
-  let accumulatedContext = `Team Goal: ${goal}\n\n`;
+  const { goal, workingDirectory, emitSSE, abortSignal } = options;
 
-  // Phase 0: 立即触发前端 UI 渲染，避免用户觉得卡顿
+  // Phase 0: 触发前端 UI 渲染
   emitTeamEvent('team_start', {
     goal,
-    agents: [], // 先传空列表，稍后 DAG 生成后补充
+    agents: [],
     startedAt: Date.now(),
   });
 
-  // Phase 1: Generate DAG
-  const dag = await generateTeamDAG(options);
-  
-  emitTeamEvent('team_dag_ready', {
-    agents: dag.tasks,
+  if (emitSSE) {
+    emitSSE({ type: 'text', data: `🚀 **启动智能体团队协作**\n正在分析任务并编排智能体...\n\n` });
+  }
+
+  // Phase 1: 父 agent 直接编排（OMC 策略）
+  const orchestrationPrompt = buildTeamOrchestrationPrompt(goal, workingDirectory);
+  const sessionId = `team-lead-${Date.now()}`;
+
+  const { providerId: finalProviderId, model: finalModel } = resolveAgentModel(
+    { id: 'orchestrator', displayName: 'Team Leader', description: 'Team orchestrator', mode: 'subagent' },
+    options.providerId,
+    options.parentModel
+  );
+
+  const { tools: allTools } = assembleTools({
+    workingDirectory,
+    prompt: goal,
+    providerId: finalProviderId,
+    sessionProviderId: options.sessionProviderId,
+    model: finalModel,
+    permissionContext: (options.parentSessionId && emitSSE && options.permissionMode)
+      ? {
+          sessionId: options.parentSessionId,
+          permissionMode: (options.permissionMode || 'trust') as import('./permission-checker').PermissionMode,
+          emitSSE,
+          abortSignal,
+        }
+      : undefined,
+    // Parent agent needs Agent/Team tools to orchestrate sub-agents.
+    // Only sub-agents use executionMode: 'spawn' to prevent nesting.
+  });
+
+  // DEBUG: log parent agent's available tools
+  const toolNames = Object.keys(allTools);
+  console.log(`[team-runner] Parent agent tools (${toolNames.length}): ${toolNames.join(', ')}`);
+  console.log(`[team-runner] Agent tool present: ${!!allTools['Agent']}, Team tool present: ${!!allTools['Team']}`);
+
+  const stream = runAgentLoop({
+    prompt: goal,
+    sessionId,
+    providerId: finalProviderId,
+    sessionProviderId: options.sessionProviderId,
+    model: finalModel,
+    systemPrompt: orchestrationPrompt,
+    workingDirectory,
+    tools: allTools,
+    maxSteps: 30,
+    permissionMode: options.permissionMode,
+  });
+
+  // Phase 2: 消费父 agent 流，转发所有 SSE 事件到前端
+  const reader = stream.getReader();
+  const collectedText: string[] = [];
+  let hasSpawnedSubAgents = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      const lines = value.split('\n');
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+
+        // 转发 SSE 事件到前端，保留原始事件类型
+        // subagent_start/subagent_complete 等事件驱动前端卡片渲染
+        if (emitSSE) {
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'text' && event.data) {
+              collectedText.push(event.data);
+            } else if (event.type === 'subagent_start') {
+              hasSpawnedSubAgents = true;
+            }
+            emitSSE(event);
+          } catch { /* skip non-JSON */ }
+        }
+      }
+    }
+  } catch (streamErr: unknown) {
+    const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+    console.warn('[team-runner] Parent agent stream error:', errMsg);
+  } finally {
+    reader.releaseLock();
+  }
+
+  // Phase 3: 如果父 agent 没有 spawn 子 agent（模型不支持 tool calling 或未调用 Agent tool），
+  // 降级到 DAG 模式确保子 agent 卡片正常渲染。
+  if (!hasSpawnedSubAgents) {
+    console.warn('[team-runner] Parent agent did not spawn sub-agents, falling back to DAG execution');
+    if (emitSSE) {
+      emitSSE({ type: 'text', data: `\n\n⚡ **切换到 DAG 调度模式**\n启用多智能体并行编排...\n\n` });
+    }
+    const result = await runDAGFallback(options);
+    emitTeamEvent('team_done', { summary: 'Team pipeline completed (DAG fallback)', completedAt: Date.now() });
+    return result;
+  }
+
+  emitTeamEvent('team_done', {
+    summary: 'Team orchestration completed',
+    completedAt: Date.now(),
   });
 
   if (emitSSE) {
-    emitSSE({ type: 'text', data: `✅ **任务 DAG 规划完成**\n包含 ${dag.tasks.length} 个任务节点，即将开始并发执行...\n\n` });
+    emitSSE({ type: 'text', data: `\n\n🎉 **团队协作完成**\n请查阅上方各智能体的执行报告。` });
   }
 
-  // Phase 2 & 4: Execute DAG with Parallel Execution and Verification Loop
+  return collectedText.join('');
+}
+
+/**
+ * runDAGFallback - DAG 降级执行路径
+ * 当父 agent 无法正常编排时，使用 buildFallbackDAG 生成任务图并执行。
+ */
+async function runDAGFallback(options: TeamRunnerOptions): Promise<string> {
+  const { goal, emitSSE, abortSignal } = options;
+  let accumulatedContext = `Team Goal: ${goal}\n\n`;
+
+  const dag = buildFallbackDAG(goal);
+
+  emitTeamEvent('team_dag_ready', { agents: dag.tasks });
+
+  if (emitSSE) {
+    emitSSE({ type: 'text', data: `✅ **DAG 降级规划完成**\n包含 ${dag.tasks.length} 个任务节点\n\n` });
+  }
+
   const pendingTasks = [...dag.tasks];
   const runningTasks = new Map<string, Promise<{ id: string }>>();
   const completedTasks = new Set<string>();
   const taskReports = new Map<string, string>();
-  let retries = 0;
-  const MAX_RETRIES = 3;
 
   while ((pendingTasks.length > 0 || runningTasks.size > 0) && !abortSignal?.aborted) {
-    // Find ready tasks
-    const readyTasks = pendingTasks.filter(t => 
+    const readyTasks = pendingTasks.filter(t =>
       !t.dependsOn || t.dependsOn.length === 0 || t.dependsOn.every(dep => completedTasks.has(dep))
     );
 
-    // Deadlock detection: if there are pending tasks but none are ready AND no tasks are running,
-    // we have a circular dependency or unresolvable dependency in the DAG.
     if (readyTasks.length === 0 && runningTasks.size === 0 && pendingTasks.length > 0) {
-      console.error('[team-runner] Deadlock detected in DAG:', pendingTasks);
-      const errMsg = `⚠️ **调度死锁错误**\n任务图中存在循环依赖或无法解析的前置条件。强制中止管线以防止系统卡死。\n剩余未执行任务: ${pendingTasks.map(t => t.id).join(', ')}`;
-      if (emitSSE) emitSSE({ type: 'error', data: JSON.stringify({ category: 'DAG_DEADLOCK', userMessage: errMsg }) });
-      throw new Error('DAG Execution Deadlock: Circular dependencies detected.');
+      console.error('[team-runner] Deadlock detected in DAG fallback:', pendingTasks);
+      break;
     }
 
-    // Start ready tasks
     for (const task of readyTasks) {
-      // Remove from pending
       const idx = pendingTasks.indexOf(task);
       if (idx > -1) pendingTasks.splice(idx, 1);
 
-      // Build context from dependencies
       let taskContext = accumulatedContext;
       if (task.dependsOn && task.dependsOn.length > 0) {
         taskContext += `\n\n--- Context from Dependencies ---\n`;
@@ -705,78 +924,29 @@ export async function runTeamPipeline(options: TeamRunnerOptions): Promise<strin
         }
       }
 
-      // Execute task
       const taskPromise = executeAgentTask(task, options, taskContext).then(({ report, errorEvent, role }) => {
         const fullReport = errorEvent ? `**Error**: ${errorEvent}` : report;
         taskReports.set(task.id, fullReport);
         completedTasks.add(task.id);
         accumulatedContext += `\n\n--- Report from ${role} (${task.id}) ---\n${fullReport}\n`;
-
-        // Phase 4: Verification Loop
-        if ((role === 'verifier' || role === 'qa-tester') && !errorEvent) {
-          const isFailed = fullReport.toLowerCase().includes('status: fail') || fullReport.toLowerCase().includes('fail') || fullReport.toLowerCase().includes('❌');
-          if (isFailed && retries < MAX_RETRIES) {
-            retries++;
-            if (emitSSE) {
-              emitSSE({ type: 'text', data: `\n\n⚠️ **验证失败**\n触发自动重试闭环 (Retry ${retries}/${MAX_RETRIES})...\n` });
-            }
-
-            const debugId = `debug-${retries}`;
-            const execId = `exec-${retries}`;
-            const verifyId = `verify-${retries}`;
-
-            pendingTasks.push({
-              id: debugId,
-              role: 'debugger',
-              desc: `分析验证失败的原因。前一次验证报告：\n${fullReport}`,
-              dependsOn: [task.id]
-            });
-            pendingTasks.push({
-              id: execId,
-              role: 'executor',
-              desc: `根据 Debugger 的分析结果修复代码。`,
-              dependsOn: [debugId]
-            });
-            pendingTasks.push({
-              id: verifyId,
-              role: role,
-              desc: `重新运行验证步骤。`,
-              dependsOn: [execId]
-            });
-          }
-        }
         return { id: task.id };
       }).catch((err: unknown) => {
-        // Handle unexpected errors from executeAgentTask
         const errMsg = err instanceof Error ? err.message : String(err);
         const role = normalizeAgentId(task.role);
         taskReports.set(task.id, `**❌ 执行异常**: ${errMsg}`);
         completedTasks.add(task.id);
         accumulatedContext += `\n\n--- Report from ${role} (${task.id}) ---\n**❌ 执行异常**: ${errMsg}\n`;
-        console.error(`[team-runner] Task ${task.id} threw error:`, err);
         return { id: task.id };
       });
 
       runningTasks.set(task.id, taskPromise);
     }
 
-    // Let completed branches advance immediately instead of waiting for the
-    // whole current batch. One slow sub-agent should not stall unrelated DAG
-    // branches that already have their dependencies satisfied.
     if (runningTasks.size > 0) {
       const settled = await Promise.race(runningTasks.values());
       runningTasks.delete(settled.id);
       continue;
     }
-  }
-
-  emitTeamEvent('team_done', {
-    summary: 'OMC Team 管线全部执行完毕',
-    completedAt: Date.now(),
-  });
-
-  if (emitSSE) {
-    emitSSE({ type: 'text', data: `\n\n🎉 **OMC Team 管线全部执行完毕**\n请查阅上方各智能体的执行报告。` });
   }
 
   return accumulatedContext;

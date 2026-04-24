@@ -2,17 +2,17 @@
  * SessionStatusIndicator.tsx — 会话状态指示器组件
  *
  * 功能：在聊天框底部状态栏显示当前会话的紧凑状态信息，
- * 包括子Agent数量、工具调用数、会话时长等。
+ * 包括子Agent数量、工具调用数、技能调用数。
  * 使用小字体设计，不干扰主会话区域的视觉。
  *
  * 用法：
- *   <SessionStatusIndicator subAgents={subAgents} toolCount={toolCount} startedAt={startedAt} />
+ *   <SessionStatusIndicator subAgents={subAgents} toolCount={toolCount} skillCount={skillCount} />
  */
 
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-import { Robot, Wrench, Clock, SpinnerGap, CheckCircle, XCircle } from '@phosphor-icons/react';
+import { useMemo } from 'react';
+import { Robot, Wrench, PuzzlePiece, SpinnerGap, CheckCircle, XCircle } from '@phosphor-icons/react';
 import {
   HoverCard,
   HoverCardTrigger,
@@ -27,43 +27,17 @@ interface SessionStatusIndicatorProps {
   subAgents?: SubAgentInfo[];
   /** 工具调用总数 */
   toolCount?: number;
-  /** 会话开始时间 */
-  startedAt?: number;
-}
-
-/**
- * 格式化时长为人类可读格式
- * 功能：将毫秒数转为 Xm / Xs 格式
- * 用法：在状态指示器中显示会话时长
- */
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return `${hours}h ${remainingMinutes}m`;
+  /** 技能调用总数 */
+  skillCount?: number;
 }
 
 /**
  * 会话状态指示器组件
- * 功能：紧凑显示当前会话的 agent 数量、工具调用数、时长
+ * 功能：紧凑显示当前会话的 agent 数量、工具调用数、技能调用数
  * 用法：放置在 ChatComposerActionBar 的右侧区域
  */
-export function SessionStatusIndicator({ subAgents = [], toolCount = 0, startedAt }: SessionStatusIndicatorProps) {
+export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCount = 0 }: SessionStatusIndicatorProps) {
   const { t } = useTranslation();
-  const [duration, setDuration] = useState('');
-
-  // 实时更新会话时长
-  useEffect(() => {
-    if (!startedAt) return;
-    const update = () => setDuration(formatDuration(Date.now() - startedAt));
-    update();
-    const interval = setInterval(update, 1000);
-    return () => clearInterval(interval);
-  }, [startedAt]);
 
   // 计算 agent 统计
   const agentStats = useMemo(() => {
@@ -75,7 +49,7 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, startedA
   }, [subAgents]);
 
   // 无活跃数据时不显示
-  if (agentStats.total === 0 && toolCount === 0 && !startedAt) return null;
+  if (agentStats.total === 0 && toolCount === 0 && skillCount === 0) return null;
 
   return (
     <HoverCard openDelay={200} closeDelay={100}>
@@ -103,25 +77,17 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, startedA
             </span>
           )}
 
-          {/* 会话时长 */}
-          {duration && (
+          {/* 技能调用数 */}
+          {skillCount > 0 && (
             <span className="flex items-center gap-0.5">
-              <Clock size={10} />
-              <span>{duration}</span>
+              <PuzzlePiece size={10} />
+              <span>{skillCount}</span>
             </span>
           )}
         </button>
       </HoverCardTrigger>
       <HoverCardContent side="top" align="end" className="w-56 p-3 text-xs">
         <div className="space-y-1.5">
-          {/* 会话时长 */}
-          {startedAt && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('session.duration')}</span>
-              <span className="font-medium font-mono">{duration || '0s'}</span>
-            </div>
-          )}
-
           {/* Agent 统计 */}
           {agentStats.total > 0 && (
             <>
@@ -164,6 +130,14 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, startedA
             <div className="flex justify-between border-t border-border pt-1.5 mt-1.5">
               <span className="text-muted-foreground">{t('session.toolCalls')}</span>
               <span className="font-medium">{toolCount}</span>
+            </div>
+          )}
+
+          {/* 技能调用统计 */}
+          {skillCount > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">技能调用</span>
+              <span className="font-medium">{skillCount}</span>
             </div>
           )}
         </div>

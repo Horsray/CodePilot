@@ -483,7 +483,7 @@ export function MessageInput({
       const uploadedFiles = await convertFiles();
       const mentionPayload = await resolveMentionPayload();
       const files = [...uploadedFiles, ...mentionPayload.files];
-      const { prompt, displayLabel } = dispatchBadge(badges, content);
+      const { prompt, displayLabel, skillContent } = dispatchBadge(badges, content);
       const mentionSections: string[] = [];
       if (mentionPayload.directoryNotes.length > 0) {
         mentionSections.push(`[Referenced Directories]\n${mentionPayload.directoryNotes.join('\n\n')}`);
@@ -495,10 +495,15 @@ export function MessageInput({
       const finalPrompt = `${prompt}${mentionAppend}`.trim();
       clearBadgesWithOrder();
       setInputValue('');
+      // Inject skill content as systemPromptAppend so the model sees the skill
+      // instructions in the system prompt rather than as a plain user message.
+      const skillAppend = skillContent
+        ? `[Skill Instructions]\n${skillContent}`
+        : undefined;
       onSend(
         finalPrompt,
         files.length > 0 ? files : undefined,
-        undefined,
+        skillAppend,
         displayLabel,
         mentionPayload.mentions.length > 0 ? mentionPayload.mentions : undefined,
       );

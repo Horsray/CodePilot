@@ -83,10 +83,15 @@ export function createAgentTool(ctx: {
         ctx.parentModel
       );
 
-      // Build system prompt
+      // Build system prompt — OMC-style non-nesting constraints
+      const SUBAGENT_CONSTRAINTS = `\n\nCONSTRAINTS (CRITICAL):
+- You are a sub-agent. You CANNOT spawn sub-agents or use the Agent/Team tools.
+- Work directly with your available tools (Read, Write, Edit, Bash, Glob, Grep).
+- Do NOT delegate. Complete your task yourself and provide a clear final report.`;
+
       const systemPrompt = agentDef.prompt
-        ? `${agentDef.prompt}\n\nWorking directory: ${ctx.workingDirectory}`
-        : `You are a helpful sub-agent. Working directory: ${ctx.workingDirectory}`;
+        ? `${agentDef.prompt}\n\nWorking directory: ${ctx.workingDirectory}${SUBAGENT_CONSTRAINTS}`
+        : `You are a helpful sub-agent. Working directory: ${ctx.workingDirectory}${SUBAGENT_CONSTRAINTS}`;
 
       // 生成稳定的子Agent ID，用于UI追踪
       const subAgentId = `subagent-${agentDef.id}-${Date.now()}`;
@@ -179,11 +184,35 @@ export function createAgentTool(ctx: {
       const thinkingParts: string[] = [];
       const toolResults: Array<{ name: string; content: string; isError: boolean }> = [];
       let errorEvent: string | null = null;
+      let timedOut = false;
+
+      // 中文注释：功能名称「子agent超时检测」，用法是当子agent在60秒内没有任何活动
+      // （文本输出、工具调用、思考等）时，自动终止流并生成报告，防止无限等待
+      const SUBAGENT_TIMEOUT_MS = 60_000; // 60秒超时
+      let lastActivityAt = Date.now();
+
+      const checkTimeout = () => {
+        const elapsed = Date.now() - lastActivityAt;
+        if (elapsed > SUBAGENT_TIMEOUT_MS) {
+          console.warn(`[agent] Sub-agent "${agentDef.id}" timed out after ${Math.round(elapsed / 1000)}s of inactivity`);
+          return true;
+        }
+        return false;
+      };
+
+      // 定期检测超时的定时器
+      const timeoutTimer = setInterval(() => {
+        if (checkTimeout()) {
+          timedOut = true;
+          reader.cancel().catch(() => {});
+        }
+      }, 5_000); // 每5秒检测一次
 
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          if (timedOut) break;
 
           // Parse SSE events, extract text content and forward permission requests
           if (value) {
@@ -192,6 +221,7 @@ export function createAgentTool(ctx: {
               if (!line.startsWith('data: ')) continue;
               try {
                 const event = JSON.parse(line.slice(6));
+                lastActivityAt = Date.now(); // 更新活动时间戳
                 progress.touch();
                 if (event.type === 'text') {
                   progress.setStage('整理子任务结果');
@@ -213,7 +243,7 @@ export function createAgentTool(ctx: {
                   }
                 } else if (event.type === 'tool_result') {
                   // 收集工具结果用于生成fallback摘要
-                  progress.setStage('分析工具结果');
+                  progress.setStage('等待模型响应');
                   try {
                     const res = JSON.parse(event.data);
                     const toolName = res.tool_use_id ? 'tool' : 'unknown';
@@ -240,6 +270,8 @@ export function createAgentTool(ctx: {
                       ctx.emitSSE({ type: 'tool_output', data: `[${status}] done` });
                     } catch { /* skip malformed */ }
                   }
+                } else if (event.type === 'tool_finished' && ctx.emitSSE) {
+                  progress.setStage('等待模型响应');
                 } else if (event.type === 'permission_request' && ctx.emitSSE) {
                   // Forward permission requests to parent stream so the
                   // client can show the approval UI for sub-agent tool calls
@@ -262,13 +294,33 @@ export function createAgentTool(ctx: {
           }
         }
       } finally {
+        clearInterval(timeoutTimer);
         progress.close();
         reader.releaseLock();
       }
 
       // 生成最终报告
       let finalReport: string;
-      if (textParts.length > 0) {
+      if (timedOut) {
+        // 超时终止：基于已收集的工具结果和thinking生成报告
+        const parts: string[] = [];
+        parts.push(`**⏱️ 子Agent执行超时（60秒无活动），已自动终止。**`);
+        if (toolResults.length > 0) {
+          parts.push(`\n**已执行 ${toolResults.length} 个工具：**`);
+          for (const tr of toolResults.slice(0, 10)) {
+            const preview = tr.content.slice(0, 500).replace(/\n/g, ' ');
+            parts.push(`- ${tr.name}: ${preview}${tr.content.length > 500 ? '...' : ''}`);
+          }
+        }
+        if (thinkingParts.length > 0) {
+          const thinkingText = thinkingParts.join('').trim();
+          if (thinkingText) {
+            parts.push('\n**思考过程：**\n' + thinkingText.slice(0, 3000));
+          }
+        }
+        parts.push('\n> 子Agent可能因模型响应缓慢或陷入循环而超时。建议检查任务复杂度或更换模型。');
+        finalReport = parts.join('\n');
+      } else if (textParts.length > 0) {
         finalReport = textParts.join('');
       } else if (errorEvent && errorEvent.includes('模型未返回任何内容') && finalModel !== ctx.parentModel) {
         // EMPTY_RESPONSE from routed model — retry with parent model as fallback
@@ -321,6 +373,13 @@ export function createAgentTool(ctx: {
                   }
                   else if (ev.type === 'thinking' && ctx.emitSSE) {
                     ctx.emitSSE({ type: 'subagent_progress', data: JSON.stringify({ id: subAgentId, detail: ev.data, append: true }) });
+                  }
+                  else if (ev.type === 'permission_request' && ctx.emitSSE) {
+                    progress.setStage('等待权限确认');
+                    ctx.emitSSE(ev);
+                  }
+                  else if (ev.type === 'tool_finished' && ctx.emitSSE) {
+                    progress.setStage('等待模型响应');
                   }
                 } catch { /* skip non-JSON */ }
               }

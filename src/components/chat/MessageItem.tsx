@@ -750,8 +750,11 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
 
         // 中文注释：功能名称「子Agent回退提取」，用法是当消息中没有sub_agents块时，
         // 从Agent/Team tool_use和tool_result对中提取子Agent信息，确保会话切换后卡片仍能渲染
-        const agentToolNames = ['Agent', 'mcp__codepilot-agent__Agent', 'Team', 'mcp__codepilot-team__Team'];
-        const toolUseBlocks = parsed.filter(b => b.type === 'tool_use' && agentToolNames.includes(b.name));
+        const isAgentOrTeamTool = (name: string) => {
+          const lower = name.toLowerCase();
+          return lower === 'agent' || lower === 'team' || lower === 'todowrite' || lower.includes('mcp__codepilot-agent__') || lower.includes('mcp__codepilot-team__') || lower.includes('mcp__codepilot-todo__');
+        };
+        const toolUseBlocks = parsed.filter(b => b.type === 'tool_use' && isAgentOrTeamTool(b.name));
         if (toolUseBlocks.length > 0) {
           const toolResultMap = new Map<string, { content: string; isError?: boolean }>();
           parsed.filter(b => b.type === 'tool_result').forEach(b => {
@@ -795,12 +798,15 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     return null;
   }, [message.content, isUser]);
 
-  // 当 SubAgentTimeline 卡片存在时，从 timeline 中过滤掉 Agent/Team 工具调用，
-  // 避免同一批智能体在时间线和卡片中重复渲染
+  // 当 SubAgentTimeline 卡片存在时，从 timeline 中过滤掉独立的 Agent/Team 工具调用，
+  // 避免同一批智能体在时间线和卡片中重复渲染。
   const timelineTools = useMemo(() => {
     if (!subAgents || subAgents.length === 0) return pairedTools;
-    const agentToolNames = ['Agent', 'mcp__codepilot-agent__Agent', 'Team', 'mcp__codepilot-team__Team'];
-    return pairedTools.filter(tool => !agentToolNames.includes(tool.name));
+    return pairedTools.filter(tool => {
+      const lower = tool.name.toLowerCase();
+      // 这里过滤掉独立的 Agent 和 Team 工具调用，避免上方工具调用组出现重复卡片
+      return !(lower === 'agent' || lower === 'team' || lower === 'todowrite' || lower.includes('mcp__codepilot-agent__') || lower.includes('mcp__codepilot-team__') || lower.includes('mcp__codepilot-todo__'));
+    });
   }, [pairedTools, subAgents]);
 
   const showAssistantAvatar = !isUser && isAssistantProject;
@@ -861,6 +867,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
               sessionId={sessionId}
               rewindUserMessageId={rewindUserMessageId}
               flat={true}
+              hideSubAgents={!!(subAgents && subAgents.length > 0)}
             />
           </>
         )}

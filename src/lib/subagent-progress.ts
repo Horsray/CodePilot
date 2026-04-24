@@ -25,6 +25,7 @@ export function createSubAgentProgressTracker(options: {
   const { id, emitSSE, initialStage, heartbeatMs = 15_000, sla } = options;
   let lastActivityAt = Date.now();
   let currentStage = initialStage;
+  let stageStartedAt = Date.now();
   let softWarned = false;
   let hardWarned = false;
 
@@ -39,19 +40,23 @@ export function createSubAgentProgressTracker(options: {
 
   const timer = emitSSE
     ? setInterval(() => {
-        const idleMs = Date.now() - lastActivityAt;
-        if (sla && !hardWarned && idleMs >= sla.hardMs) {
+        // Use stageStartedAt instead of lastActivityAt to accurately track how long
+        // the agent has been stuck in the CURRENT stage (e.g. waiting for tool execution).
+        // This prevents keep_alive events from resetting the wait timer.
+        const stageIdleMs = Date.now() - stageStartedAt;
+        
+        if (sla && !hardWarned && stageIdleMs >= sla.hardMs) {
           hardWarned = true;
-          emit(`\n⚠️ SLA 超时：${currentStage}（已等待 ${formatSeconds(idleMs)}）\n`, true);
+          emit(`\n⚠️ SLA 超时：${currentStage}（已等待 ${formatSeconds(stageIdleMs)}）\n`, true);
           return;
         }
-        if (sla && !softWarned && idleMs >= sla.softMs) {
+        if (sla && !softWarned && stageIdleMs >= sla.softMs) {
           softWarned = true;
-          emit(`\n⏱️ SLA 预警：${currentStage}（已等待 ${formatSeconds(idleMs)}）\n`, true);
+          emit(`\n⏱️ SLA 预警：${currentStage}（已等待 ${formatSeconds(stageIdleMs)}）\n`, true);
           return;
         }
-        if (idleMs >= heartbeatMs) {
-          emit(`\n...${currentStage}（已等待 ${formatSeconds(idleMs)}）\n`, true);
+        if (stageIdleMs >= heartbeatMs) {
+          emit(`\n...${currentStage}（已等待 ${formatSeconds(stageIdleMs)}）\n`, true);
         }
       }, heartbeatMs)
     : null;
@@ -64,7 +69,7 @@ export function createSubAgentProgressTracker(options: {
   return {
     touch() {
       lastActivityAt = Date.now();
-      resetWarnings();
+      // We don't reset stageStartedAt here, so the wait time for the current stage keeps accumulating
     },
     setStage(stage: string) {
       if (stage === currentStage) {
@@ -73,8 +78,8 @@ export function createSubAgentProgressTracker(options: {
       }
       currentStage = stage;
       lastActivityAt = Date.now();
+      stageStartedAt = Date.now(); // Reset stage timer when stage actually changes
       resetWarnings();
-      // Do not emit stage changes, as executeAgentTask will emit the actual progress
     },
     close() {
       if (timer) clearInterval(timer);

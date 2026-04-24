@@ -420,8 +420,11 @@ export function StreamingMessage({
 
   const timelineTools = useMemo(() => {
     if (!streamingSubAgents || streamingSubAgents.length === 0) return toolUses;
-    const agentToolNames = ['Agent', 'mcp__codepilot-agent__Agent', 'Team', 'mcp__codepilot-team__Team'];
-    return toolUses.filter(tool => !agentToolNames.includes(tool.name));
+    return toolUses.filter(tool => {
+      const lower = tool.name.toLowerCase();
+      // 过滤掉独立的 Agent 和 Team 工具调用，避免上方工具调用组出现重复卡片
+      return !(lower === 'agent' || lower === 'team' || lower === 'todowrite' || lower.includes('mcp__codepilot-agent__') || lower.includes('mcp__codepilot-team__') || lower.includes('mcp__codepilot-todo__'));
+    });
   }, [toolUses, streamingSubAgents]);
   const [finalContentStart, setFinalContentStart] = useState(0);
   const timelineStateRef = useRef<ReturnType<typeof createTimelineAccumulator> | null>(null);
@@ -817,6 +820,7 @@ export function StreamingMessage({
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
             flat={true}
+            hideSubAgents={!!(streamingSubAgents && streamingSubAgents.length > 0)}
           />
         )}
 

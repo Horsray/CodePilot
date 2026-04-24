@@ -114,6 +114,8 @@ export interface PopoverItem {
   kind?: SkillKind;
   icon?: IconComponent;
   nodeType?: MentionNodeType;
+  /** Skill body content for agent_skill kind — used to inject into system prompt */
+  content?: string;
 }
 
 /** Which popover is currently active in the command input. */
@@ -126,6 +128,8 @@ export interface CommandBadge {
   description: string;
   kind: SkillKind;
   installedSource?: 'agents' | 'claude';
+  /** Skill body content — used to inject into system prompt when dispatched */
+  content?: string;
 }
 
 /** Active CLI tool badge shown above the textarea. */

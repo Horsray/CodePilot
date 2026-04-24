@@ -721,6 +721,27 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                   resultContent += hintContent;
                 }
 
+                // SKILL_FORK interception: when the Skill tool returns a fork-mode
+                // result, parse the prompt and inject it as a system message so the
+                // model follows the skill's instructions in the next iteration.
+                const currentToolName = (event as any).toolName;
+                if (currentToolName === 'Skill' && resultContent.startsWith('[SKILL_FORK]')) {
+                  const forkMatch = resultContent.match(/^\[SKILL_FORK\]\nPrompt:\s*([\s\S]*?)\nAllowed tools:\s*(.*)$/);
+                  if (forkMatch) {
+                    const skillPrompt = forkMatch[1].trim();
+                    const allowedTools = forkMatch[2].trim();
+                    // Replace the tool result with the skill prompt so the model sees it
+                    resultContent = skillPrompt;
+                    // Inject a system message with tool restriction guidance
+                    if (allowedTools && allowedTools !== 'all') {
+                      const toolList = allowedTools.split(',').map(t => t.trim()).filter(Boolean);
+                      const restrictionMsg = `[Skill Execution Mode] You are now executing a skill with restricted tools. You may ONLY use these tools: ${toolList.join(', ')}. Follow the skill instructions above precisely.`;
+                      messages = [...messages, { role: 'system', content: restrictionMsg }] as ModelMessage[];
+                    }
+                    console.log(`[agent-loop] SKILL_FORK intercepted: ${skillPrompt.substring(0, 80)}... (tools: ${allowedTools})`);
+                  }
+                }
+
                 controller.enqueue(formatSSE({
                   type: 'tool_result',
                   data: JSON.stringify({

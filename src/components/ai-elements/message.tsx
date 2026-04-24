@@ -14,6 +14,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { FileText } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { CodeBlock } from "./code-block";
@@ -365,7 +366,76 @@ export const MessageResponse = memo(
           }
           return <pre {...preProps}>{children}</pre>;
         },
+        li: ({ children, ...liProps }: any) => {
+          // Flatten children to extract text
+          const extractText = (nodes: any[]): string => {
+            return nodes.map(node => {
+              if (typeof node === 'string') return node;
+              if (node && node.props && node.props.children) {
+                return Array.isArray(node.props.children) ? extractText(node.props.children) : String(node.props.children);
+              }
+              return '';
+            }).join('');
+          };
+
+          const isSimpleArray = Array.isArray(children);
+          
+          if (isSimpleArray && children.length > 0) {
+            const text = extractText(children).trim();
+            // Looks like an absolute path or relative path, and doesn't contain a lot of normal text
+            // Also explicitly check that it's just a path, not part of a sentence
+            if ((text.startsWith('/') || /^[a-zA-Z]:\\/.test(text)) && !text.includes(' ') && text.length > 2) {
+              return (
+                <li className="list-none mt-2 mb-2 relative flex items-start" {...liProps}>
+                  <div 
+                    className="flex w-fit max-w-full items-start gap-2 px-2.5 py-1.5 text-[13px] bg-muted/30 hover:bg-muted/60 transition-colors text-left rounded-[6px] border border-border/60 cursor-pointer group"
+                    onClick={() => {
+                      // Optional: Dispatch an event to open the file
+                      const evt = new CustomEvent('open-file', { detail: { path: text } });
+                      window.dispatchEvent(evt);
+                    }}
+                  >
+                    <FileText size={14} className="text-muted-foreground shrink-0 mt-[3px] group-hover:text-blue-500 transition-colors" />
+                    <span className="font-mono text-foreground/80 break-all leading-[1.3] pt-[2px]">{text}</span>
+                  </div>
+                </li>
+              );
+            }
+          }
+          return <li {...liProps}>{children}</li>;
+        },
         a: ({ node, href, children, ...aProps }: any) => {
+          // If the link text itself looks like a file path, we can also style it nicely
+          const isSimpleArray = Array.isArray(children);
+          if (isSimpleArray && children.length > 0) {
+            const extractText = (nodes: any[]): string => {
+              return nodes.map(node => {
+                if (typeof node === 'string') return node;
+                if (node && node.props && node.props.children) {
+                  return Array.isArray(node.props.children) ? extractText(node.props.children) : String(node.props.children);
+                }
+                return '';
+              }).join('');
+            };
+            const text = extractText(children).trim();
+            if ((text.startsWith('/') || /^[a-zA-Z]:\\/.test(text)) && !text.includes(' ') && text.length > 2) {
+              return (
+                <div 
+                  className="inline-flex max-w-full items-start gap-2 px-2.5 py-1 text-[13px] bg-muted/30 hover:bg-muted/60 transition-colors text-left rounded-[6px] border border-border/60 cursor-pointer mt-1 mb-1 align-middle mx-1 group"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    // Optional: Dispatch an event to open the file
+                    const evt = new CustomEvent('open-file', { detail: { path: text } });
+                    window.dispatchEvent(evt);
+                  }}
+                >
+                  <FileText size={14} className="text-muted-foreground shrink-0 mt-[2px] group-hover:text-blue-500 transition-colors" />
+                  <span className="font-mono text-foreground/80 break-all leading-[1.3] pt-[1px]">{text}</span>
+                </div>
+              );
+            }
+          }
+
           return (
             <a
               href={href}
@@ -382,6 +452,85 @@ export const MessageResponse = memo(
               {children}
             </a>
           );
+        },
+        code: ({ children, ...codeProps }: any) => {
+          // Check if this code block has a language class (meaning it's from a <pre> block)
+          // If so, we just return the children since CodeBlock will handle the styling
+          if (codeProps.className && (codeProps.className.includes('language-') || codeProps.className.includes('!bg-['))) {
+            return <code {...codeProps}>{children}</code>;
+          }
+          
+          // Detect if inline code is just a file path
+          const isSimpleArray = Array.isArray(children);
+          if (isSimpleArray && children.length > 0) {
+            const extractText = (nodes: any[]): string => {
+              return nodes.map(node => {
+                if (typeof node === 'string') return node;
+                if (node && node.props && node.props.children) {
+                  return Array.isArray(node.props.children) ? extractText(node.props.children) : String(node.props.children);
+                }
+                return '';
+              }).join('');
+            };
+            const text = extractText(children).trim();
+            if ((text.startsWith('/') || /^[a-zA-Z]:\\/.test(text)) && !text.includes(' ') && text.length > 2) {
+              return (
+                <span 
+                  className="inline-flex max-w-full items-start gap-2 px-2 py-1 text-[13px] bg-muted/30 hover:bg-muted/60 transition-colors text-left rounded-[6px] border border-border/60 cursor-pointer align-middle mx-1 group"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    // Optional: Dispatch an event to open the file
+                    const evt = new CustomEvent('open-file', { detail: { path: text } });
+                    window.dispatchEvent(evt);
+                  }}
+                >
+                  <FileText size={14} className="text-muted-foreground shrink-0 mt-[2px] group-hover:text-blue-500 transition-colors" />
+                  <span className="font-mono text-foreground/80 break-all leading-[1.3] pt-[1px]">{text}</span>
+                </span>
+              );
+            }
+          }
+          // If not a file path, we can still style it nicely as an inline code block
+          return (
+            <code 
+              className={cn("bg-muted/40 px-1.5 py-0.5 rounded-md font-mono text-[13px] text-foreground/90 border border-border/30", codeProps.className)} 
+              {...codeProps}
+            >
+              {children}
+            </code>
+          );
+        },
+        p: ({ children, ...pProps }: any) => {
+          // Detect if paragraph is just a file path
+          const isSimpleArray = Array.isArray(children);
+          if (isSimpleArray && children.length > 0) {
+            const extractText = (nodes: any[]): string => {
+              return nodes.map(node => {
+                if (typeof node === 'string') return node;
+                if (node && node.props && node.props.children) {
+                  return Array.isArray(node.props.children) ? extractText(node.props.children) : String(node.props.children);
+                }
+                return '';
+              }).join('');
+            };
+            const text = extractText(children).trim();
+            if ((text.startsWith('/') || /^[a-zA-Z]:\\/.test(text)) && !text.includes(' ') && text.length > 2) {
+              return (
+                <div 
+                  className="flex w-fit max-w-full items-start gap-2 px-2.5 py-1.5 text-[13px] bg-muted/30 hover:bg-muted/60 transition-colors text-left rounded-[6px] border border-border/60 cursor-pointer mt-2 mb-2 group"
+                  onClick={() => {
+                    // Optional: Dispatch an event to open the file
+                    const evt = new CustomEvent('open-file', { detail: { path: text } });
+                    window.dispatchEvent(evt);
+                  }}
+                >
+                  <FileText size={14} className="text-muted-foreground shrink-0 mt-[3px] group-hover:text-blue-500 transition-colors" />
+                  <span className="font-mono text-foreground/80 break-all leading-[1.3] pt-[2px]">{text}</span>
+                </div>
+              );
+            }
+          }
+          return <p {...pProps}>{children}</p>;
         },
         ...components,
       }}

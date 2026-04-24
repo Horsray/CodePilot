@@ -35,7 +35,7 @@ class SessionToolSemaphore {
       let released = false;
       return () => {
         if (released) return;
-        released = false;
+        released = true;
         this.running--;
         const next = this.queue.shift();
         if (next) next();

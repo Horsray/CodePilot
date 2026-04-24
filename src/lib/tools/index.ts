@@ -49,7 +49,7 @@ export interface ToolContext {
  * Create the full set of built-in coding tools.
  */
 export function createBuiltinTools(ctx: ToolContext): ToolSet {
-  return {
+  const tools: ToolSet = {
     Read: createReadTool(ctx),
     Write: createWriteTool(ctx),
     Edit: createEditTool(ctx),
@@ -61,25 +61,32 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
     codepilot_skill_create: createSkillCreateTool(ctx.workingDirectory),
     codepilot_mcp_activate: createMcpActivateTool(ctx.workingDirectory),
     codepilot_open_browser: createBrowserTool(),
-    Agent: createAgentTool({
-      workingDirectory: ctx.workingDirectory,
-      providerId: ctx.providerId,
-      sessionProviderId: ctx.sessionProviderId,
-      parentModel: ctx.model,
-      permissionMode: ctx.permissionMode,
-      parentSessionId: ctx.sessionId,
-      emitSSE: ctx.emitSSE,
-      abortSignal: ctx.abortSignal,
-    }),
-    Team: createTeamTool({
-      workingDirectory: ctx.workingDirectory,
-      providerId: ctx.providerId,
-      sessionProviderId: ctx.sessionProviderId,
-      parentModel: ctx.model,
-      permissionMode: ctx.permissionMode,
-      parentSessionId: ctx.sessionId,
-      emitSSE: ctx.emitSSE,
-      abortSignal: ctx.abortSignal,
-    }),
   };
+
+  // OMC-style: sub-agents (spawn mode) cannot spawn their own sub-agents
+  // or orchestrate teams. Only the parent agent has these capabilities.
+  if (ctx.executionMode !== 'spawn') {
+    tools.Agent = createAgentTool({
+      workingDirectory: ctx.workingDirectory,
+      providerId: ctx.providerId,
+      sessionProviderId: ctx.sessionProviderId,
+      parentModel: ctx.model,
+      permissionMode: ctx.permissionMode,
+      parentSessionId: ctx.sessionId,
+      emitSSE: ctx.emitSSE,
+      abortSignal: ctx.abortSignal,
+    });
+    tools.Team = createTeamTool({
+      workingDirectory: ctx.workingDirectory,
+      providerId: ctx.providerId,
+      sessionProviderId: ctx.sessionProviderId,
+      parentModel: ctx.model,
+      permissionMode: ctx.permissionMode,
+      parentSessionId: ctx.sessionId,
+      emitSSE: ctx.emitSSE,
+      abortSignal: ctx.abortSignal,
+    });
+  }
+
+  return tools;
 }

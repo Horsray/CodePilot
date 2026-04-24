@@ -20,6 +20,8 @@ export interface InsertResult {
 export interface BadgeDispatchResult {
   prompt: string;
   displayLabel: string;
+  /** Skill body content to inject into system prompt (for agent_skill badges) */
+  skillContent?: string;
 }
 
 export type KeyAction =
@@ -131,6 +133,7 @@ export function resolveItemSelection(
         description: item.description || '',
         kind: item.kind || 'slash_command',
         installedSource: item.installedSource,
+        content: item.content,
       },
       newInputValue: before + after,
     };
@@ -162,6 +165,15 @@ export function dispatchBadge(
     return { prompt: userContent, displayLabel: userContent };
   }
 
+  // Helper: collect skill content from agent_skill badges
+  const collectSkillContent = (bs: CommandBadge[]): string | undefined => {
+    const contents = bs
+      .filter((b) => b.kind === 'agent_skill' && b.content)
+      .map((b) => b.content!);
+    if (contents.length === 0) return undefined;
+    return contents.join('\n\n---\n\n');
+  };
+
   // Multi-skill path: combine labels into one prompt, join display labels.
   if (badges.length > 1 && badges.every((b) => b.kind === 'agent_skill')) {
     const skillNames = badges.map((b) => b.label).join(', ');
@@ -171,7 +183,7 @@ export function dispatchBadge(
     const agentPrompt = userContent
       ? `Use the ${skillNames} skills. User context: ${userContent}`
       : `Please use the ${skillNames} skills.`;
-    return { prompt: agentPrompt, displayLabel };
+    return { prompt: agentPrompt, displayLabel, skillContent: collectSkillContent(badges) };
   }
 
   const badge = badges[0];
@@ -183,7 +195,7 @@ export function dispatchBadge(
       const agentPrompt = userContent
         ? `Use the ${badge.label} skill. User context: ${userContent}`
         : `Please use the ${badge.label} skill.`;
-      return { prompt: agentPrompt, displayLabel };
+      return { prompt: agentPrompt, displayLabel, skillContent: collectSkillContent(badges) };
     }
     case 'slash_command':
     case 'sdk_command': {

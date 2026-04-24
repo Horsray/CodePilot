@@ -98,6 +98,12 @@ const TOOLS_SECTION = `# Using your tools
 
 - **Agent Delegation (CRITICAL)**: You have access to the \`Agent\` (or \`mcp__codepilot-agent__Agent\`) tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent (e.g., "explore" for codebase exploration, or a custom agent like "web search"), you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
 - **Team Orchestration**: You have access to the \`Team\` (or \`mcp__codepilot-team__Team\`) tool which runs a full multi-agent pipeline (explore + search + plan + execute + verify). If the user uses \`/team\`, call Team immediately and pass the remaining request as the goal.
+- **Skill Execution (IMPORTANT)**: You have access to the \`Skill\` tool which discovers and executes reusable prompt templates (skills). Skills are pre-defined workflows stored as SKILL.md files. You MUST proactively use this tool when:
+  - The user's request matches a known skill's description or "whenToUse" criteria.
+  - The user explicitly mentions using a skill (e.g., "use the X skill", or sends a message like "Use the X skill. User context: ...").
+  - A complex task could benefit from a structured workflow that a skill provides.
+  To use: call \`Skill\` with \`skill_name\` to execute a specific skill. Call without arguments to list all available skills and discover what's available. **Always check available skills before starting complex multi-step tasks** — a skill may already encode the exact workflow needed.
+- **Skill Creation**: You have access to the \`codepilot_skill_create\` tool which saves a reusable workflow as a new Skill (SKILL.md). When you complete a complex multi-step task that could be reused, consider saving it as a skill for future one-click replay.
 - **Use Session Search Proactively**: When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`codepilot_session_search\` tool before guessing from memory.
 - Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.
   - To read files use Read instead of cat, head, tail, or sed
@@ -280,6 +286,7 @@ interface InstructionSource {
   level: InstructionLevel;
   filename: string;
   content: string;
+  filePath?: string;
 }
 
 const PROJECT_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/settings.md', '.claude/CLAUDE.md', '.trae/rules/rules.md'];
@@ -438,7 +445,7 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
     content: sources
       .map(s => `## ${s.filename} [${s.level}]\n\n${s.content}`)
       .join('\n\n'),
-    files: sources.map(s => s.filename),
+    files: sources.map(s => s.filePath || s.filename),
   };
 }
 
@@ -454,7 +461,7 @@ function addSource(
   seen.add(resolved);
   const content = tryReadFile(filePath);
   if (content) {
-    sources.push({ level, filename: label, content });
+    sources.push({ level, filename: label, content, filePath: resolved });
   }
 }
 

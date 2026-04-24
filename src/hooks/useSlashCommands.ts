@@ -106,7 +106,7 @@ export function useSlashCommands(opts: {
             if (s.source === 'plugin' && s.loaded === false) return false;
             return true;
           })
-          .map((s: { name: string; description: string; source?: "global" | "project" | "plugin" | "installed" | "sdk"; kind?: SkillKind; installedSource?: "agents" | "claude" }) => ({
+          .map((s: { name: string; description: string; content?: string; source?: "global" | "project" | "plugin" | "installed" | "sdk"; kind?: SkillKind; installedSource?: "agents" | "claude" }) => ({
             label: s.name,
             value: `/${s.name}`,
             description: s.description || "",
@@ -114,6 +114,7 @@ export function useSlashCommands(opts: {
             installedSource: s.installedSource,
             source: s.source,
             kind: s.kind || 'slash_command',
+            content: s.content || undefined,
           }));
       }
     } catch {

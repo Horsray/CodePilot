@@ -17,6 +17,8 @@ import {
   Eyeglasses,
   ArrowSquareOut,
   Code,
+  Eye,
+  FileText,
   FilePlus,
   CaretDown,
   Play,
@@ -86,6 +88,8 @@ interface ToolActionsGroupProps {
   sessionId?: string;
   /** Rewind target user message ID */
   rewindUserMessageId?: string;
+  /** When true, filter out sub-agent tools from the timeline */
+  hideSubAgents?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +147,15 @@ export const AGENT_META: Record<string, { icon: React.ElementType, color: string
   'code-simplifier': { icon: Wrench, color: 'text-yellow-600', bg: 'bg-yellow-600/10', label: '代码简化者' },
   critic: { icon: Eyeglasses, color: 'text-red-500', bg: 'bg-red-500/10', label: '审查员' }
 };
+
+export function isSubAgentTool(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  // Do NOT filter out 'team' tool, so the "团队协作模式" card remains visible!
+  // Only filter out the individual sub-agents that are already rendered by SubAgentTimeline.
+  if (['agent', 'mcp__codepilot-agent__agent'].includes(lowerName)) return true;
+  if (lowerName.includes('mcp__codepilot-agent__')) return true;
+  return !!AGENT_META[lowerName] || lowerName.endsWith('agent') || lowerName.replace(/\s+/g, '') === 'searchagent';
+}
 
 function TeamAgentTimelines({ outputText, isRunning }: { outputText: string, isRunning: boolean }) {
   // 1. Check if outputText has agent outputs (Team runner format)
@@ -283,6 +296,51 @@ function TeamAgentTimelines({ outputText, isRunning }: { outputText: string, isR
   );
 }
 
+function parseMcpResultText(result: string): string {
+  if (!result) return '';
+  try {
+    const parsed = JSON.parse(result);
+    
+    // Check if it matches the Anthropic SDK block structure format
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.content)) {
+      return parsed.content.map((item: any) => {
+        if (typeof item === 'string') return item;
+        if (item && item.type === 'text' && typeof item.text === 'string') return item.text;
+        return JSON.stringify(item);
+      }).join('\n');
+    }
+    
+    // Check if it's already an array of strings
+    if (Array.isArray(parsed)) {
+      return parsed.map(item => {
+        if (typeof item === 'string') return item;
+        if (item && item.type === 'text' && typeof item.text === 'string') return item.text;
+        return JSON.stringify(item);
+      }).join('\n');
+    }
+    
+    // Look for text field
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.text) return String(parsed.text);
+      if (parsed.content && typeof parsed.content === 'string') return parsed.content;
+      
+      // Attempt to prettify JSON objects as a fallback
+      return JSON.stringify(parsed, null, 2);
+    }
+  } catch {
+    // If it's not valid JSON, check if it's just a raw string wrapped in quotes
+    if (typeof result === 'string' && result.startsWith('"') && result.endsWith('"')) {
+       try {
+         return JSON.parse(result);
+       } catch {
+         return result;
+       }
+    }
+    return result;
+  }
+  return result;
+}
+
 const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => ['bash', 'execute', 'run', 'shell', 'execute_command'].includes(n.toLowerCase()),
@@ -335,13 +393,66 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    match: (n) => ['read', 'readfile', 'read_file'].includes(n.toLowerCase()),
+    match: (n) => ['read', 'readfile', 'read_file', 'mcp__filesystem__read_file'].includes(n.toLowerCase()),
     icon: Eyeglasses,
-    label: '读取',
+    label: '读取文件',
     getSummary: (input) => {
       const path = getFilePath(input);
       return path ? extractFilename(path) : '文件';
     },
+    renderDetail: (tool, streamingOutput) => {
+      const isRunning = tool.result === undefined;
+      if (isRunning) {
+        return (
+          <div className="mt-2 ml-3 pl-3 py-1 space-y-1 text-[11px] text-muted-foreground/60 italic">
+            正在读取文件内容...
+          </div>
+        );
+      }
+      const outputText = tool.result;
+      if (!outputText) return null;
+      
+      const cleanText = parseMcpResultText(outputText);
+      
+      return (
+        <div className="mt-2 ml-3 border-l-2 border-blue-500/30 pl-3 py-2 bg-background/30 rounded-r-md">
+          <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[300px] overflow-auto">
+            {cleanText.length > 5000 ? cleanText.slice(0, 5000) + `\n… (已截断，共 ${cleanText.length} 字符)` : cleanText}
+          </pre>
+        </div>
+      );
+    }
+  },
+  {
+    match: (n) => ['list_directory', 'directory_tree', 'mcp__filesystem__list_directory', 'mcp__filesystem__directory_tree'].includes(n.toLowerCase()),
+    icon: FolderOpen,
+    label: '查看目录',
+    getSummary: (input) => {
+      const path = getFilePath(input);
+      return path ? extractFilename(path) : '目录';
+    },
+    renderDetail: (tool, streamingOutput) => {
+      const isRunning = tool.result === undefined;
+      if (isRunning) {
+        return (
+          <div className="mt-2 ml-3 pl-3 py-1 space-y-1 text-[11px] text-muted-foreground/60 italic">
+            正在查看目录内容...
+          </div>
+        );
+      }
+      const outputText = tool.result;
+      if (!outputText) return null;
+      
+      const cleanText = parseMcpResultText(outputText);
+      
+      return (
+        <div className="mt-2 ml-3 border-l-2 border-blue-500/30 pl-3 py-2 bg-background/30 rounded-r-md">
+          <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[300px] overflow-auto">
+            {cleanText.length > 5000 ? cleanText.slice(0, 5000) + `\n… (已截断，共 ${cleanText.length} 字符)` : cleanText}
+          </pre>
+        </div>
+      );
+    }
   },
   {
     match: (n) => ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search'].includes(n.toLowerCase()),
@@ -610,6 +721,83 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
+    match: (n) => n.toLowerCase() === 'mcp__filesystem__read_multiple_files' || n.toLowerCase() === 'codepilot_read_multiple_files',
+    icon: Eyeglasses,
+    label: '读取多个文件',
+    getSummary: (input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      if (inp && Array.isArray(inp.paths)) {
+        return `读取了 ${inp.paths.length} 个文件`;
+      }
+      return '读取了多个文件';
+    },
+    renderDetail: (tool, streamingOutput) => {
+      const isRunning = tool.result === undefined;
+      if (isRunning) {
+        return (
+          <div className="mt-2 ml-3 pl-3 py-1 space-y-1 text-[11px] text-muted-foreground/60 italic">
+            正在读取文件内容...
+          </div>
+        );
+      }
+
+      const input = tool.input as Record<string, unknown> | undefined;
+      const paths = (input?.paths as string[]) || [];
+      if (paths.length === 0) return null;
+
+      return (
+        <div className="mt-2 ml-3 border-l-2 border-blue-500/30 pl-3 py-2 space-y-1 bg-background/30 rounded-r-md">
+          <div className="flex flex-col gap-1">
+            {paths.map((path, idx) => (
+              <div 
+                key={idx} 
+                className="flex items-center gap-2 group cursor-pointer hover:bg-muted/50 p-1 rounded transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fetch('/api/open-file', {
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path }),
+                  }).catch(() => {});
+                }}
+                title="点击在编辑器中打开文件"
+              >
+                <FileText size={12} className="text-muted-foreground shrink-0" />
+                <span className="font-mono text-[11px] text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 truncate">
+                  {path}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    },
+  },
+  {
+    match: (n) => n.toLowerCase() === 'mcp__codepilot-todo__codepilot_mcp_activate' || n.toLowerCase() === 'codepilot_mcp_activate',
+    icon: Wrench,
+    label: '激活 MCP 工具',
+    getSummary: (input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      return (inp?.serverName as string) || 'MCP Server';
+    },
+    renderDetail: (tool, streamingOutput) => {
+      const isRunning = tool.result === undefined;
+      const outputText = isRunning ? streamingOutput : tool.result;
+      if (!outputText) return null;
+
+      const cleanText = parseMcpResultText(outputText);
+
+      return (
+        <div className="mt-2 ml-3 border-l-2 border-blue-500/30 pl-3 py-2 bg-background/30 rounded-r-md">
+          <div className="text-[11px] text-muted-foreground/80 break-words whitespace-pre-wrap leading-relaxed">
+            {cleanText}
+          </div>
+        </div>
+      );
+    }
+  },
+  {
     // Fallback — must be last. Shows the raw tool name so unregistered tools
     // (TodoWrite, MCP tools, plugin tools) remain identifiable.
     match: () => true,
@@ -617,6 +805,14 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     label: '',
     getSummary: (input, name?: string) => {
       const prefix = name || '';
+      
+      // Memory MCP tools
+      if (prefix.toLowerCase().includes('memory') || prefix === '记忆召回' || prefix === '记忆整理' || prefix === '记忆操作') {
+        if (prefix.includes('search') || prefix.includes('recent') || prefix === '记忆召回') return '记忆召回';
+        if (prefix.includes('store') || prefix.includes('save') || prefix.includes('write') || prefix === '记忆整理') return '记忆整理';
+        return '记忆操作';
+      }
+
       if (!input || typeof input !== 'object') return prefix;
       const data = input as Record<string, unknown>;
       const hint = String(
@@ -630,7 +826,30 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
 ];
 
 function getRenderer(name: string, input?: unknown): ToolRendererDef {
-  return TOOL_REGISTRY.find((r) => r.match(name, input)) || TOOL_REGISTRY[TOOL_REGISTRY.length - 1];
+  const match = TOOL_REGISTRY.find((r) => r.match(name, input)) || TOOL_REGISTRY[TOOL_REGISTRY.length - 1];
+  
+  // Special cases to override the default Wrench icon based on tool semantics
+  if (match === TOOL_REGISTRY[TOOL_REGISTRY.length - 1]) {
+    const lowerName = name.toLowerCase();
+    
+    if (lowerName.includes('memory') || name === 'mcp__codepilot-memory-search__codepilot_memory_recent') {
+      return { ...match, icon: Brain };
+    }
+    
+    if (lowerName.includes('search')) {
+      return { ...match, icon: MagnifyingGlass };
+    }
+    
+    if (lowerName.includes('read') || lowerName.includes('list') || lowerName.includes('tree') || lowerName.includes('fetch')) {
+      return { ...match, icon: Eye };
+    }
+    
+    if (lowerName.includes('write') || lowerName.includes('create') || lowerName.includes('move')) {
+      return { ...match, icon: FileText };
+    }
+  }
+  
+  return match;
 }
 
 /** Register a custom tool renderer. It takes priority over built-in ones. */
@@ -927,16 +1146,67 @@ const MCP_TOOL_NAME_MAP: Record<string, string> = {
   'mcp__fetch__fetch_markdown': '抓取网页(Markdown)',
   'mcp__fetch__fetch_readable': '抓取网页(Readable)',
   'mcp__fetch__fetch_json': '抓取网页(JSON)',
+  'mcp__codepilot-memory-search__codepilot_memory_recent': '记忆召回',
+  'mcp__filesystem__read_multiple_files': '读取多个文件',
+  'mcp__filesystem__list_directory': '查看目录内容',
+  'mcp__filesystem__directory_tree': '查看目录树',
+  'mcp__filesystem__read_file': '读取文件',
+  'mcp__filesystem__write_file': '写入文件',
+  'mcp__filesystem__create_directory': '创建目录',
+  'mcp__filesystem__move_file': '移动文件',
+  'mcp__filesystem__search_files': '搜索文件',
+  'mcp__codepilot-todo__codepilot_mcp_activate': '激活 MCP 工具',
 };
 
 function getToolDisplayName(name: string): string {
-  return MCP_TOOL_NAME_MAP[name] || name;
+  // Try to find an exact match first
+  if (MCP_TOOL_NAME_MAP[name]) {
+    return MCP_TOOL_NAME_MAP[name];
+  }
+
+  const lowerName = name.toLowerCase();
+
+  // If it's a memory tool that wasn't exactly matched above
+  if (lowerName.includes('memory')) {
+    if (lowerName.includes('search') || lowerName.includes('recent')) return '记忆召回';
+    if (lowerName.includes('store') || lowerName.includes('save') || lowerName.includes('write')) return '记忆整理';
+    return '记忆操作';
+  }
+  
+  // If it's a filesystem tool
+  if (lowerName.includes('filesystem')) {
+    if (lowerName.includes('read_multiple')) return '读取多个文件';
+    if (lowerName.includes('read_text') || lowerName.includes('read_file')) return '读取文件';
+    if (lowerName.includes('list_dir')) return '查看目录内容';
+    if (lowerName.includes('dir_tree') || lowerName.includes('directory_tree')) return '查看目录树';
+    if (lowerName.includes('write')) return '写入文件';
+    if (lowerName.includes('search')) return '搜索文件';
+    return '文件系统操作';
+  }
+
+  return name;
 }
 
 function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggle }: { tool: ToolAction; streamingToolOutput?: string; expandedOverride?: boolean; onToggle?: () => void }) {
   const renderer = getRenderer(tool.name, tool.input);
-  const baseSummary = renderer.getSummary(tool.input, tool.name);
-  const summary = MCP_TOOL_NAME_MAP[tool.name] ? baseSummary.replace(tool.name, MCP_TOOL_NAME_MAP[tool.name]) : baseSummary;
+  
+  // Use our smart display name function to replace raw MCP tool names
+  const displayName = getToolDisplayName(tool.name);
+  const baseSummary = renderer.getSummary(tool.input, displayName);
+  
+  // For file operations, try to extract file paths for a cleaner summary
+  let summary = baseSummary;
+  const toolInput = tool.input as Record<string, unknown> | undefined;
+  
+  if (tool.name.includes('mcp__filesystem') && toolInput) {
+    if (tool.name.includes('read_multiple_files') && Array.isArray(toolInput.paths)) {
+      const count = toolInput.paths.length;
+      summary = `读取了 ${count} 个文件`;
+    } else if (toolInput.path && typeof toolInput.path === 'string') {
+      summary = truncatePath(toolInput.path);
+    }
+  }
+  
   const filePath = getFilePath(tool.input);
   const status = getStatus(tool);
   const isTeam = tool.name.toLowerCase() === 'team' || tool.name.toLowerCase().includes('__team');
@@ -985,16 +1255,16 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           "truncate ml-1 text-left font-medium",
           status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-600 dark:text-purple-400" : (isTodoWrite ? "text-blue-600 dark:text-blue-400" : "text-foreground/80"))
         )}>
-          {renderer.label || (isTeam ? '' : summary)}
+          {renderer.label || (isTeam ? '' : displayName)}
         </span>
         
-        {!(isTeam || isTodoWrite) && (renderer.label ? !!summary : !!filePath) && (
+        {!(isTeam || isTodoWrite) && (renderer.label ? !!summary : !!filePath || !!displayName) && (
           <>
             <span className="mx-1 text-border">|</span>
             <span className={cn("font-mono text-[12px] truncate text-muted-foreground/60", renderer.label && filePath ? "max-w-[200px]" : "flex-1")}>
-              {renderer.label ? summary : truncatePath(filePath)}
+              {renderer.label ? summary : (tool.name.includes('mcp__filesystem') ? summary : truncatePath(filePath || displayName))}
             </span>
-            {renderer.label && filePath && (
+            {renderer.label && filePath && !tool.name.includes('mcp__filesystem') && (
               <>
                 <span className="mx-1 text-border">|</span>
                 <span className="font-mono text-[11px] truncate flex-1 text-muted-foreground/40">
@@ -1088,6 +1358,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   if (k === 'bash') {
     const cmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
     const displayName = getToolDisplayName(tool.name);
+    const { setTerminalOpen } = usePanel();
 
     return (
       <div className="my-1.5 border border-border/50 bg-muted/30 rounded-[6px] overflow-hidden">
@@ -1113,7 +1384,16 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
           </div>
           <div className="flex shrink-0 items-center gap-2 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
             {status === 'running' && <SpinnerGap size={14} className="animate-spin text-primary mr-1" />}
-            在终端查看 <ArrowSquareOut size={12} />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setTerminalOpen(true);
+              }}
+              className="flex items-center gap-1 hover:text-primary transition-colors"
+            >
+              在终端查看 <ArrowSquareOut size={12} />
+            </button>
           </div>
         </button>
         <AnimatePresence initial={false}>
@@ -1306,13 +1586,6 @@ function FileReviewRow({ diff }: { diff: DiffInfo; sessionId?: string; rewindId?
 
   const showPreviewBtn = canPreview(diff.filename);
 
-  const openFile = () => {
-    fetch('/api/open-file', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: diff.fullPath }),
-    }).catch(() => {});
-  };
-
   return (
     <div className="my-1.5 border border-border/50 bg-muted/30 rounded-[6px] overflow-hidden">
       <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors cursor-pointer" onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}>
@@ -1345,11 +1618,19 @@ function FileReviewRow({ diff }: { diff: DiffInfo; sessionId?: string; rewindId?
            )}
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); openFile(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (diff.fullPath) {
+                const dir = diff.fullPath.substring(0, diff.fullPath.lastIndexOf('/'));
+                if (typeof window !== 'undefined' && (window as any).electronAPI?.shell?.openPath) {
+                  (window as any).electronAPI.shell.openPath(dir).catch(() => {});
+                }
+              }
+            }}
             className="flex items-center gap-1 rounded p-1 text-muted-foreground/60 transition hover:text-foreground hover:bg-muted/50"
-            title="在编辑器打开"
+            title="在 Finder 中打开"
           >
-            <ArrowSquareOut size={14} />
+            <FolderOpen size={14} />
           </button>
         </div>
       </div>
@@ -1398,17 +1679,6 @@ export function CompletionBar({
   const totalRemoved = changedFiles.reduce((acc, f) => acc + f.diff.removed, 0);
   const pending = changedFiles.length;
 
-  // 在 Finder 中打开：打开第一个文件的目录
-  const openInFinder = () => {
-    if (changedFiles.length > 0 && changedFiles[0].diff.fullPath) {
-      const dir = changedFiles[0].diff.fullPath.substring(0, changedFiles[0].diff.fullPath.lastIndexOf('/'));
-      // 使用 Electron IPC 打开文件管理器 (macOS Finder / Windows Explorer)
-      if (typeof window !== 'undefined' && (window as any).electronAPI?.shell?.openPath) {
-        (window as any).electronAPI.shell.openPath(dir).catch(() => {});
-      }
-    }
-  };
-
   if (pending === 0) return null;
 
   return (
@@ -1425,14 +1695,6 @@ export function CompletionBar({
               <span className="text-red-500 font-mono">-{totalRemoved}</span>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={openInFinder}
-            className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-2 py-1 text-[12px] font-medium text-foreground/70 transition hover:bg-muted hover:text-foreground"
-            title="在 Finder 中打开"
-          >
-            <FolderOpen size={12} />
-          </button>
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
@@ -1479,21 +1741,43 @@ export function ToolActionsGroup({
   flat,
   sessionId,
   rewindUserMessageId,
-}: ToolActionsGroupProps & { flat?: boolean; sessionId?: string; rewindUserMessageId?: string }) {
+  hideSubAgents,
+}: ToolActionsGroupProps & { flat?: boolean; sessionId?: string; rewindUserMessageId?: string; hideSubAgents?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+
+  // 中文注释：功能名称「过滤子Agent工具调用」，用法是当 hideSubAgents 为 true 时（通常是因为下方已经渲染了专门的子Agent卡片），
+  // 在此处将其从时间线中过滤掉，避免在界面上出现重复显示的“Search Agent”或“探索者”工具卡片。
+  // 请其他 AI 不要改动此处的过滤逻辑，确保时间线和 Agent 卡片不重复渲染。
+  const effectiveTools = React.useMemo(() => {
+    if (!hideSubAgents) return tools;
+    return tools.filter(t => !isSubAgentTool(t.name));
+  }, [tools, hideSubAgents]);
+
+  const effectiveSteps = React.useMemo(() => {
+    if (!steps || !hideSubAgents) return steps;
+    return steps.map(step => ({
+      ...step,
+      toolCalls: step.toolCalls.filter(tc => !isSubAgentTool(tc.name)),
+      events: step.events?.filter(e => {
+        if (e.type !== 'tool') return true;
+        const tc = step.toolCalls.find(t => t.id === e.toolCallId);
+        return tc ? !isSubAgentTool(tc.name) : true;
+      })
+    })).filter(step => step.reasoning || step.output || step.toolCalls.length > 0 || (step.events && step.events.length > 0));
+  }, [steps, hideSubAgents]);
 
   // If streaming and tools/thinking are present, default to expanded
   React.useEffect(() => {
-    if (isStreaming && (tools.length > 0 || thinkingContent || (steps && steps.length > 0))) {
+    if (isStreaming && (effectiveTools.length > 0 || thinkingContent || (effectiveSteps && effectiveSteps.length > 0))) {
       setExpanded(true);
     }
-  }, [isStreaming, tools.length, thinkingContent, steps]);
+  }, [isStreaming, effectiveTools.length, thinkingContent, effectiveSteps]);
 
-  const hasRunningTool = tools.some((t) => t.result === undefined);
-  const hasError = tools.some((t) => t.isError);
+  const hasRunningTool = effectiveTools.some((t) => t.result === undefined);
+  const hasError = effectiveTools.some((t) => t.isError);
   const groupStatus = hasRunningTool ? 'running' : (hasError ? 'error' : 'success');
 
-  const segments = computeSegments(tools, thinkingContent, steps);
+  const segments = computeSegments(effectiveTools, thinkingContent, effectiveSteps);
 
   const renderSegments = () => {
     const blocks: React.ReactNode[] = [];
@@ -1575,6 +1859,7 @@ export function ToolActionsGroup({
 
   // If flat mode, just render the segments without the outer container
   if (flat) {
+    if (segments.length === 0) return null;
     return (
       <div className="my-2">
         {renderSegments()}

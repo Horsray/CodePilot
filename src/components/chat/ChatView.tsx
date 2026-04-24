@@ -1144,11 +1144,11 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         }
         right={
           <div className="flex items-center gap-3">
-            {/* 会话状态指示器：显示 agent 数量、工具调用数、会话时长 */}
+            {/* 会话状态指示器：显示 agent 数量、工具调用数、技能调用数 */}
             <SessionStatusIndicator
               subAgents={subAgents}
               toolCount={toolUses.length}
-              startedAt={streamSnapshot?.startedAt}
+              skillCount={toolUses.filter((t: any) => t.name === 'Skill').length}
             />
             <RuntimeBadge providerId={currentProviderId} />
             <ContextUsageIndicator

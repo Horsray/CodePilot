@@ -1,12 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Info, Book, CaretRight, CaretDown, Globe } from "@/components/ui/icon";
+import { Info, Book, CaretRight, CaretDown, Globe, FolderOpen, Copy, ArrowSquareOut } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/types";
 import { useContextUsage } from "@/hooks/useContextUsage";
 import { usePanel } from "@/hooks/usePanel";
+import { showToast } from "@/hooks/useToast";
+import { copyTextToClipboard } from "@/lib/console-utils";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 
 interface ContextCompressionWidgetProps {
   messages: Message[];
@@ -40,34 +43,75 @@ export function ContextCompressionWidget({
   const [detailsExpanded, setDetailsExpanded] = useState(true);
   const [listExpanded, setListExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<'rules' | 'web' | 'files' | 'others'>('rules');
-  const { setPreviewFile, setPreviewOpen } = usePanel();
+  const { setPreviewFile, setPreviewOpen, openBrowserTab } = usePanel();
 
   const handleOpenItem = (item: string) => {
     if (item.startsWith('http://') || item.startsWith('https://')) {
-      window.open(item, '_blank');
-    } else {
-      // Pass the cleaned path for preview. The IDE's file resolution needs clean paths,
-      // especially for rules where the UI injects custom names like "Rule: xxx (Global)".
-      let cleanPath = item;
-      
-      if (cleanPath.startsWith('Rule: ')) {
-        cleanPath = cleanPath.substring(6).trim();
-      }
-      
-      cleanPath = cleanPath.replace(/\s*\([^)]*\)$/, '').trim();
-      
-      setPreviewFile(cleanPath);
-      setPreviewOpen(true);
+      // 中文注释：功能名称「内置浏览器打开URL」，用法是左键点击联网搜索的URL时
+      // 使用内置浏览器标签页打开，而非系统默认浏览器
+      openBrowserTab(item, item);
+      return;
+    }
+
+    // Pass the cleaned path for preview. The IDE's file resolution needs clean paths.
+    // For rules, the backend will recognize the 'Rule: ' prefix and serve it from DB.
+    let cleanPath = item;
+    cleanPath = cleanPath.replace(/\s*\([^)]*\)$/, '').trim();
+
+    setPreviewFile(cleanPath);
+    setPreviewOpen(true);
+  };
+
+  const handleRevealInFinder = async (path: string) => {
+    if (path.startsWith('Rule: ') || path.includes('Subdirectory Hints') || path.startsWith('http://') || path.startsWith('https://')) {
+      showToast({ message: "虚拟文件或网页无法在文件管理器中打开", type: "info" });
+      return;
+    }
+    try {
+      const res = await fetch('/api/utils/open-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, reveal: true }),
+      });
+      if (!res.ok) throw new Error('Failed to reveal');
+    } catch (err) {
+      showToast({ message: "打开文件所在目录失败", type: "error" });
     }
   };
 
-  const { rules, files, web, othersCount } = useMemo(() => {
+  const handleCopyPath = async (path: string) => {
+    const text = path.startsWith('Rule: ')
+      ? path.substring(6).replace(/\s*\([^)]*\)$/, '').trim()
+      : path.replace(/\s*\([^)]*\)$/, '').trim();
+    const ok = await copyTextToClipboard(text);
+    showToast({ message: ok ? "已复制文件路径" : "复制失败", type: ok ? "success" : "error" });
+  };
+
+  const { rules, files, web, othersCount, sessionTokens } = useMemo(() => {
     const rulesMap = new Map<string, { path: string, name: string }>();
     const filesMap = new Map<string, { path: string, name: string }>();
     const webSet = new Set<string>();
     let othersCount = 0;
+    
+    let totalInput = 0;
+    let totalOutput = 0;
+    let totalCache = 0;
+    let totalCost = 0;
 
     messages.forEach((msg) => {
+      // Aggregate token usage
+      if (msg.token_usage) {
+        try {
+          const usage = JSON.parse(msg.token_usage);
+          if (usage) {
+            totalInput += (usage.input_tokens || 0);
+            totalOutput += (usage.output_tokens || 0);
+            totalCache += (usage.cache_read_input_tokens || 0);
+            totalCost += (usage.cost_usd || 0);
+          }
+        } catch {}
+      }
+
       // Collect referenced contexts
       if (msg.role === 'assistant' && msg.referenced_contexts) {
         try {
@@ -197,6 +241,13 @@ export function ContextCompressionWidget({
       files: Array.from(filesMap.values()),
       web: Array.from(webSet).map(url => ({ path: url, name: url })),
       othersCount,
+      sessionTokens: {
+        total: totalInput + totalOutput + totalCache,
+        input: totalInput,
+        output: totalOutput,
+        cache: totalCache,
+        cost: totalCost
+      }
     };
   }, [messages, toolFiles]);
 
@@ -279,7 +330,7 @@ export function ContextCompressionWidget({
         </div>
 
         {/* Progress Bar */}
-        <div className="flex items-center gap-3 mb-3" title={`规则: ${Math.round(rulesPct)}% | 联网: ${Math.round(webPct)}% | 文件: ${Math.round(filesPct)}% | 其他: ${Math.round(othersPct)}%`}>
+        <div className="flex items-center gap-3 mb-3" title={`规则: ${Math.round(rulesPct)}% | 联网: ${Math.round(webPct)}% | 文件: ${Math.round(filesPct)}% | 数据统计: ${Math.round(othersPct)}%`}>
           <div className="flex-1 h-1.5 flex rounded-full overflow-hidden bg-muted/40">
             <div className="bg-violet-500 transition-all duration-300" style={{ width: `${rulesPct}%` }} />
             <div className="bg-[#00a8ff] transition-all duration-300" style={{ width: `${webPct}%` }} />
@@ -337,10 +388,10 @@ export function ContextCompressionWidget({
               "flex items-center gap-1 border-b pb-0.5 transition-colors whitespace-nowrap",
               activeTab === 'others' ? "border-foreground/80 text-foreground/90 font-medium" : "border-transparent hover:text-foreground/70"
             )}
-            title={`其他: ${Math.round(othersPct)}%`}
+            title={`统计数据`}
           >
             <div className="w-1.5 h-1.5 bg-muted-foreground/30 rounded-[1px]" />
-            其他
+            数据统计
           </button>
         </div>
 
@@ -348,27 +399,66 @@ export function ContextCompressionWidget({
         {detailsExpanded && (
           activeTab === 'others' ? (
             <div className="flex flex-col items-center justify-center py-6 text-center">
-              <p className="text-[12px] font-medium text-foreground/80 mb-1">其他上下文</p>
-              <p className="text-[11px] text-muted-foreground/60">用于系统级指令和后台处理的上下文</p>
+              <p className="text-[12px] font-medium text-foreground/80 mb-1">会话数据统计</p>
+              <div className="text-[11px] text-muted-foreground/60 space-y-1 mt-2">
+                <p>token消耗：<span className="font-mono text-foreground/80">{sessionTokens.total.toLocaleString()}</span></p>
+                <p>输入：<span className="font-mono text-foreground/80">{sessionTokens.input.toLocaleString()}</span> &nbsp;&nbsp; 输出：<span className="font-mono text-foreground/80">{sessionTokens.output.toLocaleString()}</span> &nbsp;&nbsp; cache：<span className="font-mono text-foreground/80">{sessionTokens.cache.toLocaleString()}</span></p>
+                {sessionTokens.cost > 0 && <p className="mt-1">预估成本：<span className="font-mono text-foreground/80">${sessionTokens.cost.toFixed(4)}</span></p>}
+              </div>
             </div>
           ) : (
             <div className="space-y-2.5 mt-2">
-              {(activeTab === 'rules' ? rules : activeTab === 'web' ? web : files).slice(0, listExpanded ? undefined : 6).map((item, i) => (
-                <div 
-                  key={i} 
-                  className="flex items-center gap-2 text-[12px] text-foreground/80 truncate cursor-pointer hover:text-foreground transition-colors group"
-                  onClick={() => handleOpenItem(item.path)}
-                >
-                  {activeTab === 'web' ? (
-                    <Globe size={14} className="text-foreground/80 shrink-0 group-hover:text-foreground" />
-                  ) : activeTab === 'rules' ? (
-                    <Book size={14} className="text-violet-400 shrink-0" />
-                  ) : (
-                    <Book size={14} className="text-[#00a8ff] shrink-0" />
-                  )}
-                  <span className="truncate">{item.name}</span>
-                </div>
-              ))}
+              {(activeTab === 'rules' ? rules : activeTab === 'web' ? web : files).slice(0, listExpanded ? undefined : 6).map((item, i) => {
+                const isDbRule = item.path.startsWith('Rule: ');
+                const isSubdir = item.path.includes('Subdirectory Hints');
+                const isWeb = activeTab === 'web';
+                
+                return (
+                  <ContextMenu key={i}>
+                    <ContextMenuTrigger asChild>
+                      <div 
+                        className="flex items-center gap-2 text-[12px] text-foreground/80 truncate cursor-pointer hover:text-foreground transition-colors group"
+                        onClick={() => handleOpenItem(item.path)}
+                      >
+                        {isWeb ? (
+                          <Globe size={14} className="text-foreground/80 shrink-0 group-hover:text-foreground" />
+                        ) : activeTab === 'rules' ? (
+                          <Book size={14} className={isDbRule ? "text-amber-500/70 shrink-0" : isSubdir ? "text-orange-500/70 shrink-0" : "text-violet-400 shrink-0"} />
+                        ) : (
+                          <Book size={14} className="text-[#00a8ff] shrink-0" />
+                        )}
+                        <span className="truncate">{item.name}</span>
+                      </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className="w-48">
+                      {isWeb && (
+                        <>
+                          <ContextMenuItem onClick={() => window.open(item.path, '_blank')}>
+                            <ArrowSquareOut className="mr-2 h-4 w-4" />
+                            <span>使用系统浏览器打开</span>
+                          </ContextMenuItem>
+                          <ContextMenuItem onClick={() => { copyTextToClipboard(item.path).then(ok => showToast({ message: ok ? "已复制 URL" : "复制失败", type: ok ? "info" : "error" })); }}>
+                            <Copy className="mr-2 h-4 w-4" />
+                            <span>复制 URL</span>
+                          </ContextMenuItem>
+                        </>
+                      )}
+                      {!isDbRule && !isSubdir && !isWeb && (
+                        <ContextMenuItem onClick={() => handleRevealInFinder(item.path)}>
+                          <FolderOpen className="mr-2 h-4 w-4" />
+                          <span>在 Finder 中打开</span>
+                        </ContextMenuItem>
+                      )}
+                      {!isWeb && (
+                        <ContextMenuItem onClick={() => handleCopyPath(item.path)}>
+                          <Copy className="mr-2 h-4 w-4" />
+                          <span>复制文件路径</span>
+                        </ContextMenuItem>
+                      )}
+                    </ContextMenuContent>
+                  </ContextMenu>
+                );
+              })}
               
               {/* Show more/less toggle */}
               {(activeTab === 'rules' ? rules : activeTab === 'web' ? web : files).length > 6 && (

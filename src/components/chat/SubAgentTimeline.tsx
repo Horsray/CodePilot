@@ -15,9 +15,14 @@ import { SubAgentInfo } from '@/types';
 function extractCurrentTool(progress: string): { name: string; detail: string } | null {
   if (!progress) return null;
   const lines = progress.split('\n').filter(l => l.trim());
-  // 从后往前找最近的工具调用行
+  // 从后往前找最近的有意义的状态行
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
+    if (line.includes('分析工具结果') || line.includes('等待模型响应') || line.includes('等待权限确认')) {
+      // 提取核心状态文本，去掉 ... 和 (已等待 xxs)
+      const cleanName = line.replace(/^\.*|（已等待.*?）|\(已等待.*?\)/g, '').trim();
+      return { name: cleanName, detail: '' };
+    }
     if (line.startsWith('> ') || line.includes('执行工具:') || line.includes('准备执行工具:')) {
       return { name: line.replace(/^[>🛠️\s]+/, '').trim(), detail: '' };
     }
@@ -308,17 +313,8 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                 </div>
               </div>
 
-              {/* 运行中的精简日志预览（不需要展开即可看到） */}
-              {agent.status === 'running' && recentLogs.length > 0 && !isExpanded && (
-                <div className={cn("px-3 pb-1.5 space-y-0.5", subAgents.length > 1 && "pl-8")}>
-                  {recentLogs.map((log, i) => (
-                    <div key={i} className="text-[10px] text-muted-foreground/50 truncate font-mono leading-relaxed">
-                      <span className="text-muted-foreground/30 mr-1">│</span>
-                      {log.slice(0, 120)}
-                    </div>
-                  ))}
-                </div>
-              )}
+              {/* 运行中的精简日志预览（如果需要可以在这里控制，根据用户要求折叠时单行卡片，所以移除 !isExpanded 下的预览） */}
+              {/* agent.status === 'running' && recentLogs.length > 0 && !isExpanded && ... 被移除 */}
 
               {/* 展开详情 */}
               <div

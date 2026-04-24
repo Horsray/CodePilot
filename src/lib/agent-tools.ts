@@ -269,6 +269,12 @@ function wrapWithPermissions(
           try {
             const output = await original.execute(input, execOptions);
             emitEvent('tool:post-use', { sessionId: ctx.sessionId, toolName: name });
+            if (ctx.emitSSE) {
+              ctx.emitSSE({
+                type: 'tool_finished',
+                data: JSON.stringify({ tool: name }),
+              });
+            }
             // Ensure we always return a valid value, never null/undefined
             if (output == null) {
               console.warn(`[permission-wrapper] Tool ${name} returned null/undefined, converting to empty string`);
