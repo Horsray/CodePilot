@@ -196,10 +196,12 @@ export function createAgentTool(ctx: {
                 if (event.type === 'text') {
                   progress.setStage('整理子任务结果');
                   textParts.push(event.data);
+                  if (ctx.emitSSE) ctx.emitSSE({ type: 'subagent_progress', data: JSON.stringify({ id: subAgentId, detail: event.data, append: true }) });
                 } else if (event.type === 'thinking') {
                   // 收集thinking作为后备输出
                   progress.setStage('模型思考中');
                   thinkingParts.push(event.data);
+                  if (ctx.emitSSE) ctx.emitSSE({ type: 'subagent_progress', data: JSON.stringify({ id: subAgentId, detail: event.data, append: true }) });
                 } else if (event.type === 'error') {
                   // 收集错误事件
                   progress.setStage('子任务执行出错');
@@ -215,12 +217,21 @@ export function createAgentTool(ctx: {
                   try {
                     const res = JSON.parse(event.data);
                     const toolName = res.tool_use_id ? 'tool' : 'unknown';
-                    toolResults.push({
-                      name: toolName,
-                      content: String(res.content || '').slice(0, 2000),
-                      isError: !!res.is_error,
+                  toolResults.push({
+                    name: toolName,
+                    content: String(res.content || '').slice(0, 2000),
+                    isError: !!res.is_error,
+                  });
+                  // Emit result preview for transparency
+                  if (ctx.emitSSE) {
+                    const preview = String(res.content || '').slice(0, 200).replace(/\n/g, ' ');
+                    const progressMsg = `\n📋 结果: ${res.is_error ? '❌' : '✅'} ${preview}${String(res.content || '').length > 200 ? '...' : ''}\n\n`;
+                    ctx.emitSSE({
+                      type: 'subagent_progress',
+                      data: JSON.stringify({ id: subAgentId, detail: progressMsg, append: true }),
                     });
-                  } catch { /* skip malformed */ }
+                  }
+                } catch { /* skip malformed */ }
                   // 同时转发到父流
                   if (ctx.emitSSE) {
                     try {
@@ -243,6 +254,7 @@ export function createAgentTool(ctx: {
                     const toolRenderer = getToolSummary(tool.name, tool.input);
                     progress.setStage(`执行工具: ${toolRenderer}`);
                     ctx.emitSSE({ type: 'tool_output', data: `> ${toolRenderer}` });
+                    ctx.emitSSE({ type: 'subagent_progress', data: JSON.stringify({ id: subAgentId, detail: `\n🛠️ 准备执行工具: ${tool.name}\n`, append: true }) });
                   } catch { /* skip malformed */ }
                 }
               } catch { /* skip non-JSON lines */ }
@@ -258,6 +270,71 @@ export function createAgentTool(ctx: {
       let finalReport: string;
       if (textParts.length > 0) {
         finalReport = textParts.join('');
+      } else if (errorEvent && errorEvent.includes('模型未返回任何内容') && finalModel !== ctx.parentModel) {
+        // EMPTY_RESPONSE from routed model — retry with parent model as fallback
+        console.warn(`[agent] Sub-agent "${agentDef.id}" got empty response from model="${finalModel}", retrying with parentModel="${ctx.parentModel}"`);
+        progress.setStage('模型不兼容，回退重试中');
+        const fallbackStream = runAgentLoop({
+          prompt,
+          sessionId: `${subAgentId}-retry`,
+          providerId: ctx.providerId || finalProviderId,
+          sessionProviderId: ctx.sessionProviderId,
+          model: ctx.parentModel,
+          systemPrompt,
+          workingDirectory: ctx.workingDirectory,
+          tools: subTools,
+          maxSteps: agentDef.maxSteps || 30,
+          permissionMode: ctx.permissionMode,
+        });
+        const fallbackReader = fallbackStream.getReader();
+        const fallbackTextParts: string[] = [];
+        try {
+          while (true) {
+            const { done, value } = await fallbackReader.read();
+            if (done) break;
+            if (value) {
+              for (const line of value.split('\n')) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                  const ev = JSON.parse(line.slice(6));
+                  progress.touch();
+                  if (ev.type === 'text') {
+                    fallbackTextParts.push(ev.data);
+                    if (ctx.emitSSE) ctx.emitSSE({ type: 'subagent_progress', data: JSON.stringify({ id: subAgentId, detail: ev.data, append: true }) });
+                  }
+                  else if (ev.type === 'tool_use' && ctx.emitSSE) {
+                    try {
+                      const tool = JSON.parse(ev.data);
+                      const toolRenderer = getToolSummary(tool.name, tool.input);
+                      progress.setStage(`回退执行: ${toolRenderer}`);
+                      ctx.emitSSE({ type: 'tool_output', data: `> [fallback] ${toolRenderer}` });
+                      ctx.emitSSE({ type: 'subagent_progress', data: JSON.stringify({ id: subAgentId, detail: `\n🛠️ 准备执行工具: ${tool.name}\n`, append: true }) });
+                    } catch { /* skip */ }
+                  }
+                  else if (ev.type === 'tool_result' && ctx.emitSSE) {
+                    try {
+                      const res = JSON.parse(ev.data);
+                      const preview = String(res.content || '').slice(0, 200).replace(/\n/g, ' ');
+                      const progressMsg = `\n📋 结果: ${res.is_error ? '❌' : '✅'} ${preview}${String(res.content || '').length > 200 ? '...' : ''}\n\n`;
+                      ctx.emitSSE({ type: 'subagent_progress', data: JSON.stringify({ id: subAgentId, detail: progressMsg, append: true }) });
+                    } catch { /* skip */ }
+                  }
+                  else if (ev.type === 'thinking' && ctx.emitSSE) {
+                    ctx.emitSSE({ type: 'subagent_progress', data: JSON.stringify({ id: subAgentId, detail: ev.data, append: true }) });
+                  }
+                } catch { /* skip non-JSON */ }
+              }
+            }
+          }
+        } finally {
+          fallbackReader.releaseLock();
+        }
+        if (fallbackTextParts.length > 0) {
+          finalReport = fallbackTextParts.join('');
+          errorEvent = null; // clear error since fallback succeeded
+        } else {
+          finalReport = `**子Agent执行出错：** 原始模型 "${finalModel}" 返回空内容，回退到父模型 "${ctx.parentModel}" 也未产出有效输出。`;
+        }
       } else if (errorEvent) {
         finalReport = `**子Agent执行出错：** ${errorEvent}`;
       } else if (thinkingParts.length > 0 || toolResults.length > 0) {

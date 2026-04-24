@@ -1,22 +1,47 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { SpinnerGap, CheckCircle, XCircle, Clock, Robot, CaretDown, CaretRight } from '@phosphor-icons/react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { SpinnerGap, CheckCircle, XCircle, Clock, Robot, CaretDown, CaretRight, Lightning, Bug, MagnifyingGlass, Gear, TerminalWindow, Brain } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { AGENT_META } from '../ai-elements/tool-actions-group';
 
 import { SubAgentInfo } from '@/types';
 
 /**
- * SubAgentTimeline - 子Agent嵌套时间线组件
- *
- * 功能：
- * - 显示子Agent的独立卡片，位于主时间线内侧
- * - 显示智能体名称、状态（运行中/完成/错误）
- * - 运行时显示进度信息，完成后显示报告摘要
- * - 支持并行显示多个agent（不互相覆盖）
- * - 字体比主时间线小
- * - 主Agent下方显示子Agent完成统计
+ * 从进度文本中提取最近的工具调用信息
+ * 功能：解析 progress 文本，找到最近的 "执行工具:" 或 "> " 开头的行
+ * 用法：在 SubAgentCard 中实时显示当前正在执行的工具
+ */
+function extractCurrentTool(progress: string): { name: string; detail: string } | null {
+  if (!progress) return null;
+  const lines = progress.split('\n').filter(l => l.trim());
+  // 从后往前找最近的工具调用行
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line.startsWith('> ') || line.includes('执行工具:') || line.includes('准备执行工具:')) {
+      return { name: line.replace(/^[>🛠️\s]+/, '').trim(), detail: '' };
+    }
+  }
+  return null;
+}
+
+/**
+ * 从进度文本中提取最近的日志行
+ * 功能：解析 progress 文本，返回最近 N 行精简日志
+ * 用法：在 SubAgentCard 中显示最近的操作日志，便于排查卡住问题
+ */
+function extractRecentLogs(progress: string, maxLines = 5): string[] {
+  if (!progress) return [];
+  const lines = progress.split('\n').filter(l => l.trim());
+  // 过滤掉空行和纯分隔符
+  const meaningful = lines.filter(l => l.trim() && !l.match(/^[─━\-]{3,}$/));
+  return meaningful.slice(-maxLines);
+}
+
+/**
+ * SubAgentProgress - 子Agent进度显示组件
+ * 功能：显示子Agent的实时进度文本，支持自动滚动到底部
+ * 用法：在展开的子Agent卡片中渲染
  */
 function SubAgentProgress({ progress }: { progress: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -28,7 +53,7 @@ function SubAgentProgress({ progress }: { progress: string }) {
   }, [progress]);
 
   return (
-    <div 
+    <div
       ref={scrollRef}
       className="text-[11px] text-muted-foreground/80 p-2.5 rounded-md bg-blue-500/5 border border-blue-500/10 max-h-64 overflow-y-auto flex flex-col gap-1 scroll-smooth"
     >
@@ -39,9 +64,63 @@ function SubAgentProgress({ progress }: { progress: string }) {
   );
 }
 
+/**
+ * HeartbeatIndicator - 心跳指示器组件
+ * 功能：当 Agent 运行超过 30 秒无新日志时，显示警告提示
+ * 用法：在 SubAgentCard 头部实时显示，帮助用户判断 Agent 是否卡住
+ */
+function HeartbeatIndicator({ lastUpdateAt, status }: { lastUpdateAt?: number; status: string }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (status !== 'running' || !lastUpdateAt) return;
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - lastUpdateAt) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [status, lastUpdateAt]);
+
+  if (status !== 'running' || !lastUpdateAt) return null;
+
+  if (elapsed > 60) {
+    return (
+      <span className="flex items-center gap-0.5 text-[9px] text-amber-500 animate-pulse shrink-0">
+        <Bug size={9} />
+        <span>{elapsed}s</span>
+      </span>
+    );
+  }
+  if (elapsed > 30) {
+    return (
+      <span className="flex items-center gap-0.5 text-[9px] text-amber-400/70 shrink-0">
+        <Clock size={9} />
+        <span>{elapsed}s</span>
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-0.5 text-[9px] text-emerald-500/60 shrink-0">
+      <Lightning size={9} weight="fill" />
+    </span>
+  );
+}
+
 export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [userInteractedAgents, setUserInteractedAgents] = useState<Set<string>>(new Set());
+
+  // 追踪每个 Agent 最后一次更新时间，用于心跳检测
+  const lastUpdateMap = useMemo(() => {
+    const map = new Map<string, number>();
+    subAgents.forEach(a => {
+      if (a.status === 'running' && a.progress) {
+        map.set(a.id, Date.now());
+      } else if (a.completedAt) {
+        map.set(a.id, a.completedAt);
+      }
+    });
+    return map;
+  }, [subAgents]);
 
   // 自动展开/收起逻辑：
   // - 新Agent启动时，自动展开
@@ -145,21 +224,42 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
 
   return (
     <div className="mt-3 space-y-2 w-full max-w-full">
-      {/* 子Agent卡片列表 - 网格布局，支持并行显示 */}
-      <div className="grid gap-2">
-        {subAgents.map((agent) => {
+      {/* 子Agent卡片列表 - 树状布局，支持并行显示 */}
+      <div className="relative">
+        {/* 树状连接线 */}
+        {subAgents.length > 1 && (
+          <div className="absolute left-[15px] top-4 bottom-4 w-px bg-gradient-to-b from-primary/30 via-primary/20 to-primary/10" />
+        )}
+        <div className="grid gap-2">
+        {subAgents.map((agent, idx) => {
           const isExpanded = expandedAgents.has(agent.id);
           const currentProgress = agent.progress;
           const terminalReport = agent.report || (agent.error ? `错误:\n${agent.error}` : '');
+          const currentTool = agent.status === 'running' ? extractCurrentTool(agent.progress || '') : null;
+          const recentLogs = agent.status === 'running' ? extractRecentLogs(agent.progress || '', 3) : [];
+
+          // 树状连接点颜色
+          const dotColor = agent.status === 'running' ? 'bg-blue-500' :
+                           agent.status === 'completed' ? 'bg-emerald-500' :
+                           'bg-red-500';
 
           return (
             <div
               key={agent.id}
-              className="rounded-lg border bg-card overflow-hidden transition-all duration-200 hover:shadow-sm"
+              className="rounded-lg border bg-card overflow-hidden transition-all duration-200 hover:shadow-sm relative"
             >
+              {/* 树状连接点 */}
+              {subAgents.length > 1 && (
+                <div className="absolute left-2.5 top-[18px] z-10">
+                  <div className={cn("w-2 h-2 rounded-full border-2 border-background", dotColor)} />
+                  {/* 水平连接线 */}
+                  <div className="absolute left-2 top-[3px] w-3 h-px bg-primary/20" />
+                </div>
+              )}
+
               {/* 子Agent卡片头部 - 可点击展开/收起 */}
               <div
-                className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors"
+                className={cn("flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors", subAgents.length > 1 && "pl-8")}
                 onClick={() => toggleExpand(agent.id)}
               >
                 {/* 展开/收起图标 */}
@@ -175,28 +275,50 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                 })()}
 
                 {/* Agent名称 */}
-                <span className="font-medium text-xs text-foreground/90 shrink-0 flex items-center gap-1">
+                <span className="font-medium text-xs text-foreground/90 shrink-0 flex items-center gap-1" title={agent.displayName || agent.name}>
                   {getAgentLabel(agent.name, agent.displayName)}
                   {agent.model && (
                     <span className="text-[10px] text-muted-foreground/60 font-mono tracking-tighter ml-1">({agent.model})</span>
                   )}
                 </span>
-                
+
                 <span className="text-muted-foreground/40 mx-1 shrink-0">|</span>
-                
-                <span className="text-xs text-muted-foreground/70 truncate flex-1 max-w-[400px]">
-                  {agent.prompt}
-                </span>
+
+                {/* 当前工具调用（运行中）或任务摘要 */}
+                {currentTool ? (
+                  <span className="flex items-center gap-1 text-[11px] text-blue-500/80 truncate flex-1 max-w-[400px]" title={currentTool.name}>
+                    <Gear size={10} className="animate-spin shrink-0" />
+                    <span className="truncate">{currentTool.name}</span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground/70 truncate flex-1 max-w-[400px]" title={agent.prompt}>
+                    {agent.prompt}
+                  </span>
+                )}
 
                 {/* 状态标签 */}
                 <div className="flex items-center gap-1.5 ml-auto">
-                  <span className="flex items-center gap-1 text-[10px] text-muted-foreground/60 mr-2 shrink-0 font-mono">
+                  {/* 心跳指示器 */}
+                  <HeartbeatIndicator lastUpdateAt={lastUpdateMap.get(agent.id)} status={agent.status} />
+                  <span className="flex items-center gap-1 text-[10px] text-muted-foreground/60 mr-1 shrink-0 font-mono">
                     <Clock size={10} />
                     {formatDuration(agent.startedAt, agent.completedAt)}
                   </span>
                   {getStatusBadge(agent.status)}
                 </div>
               </div>
+
+              {/* 运行中的精简日志预览（不需要展开即可看到） */}
+              {agent.status === 'running' && recentLogs.length > 0 && !isExpanded && (
+                <div className={cn("px-3 pb-1.5 space-y-0.5", subAgents.length > 1 && "pl-8")}>
+                  {recentLogs.map((log, i) => (
+                    <div key={i} className="text-[10px] text-muted-foreground/50 truncate font-mono leading-relaxed">
+                      <span className="text-muted-foreground/30 mr-1">│</span>
+                      {log.slice(0, 120)}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* 展开详情 */}
               <div
@@ -209,6 +331,15 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                     <span className="font-medium text-muted-foreground/60 mr-1">任务：</span>
                     {agent.prompt}
                   </div>
+
+                  {/* 当前工具调用高亮（运行中） */}
+                  {agent.status === 'running' && currentTool && (
+                    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-blue-500/8 border border-blue-500/15">
+                      <Gear size={11} className="text-blue-500 animate-spin shrink-0" />
+                      <span className="text-[11px] text-blue-500/90 font-medium">当前工具：</span>
+                      <span className="text-[11px] text-blue-500/70 font-mono truncate">{currentTool.name}</span>
+                    </div>
+                  )}
 
                   {/* 运行进度 */}
                   {agent.status === 'running' && currentProgress && (
@@ -229,6 +360,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
             </div>
           );
         })}
+        </div>
       </div>
 
       {/* 子Agent状态汇总 - 放在最后面跟随光标 */}

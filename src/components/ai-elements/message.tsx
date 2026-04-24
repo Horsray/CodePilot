@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
-import { createSharedCodePlugin } from "./code-block";
+import { CodeBlock } from "./code-block";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { CaretLeft, CaretRight } from "@phosphor-icons/react";
@@ -325,14 +325,10 @@ export const MessageBranchPage = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
-// Phase 5.5 — use the shared-LRU plugin from code-block.tsx so chat
-// messages and file-preview rendering hit the same Shiki highlighter /
-// token caches instead of each running its own unbounded pool. See
-// POC 0.2. supportsLanguage is intentionally permissive (true) because
-// highlightCode() itself normalizes unknown languages to "text" via
-// getHighlighter's fallback path.
-const _codePlugin = createSharedCodePlugin();
-const streamdownPlugins = { cjk, code: _codePlugin, math, mermaid };
+// Phase 5.5 — replaced streamdown's code plugin with our custom CodeBlock
+// to achieve full custom UI (line numbers, copy button, headers).
+// We override the 'pre' component below.
+const streamdownPlugins = { cjk, math, mermaid };
 
 export const MessageResponse = memo(
   ({ className, components, ...props }: MessageResponseProps) => (
@@ -343,6 +339,32 @@ export const MessageResponse = memo(
       )}
       plugins={streamdownPlugins}
       components={{
+        pre: ({ children, ...preProps }: any) => {
+          const extractText = (node: any): string => {
+            if (typeof node === 'string') return node;
+            if (typeof node === 'number') return String(node);
+            if (Array.isArray(node)) return node.map(extractText).join('');
+            if (node && typeof node === 'object' && node.props && node.props.children) {
+              return extractText(node.props.children);
+            }
+            return '';
+          };
+          const codeEl = Array.isArray(children) ? children[0] : children;
+          if (codeEl && typeof codeEl === 'object' && 'props' in codeEl) {
+            const className = codeEl.props.className || "";
+            const match = /language-(\w+)/.exec(className);
+            const language = match ? match[1] : "text";
+            const codeString = extractText(codeEl.props.children).replace(/\n$/, "");
+            return (
+              <CodeBlock
+                code={codeString}
+                language={language}
+                className="my-4"
+              />
+            );
+          }
+          return <pre {...preProps}>{children}</pre>;
+        },
         a: ({ node, href, children, ...aProps }: any) => {
           return (
             <a

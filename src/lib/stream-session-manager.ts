@@ -613,9 +613,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         // Dispatch window event for sub-agent timeline UI
         window.dispatchEvent(new CustomEvent('subagent-start', { detail: { sessionId: params.sessionId, ...data } }));
         // 中文注释：功能名称「子Agent超时清理」，用法是为每个子Agent设置空闲超时定时器，
-        // 如果60秒内没有收到任何进度更新或完成事件，自动标记为超时完成，
+        // 如果5分钟内没有收到任何进度更新或完成事件，自动标记为超时完成，
         // 避免空智能体或卡死的子Agent导致主Agent无限等待
-        const SUBAGENT_IDLE_TIMEOUT_MS = 60_000;
+        const SUBAGENT_IDLE_TIMEOUT_MS = 5 * 60_000; // 5 minutes — 60s was too aggressive for slow providers
         const startTimer = () => {
           const existing = stream.subAgentTimers.get(data.id);
           if (existing) {
@@ -629,7 +629,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
               updatedAgents[idx] = {
                 ...updatedAgents[idx],
                 status: 'error',
-                error: '超时：60秒内无活动，已自动清理',
+                error: '超时：5分钟内无活动，已自动清理',
                 completedAt: Date.now(),
               };
               stream.subAgents = updatedAgents;
@@ -655,7 +655,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         if (existingTimer) {
           clearTimeout(existingTimer);
           stream.pendingTimers.delete(existingTimer);
-          const SUBAGENT_IDLE_TIMEOUT_MS = 60_000;
+          const SUBAGENT_IDLE_TIMEOUT_MS = 5 * 60_000; // 5 minutes
           const timer = setTimeout(() => {
             const idx = stream.subAgents.findIndex(a => a.id === data.id);
             if (idx >= 0 && stream.subAgents[idx].status === 'running') {
@@ -663,7 +663,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
               updatedAgents[idx] = {
                 ...updatedAgents[idx],
                 status: 'error',
-                error: '超时：60秒内无活动，已自动清理',
+                error: '超时：5分钟内无活动，已自动清理',
                 completedAt: Date.now(),
               };
               stream.subAgents = updatedAgents;

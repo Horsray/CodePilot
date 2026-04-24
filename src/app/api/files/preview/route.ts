@@ -23,9 +23,9 @@ export async function GET(request: NextRequest) {
   const resolvedPath = path.resolve(filePath);
   const homeDir = os.homedir();
 
-  // Validate that the file is within the session's working directory.
-  // baseDir may be on a different drive than homeDir on Windows.
-  // Only reject root paths as baseDir to prevent full-disk access.
+  // 中文注释：文件预览路径安全校验。
+  // 优先检查 baseDir（项目目录），若不通过则回退到 homeDir 检查，
+  // 允许用户预览上下文中引用的项目外文件（如全局规则文件 ~/.claude/CLAUDE.md）。
   const baseDir = searchParams.get('baseDir');
   const resolvedBase = baseDir ? path.resolve(baseDir) : homeDir;
   if (baseDir && isRootPath(resolvedBase)) {
@@ -34,9 +34,11 @@ export async function GET(request: NextRequest) {
       { status: 403 }
     );
   }
-  if (!isPathSafe(resolvedBase, resolvedPath)) {
+  const inProjectScope = isPathSafe(resolvedBase, resolvedPath);
+  const inHomeScope = isPathSafe(homeDir, resolvedPath);
+  if (!inProjectScope && !inHomeScope) {
     return NextResponse.json<ErrorResponse>(
-      { error: baseDir ? 'File is outside the project scope' : 'File is outside the allowed scope' },
+      { error: 'File is outside the allowed scope' },
       { status: 403 }
     );
   }

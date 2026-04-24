@@ -417,6 +417,12 @@ export function StreamingMessage({
 }: StreamingMessageProps) {
   const { t } = useTranslation();
   const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
+
+  const timelineTools = useMemo(() => {
+    if (!streamingSubAgents || streamingSubAgents.length === 0) return toolUses;
+    const agentToolNames = ['Agent', 'mcp__codepilot-agent__Agent', 'Team', 'mcp__codepilot-team__Team'];
+    return toolUses.filter(tool => !agentToolNames.includes(tool.name));
+  }, [toolUses, streamingSubAgents]);
   const [finalContentStart, setFinalContentStart] = useState(0);
   const timelineStateRef = useRef<ReturnType<typeof createTimelineAccumulator> | null>(null);
   const prevSnapshotRef = useRef<{
@@ -791,9 +797,9 @@ export function StreamingMessage({
         )}
 
         {/* Render the timeline (tools and thoughts interleaved) */}
-        {(toolUses.length > 0 || liveTimelineSteps.length > 0) && (
+        {(timelineTools.length > 0 || liveTimelineSteps.length > 0) && (
           <ToolActionsGroup
-            tools={toolUses.map((tool) => {
+            tools={timelineTools.map((tool) => {
               const result = toolResults.find((r) => r.tool_use_id === tool.id);
               return {
                 id: tool.id,

@@ -1853,6 +1853,14 @@ const zh: Record<TranslationKey, string> = {
   'buddy.namePlaceholder': '给你的伙伴起个名字...',
   'buddy.nameHint': '这将是你的伙伴的名字',
   'buddy.reset': '重置伙伴',
+
+  // ── Session Status ──────────────────────────────────────
+  'session.duration': '会话时长',
+  'session.agents': '智能体',
+  'session.running': '运行中',
+  'session.completed': '已完成',
+  'session.errors': '异常',
+  'session.toolCalls': '工具调用',
 };
 
 export default zh;

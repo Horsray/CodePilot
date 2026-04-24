@@ -36,7 +36,8 @@ export function ContextCompressionWidget({
     upstreamModelId,
   });
 
-  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  // 中文注释：上下文统计详情默认展开，用户可手动收起
+  const [detailsExpanded, setDetailsExpanded] = useState(true);
   const [listExpanded, setListExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<'rules' | 'web' | 'files' | 'others'>('rules');
   const { setPreviewFile, setPreviewOpen } = usePanel();

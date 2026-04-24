@@ -25,6 +25,7 @@ import { usePanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useClientPlatform } from '@/hooks/useClientPlatform';
 import { showToast } from '@/hooks/useToast';
+import { preloadXtermModules } from '@/components/terminal/XtermTerminal';
 import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, type Species } from '@/lib/buddy';
 
 export function UnifiedTopBar() {
@@ -304,6 +305,7 @@ export function UnifiedTopBar() {
                     variant={(bottomPanelOpen && bottomPanelTab === "terminal") ? "secondary" : "ghost"}
                     size="icon-sm"
                     className={(bottomPanelOpen && bottomPanelTab === "terminal") ? "" : "text-muted-foreground hover:text-foreground"}
+                    onMouseEnter={() => { preloadXtermModules(); }}
                     onClick={() => {
                       if (bottomPanelOpen && bottomPanelTab === "terminal") {
                         setBottomPanelOpen(false);
@@ -327,7 +329,11 @@ export function UnifiedTopBar() {
                     variant={fileTreeOpen ? "secondary" : "ghost"}
                     size="icon-sm"
                     className={fileTreeOpen ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => setFileTreeOpen(!fileTreeOpen)}
+                    onClick={() => {
+                      // 中文注释：交替式交互，点击文件树时收起看板
+                      if (!fileTreeOpen && dashboardPanelOpen) setDashboardPanelOpen(false);
+                      setFileTreeOpen(!fileTreeOpen);
+                    }}
                   >
                     <Folder size={16} weight={fileTreeOpen ? "fill" : "regular"} />
                     <span className="sr-only">{t('topBar.fileTree')}</span>
@@ -342,7 +348,11 @@ export function UnifiedTopBar() {
                     variant={dashboardPanelOpen ? "secondary" : "ghost"}
                     size="icon-sm"
                     className={dashboardPanelOpen ? "" : "text-muted-foreground hover:text-foreground"}
-                    onClick={() => setDashboardPanelOpen(!dashboardPanelOpen)}
+                    onClick={() => {
+                      // 中文注释：交替式交互，点击看板时收起文件树
+                      if (!dashboardPanelOpen && fileTreeOpen) setFileTreeOpen(false);
+                      setDashboardPanelOpen(!dashboardPanelOpen);
+                    }}
                   >
                     {isAssistantWorkspace
                       ? <img

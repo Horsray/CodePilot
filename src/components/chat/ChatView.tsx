@@ -12,6 +12,7 @@ import { ModeIndicator } from './ModeIndicator';
 import { ChatPermissionSelector } from './ChatPermissionSelector';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { RuntimeBadge } from './RuntimeBadge';
+import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { Button } from '@/components/ui/button';
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -1143,6 +1144,12 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         }
         right={
           <div className="flex items-center gap-3">
+            {/* 会话状态指示器：显示 agent 数量、工具调用数、会话时长 */}
+            <SessionStatusIndicator
+              subAgents={subAgents}
+              toolCount={toolUses.length}
+              startedAt={streamSnapshot?.startedAt}
+            />
             <RuntimeBadge providerId={currentProviderId} />
             <ContextUsageIndicator
               messages={messages}

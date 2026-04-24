@@ -128,7 +128,20 @@ export const AGENT_META: Record<string, { icon: React.ElementType, color: string
   tester: { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: '测试者' },
   qa: { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: '质量保证' },
   debugger: { icon: Wrench, color: 'text-yellow-500', bg: 'bg-yellow-500/10', label: '调试者' },
-  general: { icon: Robot, color: 'text-slate-500', bg: 'bg-slate-500/10', label: '通用助手' }
+  general: { icon: Robot, color: 'text-slate-500', bg: 'bg-slate-500/10', label: '通用助手' },
+  architect: { icon: Brain, color: 'text-indigo-600', bg: 'bg-indigo-600/10', label: '架构师' },
+  tracer: { icon: MagnifyingGlass, color: 'text-blue-400', bg: 'bg-blue-400/10', label: '追踪者' },
+  'security-reviewer': { icon: ShieldCheck, color: 'text-rose-600', bg: 'bg-rose-600/10', label: '安全审查员' },
+  'code-reviewer': { icon: Eyeglasses, color: 'text-violet-500', bg: 'bg-violet-500/10', label: '代码审查员' },
+  'test-engineer': { icon: ShieldCheck, color: 'text-rose-400', bg: 'bg-rose-400/10', label: '测试工程师' },
+  designer: { icon: NotePencil, color: 'text-pink-500', bg: 'bg-pink-500/10', label: '设计师' },
+  writer: { icon: NotePencil, color: 'text-cyan-500', bg: 'bg-cyan-500/10', label: '技术作者' },
+  'qa-tester': { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: 'QA 测试员' },
+  scientist: { icon: Brain, color: 'text-teal-500', bg: 'bg-teal-500/10', label: '数据科学家' },
+  'document-specialist': { icon: NotePencil, color: 'text-sky-500', bg: 'bg-sky-500/10', label: '文档专家' },
+  'git-master': { icon: Code, color: 'text-orange-600', bg: 'bg-orange-600/10', label: 'Git 大师' },
+  'code-simplifier': { icon: Wrench, color: 'text-yellow-600', bg: 'bg-yellow-600/10', label: '代码简化者' },
+  critic: { icon: Eyeglasses, color: 'text-red-500', bg: 'bg-red-500/10', label: '审查员' }
 };
 
 function TeamAgentTimelines({ outputText, isRunning }: { outputText: string, isRunning: boolean }) {
@@ -555,6 +568,48 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
+    match: (n) => n.toLowerCase() === 'todowrite' || n.toLowerCase().includes('__todowrite'),
+    icon: ListChecks,
+    label: '更新任务计划',
+    getSummary: () => '更新任务计划',
+    renderDetail: (tool, streamingOutput) => {
+      const isRunning = tool.result === undefined;
+      const outputText = isRunning ? streamingOutput : tool.result;
+      
+      // Try to extract JSON content for prettier display if needed, 
+      // or just show a nice loading state / JSON view.
+      return (
+        <div className="mt-2 ml-3 border-l-2 border-blue-500/30 pl-3 py-1 space-y-1 bg-background/30 rounded-r-md">
+          {isRunning ? (
+            <div className="text-[11px] text-blue-500/70 flex items-center">
+              <SpinnerGap size={10} className="inline-block mr-1.5 animate-spin shrink-0" />
+              正在更新任务计划...
+            </div>
+          ) : (
+            <div className="text-[11px] text-emerald-500/70 flex items-center mb-2">
+              <CheckCircle size={10} className="inline-block mr-1.5 shrink-0" />
+              任务计划更新完成
+            </div>
+          )}
+          
+          {outputText && (
+            <div className="mt-2 text-[10px] text-muted-foreground/60 font-mono whitespace-pre-wrap break-all max-h-[150px] overflow-auto bg-muted/20 p-2 rounded">
+              {typeof outputText === 'string' && outputText.startsWith('{') 
+                ? (() => {
+                    try {
+                      return JSON.stringify(JSON.parse(outputText), null, 2);
+                    } catch {
+                      return outputText;
+                    }
+                  })()
+                : outputText}
+            </div>
+          )}
+        </div>
+      );
+    },
+  },
+  {
     // Fallback — must be last. Shows the raw tool name so unregistered tools
     // (TodoWrite, MCP tools, plugin tools) remain identifiable.
     match: () => true,
@@ -885,18 +940,19 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
   const filePath = getFilePath(tool.input);
   const status = getStatus(tool);
   const isTeam = tool.name.toLowerCase() === 'team' || tool.name.toLowerCase().includes('__team');
+  const isTodoWrite = tool.name.toLowerCase() === 'todowrite' || tool.name.toLowerCase().includes('__todowrite');
   const hasDetail = !!renderer.renderDetail;
   const detailVisible = hasDetail && (status === 'running' || !!streamingToolOutput || !!tool.result);
-  const [internalExpanded, setInternalExpanded] = useState(isTeam ? false : status === 'running');
+  const [internalExpanded, setInternalExpanded] = useState((isTeam || isTodoWrite) ? false : status === 'running');
   const [showRaw, setShowRaw] = useState(false);
 
   const expanded = expandedOverride !== undefined ? expandedOverride : internalExpanded;
 
   React.useEffect(() => {
     if (expandedOverride === undefined) {
-      setInternalExpanded(isTeam ? false : status === 'running');
+      setInternalExpanded((isTeam || isTodoWrite) ? false : status === 'running');
     }
-  }, [status, expandedOverride, isTeam]);
+  }, [status, expandedOverride, isTeam, isTodoWrite]);
 
   const hasRawContent = !hasDetail && (tool.result || (tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0));
 
@@ -917,21 +973,22 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
         className={cn(
           "flex w-full items-center gap-2 px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
           status === 'error' ? "bg-red-500/[0.03]" : "",
-          isTeam ? "bg-purple-500/[0.05] hover:bg-purple-500/[0.1] text-purple-500" : ""
+          isTeam ? "bg-purple-500/[0.05] hover:bg-purple-500/[0.1] text-purple-500" : "",
+          isTodoWrite ? "bg-blue-500/[0.05] hover:bg-blue-500/[0.1] text-blue-500" : ""
         )}
       >
         <div className="flex shrink-0 items-center justify-center">
-          {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-500" : "text-blue-500") })}
+          {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-blue-500")) })}
         </div>
 
         <span className={cn(
           "truncate ml-1 text-left font-medium",
-          status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-600 dark:text-purple-400" : "text-foreground/80")
+          status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-600 dark:text-purple-400" : (isTodoWrite ? "text-blue-600 dark:text-blue-400" : "text-foreground/80"))
         )}>
           {renderer.label || (isTeam ? '' : summary)}
         </span>
         
-        {!isTeam && (renderer.label ? !!summary : !!filePath) && (
+        {!(isTeam || isTodoWrite) && (renderer.label ? !!summary : !!filePath) && (
           <>
             <span className="mx-1 text-border">|</span>
             <span className={cn("font-mono text-[12px] truncate text-muted-foreground/60", renderer.label && filePath ? "max-w-[200px]" : "flex-1")}>
@@ -948,9 +1005,9 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           </>
         )}
 
-        <div className={cn("ml-auto flex items-center gap-2", isTeam ? "text-purple-500/80" : "text-muted-foreground")}>
+        <div className={cn("ml-auto flex items-center gap-2", isTeam ? "text-purple-500/80" : (isTodoWrite ? "text-blue-500/80" : "text-muted-foreground"))}>
           {status === 'running' && <SpinnerGap size={14} className={cn("animate-spin", isTeam ? "text-purple-500" : "text-primary")} />}
-          {status === 'success' && <CheckCircle size={14} className={isTeam ? "text-purple-500" : "text-emerald-500"} />}
+          {status === 'success' && <CheckCircle size={14} className={isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-emerald-500")} />}
           {status === 'error' && <XCircle size={14} className="text-red-500" />}
         </div>
       </button>
@@ -1010,7 +1067,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   }, [tool.name, status, tool.input]);
 
   React.useEffect(() => {
-    if (k === 'team') return; // Do not auto-expand team
+    if (k === 'team' || k === 'todowrite') return; // Do not auto-expand team or todowrite
     if (status === 'running') {
       setExpanded(true);
     } else {
@@ -1086,6 +1143,14 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
         <div className="border border-blue-500/30 bg-muted/20 rounded-[8px] overflow-hidden shadow-sm">
           <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
         </div>
+      </div>
+    );
+  }
+
+  if (k === 'todowrite') {
+    return (
+      <div className="my-2 border border-blue-500/30 bg-blue-500/[0.05] rounded-[8px] overflow-hidden shadow-sm">
+        <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
       </div>
     );
   }
@@ -1183,8 +1248,9 @@ function extractDiffFromMcpFilesystemEditInput(input: unknown): { oldText: strin
   if (oldParts.length === 0 && newParts.length === 0) return null;
   return { oldText: oldParts.join('\n'), newText: newParts.join('\n') };
 }
-function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'agent' | 'team' | 'other' {
+function toolKind2(name: string): 'read' | 'write' | 'create' | 'search' | 'bash' | 'agent' | 'team' | 'todowrite' | 'other' {
   const n = name.toLowerCase();
+  if (n === 'todowrite' || n.includes('__todowrite')) return 'todowrite';
   if (['read', 'readfile', 'read_file', 'read_text_file', 'read_multiple_files'].includes(n)) return 'read';
   if (['edit', 'notebookedit', 'notebook_edit', 'apply_patch'].includes(n) || n.endsWith('__edit_file')) return 'write';
   if (n.endsWith('__write_file')) return 'create';

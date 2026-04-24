@@ -395,7 +395,7 @@ const LINE_NUMBER_CLASSES = cn(
   "before:w-6",
   "before:mr-4",
   "before:text-right",
-  "before:text-muted-foreground/50",
+  "before:text-muted-foreground/40",
   "before:font-mono",
   "before:select-none"
 );
@@ -427,17 +427,17 @@ const CodeBlockBody = memo(
     return (
       <pre
         className={cn(
-          "m-0 p-4 text-sm whitespace-pre-wrap break-words",
+          "m-0 py-4 pr-4 pl-3 text-[13px] leading-[1.6] whitespace-pre-wrap break-words",
           isTerminal
             ? "!bg-[var(--terminal-bg)] !text-[var(--terminal-foreground)]"
-            : "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]",
+            : "bg-muted/10 dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]",
           className
         )}
         style={preStyle}
       >
         <code
           className={cn(
-            "font-mono text-sm",
+            "font-mono text-[13px]",
             showLineNumbers && "[counter-increment:line_0] [counter-reset:line]"
           )}
         >
@@ -470,7 +470,7 @@ export const CodeBlockContainer = ({
 }: HTMLAttributes<HTMLDivElement> & { language: string }) => (
   <div
     className={cn(
-      "group relative w-full overflow-hidden rounded-md border bg-background text-foreground",
+      "group relative w-full overflow-hidden rounded-lg border bg-background text-foreground shadow-sm",
       className
     )}
     data-language={language}
@@ -683,7 +683,7 @@ export const CodeBlockContent = ({
 export const CodeBlock = ({
   code,
   language,
-  showLineNumbers = false,
+  showLineNumbers = true,
   filename,
   className,
   children,
@@ -737,9 +737,8 @@ const CodeBlockDefaultHeader = ({
   filename?: string;
   isTerminal: boolean;
 }) => {
-  const { code: contextCode, language: contextLanguage } = useContext(CodeBlockContext);
+  const { code: contextCode } = useContext(CodeBlockContext);
   const [copied, setCopied] = useState(false);
-  const [copiedMarkdown, setCopiedMarkdown] = useState(false);
 
   const handleCopy = async () => {
     try {
@@ -751,91 +750,48 @@ const CodeBlockDefaultHeader = ({
     }
   };
 
-  const handleCopyMarkdown = async () => {
-    try {
-      const markdown = `\`\`\`${contextLanguage}\n${contextCode}\n\`\`\``;
-      await navigator.clipboard.writeText(markdown);
-      setCopiedMarkdown(true);
-      setTimeout(() => setCopiedMarkdown(false), 2000);
-    } catch {
-      // clipboard not available
-    }
+  const formatLang = (lang: string) => {
+    const lower = lang.toLowerCase();
+    if (['tsx', 'jsx', 'html', 'css', 'sql', 'php', 'json', 'yaml', 'xml'].includes(lower)) return lang.toUpperCase();
+    if (lower === 'typescript' || lower === 'ts') return 'TypeScript';
+    if (lower === 'javascript' || lower === 'js') return 'JavaScript';
+    if (lower === 'python' || lower === 'py') return 'Python';
+    if (lower === 'cpp' || lower === 'c++') return 'C++';
+    if (lower === 'csharp' || lower === 'c#') return 'C#';
+    if (lower === 'markdown' || lower === 'md') return 'Markdown';
+    return lang.charAt(0).toUpperCase() + lang.slice(1);
   };
 
-  const langIcon = getLanguageIcon(language);
+  const displayLang = formatLang(language);
 
   return (
     <div className={cn(
-      "flex items-center justify-between px-4 py-1.5 text-xs border-b",
+      "flex items-center justify-between px-4 py-2 text-[13px] border-b",
       isTerminal
-        ? "bg-[var(--terminal-bg)] text-[var(--terminal-muted)]"
-        : "bg-muted text-muted-foreground"
+        ? "bg-[var(--terminal-bg)] border-[var(--terminal-border)] text-[var(--terminal-muted)]"
+        : "bg-muted/40 border-border/50 text-muted-foreground"
     )}>
-      <div className="flex items-center gap-2 min-w-0">
-        {createElement(langIcon, { size: 14, className: cn(
-          "shrink-0",
-          isTerminal ? "text-[var(--terminal-accent)]" : "text-muted-foreground",
-        ) })}
-        {filename && (
-          <span className={cn(
-            "truncate font-medium",
-            isTerminal ? "text-[var(--terminal-foreground)]" : "text-foreground"
-          )}>{filename}</span>
+      <div className="flex items-center gap-1.5 font-medium text-muted-foreground/80">
+        {filename ? filename : (
+          <>
+            {displayLang}
+            <CaretDown size={12} className="opacity-50 ml-0.5" />
+          </>
         )}
-        {filename && <span className="text-muted-foreground/50">|</span>}
-        <span className={cn(
-          "rounded px-1.5 py-0.5",
-          isTerminal
-            ? "bg-[var(--terminal-hover-bg)] text-[var(--terminal-accent)]"
-            : "bg-accent text-accent-foreground"
-        )}>{language.toUpperCase()}</span>
       </div>
-      <div className="flex items-center gap-1 ml-2 shrink-0">
+      <div className="flex items-center">
         <button
           onClick={handleCopy}
           type="button"
           className={cn(
-            "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+            "flex items-center justify-center rounded p-1 transition-colors",
             isTerminal
-              ? "text-[var(--terminal-muted)] hover:text-[var(--terminal-foreground)] hover:bg-[var(--terminal-hover-bg)]"
-              : "text-muted-foreground hover:text-foreground hover:bg-accent"
+              ? "hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-foreground)]"
+              : "hover:bg-muted-foreground/10 hover:text-foreground"
           )}
           title="Copy code"
         >
-          {copied ? (
-            <>
-              <Check size={12} />
-              <span>Copied</span>
-            </>
-          ) : (
-            <>
-              <Copy size={12} />
-              <span>Copy</span>
-            </>
-          )}
-        </button>
-        <button
-          onClick={handleCopyMarkdown}
-          type="button"
-          className={cn(
-            "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
-            isTerminal
-              ? "text-[var(--terminal-muted)] hover:text-[var(--terminal-foreground)] hover:bg-[var(--terminal-hover-bg)]"
-              : "text-muted-foreground hover:text-foreground hover:bg-accent"
-          )}
-          title="Copy as Markdown"
-        >
-          {copiedMarkdown ? (
-            <>
-              <Check size={12} />
-              <span>Copied</span>
-            </>
-          ) : (
-            <>
-              <FileCode size={12} />
-              <span>Markdown</span>
-            </>
-          )}
+          {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
         </button>
       </div>
     </div>

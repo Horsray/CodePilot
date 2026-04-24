@@ -11,6 +11,20 @@ interface XtermTerminalProps {
   onReady: (term: Terminal) => void;
 }
 
+// 中文注释：功能名称「xterm 模块预加载」，用法是在终端面板打开前提前加载 xterm 及插件模块，
+// 消除首次打开时的动态 import 延迟，显著提升终端启动速度。
+let _preloadPromise: Promise<unknown> | null = null;
+export function preloadXtermModules() {
+  if (!_preloadPromise) {
+    _preloadPromise = Promise.all([
+      import("@xterm/xterm"),
+      import("@xterm/addon-fit"),
+      import("@xterm/addon-webgl"),
+    ]);
+  }
+  return _preloadPromise;
+}
+
 /**
  * XtermTerminal — 渲染 xterm.js 终端，支持完整 ANSI 序列。
  * 懒加载 xterm.js 和插件以避免 SSR 问题。
@@ -79,11 +93,7 @@ export function XtermTerminal({
     let disposed = false;
 
     async function init() {
-      const [xtermMod, fitMod, webglMod] = await Promise.all([
-        import("@xterm/xterm"),
-        import("@xterm/addon-fit"),
-        import("@xterm/addon-webgl"),
-      ]);
+      const [xtermMod, fitMod, webglMod] = await preloadXtermModules() as [typeof import("@xterm/xterm"), typeof import("@xterm/addon-fit"), typeof import("@xterm/addon-webgl")];
 
       if (disposed) return;
 
@@ -111,40 +121,38 @@ export function XtermTerminal({
 
       if (containerRef.current && !disposed) {
         term.open(containerRef.current);
-        fitAddon.fit();
 
-        try {
-          term.loadAddon(new webglMod.WebglAddon());
-        } catch (e) {
-          console.warn("WebGL addon failed to load, falling back to canvas/dom", e);
-        }
+        // 中文注释：聚焦容器时自动聚焦终端
+        const handleContainerFocus = () => { term.focus(); };
+        const containerEl = containerRef.current;
+        containerEl.addEventListener('focus', handleContainerFocus);
+        containerEl.addEventListener('click', handleContainerFocus);
 
-        term.focus();
+        // 中文注释：延迟一帧再 fit，确保容器布局已完成，避免黑边
+        requestAnimationFrame(() => {
+          if (disposed || !fitAddonRef.current || !termRef.current) return;
+          try { fitAddonRef.current.fit(); } catch { /* ignore */ }
 
-        term.onData((data) => {
-          onDataRef.current(data);
+          try { term.loadAddon(new webglMod.WebglAddon()); } catch (e) {
+            console.warn("WebGL addon failed to load, falling back to canvas/dom", e);
+          }
+
+          term.focus();
+          term.onData((data) => { onDataRef.current(data); });
+
+          // 中文注释：二次延迟 fit 确保 WebGL 渲染器初始化后尺寸正确
+          setTimeout(() => {
+            if (fitAddonRef.current && termRef.current) {
+              try { fitAddonRef.current.fit(); onResizeRef.current(termRef.current.cols, termRef.current.rows); } catch { /* ignore */ }
+            }
+          }, 150);
+
+          onReadyRef.current(term);
         });
 
-        const handleContainerFocus = () => {
-          term.focus();
-        };
-        containerRef.current.addEventListener('focus', handleContainerFocus);
-        containerRef.current.addEventListener('click', handleContainerFocus);
-
-        setTimeout(() => {
-          if (fitAddonRef.current && termRef.current) {
-            try {
-              fitAddonRef.current.fit();
-              onResizeRef.current(termRef.current.cols, termRef.current.rows);
-            } catch { /* ignore */ }
-          }
-        }, 100);
-
-        onReadyRef.current(term);
-
         return () => {
-          containerRef.current?.removeEventListener('focus', handleContainerFocus);
-          containerRef.current?.removeEventListener('click', handleContainerFocus);
+          containerEl.removeEventListener('focus', handleContainerFocus);
+          containerEl.removeEventListener('click', handleContainerFocus);
         };
       }
     }
@@ -214,7 +222,7 @@ export function XtermTerminal({
     <div
       ref={containerRef}
       className="absolute inset-0 focus:outline-none xterm-container flex"
-      style={{ padding: "4px 0 0 8px" }}
+      style={{ padding: "4px 4px 4px 8px" }}
       onClick={() => termRef.current?.focus()}
     />
   );

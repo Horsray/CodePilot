@@ -795,6 +795,14 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     return null;
   }, [message.content, isUser]);
 
+  // 当 SubAgentTimeline 卡片存在时，从 timeline 中过滤掉 Agent/Team 工具调用，
+  // 避免同一批智能体在时间线和卡片中重复渲染
+  const timelineTools = useMemo(() => {
+    if (!subAgents || subAgents.length === 0) return pairedTools;
+    const agentToolNames = ['Agent', 'mcp__codepilot-agent__Agent', 'Team', 'mcp__codepilot-team__Team'];
+    return pairedTools.filter(tool => !agentToolNames.includes(tool.name));
+  }, [pairedTools, subAgents]);
+
   const showAssistantAvatar = !isUser && isAssistantProject;
   const buddyInfo = isAssistantProject ? (globalThis as Record<string, unknown>).__codepilot_buddy_info__ as { emoji?: string; species?: string; rarity?: string } | undefined : undefined;
 
@@ -838,10 +846,10 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           )}
 
         {/* Render the timeline (tools and thoughts interleaved) */}
-        {!isUser && (pairedTools.length > 0 || timelineSteps.length > 0) && (
+        {!isUser && (timelineTools.length > 0 || timelineSteps.length > 0) && (
           <>
             <ToolActionsGroup
-              tools={pairedTools.map((tool, i) => ({
+              tools={timelineTools.map((tool, i) => ({
                 id: `hist-${i}`,
                 name: tool.name,
                 input: tool.input,

@@ -1856,6 +1856,14 @@ const en = {
   'buddy.namePlaceholder': 'Give your buddy a name...',
   'buddy.nameHint': 'This will be your buddy\'s name',
   'buddy.reset': 'Reset buddy',
+
+  // ── Session Status ──────────────────────────────────────
+  'session.duration': 'Duration',
+  'session.agents': 'Agents',
+  'session.running': 'Running',
+  'session.completed': 'Completed',
+  'session.errors': 'Errors',
+  'session.toolCalls': 'Tool Calls',
 } as const;
 
 export type TranslationKey = keyof typeof en;

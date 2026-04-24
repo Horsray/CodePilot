@@ -33,12 +33,19 @@ export function resolveAgentModel(
     } else {
       useCase = 'sonnet';
     }
-    
+
     const mappedTarget = resolvedParent.roleModels[useCase] || resolvedParent.roleModels.default;
     if (mappedTarget && mappedTarget.includes(':')) {
       const [targetProviderId, ...targetModelParts] = mappedTarget.split(':');
       finalProviderId = targetProviderId;
       finalModel = targetModelParts.join(':');
+      console.log(`[agent-routing] multi_head routed agent="${agentDef.id}" useCase=${useCase} → provider=${targetProviderId} model=${finalModel}`);
+    } else if (mappedTarget) {
+      // roleModel value doesn't have provider:model format — use as model name with parent provider
+      finalModel = mappedTarget;
+      console.log(`[agent-routing] multi_head routed agent="${agentDef.id}" useCase=${useCase} → model=${mappedTarget} (parent provider)`);
+    } else {
+      console.warn(`[agent-routing] multi_head no mapping for useCase=${useCase}, falling back to parentModel=${parentModel}`);
     }
   }
 

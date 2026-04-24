@@ -342,8 +342,61 @@ async function executeAgentTask(
     reader.releaseLock();
   }
 
+  // EMPTY_RESPONSE fallback: if routed model returned nothing, retry with parent model
+  if (errorEvent && errorEvent.includes('模型未返回任何内容') && finalModel !== options.parentModel) {
+    console.warn(`[team-runner] Agent "${role}" got empty response from model="${finalModel}", retrying with parentModel="${options.parentModel}"`);
+    progress.setStage('模型不兼容，回退重试中');
+    const fallbackStream = runAgentLoop({
+      prompt,
+      sessionId: `${subAgentId}-retry`,
+      providerId: options.providerId,
+      sessionProviderId: options.sessionProviderId,
+      model: options.parentModel,
+      systemPrompt,
+      workingDirectory,
+      tools: subTools,
+      maxSteps: agentDef.maxSteps || 30,
+      permissionMode: options.permissionMode,
+    });
+    const fallbackReader = fallbackStream.getReader();
+    try {
+      while (true) {
+        const { done, value } = await fallbackReader.read();
+        if (done) break;
+        if (value) {
+          for (const line of value.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const ev = JSON.parse(line.slice(6));
+              progress.touch();
+              if (ev.type === 'text') {
+                textParts.push(ev.data);
+              } else if (ev.type === 'thinking') {
+                thinkingParts.push(ev.data);
+              } else if (ev.type === 'tool_use' && emitSSE) {
+                try {
+                  const toolData = JSON.parse(ev.data);
+                  emitSSE({
+                    type: 'subagent_progress',
+                    data: JSON.stringify({ id: subAgentId, detail: `\n🛠️ [fallback] ${toolData.name}\n`, append: true }),
+                  });
+                } catch { /* skip */ }
+              }
+            } catch { /* skip non-JSON */ }
+          }
+        }
+      }
+    } finally {
+      fallbackReader.releaseLock();
+    }
+    if (textParts.length > 0) {
+      errorEvent = null; // clear error since fallback succeeded
+      taskFailed = false;
+    }
+  }
+
   const parts: string[] = [];
-  
+
   if (errorEvent) {
     parts.push(`**❌ 执行出错：**\n${errorEvent}\n`);
   }
