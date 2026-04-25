@@ -21,21 +21,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const systemPrompt = `你是一个提示词优化专家。用户会输入一段相对简略或不够清晰的指令，请你将其优化为更专业、结构清晰、更容易被 AI 智能体理解的提示词。
-规则：
-1. 保持用户原始意图不变。
-2. 增加必要的上下文结构（如：目标、步骤、约束条件等）。
-3. 直接输出优化后的提示词内容，不要包含任何多余的解释、问候或多余的标点符号。
-4. 如果用户原本的提示词已经足够清晰，则进行轻微的润色即可。`;
+    const systemPrompt = `你是一个提示词优化专家。用户会输入一段指令，请你将其优化为更专业、结构清晰、更容易被 AI 智能体理解的提示词。
+
+【严格输出规则】
+1. 只输出优化后的提示词正文，禁止输出任何其他内容。
+2. 禁止添加"优化后"、"优化结果"、"以下是优化后的提示词"等任何前缀或标签。
+3. 禁止输出优化前的原文。
+4. 禁止输出对比说明、修改理由、解释或总结。
+5. 禁止使用 markdown 标题、引用块或代码块包裹。
+6. 输出内容必须是可以直接复制发送的纯文本。
+7. 如果用户原本的提示词已经足够清晰，则进行轻微润色即可。`;
 
     const res = await generateTextFromProvider({
       providerId,
       model,
       system: systemPrompt,
-      prompt: `请优化以下提示词：\n\n${prompt}`,
+      prompt: `请优化以下提示词，只输出优化后的纯文本内容：\n\n${prompt}`,
     });
 
-    return NextResponse.json({ result: res.trim() });
+    // 后处理：剥离模型可能残留的前缀包装
+    let cleaned = res.trim();
+    // 去除常见前缀：优化后：、优化结果：、以下是优化后的提示词：等
+    cleaned = cleaned.replace(/^(?:优化后|优化结果|以下是优化后的提示词|优化后的提示词|Optimized prompt|Here is the optimized prompt)[：:]\s*/i, '');
+    // 去除首尾的 markdown 代码块包裹
+    cleaned = cleaned.replace(/^```\w*\n?/, '').replace(/\n?```$/, '');
+    // 去除多余的引号包裹
+    if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith('"') && cleaned.endsWith('"'))) {
+      cleaned = cleaned.slice(1, -1);
+    }
+
+    return NextResponse.json({ result: cleaned });
   } catch (error: any) {
     console.error('Prompt optimization failed:', error);
     return NextResponse.json(

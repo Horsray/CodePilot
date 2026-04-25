@@ -58,7 +58,7 @@ function loadAndMerge(projectCwd?: string): CachedMcpConfig {
     'memory': {
       type: 'stdio',
       command: 'node',
-      args: ['-e', 'const cp=require("child_process");process.chdir(process.env.CODEPILOT_WORKSPACE);const child=cp.spawn(process.platform==="win32"?"npx.cmd":"npx",["-y","@modelcontextprotocol/server-memory"],{stdio:"inherit"});child.on("exit",c=>process.exit(c||0));'],
+      args: ['-e', 'const cp=require("child_process");process.chdir(process.env.CODEPILOT_WORKSPACE);const child=cp.spawn(process.platform==="win32"?"npx.cmd":"npx",["-y","@modelcontextprotocol/server-memory"],{stdio:"inherit"});child.on("exit",c=>process.exit(c||0));process.on("SIGTERM",()=>child.kill("SIGTERM"));process.on("SIGINT",()=>child.kill("SIGINT"));process.stdin.on("end",()=>child.kill("SIGTERM"));process.stdin.on("close",()=>child.kill("SIGTERM"));'],
       env: { CODEPILOT_WORKSPACE: cwd },
       enabled: true
     },

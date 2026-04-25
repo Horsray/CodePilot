@@ -229,9 +229,9 @@ export const ReasoningContent = memo(
                 href={href}
                 {...aProps}
                 onClick={(e) => {
-                  if (href && LOCAL_URL_REGEX.test(href)) {
+                  if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
                     e.preventDefault();
-                    usePanelStore.getState().openBrowserTab(href, "本地预览");
+                    usePanelStore.getState().openBrowserTab(href, "网页预览");
                   } else if (aProps.onClick) {
                     aProps.onClick(e);
                   }

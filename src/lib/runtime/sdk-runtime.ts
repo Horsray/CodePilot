@@ -23,6 +23,7 @@ import { getSetting, getActiveProvider } from '../db';
 // streamClaude), so it's safe to drop in favor of a static import that both
 // bundlers handle correctly.
 import { streamClaudeSdk } from '../claude-client';
+import { syncMcpConnections } from '../mcp-connection-manager';
 
 export const sdkRuntime: AgentRuntime = {
   id: 'claude-code-sdk',
@@ -30,6 +31,12 @@ export const sdkRuntime: AgentRuntime = {
   description: 'Claude Code CLI agent with built-in tools, MCP, and permissions.',
 
   stream(options: RuntimeStreamOptions): ReadableStream<string> {
+    // SDK Runtime spawns its own MCP servers inside the Claude Code subprocess.
+    // If the Native Runtime was previously used, its MCP servers might still be running
+    // in the background (holding locks or ports). We MUST clear them to prevent conflicts.
+    syncMcpConnections({}).catch(err => {
+      console.warn('[sdk-runtime] Failed to clear Native MCP connections:', err);
+    });
 
     // Convert RuntimeStreamOptions → ClaudeStreamOptions
     const ro = options.runtimeOptions || {};

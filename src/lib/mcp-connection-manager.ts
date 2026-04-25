@@ -69,6 +69,10 @@ function getMcpToolTimeoutMs(serverName: string, toolName: string): number {
 
 export const connections = new Map<string, McpConnection>();
 
+function isConfigEqual(a: MCPServerConfig, b: MCPServerConfig): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * Sync the connection pool with desired configurations.
  * Connects new servers, disconnects removed ones.
@@ -80,10 +84,15 @@ export async function syncMcpConnections(
   const desiredNames = new Set(Object.keys(desiredConfigs));
   const results: McpSyncServerResult[] = [];
 
-  // Disconnect servers that are no longer in config
-  for (const [name] of connections) {
+  // Disconnect servers that are no longer in config OR whose config has changed
+  for (const [name, existing] of connections) {
     if (!desiredNames.has(name)) {
       await disconnectServer(name);
+    } else {
+      const desiredConfig = desiredConfigs[name];
+      if (!isConfigEqual(existing.config, desiredConfig)) {
+        await disconnectServer(name);
+      }
     }
   }
 

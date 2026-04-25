@@ -18,8 +18,37 @@ import {
 import { cn } from '@/lib/utils';
 import type { TimelineFileChange, TimelineStep } from '@/types';
 import { usePanel } from '@/hooks/usePanel';
+import { usePanelStore } from '@/store/usePanelStore';
 
 const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.tsx', '.jsx', '.csv', '.tsv']);
+
+const URL_REGEX = /(https?:\/\/[^\s"'<>]+)/gi;
+
+function Linkify({ children, className }: { children: string, className?: string }) {
+  if (!children || typeof children !== 'string') return <>{children}</>;
+  const parts = children.split(URL_REGEX);
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (i % 2 === 1) {
+          return (
+            <span
+              key={i}
+              className={cn("text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 underline cursor-pointer", className)}
+              onClick={(e) => {
+                e.stopPropagation();
+                usePanelStore.getState().openBrowserTab(part, '网页预览');
+              }}
+            >
+              {part}
+            </span>
+          );
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </>
+  );
+}
 
 function canPreview(filename: string): boolean {
   const ext = '.' + filename.split('.').pop()?.toLowerCase();
@@ -302,6 +331,27 @@ function ActivityCard({
   // We don't want it permanently open, that looks cluttered.
   const open = userToggled ?? isRunning;
 
+  // ---------------------------------------------------------------------------
+  // 功能名称：执行卡片内的思考内容自动滚动控制
+  // 用法：和 ThinkingRow 类似，当思考内容展开并处于渲染状态时，
+  // 会将内容自动滚动到底部。用户手动上滑可取消自动跟随，滑到底部恢复。
+  // ---------------------------------------------------------------------------
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+
+  useEffect(() => {
+    if (open && autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [step.reasoning, open, autoScroll]);
+
+  const handleScroll = () => {
+    if (!scrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 10;
+    setAutoScroll(isAtBottom);
+  };
+
   const activity = getActivityInfo(step);
   const reasoningText = cleanReasoningText(step.reasoning);
   const showReasoningDetail = Boolean(
@@ -411,8 +461,12 @@ function ActivityCard({
                 <Brain size={12} weight="bold" />
                 <span>思考内容</span>
               </div>
-              <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/80">
-                {reasoningText}
+              <div 
+                ref={scrollRef}
+                onScroll={handleScroll}
+                className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/80 max-h-[400px] overflow-y-auto overscroll-contain scrollbar-thin"
+              >
+                <Linkify>{reasoningText}</Linkify>
               </div>
             </div>
           )}
@@ -436,7 +490,7 @@ function ActivityCard({
                     <div className="p-2 border-b border-border/20 bg-muted/5 overflow-x-auto">
                       <span className="text-[10px] font-medium text-muted-foreground/50 uppercase mb-1 block">Input</span>
                       <pre className="whitespace-pre-wrap text-[11px] leading-5 font-mono text-muted-foreground/70">
-                        {formatResultText(JSON.stringify(tool.input, null, 2), compact)}
+                        <Linkify>{formatResultText(JSON.stringify(tool.input, null, 2), compact)}</Linkify>
                       </pre>
                     </div>
                   )}
@@ -447,7 +501,7 @@ function ActivityCard({
                         'whitespace-pre-wrap text-[11px] leading-5 font-mono',
                         tool.isError ? 'text-red-500/80' : 'text-foreground/60',
                       )}>
-                        {formatResultText(tool.result, compact)}
+                        <Linkify>{formatResultText(tool.result, compact)}</Linkify>
                       </pre>
                     </div>
                   )}

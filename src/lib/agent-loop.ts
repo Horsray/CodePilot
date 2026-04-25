@@ -126,17 +126,17 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
 
       try {
         // 0. Sync MCP servers before assembling tools (await to avoid race condition)
-        if (mcpServers && Object.keys(mcpServers).length > 0) {
-          console.log(`[agent-loop] Syncing ${Object.keys(mcpServers).length} MCP servers: ${Object.keys(mcpServers).join(', ')}`);
-          try {
-            const { syncMcpConnections } = await import('./mcp-connection-manager');
-            await syncMcpConnections(mcpServers);
-          } catch (err) {
-            console.warn('[agent-loop] MCP sync error:', err instanceof Error ? err.message : err);
-            reportNativeError('MCP_CONNECTION_ERROR', err, { sessionId });
+        try {
+          const { syncMcpConnections } = await import('./mcp-connection-manager');
+          if (mcpServers && Object.keys(mcpServers).length > 0) {
+            console.log(`[agent-loop] Syncing ${Object.keys(mcpServers).length} MCP servers: ${Object.keys(mcpServers).join(', ')}`);
+          } else {
+            console.log('[agent-loop] Clearing MCP servers (none requested)');
           }
-        } else {
-          console.log('[agent-loop] No MCP servers to sync');
+          await syncMcpConnections(mcpServers || {});
+        } catch (err) {
+          console.warn('[agent-loop] MCP sync error:', err instanceof Error ? err.message : err);
+          reportNativeError('MCP_CONNECTION_ERROR', err, { sessionId });
         }
 
         // 0b. Initial tool assembly (so UI knows available tools on start)

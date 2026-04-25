@@ -96,11 +96,39 @@ interface ToolActionsGroupProps {
 // Tool Registry — extensible per-type rendering
 // ---------------------------------------------------------------------------
 
+const URL_REGEX = /(https?:\/\/[^\s"'<>]+)/gi;
+
+function Linkify({ children, className }: { children: string, className?: string }) {
+  if (!children || typeof children !== 'string') return <>{children}</>;
+  const parts = children.split(URL_REGEX);
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (i % 2 === 1) {
+          return (
+            <span
+              key={i}
+              className={cn("text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 underline cursor-pointer", className)}
+              onClick={(e) => {
+                e.stopPropagation();
+                usePanelStore.getState().openBrowserTab(part, "网页预览");
+              }}
+            >
+              {part}
+            </span>
+          );
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </>
+  );
+}
+
 interface ToolRendererDef {
   match: (name: string, input?: unknown) => boolean;
   icon: Icon;
   label: string;
-  getSummary: (input: unknown, name?: string) => string;
+  getSummary: (input: unknown, name?: string, tool?: ToolAction) => string;
   /** Render inline detail when tool row is hovered/expanded (optional) */
   renderDetail?: (tool: ToolAction, streamingOutput?: string) => React.ReactNode;
 }
@@ -179,7 +207,7 @@ function TeamAgentTimelines({ outputText, isRunning }: { outputText: string, isR
     return (
       <div className="mt-2 ml-3 border-l-2 border-primary/20 pl-3 py-1 bg-background/30 rounded-r-md">
         <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[300px] overflow-auto">
-          {outputText}
+          <Linkify>{outputText}</Linkify>
         </pre>
       </div>
     );
@@ -458,7 +486,16 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     match: (n) => ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search'].includes(n.toLowerCase()),
     icon: MagnifyingGlass,
     label: '搜索',
-    getSummary: (input) => {
+    getSummary: (input, name, tool) => {
+      const outputText = tool?.result;
+      if (outputText) {
+        // Try to get the first line that looks like "Found X files", "找到 X 个文件", "Found X results", etc.
+        const lines = outputText.split('\n').filter(l => l.trim());
+        const summaryLine = lines.find(l => /^found\s+\d+/i.test(l) || /^找到\s+\d+/i.test(l) || /^匹配\s+\d+/i.test(l) || /^\d+\s+matches/i.test(l) || /^\d+\s+results/i.test(l));
+        if (summaryLine) {
+          return summaryLine;
+        }
+      }
       const inp = input as Record<string, unknown> | undefined;
       const pattern = (inp?.pattern || inp?.query || inp?.glob || '') as string;
       return pattern ? `"${pattern.length > 50 ? pattern.slice(0, 47) + '...' : pattern}"` : '搜索内容';
@@ -487,6 +524,11 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
         // Not JSON, just use raw lines
       }
 
+      // If the first line is our summary line, we can skip rendering it in the detail body
+      if (lines.length > 0 && (/^found\s+\d+/i.test(lines[0]) || /^找到\s+\d+/i.test(lines[0]) || /^匹配\s+\d+/i.test(lines[0]) || /^\d+\s+matches/i.test(lines[0]) || /^\d+\s+results/i.test(lines[0]))) {
+        lines = lines.slice(1);
+      }
+
       if (lines.length === 0) return null;
 
       const displayLines = lines.slice(0, 8);
@@ -494,12 +536,56 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
 
       return (
         <div className="mt-1 ml-[11px] border-l-2 border-blue-500/20 pl-4 py-1 space-y-1">
-          {displayLines.map((line, i) => (
-            <div key={i} className="text-[11px] font-mono text-muted-foreground/70 truncate flex items-center gap-1.5">
-              <div className="w-1 h-1 rounded-full bg-blue-500/40 shrink-0" />
-              {line}
-            </div>
-          ))}
+          {displayLines.map((line, i) => {
+            // Very basic heuristic to check if it's a file path
+            // For example: /Users/... or src/...
+            const isFilePath = !line.includes(' ') && (line.includes('/') || line.includes('\\')) && line.includes('.');
+            
+            // Grep might return path:line:content
+            const matchFormat = line.match(/^([^:]+):(\d+):(.*)$/);
+            
+            return (
+              <div key={i} className="text-[11px] font-mono text-muted-foreground/70 truncate flex items-center gap-1.5">
+                <div className="w-1 h-1 rounded-full bg-blue-500/40 shrink-0" />
+                {isFilePath ? (
+                  <span 
+                    className="text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 underline cursor-pointer truncate"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      fetch('/api/open-file', {
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: line }),
+                      }).catch(() => {});
+                    }}
+                    title="点击在编辑器中打开文件"
+                  >
+                    {line}
+                  </span>
+                ) : matchFormat ? (
+                  <div className="truncate flex items-center">
+                    <span 
+                      className="text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 underline cursor-pointer shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fetch('/api/open-file', {
+                          method: 'POST', 
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ path: matchFormat[1] }),
+                        }).catch(() => {});
+                      }}
+                    >
+                      {matchFormat[1]}
+                    </span>
+                    <span className="text-muted-foreground/50 mx-1 shrink-0">:{matchFormat[2]}:</span>
+                    <span className="truncate">{matchFormat[3]}</span>
+                  </div>
+                ) : (
+                  <span>{line}</span>
+                )}
+              </div>
+            );
+          })}
           {more > 0 && (
             <div className="text-[10px] font-medium text-muted-foreground/40 mt-1 pl-2">
               ... 及其他 {more} 项
@@ -879,7 +965,7 @@ function isActionTool(name: string): boolean {
     n.endsWith('__edit_file') ||
     n.endsWith('__write_file')
   ) return true;
-  return ['bash', 'execute', 'run', 'shell', 'execute_command', 'write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'notebookedit', 'notebook_edit'].includes(n) || n.startsWith('mcp__playwright');
+  return ['bash', 'execute', 'run', 'shell', 'execute_command', 'write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'notebookedit', 'notebook_edit', 'codepilot_open_browser'].includes(n) || n.startsWith('mcp__playwright');
 }
 
 type Segment =
@@ -1062,6 +1148,30 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
 
   const isExpanded = userExpanded !== null ? userExpanded : Boolean(isStreaming);
 
+  // ---------------------------------------------------------------------------
+  // 功能名称：思考卡片自动滚动控制
+  // 用法：通过监听滚动容器的 scrollTop 和 scrollHeight 差值，
+  // 判断用户是否手动向上滚动，如果是则停止自动跟随最新内容，
+  // 若滚动回底部，则恢复自动跟随。
+  // ---------------------------------------------------------------------------
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+
+  // Auto-scroll logic
+  React.useEffect(() => {
+    if (isExpanded && autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [content, isExpanded, autoScroll]);
+
+  const handleScroll = () => {
+    if (!scrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    // If user scrolled up (more than 10px from bottom), disable auto-scroll
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 10;
+    setAutoScroll(isAtBottom);
+  };
+
   React.useEffect(() => {
     if (!isStreaming && userExpanded === null) {
       const timer = setTimeout(() => {
@@ -1104,7 +1214,11 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="px-3 py-2 text-[12px] text-foreground/80 prose prose-sm dark:prose-invert max-w-none border-l-2 border-violet-500/20 ml-3">
+            <div 
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className="px-3 py-2 text-[12px] text-foreground/80 prose prose-sm dark:prose-invert max-w-none border-l-2 border-violet-500/20 ml-3 max-h-[400px] overflow-y-auto overscroll-contain scrollbar-thin"
+            >
               <Streamdown
                 plugins={thinkingPlugins}
                 components={{
@@ -1114,9 +1228,9 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
                         href={href}
                         {...aProps}
                         onClick={(e) => {
-                          if (href && LOCAL_URL_REGEX.test(href)) {
+                          if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
                             e.preventDefault();
-                            usePanelStore.getState().openBrowserTab(href, "本地预览");
+                            usePanelStore.getState().openBrowserTab(href, "网页预览");
                           } else if (aProps.onClick) {
                             aProps.onClick(e);
                           }
@@ -1216,7 +1330,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
   
   // Use our smart display name function to replace raw MCP tool names
   const displayName = getToolDisplayName(tool.name);
-  const baseSummary = renderer.getSummary(tool.input, displayName);
+  const baseSummary = renderer.getSummary(tool.input, displayName, tool);
   
   // For file operations, try to extract file paths for a cleaner summary
   let summary = baseSummary;
@@ -1249,13 +1363,14 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
       } else if (status === 'running') {
         setInternalExpanded(true);
       } else {
+        const isSearch = ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search', 'searchcodebase'].includes(tool.name.toLowerCase());
         const timer = setTimeout(() => {
           setInternalExpanded(false);
-        }, 2000);
+        }, isSearch ? 0 : 2000);
         return () => clearTimeout(timer);
       }
     }
-  }, [status, expandedOverride, isTeam, isTodoWrite]);
+  }, [status, expandedOverride, isTeam, isTodoWrite, tool.name]);
 
   const hasRawContent = !hasDetail && (tool.result || (tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0));
 
@@ -1333,7 +1448,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
                   <div className="mb-3">
                     <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">Input</h5>
                     <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[200px] overflow-auto">
-                      {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
+                      <Linkify>{typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}</Linkify>
                     </pre>
                   </div>
                 ) : null}
@@ -1346,7 +1461,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
                       "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
                       tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
                     )}>
-                      {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
+                      <Linkify>{tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}</Linkify>
                     </pre>
                   </div>
                 ) : null}
@@ -1881,9 +1996,9 @@ export function ToolActionsGroup({
                         href={href}
                         {...aProps}
                         onClick={(e) => {
-                          if (href && LOCAL_URL_REGEX.test(href)) {
+                          if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
                             e.preventDefault();
-                            usePanelStore.getState().openBrowserTab(href, "本地预览");
+                            usePanelStore.getState().openBrowserTab(href, "网页预览");
                           } else if (aProps.onClick) {
                             aProps.onClick(e);
                           }
