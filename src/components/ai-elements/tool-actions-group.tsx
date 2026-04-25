@@ -807,15 +807,28 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    match: (n) => n.toLowerCase() === 'mcp__filesystem__read_multiple_files' || n.toLowerCase() === 'codepilot_read_multiple_files',
+    match: (n) => ['read', 'read_file', 'mcp__filesystem__read_file', 'mcp__filesystem__read_multiple_files', 'mcp__filesystem__list_directory', 'mcp__filesystem__directory_tree', 'view_file'].some(v => n.toLowerCase().includes(v)),
     icon: Eyeglasses,
-    label: '读取多个文件',
-    getSummary: (input) => {
+    label: '读取文件',
+    getSummary: (input, name, tool) => {
+      const outputText = tool?.result;
+      if (outputText) {
+        const lines = outputText.split('\n').filter(l => l.trim());
+        const summaryLine = lines.find(l => /^found\s+\d+/i.test(l) || /^找到\s+\d+/i.test(l) || /^读取了\s+\d+/i.test(l) || /^\d+\s+lines/i.test(l) || /^read\s+\d+/i.test(l));
+        if (summaryLine) {
+          return summaryLine;
+        }
+      }
       const inp = input as Record<string, unknown> | undefined;
       if (inp && Array.isArray(inp.paths)) {
         return `读取了 ${inp.paths.length} 个文件`;
       }
-      return '读取了多个文件';
+      if (inp && (inp.path || inp.file_path || inp.filePath)) {
+        const linesCount = outputText ? outputText.split('\n').length : 0;
+        if (linesCount > 0) return `读取了 ${linesCount} 行`;
+        return `读取了文件`;
+      }
+      return '读取了文件';
     },
     renderDetail: (tool, streamingOutput) => {
       const isRunning = tool.result === undefined;
@@ -828,7 +841,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
       }
 
       const input = tool.input as Record<string, unknown> | undefined;
-      const paths = (input?.paths as string[]) || [];
+      const paths = (input?.paths as string[]) || (input?.path ? [input.path as string] : []);
       if (paths.length === 0) return null;
 
       return (
@@ -849,7 +862,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
                 title="点击在编辑器中打开文件"
               >
                 <FileText size={12} className="text-muted-foreground shrink-0" />
-                <span className="font-mono text-[11px] text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 truncate">
+                <span className="font-mono text-[11px] text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 truncate underline">
                   {path}
                 </span>
               </div>
@@ -1090,19 +1103,22 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
   const hasError = tools.some((t) => t.isError);
 
   return (
-    <div className="my-1.5 overflow-hidden">
+    <div className="my-1 overflow-hidden">
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center justify-between px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px]"
+        className="flex w-full items-center justify-between px-2 py-1 text-[11px] hover:bg-muted/40 transition-colors rounded-[6px]"
       >
-        <div className="flex items-center gap-2">
-          <MagnifyingGlass size={14} className="text-blue-500" />
-          <span className="text-foreground/80 ml-1">
+        <div className="flex items-center gap-2 overflow-hidden min-w-0 pr-2">
+          <MagnifyingGlass size={14} className="text-blue-500 shrink-0" />
+          <span 
+            className="text-foreground/80 ml-1 truncate"
+            title={hasRunning ? `正在检索 (${tools.length})` : `检索了 ${tools.length} 个文件`}
+          >
             {hasRunning ? `正在检索 (${tools.length})` : `检索了 ${tools.length} 个文件`}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {hasRunning && <SpinnerGap size={14} className="animate-spin text-primary" />}
           {!hasRunning && hasError && <XCircle size={14} className="text-red-500" />}
           {!hasRunning && !hasError && <CheckCircle size={14} className="text-emerald-500" />}
@@ -1176,13 +1192,13 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
     if (!isStreaming && userExpanded === null) {
       const timer = setTimeout(() => {
         setUserExpanded(false);
-      }, 2000);
+      }, 1000);
       return () => clearTimeout(timer);
     }
   }, [isStreaming, userExpanded]);
 
   return (
-    <div className="my-1.5 overflow-hidden">
+    <div className="my-1 overflow-hidden">
       <button
         type="button"
         onClick={() => {
@@ -1192,15 +1208,18 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="flex w-full items-center justify-between px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px]"
+        className="flex w-full items-center justify-between px-2 py-1 text-[11px] hover:bg-muted/40 transition-colors rounded-[6px]"
       >
-        <div className="flex items-center gap-2">
-          <Brain size={14} className="text-violet-500" />
-          <span className="text-foreground/80 truncate ml-1 text-left">
+        <div className="flex items-center gap-2 overflow-hidden min-w-0 pr-2">
+          <Brain size={14} className="text-violet-500 shrink-0" />
+          <span 
+            className="text-foreground/80 truncate ml-1 text-left"
+            title="思考"
+          >
             思考
           </span>
         </div>
-        <div className="flex items-center gap-2 text-muted-foreground">
+        <div className="flex items-center gap-2 text-muted-foreground shrink-0">
           {isStreaming && <SpinnerGap size={14} className="animate-spin text-primary" />}
           {!isStreaming && <CheckCircle size={14} className="text-emerald-500" />}
         </div>
@@ -1250,6 +1269,20 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
                     // 如果代码块被 <pre> 包裹，说明是大段代码，此时类名通常会带有 'language-'，交给原本的 pre 处理即可
                     if (codeProps.className && (codeProps.className.includes('language-') || codeProps.className.includes('!bg-['))) {
                       return <code {...codeProps}>{children}</code>;
+                    }
+                    if (typeof children === 'string' && (children.startsWith('http://') || children.startsWith('https://'))) {
+                      return (
+                        <span 
+                          className={cn("bg-muted/40 px-1 py-[1px] rounded font-mono text-[12px] border border-border/30 mx-0.5 text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 underline cursor-pointer break-all", codeProps.className)}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            usePanelStore.getState().openBrowserTab(children, "网页预览");
+                          }}
+                        >
+                          {children}
+                        </span>
+                      );
                     }
                     // 处理行内小段代码的样式：移除前后反引号，保留背景色，取消巨大的字体
                     return (
@@ -1349,34 +1382,34 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
   const status = getStatus(tool);
   const isTeam = tool.name.toLowerCase() === 'team' || tool.name.toLowerCase().includes('__team');
   const isTodoWrite = tool.name.toLowerCase() === 'todowrite' || tool.name.toLowerCase().includes('__todowrite');
+  const isFileOrSearch = ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search', 'searchcodebase', 'read', 'read_file', 'read_multiple_files', 'list_directory', 'directory_tree', 'view_file'].some(n => tool.name.toLowerCase().includes(n));
   const hasDetail = !!renderer.renderDetail;
   const detailVisible = hasDetail && (status === 'running' || !!streamingToolOutput || !!tool.result);
-  const [internalExpanded, setInternalExpanded] = useState((isTeam || isTodoWrite) ? false : status === 'running');
+  const [internalExpanded, setInternalExpanded] = useState((isTeam || isTodoWrite || isFileOrSearch) ? false : status === 'running');
   const [showRaw, setShowRaw] = useState(false);
 
   const expanded = expandedOverride !== undefined ? expandedOverride : internalExpanded;
 
   React.useEffect(() => {
     if (expandedOverride === undefined) {
-      if (isTeam || isTodoWrite) {
+      if (isTeam || isTodoWrite || isFileOrSearch) {
         setInternalExpanded(false);
       } else if (status === 'running') {
         setInternalExpanded(true);
       } else {
-        const isSearch = ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search', 'searchcodebase'].includes(tool.name.toLowerCase());
         const timer = setTimeout(() => {
           setInternalExpanded(false);
-        }, isSearch ? 0 : 2000);
+        }, 1000);
         return () => clearTimeout(timer);
       }
     }
-  }, [status, expandedOverride, isTeam, isTodoWrite, tool.name]);
+  }, [status, expandedOverride, isTeam, isTodoWrite, isFileOrSearch]);
 
   const hasRawContent = !hasDetail && (tool.result || (tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0));
 
   return (
     <div className={cn(
-      "my-1.5 overflow-hidden",
+      "my-1 overflow-hidden",
       status === 'error' ? "border border-red-500/20 rounded-[6px]" : ""
     )}>
       <button
@@ -1389,7 +1422,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           }
         }}
         className={cn(
-          "flex w-full items-center gap-2 px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
+          "flex w-full items-center gap-2 px-2 py-1 text-[11px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
           status === 'error' ? "bg-red-500/[0.03]" : "",
           isTeam ? "bg-purple-500/[0.05] hover:bg-purple-500/[0.1] text-purple-500" : "",
           isTodoWrite ? "bg-blue-500/[0.05] hover:bg-blue-500/[0.1] text-blue-500" : ""
@@ -1399,23 +1432,32 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-blue-500")) })}
         </div>
 
-        <span className={cn(
-          "truncate ml-1 text-left font-medium",
-          status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-600 dark:text-purple-400" : (isTodoWrite ? "text-blue-600 dark:text-blue-400" : "text-foreground/80"))
-        )}>
+        <span 
+          className={cn(
+            "truncate ml-1 text-left font-medium",
+            status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-600 dark:text-purple-400" : (isTodoWrite ? "text-blue-600 dark:text-blue-400" : "text-foreground/80"))
+          )}
+          title={renderer.label || (isTeam ? '' : displayName)}
+        >
           {renderer.label || (isTeam ? '' : displayName)}
         </span>
         
         {!(isTeam || isTodoWrite) && (renderer.label ? !!summary : !!filePath || !!displayName) && (
           <>
-            <span className="mx-1 text-border">|</span>
-            <span className={cn("font-mono text-[12px] truncate text-muted-foreground/60", renderer.label && filePath ? "max-w-[200px]" : "flex-1")}>
+            <span className="mx-1 text-border shrink-0">|</span>
+            <span 
+              className={cn("font-mono text-[11px] truncate text-muted-foreground/60 min-w-0", renderer.label && filePath ? "max-w-[200px]" : "flex-1")}
+              title={renderer.label ? summary : (tool.name.includes('mcp__filesystem') ? summary : truncatePath(filePath || displayName))}
+            >
               {renderer.label ? summary : (tool.name.includes('mcp__filesystem') ? summary : truncatePath(filePath || displayName))}
             </span>
             {renderer.label && filePath && !tool.name.includes('mcp__filesystem') && (
               <>
-                <span className="mx-1 text-border">|</span>
-                <span className="font-mono text-[11px] truncate flex-1 text-muted-foreground/40">
+                <span className="mx-1 text-border shrink-0">|</span>
+                <span 
+                  className="font-mono text-[10px] truncate flex-1 text-muted-foreground/40 min-w-0"
+                  title={filePath}
+                >
                   {filePath}
                 </span>
               </>
@@ -1423,7 +1465,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           </>
         )}
 
-        <div className={cn("ml-auto flex items-center gap-2", isTeam ? "text-purple-500/80" : (isTodoWrite ? "text-blue-500/80" : "text-muted-foreground"))}>
+        <div className={cn("ml-auto flex shrink-0 items-center gap-2", isTeam ? "text-purple-500/80" : (isTodoWrite ? "text-blue-500/80" : "text-muted-foreground"))}>
           {status === 'running' && <SpinnerGap size={14} className={cn("animate-spin", isTeam ? "text-purple-500" : "text-primary")} />}
           {status === 'success' && <CheckCircle size={14} className={isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-emerald-500")} />}
           {status === 'error' && <XCircle size={14} className="text-red-500" />}
@@ -1477,24 +1519,25 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
 function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { tool: ToolAction; isStreaming?: boolean; streamingToolOutput?: string; sessionId?: string; rewindId?: string }) {
   const k = toolKind2(tool.name);
   const status = getStatus(tool);
-  
+
   // Unconditional hook calls at the top level
   const [expanded, setExpanded] = useState(k === 'team' ? false : status === 'running');
-  const prevStatusRef = React.useRef(status);
+  const browserDispatchedRef = React.useRef(false);
   const { setTerminalOpen } = usePanel();
 
+  // 浏览器面板打开：当工具成功完成时触发，不依赖 prevStatus 避免跳过 running 状态导致失效
   React.useEffect(() => {
-    // Special side-effect for opening browser panel when the tool completes
     const isBrowserTool = tool.name === 'codepilot_open_browser' || tool.name.endsWith('__codepilot_open_browser');
-    if (isBrowserTool && prevStatusRef.current === 'running' && status === 'success') {
+    if (isBrowserTool && status === 'success' && !browserDispatchedRef.current) {
+      browserDispatchedRef.current = true;
       const input = tool.input as { url?: string; title?: string } | undefined;
-      if (input?.url) {
+      const url = input?.url;
+      if (url) {
         window.dispatchEvent(new CustomEvent('action:open-browser-panel', {
-          detail: { url: input.url, title: input.title }
+          detail: { url, title: input?.title }
         }));
       }
     }
-    prevStatusRef.current = status;
   }, [tool.name, status, tool.input]);
 
   React.useEffect(() => {
@@ -1521,7 +1564,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
     const displayName = getToolDisplayName(tool.name);
 
     return (
-      <div className="my-1.5 border border-border/50 bg-muted/30 rounded-[6px] overflow-hidden">
+      <div className="my-1 border border-border/50 bg-muted/30 rounded-[6px] overflow-hidden">
         <div
           role="button"
           tabIndex={0}
@@ -1532,24 +1575,27 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
               setExpanded(!expanded);
             }
           }}
-          className="flex w-full items-center justify-between px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px] cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex w-full items-center justify-between px-2 py-1 text-[11px] hover:bg-muted/40 transition-colors rounded-[6px] cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
-          <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4">
+          <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4 min-w-0">
             <TerminalWindow size={14} weight="bold" className="text-violet-500 shrink-0" />
-            <span className="text-foreground/80 shrink-0 text-left">{displayName}</span>
-            <span className="rounded bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground shrink-0">
+            <span className="text-foreground/80 shrink-0 text-left truncate" title={displayName}>{displayName}</span>
+            <span className="rounded bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground shrink-0">
               {status === 'running' ? '运行中' : status === 'error' ? '失败' : '完成'}
             </span>
             {cmd && (
               <>
                 <span className="text-muted-foreground/40 shrink-0 ml-1">|</span>
-                <span className="text-muted-foreground/70 font-mono text-[12px] truncate ml-1 text-left">
+                <span 
+                  className="text-muted-foreground/70 font-mono text-[11px] truncate ml-1 text-left min-w-0"
+                  title={`$ ${cmd}`}
+                >
                   $ {cmd}
                 </span>
               </>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-2 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
+          <div className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors">
             {status === 'running' && <SpinnerGap size={14} className="animate-spin text-primary mr-1" />}
             <button
               type="button"
@@ -1586,7 +1632,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   
   if (k === 'agent') {
     return (
-      <div className="my-2 ml-4 border-l-[2px] border-border/50 pl-4 py-1">
+      <div className="my-1 ml-4 border-l-[2px] border-border/50 pl-4 py-1">
         <div className="border border-blue-500/30 bg-muted/20 rounded-[8px] overflow-hidden shadow-sm">
           <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
         </div>
@@ -1596,7 +1642,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
 
   if (k === 'todowrite') {
     return (
-      <div className="my-2 border border-blue-500/30 bg-blue-500/[0.05] rounded-[8px] overflow-hidden shadow-sm">
+      <div className="my-1 border border-blue-500/30 bg-blue-500/[0.05] rounded-[8px] overflow-hidden shadow-sm">
         <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
       </div>
     );
@@ -1604,14 +1650,14 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
 
   if (k === 'team') {
     return (
-      <div className="my-2 border border-purple-500/30 bg-purple-500/[0.05] rounded-[8px] overflow-hidden shadow-sm">
+      <div className="my-1 border border-purple-500/30 bg-purple-500/[0.05] rounded-[8px] overflow-hidden shadow-sm">
         <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
       </div>
     );
   }
 
   return (
-    <div className="bg-muted/30 my-1.5 border border-border/50 rounded-[6px] overflow-hidden">
+    <div className="bg-muted/30 my-1 border border-border/50 rounded-[6px] overflow-hidden">
       <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
     </div>
   );
@@ -1754,18 +1800,28 @@ function FileReviewRow({ diff }: { diff: DiffInfo; sessionId?: string; rewindId?
   const showPreviewBtn = canPreview(diff.filename);
 
   return (
-    <div className="my-1.5 border border-border/50 bg-muted/30 rounded-[6px] overflow-hidden">
-      <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors cursor-pointer" onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}>
+    <div className="my-1 border border-border/50 bg-muted/30 rounded-[6px] overflow-hidden">
+      <div className="flex items-center gap-2 px-2 py-1 text-[11px] hover:bg-muted/40 transition-colors cursor-pointer" onClick={() => { setOpen(v => !v); if (!open) stopScroll(); }}>
         <div className="flex shrink-0 items-center justify-center">
           {diff.mode === 'create'
             ? <FilePlus size={14} className="text-emerald-500" />
             : <NotePencil size={14} className="text-amber-500" />}
         </div>
-        <div className="flex min-w-0 flex-1 items-center gap-2 ml-1">
-          <span className="truncate text-foreground/80">{diff.filename}</span>
-          <span className="truncate font-mono text-[11px] text-muted-foreground/50 hidden sm:inline max-w-[200px]">{diff.fullPath}</span>
+        <div className="flex min-w-0 flex-1 items-center gap-2 ml-1 overflow-hidden">
+          <span 
+            className="truncate text-foreground/80 shrink-0"
+            title={diff.filename}
+          >
+            {diff.filename}
+          </span>
+          <span 
+            className="truncate font-mono text-[10px] text-muted-foreground/50 hidden sm:inline max-w-[200px]"
+            title={diff.fullPath}
+          >
+            {diff.fullPath}
+          </span>
         </div>
-        <div className="flex items-center gap-2 ml-auto shrink-0 font-mono text-[12px]">
+        <div className="flex items-center gap-2 ml-auto shrink-0 font-mono text-[11px]">
           {diff.added > 0 && <span className="text-emerald-500/80">+{diff.added}</span>}
           {diff.removed > 0 && <span className="text-red-500/80">-{diff.removed}</span>}
         </div>
@@ -1953,7 +2009,7 @@ export function ToolActionsGroup({
     const flushLineGroup = () => {
       if (currentLineGroup.length > 0) {
         blocks.push(
-          <div key={`line-${blocks.length}`} className="my-1.5 flex flex-col">
+          <div key={`line-${blocks.length}`} className="my-1 flex flex-col">
             {currentLineGroup}
           </div>
         );
@@ -1982,7 +2038,7 @@ export function ToolActionsGroup({
       } else if (segment.kind === 'text') {
         flushLineGroup();
         blocks.push(
-          <div key={`text-${idx}`} className="my-1.5 flex items-start gap-2 px-2 py-1">
+          <div key={`text-${idx}`} className="my-1 flex items-start gap-2 px-2 py-1">
             <div className="mt-[3px] flex shrink-0 items-center justify-center">
               <FileText size={14} className="text-muted-foreground/50" />
             </div>
@@ -2039,7 +2095,7 @@ export function ToolActionsGroup({
   if (flat) {
     if (segments.length === 0) return null;
     return (
-      <div className="my-2">
+      <div className="my-1">
         {renderSegments()}
       </div>
     );
@@ -2068,7 +2124,7 @@ export function ToolActionsGroup({
   // should be displayed independently in StreamingStatusBar.
 
   return (
-    <div className="my-2">
+    <div className="my-1">
       {tools.length > 0 || (steps && steps.length > 0) ? (
         <button
           type="button"

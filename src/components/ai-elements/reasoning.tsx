@@ -240,6 +240,33 @@ export const ReasoningContent = memo(
                 {children}
               </a>
             );
+          },
+          code: ({ children, ...codeProps }: any) => {
+            if (codeProps.className && (codeProps.className.includes('language-') || codeProps.className.includes('!bg-['))) {
+              return <code {...codeProps}>{children}</code>;
+            }
+            if (typeof children === 'string' && (children.startsWith('http://') || children.startsWith('https://'))) {
+              return (
+                <span 
+                  className={cn("bg-muted/40 px-1 py-[1px] rounded font-mono text-[12px] border border-border/30 mx-0.5 text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 underline cursor-pointer break-all", codeProps.className)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    usePanelStore.getState().openBrowserTab(children, "网页预览");
+                  }}
+                >
+                  {children}
+                </span>
+              );
+            }
+            return (
+              <code 
+                className="bg-muted/40 px-1 py-[1px] rounded font-mono text-[12px] text-foreground/80 before:content-none after:content-none border border-border/30 mx-0.5" 
+                {...codeProps}
+              >
+                {children}
+              </code>
+            );
           }
         }}
         {...props}

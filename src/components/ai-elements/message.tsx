@@ -462,6 +462,7 @@ export const MessageResponse = memo(
           
           // Detect if inline code is just a file path
           const isSimpleArray = Array.isArray(children);
+          let textContent = '';
           if (isSimpleArray && children.length > 0) {
             const extractText = (nodes: any[]): string => {
               return nodes.map(node => {
@@ -472,25 +473,44 @@ export const MessageResponse = memo(
                 return '';
               }).join('');
             };
-            const text = extractText(children).trim();
-            if ((text.startsWith('/') || /^[a-zA-Z]:\\/.test(text)) && !text.includes(' ') && text.length > 2) {
+            textContent = extractText(children).trim();
+            if ((textContent.startsWith('/') || /^[a-zA-Z]:\\/.test(textContent)) && !textContent.includes(' ') && textContent.length > 2) {
               return (
                 <span 
                   className="inline-flex max-w-full items-start gap-2 px-2 py-1 text-[13px] bg-muted/30 hover:bg-muted/60 transition-colors text-left rounded-[6px] border border-border/60 cursor-pointer align-middle mx-1 group"
                   onClick={(e) => {
                     e.preventDefault();
                     // Optional: Dispatch an event to open the file
-                    const evt = new CustomEvent('open-file', { detail: { path: text } });
+                    const evt = new CustomEvent('open-file', { detail: { path: textContent } });
                     window.dispatchEvent(evt);
                   }}
                 >
                   <FileText size={14} className="text-muted-foreground shrink-0 mt-[2px] group-hover:text-blue-500 transition-colors" />
-                  <span className="font-mono text-foreground/80 break-all leading-[1.3] pt-[1px]">{text}</span>
+                  <span className="font-mono text-foreground/80 break-all leading-[1.3] pt-[1px]">{textContent}</span>
                 </span>
               );
             }
           }
-          // If not a file path, we can still style it nicely as an inline code block
+
+          if (typeof children === 'string' || textContent) {
+            const t = typeof children === 'string' ? children : textContent;
+            if (t.startsWith('http://') || t.startsWith('https://')) {
+              return (
+                <span 
+                  className={cn("bg-muted/40 px-1.5 py-0.5 rounded-md font-mono text-[13px] border border-border/30 text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 underline cursor-pointer break-all", codeProps.className)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    usePanelStore.getState().openBrowserTab(t, "网页预览");
+                  }}
+                >
+                  {t}
+                </span>
+              );
+            }
+          }
+
+          // If not a file path or URL, we can still style it nicely as an inline code block
           return (
             <code 
               className={cn("bg-muted/40 px-1.5 py-0.5 rounded-md font-mono text-[13px] text-foreground/90 border border-border/30", codeProps.className)} 

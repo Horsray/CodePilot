@@ -13,7 +13,11 @@ import {
   SpinnerGap,
   TerminalWindow,
   XCircle,
-  Play
+  Play,
+  FileText,
+  CaretRight,
+  ArrowSquareOut,
+  ArrowElbowDownRight
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import type { TimelineFileChange, TimelineStep } from '@/types';
@@ -239,18 +243,53 @@ function getActivityInfo(step: TimelineStep) {
     const tool = step.toolCalls[0];
     const name = tool.name.toLowerCase();
     
-    // Viewing files
-    if (name === 'read' || name === 'readfile' || name === 'ls' || name === 'glob' || name === 'grep') {
-      const input = tool.input as any;
-      const path = input?.path || input?.file_path || input?.filePath || '';
-      const fileName = path.split('/').pop() || path;
+    if (name === 'search' || name === 'glob' || name === 'grep' || name === 'find_files' || name === 'search_files' || name === 'websearch' || name === 'web_search' || name === 'searchcodebase') {
       return {
-        type: 'viewing',
+        type: 'searching',
         icon: <MagnifyingGlass size={14} weight="bold" className="text-blue-500" />,
+        label: isDone ? '内容检索' : '正在检索',
+        subtitle: (() => {
+          if (tool.result) {
+            const lines = tool.result.split('\n').filter(l => l.trim());
+            const summaryLine = lines.find(l => /^found\s+\d+/i.test(l) || /^找到\s+\d+/i.test(l) || /^匹配\s+\d+/i.test(l) || /^\d+\s+matches/i.test(l) || /^\d+\s+results/i.test(l));
+            if (summaryLine) return summaryLine;
+          }
+          return isDone ? '检索完成' : `使用 ${tool.name} 搜索内容`;
+        })(),
+        colorClass: 'text-blue-500/80',
+        bgClass: 'bg-blue-500/10'
+      };
+    }
+
+    // File Reading / Viewing
+    if (name === 'read' || name === 'read_file' || name === 'mcp__filesystem__read_file' || name === 'mcp__filesystem__read_multiple_files' || name === 'mcp__filesystem__list_directory' || name === 'mcp__filesystem__directory_tree' || name === 'view_file') {
+      const input = tool.input as Record<string, unknown> | undefined;
+      const path = input?.path || input?.file_path || input?.filePath;
+      const fileName = path && typeof path === 'string' ? path.split(/[\/\\]/).pop() : undefined;
+      
+      return {
+        type: 'reading',
+        icon: <FileText size={14} weight="bold" className="text-blue-500" />,
         label: isDone 
           ? (fileName ? `查看 ${fileName}` : '文件检索')
           : (fileName ? `正在查看 ${fileName}` : '正在检索文件'),
-        subtitle: `使用了 ${tool.name} 工具`,
+        subtitle: (() => {
+          if (tool.result) {
+            const lines = tool.result.split('\n').filter(l => l.trim());
+            const summaryLine = lines.find(l => /^found\s+\d+/i.test(l) || /^找到\s+\d+/i.test(l) || /^读取了\s+\d+/i.test(l) || /^\d+\s+lines/i.test(l) || /^read\s+\d+/i.test(l));
+            if (summaryLine) return summaryLine;
+            
+            if (name === 'mcp__filesystem__read_multiple_files') {
+               const input = tool.input as Record<string, unknown>;
+               if (input && Array.isArray(input.paths)) {
+                 return `读取了 ${input.paths.length} 个文件`;
+               }
+            } else {
+               return `读取了 ${lines.length} 行`;
+            }
+          }
+          return `使用了 ${tool.name} 工具`;
+        })(),
         colorClass: 'text-blue-500/80',
         bgClass: 'bg-blue-500/10'
       };
@@ -273,7 +312,24 @@ function getActivityInfo(step: TimelineStep) {
       type: 'calling',
       icon: <Gear size={14} weight="bold" className="text-violet-500" />,
       label: isDone ? `调用 ${tool.name}` : `正在调用 ${tool.name}`,
-      subtitle: isDone ? '工具执行完毕' : '执行工具函数',
+      subtitle: (() => {
+        if (tool.result) {
+          const lines = tool.result.split('\n').filter(l => l.trim());
+          const summaryLine = lines.find(l => /^found\s+\d+/i.test(l) || /^找到\s+\d+/i.test(l) || /^读取了\s+\d+/i.test(l) || /^\d+\s+lines/i.test(l) || /^read\s+\d+/i.test(l) || /^匹配\s+\d+/i.test(l) || /^\d+\s+matches/i.test(l) || /^\d+\s+results/i.test(l));
+          if (summaryLine) return summaryLine;
+          
+          if (['read', 'read_file', 'mcp__filesystem__read_file', 'view_file'].some(v => tool.name.toLowerCase().includes(v))) {
+             return `读取了 ${lines.length} 行`;
+          }
+          if (['mcp__filesystem__read_multiple_files'].some(v => tool.name.toLowerCase().includes(v))) {
+             const input = tool.input as any;
+             if (input && Array.isArray(input.paths)) {
+               return `读取了 ${input.paths.length} 个文件`;
+             }
+          }
+        }
+        return isDone ? '工具执行完毕' : '执行工具函数';
+      })(),
       colorClass: 'text-violet-500/80',
       bgClass: 'bg-violet-500/10'
     };
@@ -315,12 +371,11 @@ function ActivityCard({
   onForceStop?: () => void;
 }) {
   const primaryTool = getPrimaryTool(step);
-  const isCommandStep = Boolean(primaryTool && isCommandToolName(primaryTool.name));
-  
-  // Update state logic to maintain open state for running steps, but close when finished
-  const [userToggled, setUserToggled] = useState<boolean | null>(null);
   const isRunning = step.status === 'running' || step.status === 'retrying';
+  const isCommandStep = Boolean(primaryTool && isCommandToolName(primaryTool.name));
+  const isSearchTool = Boolean(primaryTool && ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search', 'searchcodebase', 'read', 'read_file', 'mcp__filesystem__read_file', 'mcp__filesystem__read_multiple_files', 'mcp__filesystem__list_directory', 'mcp__filesystem__directory_tree', 'view_file'].some(n => primaryTool.name.toLowerCase().includes(n)));
   
+  // ---------------------------------------------------------------------------
   // Initialize as open when running. When finished, only remain open if explicitly toggled by user.
   // CRITICAL FIX: To prevent UI jumping and endless expanding/collapsing, we default to FALSE
   // when finished, unless the user explicitly requested it to be open.
@@ -329,7 +384,25 @@ function ActivityCard({
   // this prevents the jumping behavior entirely.
   // CRITICAL FIX 8: In compact mode, we STILL WANT TO COLLAPSE it when done, but we use fixed max-height on parent to prevent jumping.
   // We don't want it permanently open, that looks cluttered.
-  const open = userToggled ?? isRunning;
+  // ---------------------------------------------------------------------------
+  const [userToggled, setUserToggled] = useState<boolean | null>(null);
+  const [internalExpanded, setInternalExpanded] = useState(isSearchTool ? false : isRunning);
+  
+  useEffect(() => {
+    if (userToggled !== null) return;
+    if (isSearchTool) {
+      setInternalExpanded(false);
+    } else if (isRunning) {
+      setInternalExpanded(true);
+    } else {
+      const timer = setTimeout(() => {
+        setInternalExpanded(false);
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [isRunning, isSearchTool, userToggled]);
+
+  const open = userToggled ?? internalExpanded;
 
   // ---------------------------------------------------------------------------
   // 功能名称：执行卡片内的思考内容自动滚动控制
@@ -395,7 +468,10 @@ function ActivityCard({
       return step.status === 'completed' ? '已查看检索细节' : activity.subtitle;
     }
     if (activity.type === 'calling') {
-      return step.status === 'completed' ? '工具执行完毕' : activity.subtitle;
+      if (isSearchTool && !showToolDetail) {
+        return activity.subtitle;
+      }
+      return step.status === 'completed' ? activity.subtitle : activity.subtitle;
     }
     if (activity.type === 'executing') {
       return step.status === 'completed' ? '终端任务已结束' : activity.subtitle;
@@ -415,7 +491,7 @@ function ActivityCard({
 
 
   return (
-    <div className={cn("my-1.5 border-b border-border/20 last:border-0 pb-1.5 overflow-hidden", compact ? "bg-transparent" : "bg-background")}>
+    <div className={cn("my-1 border-b border-border/20 last:border-0 pb-1 overflow-hidden", compact ? "bg-transparent" : "bg-background")}>
       <button
           type="button"
           onClick={() => {
@@ -427,15 +503,21 @@ function ActivityCard({
               }
             }
           }}
-          className={cn("flex w-full items-center justify-between px-2 py-2 hover:bg-muted/40 transition-colors rounded-[6px]", compact ? "text-[12px]" : "text-[13px]")}
+          className={cn("flex w-full items-center justify-between px-2 py-1.5 hover:bg-muted/40 transition-colors rounded-[6px]", compact ? "text-[11px]" : "text-[12px]")}
         >
         <div className="flex items-center gap-2 overflow-hidden min-w-0 pr-2">
           {activity.icon}
-          <span className="font-medium text-foreground/80 truncate ml-1 text-left shrink-0">
+          <span 
+            className="font-medium text-foreground/80 truncate ml-1 text-left shrink-0"
+            title={activity.label}
+          >
             {activity.label}
           </span>
           <span className="text-border mx-1 shrink-0">|</span>
-          <span className="font-mono text-[12px] text-muted-foreground/60 truncate flex-1 text-left min-w-0">
+          <span 
+            className="font-mono text-[11px] text-muted-foreground/60 truncate flex-1 text-left min-w-0"
+            title={isCommandStep && step.status === 'running' ? runningStatusText : collapsedLead}
+          >
             {isCommandStep && step.status === 'running' ? runningStatusText : collapsedLead}
           </span>
         </div>
