@@ -316,7 +316,11 @@ describe('Provider Resolver', () => {
       const resolved = resolveProvider({ providerId: 'env' });
       assert.equal(resolved.provider, undefined);
       assert.equal(resolved.protocol, 'anthropic');
-      assert.deepEqual(resolved.settingSources, []);
+      // With direct Anthropic creds in env, settingSources enables full
+      // Claude Code capabilities (CLAUDE.md, skills, hooks, OMC).
+      // Without direct creds, settingSources stays [] for fast-start.
+      const hasDirectCreds = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+      assert.deepEqual(resolved.settingSources, hasDirectCreds ? ['user', 'project', 'local'] : []);
     });
 
     it('returns env-based resolution when no provider configured', () => {

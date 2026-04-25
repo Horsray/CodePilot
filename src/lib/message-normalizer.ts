@@ -13,7 +13,7 @@
 /** Max chars for tool-related content in recent messages */
 const RECENT_CONTENT_LIMIT = 5000;
 /** Max chars for tool-related content in old messages (>30 turns ago) */
-const OLD_CONTENT_LIMIT = 1000;
+const OLD_CONTENT_LIMIT = 4000;
 /** Messages older than this many turns from the end get aggressive truncation */
 const OLD_MESSAGE_THRESHOLD = 30;
 
@@ -44,7 +44,7 @@ export function normalizeMessageContent(role: string, raw: string): string {
           const thinkingText = String(b.thinking);
           const boldMatch = thinkingText.match(/\*\*(.+?)\*\*/);
           const headingMatch = thinkingText.match(/^#{1,4}\s+(.+)$/m);
-          const summary = boldMatch?.[1] || headingMatch?.[1] || thinkingText.slice(0, 80);
+          const summary = boldMatch?.[1] || headingMatch?.[1] || thinkingText.slice(0, 500);
           parts.push(`<prior-reasoning>${escapeXmlAttr(summary)}</prior-reasoning>`);
         } else if (b.type === 'text' && b.text) {
           parts.push(b.text);

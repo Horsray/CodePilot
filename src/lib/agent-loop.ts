@@ -669,6 +669,34 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                   }));
                 }
 
+                // 中文注释：功能名称「Agent工具调用拦截」，用法是检测Agent/子Agent工具调用，
+                // 发射 subagent_start 事件给 SubAgentTimeline 卡片 UI 渲染，
+                // 使 OMC 和 CodePilot 的子 Agent 都能显示为卡片
+                {
+                  const tn = event.toolName.toLowerCase();
+                  const isAgentCall = tn === 'agent'
+                    || tn === 'mcp__codepilot-agent__agent'
+                    || tn.includes('__agent')
+                    || (tn.endsWith('agent') && tn !== 'subagent-progress');
+                  if (isAgentCall) {
+                    try {
+                      const inp = (event.input || {}) as Record<string, unknown>;
+                      const agentType = String(inp.agent || inp.subagent_type || inp.description || 'general');
+                      const prompt = String(inp.prompt || inp.description || inp.query || '');
+                      const subAgentId = `agent-loop-${agentType}-${event.toolCallId}`;
+                      controller.enqueue(formatSSE({
+                        type: 'subagent_start',
+                        data: JSON.stringify({
+                          id: subAgentId,
+                          name: agentType,
+                          displayName: agentType,
+                          prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
+                        }),
+                      }));
+                    } catch { /* best effort */ }
+                  }
+                }
+
                 // Track TodoWrite tool calls for deferred task_update sync
                 if (event.toolName === 'TodoWrite' || event.toolName === 'mcp__codepilot-todo__TodoWrite') {
                   try {
@@ -712,8 +740,9 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 if (typeof rawOutput === 'string') {
                   resultContent = rawOutput;
                 } else if (rawOutput == null) {
-                  // Tool returned null or undefined — treat as empty result
-                  resultContent = '';
+                  // 中文注释：功能名称「工具空结果处理」，用法是工具返回null/undefined时，返回明确的错误信息
+                  // 避免返回空字符串导致模型困惑和反复重试
+                  resultContent = `[工具执行警告] 工具 "${(event as any).toolName}" 执行完成但未返回任何内容。可能原因：1) 命令无输出 2) 操作成功但无反馈 3) 工具内部逻辑未返回结果。如果这是预期行为，请继续下一步；如果需要更多信息，请尝试其他工具或调整参数。`;
                 } else {
                   resultContent = JSON.stringify(rawOutput);
                 }
@@ -750,6 +779,29 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                     is_error: false,
                   }),
                 }));
+
+                // 中文注释：功能名称「Agent工具完成事件」，用法是当Agent工具返回结果时，
+                // 发射 subagent_complete 事件给 SubAgentTimeline 卡片 UI，
+                // 使 OMC 和 CodePilot 的子 Agent 完成后卡片能正确显示报告
+                {
+                  const tn = (event as any).toolName?.toLowerCase() || '';
+                  const isAgentResult = tn === 'agent'
+                    || tn === 'mcp__codepilot-agent__agent'
+                    || tn.includes('__agent')
+                    || (tn.endsWith('agent') && tn !== 'subagent-progress');
+                  if (isAgentResult) {
+                    try {
+                      const subAgentId = `agent-loop-${tn}-${event.toolCallId}`;
+                      controller.enqueue(formatSSE({
+                        type: 'subagent_complete',
+                        data: JSON.stringify({
+                          id: subAgentId,
+                          report: resultContent.slice(0, 5000),
+                        }),
+                      }));
+                    } catch { /* best effort */ }
+                  }
+                }
 
                 // Extract web search URLs from tool results for context stats
                 const toolName = (event as any).toolName;
@@ -800,6 +852,27 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                     is_error: true,
                   }),
                 }));
+                // 中文注释：功能名称「Agent工具错误完成事件」，用法是当Agent工具执行出错时，
+                // 发射 subagent_complete 事件（带 error 字段），使卡片 UI 显示错误状态
+                {
+                  const tn = (event as any).toolName?.toLowerCase() || '';
+                  const isAgentResult = tn === 'agent'
+                    || tn === 'mcp__codepilot-agent__agent'
+                    || tn.includes('__agent')
+                    || (tn.endsWith('agent') && tn !== 'subagent-progress');
+                  if (isAgentResult) {
+                    try {
+                      const subAgentId = `agent-loop-${tn}-${(event as any).toolCallId}`;
+                      controller.enqueue(formatSSE({
+                        type: 'subagent_complete',
+                        data: JSON.stringify({
+                          id: subAgentId,
+                          error: String((event as any).error),
+                        }),
+                      }));
+                    } catch { /* best effort */ }
+                  }
+                }
                 break;
 
               case 'error':

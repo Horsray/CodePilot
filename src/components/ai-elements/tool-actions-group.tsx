@@ -1321,6 +1321,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   // Unconditional hook calls at the top level
   const [expanded, setExpanded] = useState(k === 'team' ? false : status === 'running');
   const prevStatusRef = React.useRef(status);
+  const { setTerminalOpen } = usePanel();
 
   React.useEffect(() => {
     // Special side-effect for opening browser panel when the tool completes
@@ -1358,14 +1359,20 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   if (k === 'bash') {
     const cmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
     const displayName = getToolDisplayName(tool.name);
-    const { setTerminalOpen } = usePanel();
 
     return (
       <div className="my-1.5 border border-border/50 bg-muted/30 rounded-[6px] overflow-hidden">
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center justify-between px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px]"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setExpanded(!expanded);
+            }
+          }}
+          className="flex w-full items-center justify-between px-2 py-1.5 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px] cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4">
             <TerminalWindow size={14} weight="bold" className="text-violet-500 shrink-0" />
@@ -1390,12 +1397,12 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
                 e.stopPropagation();
                 setTerminalOpen(true);
               }}
-              className="flex items-center gap-1 hover:text-primary transition-colors"
+              className="flex items-center gap-1 hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded px-1"
             >
               在终端查看 <ArrowSquareOut size={12} />
             </button>
           </div>
-        </button>
+        </div>
         <AnimatePresence initial={false}>
           {expanded && (
             <motion.div

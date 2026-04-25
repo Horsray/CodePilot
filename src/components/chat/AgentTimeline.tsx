@@ -411,7 +411,7 @@ function ActivityCard({
                 <Brain size={12} weight="bold" />
                 <span>思考内容</span>
               </div>
-              <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/80 prose prose-sm dark:prose-invert max-w-none">
+              <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/80">
                 {reasoningText}
               </div>
             </div>

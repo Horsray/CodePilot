@@ -275,10 +275,11 @@ function wrapWithPermissions(
                 data: JSON.stringify({ tool: name }),
               });
             }
-            // Ensure we always return a valid value, never null/undefined
+            // 中文注释：功能名称「工具空结果处理」，用法是工具返回null/undefined时，返回明确的错误信息
+            // 避免返回空字符串导致模型困惑和反复重试
             if (output == null) {
-              console.warn(`[permission-wrapper] Tool ${name} returned null/undefined, converting to empty string`);
-              return '';
+              console.warn(`[permission-wrapper] Tool ${name} returned null/undefined, converting to warning message`);
+              return `[工具执行警告] 工具 "${name}" 执行完成但未返回任何内容。可能原因：1) 命令无输出 2) 操作成功但无反馈 3) 工具内部逻辑未返回结果。`;
             }
             return output;
           } catch (err) {

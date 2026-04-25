@@ -71,10 +71,21 @@ function extractSkillInvocations(
   for (const use of toolUses) {
     if (use.name !== 'Skill') continue;
 
-    const input = (use.input || {}) as Record<string, unknown>;
-    const skillName = typeof input.skill_name === 'string' ? input.skill_name : 'unknown';
-    const args = typeof input.arguments === 'object' && input.arguments !== null
-      ? input.arguments as Record<string, string>
+    // Handle both cases: input could be an object OR a string (if double-stringified)
+    let parsedInput: Record<string, unknown> = {};
+    if (typeof use.input === 'string') {
+      try {
+        parsedInput = JSON.parse(use.input) as Record<string, unknown>;
+      } catch {
+        parsedInput = {};
+      }
+    } else if (use.input && typeof use.input === 'object') {
+      parsedInput = use.input as Record<string, unknown>;
+    }
+
+    const skillName = typeof parsedInput.skill_name === 'string' ? parsedInput.skill_name : 'unknown';
+    const args = typeof parsedInput.arguments === 'object' && parsedInput.arguments !== null
+      ? parsedInput.arguments as Record<string, string>
       : undefined;
 
     skills.push({

@@ -554,7 +554,7 @@ async function tryInvokeToolVariants(
 
 function stringifyToolOutput(output: unknown): string {
   if (typeof output === 'string') return output;
-  if (output == null) return '';
+  if (output == null) return '[工具执行警告] 工具执行完成但未返回任何内容。可能原因：1) 命令无输出 2) 操作成功但无反馈 3) 工具内部逻辑未返回结果。';
   try {
     return JSON.stringify(output);
   } catch {

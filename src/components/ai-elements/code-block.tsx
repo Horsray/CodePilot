@@ -350,11 +350,15 @@ export const highlightCode = (
       const availableLangs = highlighter.getLoadedLanguages();
       const langToUse = availableLangs.includes(language) ? language : "text";
 
+      const availableThemes = highlighter.getLoadedThemes();
+      const safeLight = availableThemes.includes(lightTheme) ? lightTheme : SHIKI_DEFAULT_LIGHT;
+      const safeDark = availableThemes.includes(darkTheme) ? darkTheme : SHIKI_DEFAULT_DARK;
+
       const result = highlighter.codeToTokens(code, {
         lang: langToUse,
         themes: {
-          dark: darkTheme,
-          light: lightTheme,
+          dark: safeDark,
+          light: safeLight,
         },
       });
 

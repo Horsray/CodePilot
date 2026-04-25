@@ -67,10 +67,10 @@ describe('normalizeMessageContent', () => {
 
   it('truncates long thinking content in summary', () => {
     const raw = JSON.stringify([
-      { type: 'thinking', thinking: 'A'.repeat(200) },
+      { type: 'thinking', thinking: 'A'.repeat(600) },
     ]);
     const result = normalizeMessageContent('assistant', raw);
-    assert.ok(result.length < 200);
+    assert.ok(result.length < 600);
     assert.ok(result.includes('<prior-reasoning>'));
   });
 
@@ -102,7 +102,7 @@ describe('microCompactMessage', () => {
   it('truncates more aggressively for old messages (>30 turns)', () => {
     const content = 'x'.repeat(5000);
     const result = microCompactMessage('user', content, 35);
-    assert.ok(result.length <= 1000 + 50);
+    assert.ok(result.length <= 4000 + 50);
     assert.ok(result.includes('[...truncated...]'));
   });
 

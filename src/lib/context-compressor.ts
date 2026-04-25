@@ -305,7 +305,7 @@ export async function compressConversation(params: CompressParams): Promise<Comp
     const formatted = messages.map(m => {
       const role = m.role === 'user' ? 'User' : 'Assistant';
       const cleaned = normalizeMessageContent(m.role, m.content);
-      const content = cleaned.length > 800 ? cleaned.slice(0, 800) + '...' : cleaned;
+      const content = cleaned.length > 2000 ? cleaned.slice(0, 2000) + '...' : cleaned;
       return `${role}: ${content}`;
     }).join('\n\n');
 

@@ -27,10 +27,13 @@ describe('subagent stream resilience', () => {
   });
 
   it('routes /team deterministically through runTeamPipeline instead of prompt-only orchestration', () => {
+    // [DISABLED] CodePilot 原生 /team 命令已停用，改由 OMC 驱动多 Agent 协作
+    // /team 现在走正常 agent-loop 流程，不再直接调用 runTeamPipeline
     const route = read('src/app/api/chat/route.ts');
     const teamRunner = read('src/lib/team-runner.ts');
-    assert.match(route, /isTeamCommand/);
-    assert.match(route, /runTeamPipeline/);
+    // route.ts 中 /team 入口已被注释，确认不再包含活跃的 isTeamCommand 逻辑
+    // 注释中仍保留 isTeamCommand 字样，但不再是活跃代码
+    assert.match(route, /\/team.*已停用|DISABLED.*\/team/);
     assert.match(teamRunner, /Team Job/);
   });
 });

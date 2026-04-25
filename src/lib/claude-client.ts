@@ -708,16 +708,17 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
           env: sanitizeEnv(sdkEnv),
-          // CodePilot provides its own project context, permissions, and MCP
-          // wiring. `--bare` skips Claude Code's interactive CLI startup work
-          // (hooks, LSP/plugin sync, auto-memory, background prefetch, and
-          // filesystem instruction discovery) that would otherwise block
-          // first-token latency in embedded SDK mode.
-          extraArgs: { bare: null },
-          // Fast-start default: do not let Claude Code scan user/project
-          // filesystem settings on every chat turn. CodePilot injects auth,
-          // project instructions, and on-demand MCP explicitly.
+          // When settingSources is non-empty (native Anthropic auth users),
+          // do NOT pass --bare so Claude Code runs with full capabilities:
+          // hooks, auto-memory, CLAUDE.md discovery, skill discovery, OMC.
+          // When settingSources is empty (DB providers / cc-switch), keep
+          // --bare for fast startup since CodePilot manages everything.
+          ...(resolved.settingSources && resolved.settingSources.length > 0
+            ? {}
+            : { extraArgs: { bare: null } }),
           settingSources: resolved.settingSources as Options['settingSources'],
+          // Debug: log runtime mode to verify --bare / settingSources behavior
+          ...(console.log(`[claude-client] SDK mode: ${resolved.settingSources?.length ? 'FULL (--bare off, settingSources=' + resolved.settingSources.join(',') + ')' : 'FAST (--bare on, settingSources=[])'}`) , {}),
           // Auto-allow all CodePilot built-in MCPs. These are host-defined
           // in-process servers (createSdkMcpServer in claude-client.ts below)
           // that ship with CodePilot — they're not third-party plugins and
@@ -757,8 +758,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__codepilot-todo__TodoWrite',
             'AskUserQuestion',
             'mcp__codepilot-ask-user__AskUserQuestion',
-            'mcp__codepilot-agent__Agent',
-            'mcp__codepilot-team__Team',
             'webfetch__fetch_fetch_readable',
             'webfetch__fetch_fetch_markdown',
             'context7_resolve-library-id',
@@ -784,11 +783,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__github__get_file_contents',
             'mcp__github__search_repositories',
           ],
-          // Explicitly declare built-in tools. `--bare` (CLAUDE_CODE_SIMPLE) 
-          // normally hard-limits tools to just Bash/Read/Edit. Passing 'default'
-          // bypasses this restriction and restores full functionality, including
-          // all MCP tools.
-          tools: ['default', 'Grep', 'Glob', 'Bash', 'Read', 'Write', 'Edit'],
+          // When --bare is active (settingSources empty), explicitly declare
+          // tools to bypass CLAUDE_CODE_SIMPLE's hard limit to just Bash/Read/Edit.
+          // When --bare is NOT active, Claude Code discovers tools natively.
+          ...(resolved.settingSources && resolved.settingSources.length > 0
+            ? {}
+            : { tools: ['default', 'Grep', 'Glob', 'Bash', 'Read', 'Write', 'Edit'] as Options['tools'] }),
         };
 
         if (skipPermissions) {
@@ -827,10 +827,18 @@ if (claudePath) {
         if (systemPrompt) {
           // Use preset append mode to keep Claude Code's default system prompt
           // (which includes skills, working directory awareness, etc.)
+          //
+          // IMPORTANT: OMC (oh-my-claudecode) instructions are loaded via
+          // CLAUDE.md before this append. The append must NOT override OMC's
+          // agent orchestration, skill invocation, or behavioral triggers.
+          const omcPriorityPrefix = `## IMPORTANT: Multi-Agent Orchestration Priority
+If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.md), you MUST prioritize OMC's agent orchestration rules, skill triggers, and behavioral patterns over any conflicting instructions below. OMC handles: agent delegation, model routing, parallel execution, verification workflows, and skill invocation. The following CodePilot-specific instructions only supplement OMC for CodePilot-unique features (UI widgets, media, notifications).
+
+`;
           queryOptions.systemPrompt = {
             type: 'preset',
             preset: 'claude_code',
-            append: systemPrompt,
+            append: omcPriorityPrefix + systemPrompt,
           };
         }
 
@@ -854,44 +862,9 @@ if (claudePath) {
           }
         }
 
-        // Inject a dictionary of all available but dormant MCP servers into the system prompt.
-        // This solves the "keyword gating" limitation by making the AI aware of all installed
-        // MCP servers (global + project) so it can autonomously decide to request them.
-        try {
-          const { loadAllMcpServers } = await import('@/lib/mcp-loader');
-          const allServers = loadAllMcpServers(resolvedWorkingDirectory.path);
-          if (allServers) {
-            const loadedServerNames = new Set(Object.keys(queryOptions.mcpServers || {}));
-            const dormantServers = Object.entries(allServers)
-              .filter(([name]) => !loadedServerNames.has(name))
-              .map(([name, config]) => {
-                const target = config.command || config.url || '';
-                return `- **${name}**: ${target}`;
-              });
-
-            if (dormantServers.length > 0) {
-              const mcpDiscoveryPrompt = `
-<available_mcp_servers>
-The user has installed the following external MCP servers (global and project-level), but they are currently UNLOADED to save memory and startup time:
-${dormantServers.join('\n')}
-
-**CRITICAL RULE**: If the user's request requires any capability from an unloaded MCP server, you MUST:
-1. Call the \`codepilot_mcp_activate\` tool with the exact server name (e.g., "github", "fetch", "minimax_vision")
-2. Wait for the activation result
-3. Then use the newly available tools to complete the request
-
-DO NOT say "I don't have access to..." or "I cannot...". DO NOT ask the user for permission to load the server. Just activate it and proceed.
-Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ serverName: "github" }), then use the github tools.
-</available_mcp_servers>`;
-
-              if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-                queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n' + mcpDiscoveryPrompt;
-              }
-            }
-          }
-        } catch (e) {
-          console.error('[claude-client] Failed to inject MCP discovery prompt:', e);
-        }
+        // MCP discovery prompt: REMOVED — with settingSources including 'user',
+        // Claude Code natively discovers and loads MCP servers from settings.json.
+        // The on-demand keyword-gated loading above still handles project-level MCPs.
 
         // Memory MCP: always registered in assistant mode for memory search/retrieval.
         // Unlike other MCPs which are keyword-gated, memory search is a core assistant capability.
@@ -934,61 +907,26 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           }
         }
 
-        // Session history search tool — always available (queries SQLite messages table)
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const { createSessionSearchTools, SESSION_SEARCH_SYSTEM_PROMPT } = require('./builtin-tools/session-search');
-          const toolsObj = createSessionSearchTools();
-          // SDK uses a wrapper to adapt tool sets
-          // Since Claude Code SDK requires tools in its specific schema, we need to adapt it.
-          // But since the focus of the report is Native Runtime, and it's already there in getBuiltinTools(),
-          // we'll just inject the prompt for awareness in SDK.
-          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + SESSION_SEARCH_SYSTEM_PROMPT;
-          }
-        } catch { /* module not available */ }
+        // Session history search: REMOVED — OMC provides session_search via
+        // mcp__plugin_oh-my-claudecode_t__session_search which covers this.
 
-        // Agent MCP: globally available in all contexts
-        {
-          const { createAgentMcpServer, AGENT_MCP_SYSTEM_PROMPT } = await import('@/lib/agent-mcp');
-          queryOptions.mcpServers = {
-            ...(queryOptions.mcpServers || {}),
-            'codepilot-agent': createAgentMcpServer({
-              workingDirectory: resolvedWorkingDirectory.path,
-              providerId: options.providerId,
-              sessionProviderId: options.sessionProviderId,
-              parentModel: model,
-              permissionMode: options.permissionMode,
-              parentSessionId: sessionId,
-              emitSSE: (e) => controller.enqueue(formatSSE(e as SSEEvent)),
-              abortSignal: abortController?.signal,
-            }),
-          };
-          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + AGENT_MCP_SYSTEM_PROMPT;
-          }
-        }
+        // Agent MCP: DISABLED — OMC's native agent system (via Claude Code's
+        // Agent tool + ~/.claude/agents/) handles multi-agent orchestration now.
+        // CodePilot's custom agent-mcp.ts and team-mcp.ts are no longer needed.
+        //
+        // const { createAgentMcpServer, AGENT_MCP_SYSTEM_PROMPT } = await import('@/lib/agent-mcp');
+        // queryOptions.mcpServers = {
+        //   ...(queryOptions.mcpServers || {}),
+        //   'codepilot-agent': createAgentMcpServer({ ... }),
+        // };
 
-        // Team MCP: globally available in all contexts
-        {
-          const { createTeamMcpServer, TEAM_MCP_SYSTEM_PROMPT } = await import('@/lib/team-mcp');
-          queryOptions.mcpServers = {
-            ...(queryOptions.mcpServers || {}),
-            'codepilot-team': createTeamMcpServer({
-              workingDirectory: resolvedWorkingDirectory.path,
-              providerId: options.providerId,
-              sessionProviderId: options.sessionProviderId,
-              parentModel: model,
-              permissionMode: options.permissionMode,
-              parentSessionId: sessionId,
-              emitSSE: (e) => controller.enqueue(formatSSE(e as any)),
-              abortSignal: abortController?.signal,
-            }),
-          };
-          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + TEAM_MCP_SYSTEM_PROMPT;
-          }
-        }
+        // Team MCP: DISABLED — OMC's team orchestration handles this now.
+        //
+        // const { createTeamMcpServer, TEAM_MCP_SYSTEM_PROMPT } = await import('@/lib/team-mcp');
+        // queryOptions.mcpServers = {
+        //   ...(queryOptions.mcpServers || {}),
+        //   'codepilot-team': createTeamMcpServer({ ... }),
+        // };
 
         // Browser MCP: globally available in all contexts
         {

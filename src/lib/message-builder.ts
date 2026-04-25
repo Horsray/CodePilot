@@ -110,8 +110,9 @@ function enforceAlternation(messages: ModelMessage[]): ModelMessage[] {
       // Merge consecutive user messages, preserving multi-part content
       result[result.length - 1] = { role: 'user', content: mergeUserContent(prev.content, curr.content) };
     } else if (curr.role === prev.role && curr.role === 'assistant') {
-      // Keep the later assistant message (more recent)
-      result[result.length - 1] = curr;
+      // Merge consecutive assistant messages instead of dropping intermediate ones.
+      // Dropping them caused the model to lose its own reasoning and tool-call context.
+      result[result.length - 1] = { role: 'assistant', content: mergeUserContent(prev.content, curr.content) };
     } else {
       result.push(curr);
     }
@@ -276,10 +277,12 @@ function convertAssistantBlocks(blocks: MessageContentBlock[]): ModelMessage[] {
         break;
 
       case 'thinking':
-        // Thinking blocks are Anthropic-specific. The AI SDK supports ReasoningPart
-        // but sending reasoning back to the model is provider-dependent.
-        // Skip — thinking is informational and not sent back to the model
-        // in most cases. Anthropic's sendReasoning option controls this at the provider level.
+        // Preserve thinking blocks so the model retains its chain-of-thought
+        // across turns. This is critical for reasoning quality — dropping
+        // thinking caused the model to "forget" its own analysis.
+        if (block.thinking) {
+          assistantParts.push({ type: 'reasoning', text: String(block.thinking) });
+        }
         break;
 
       case 'tool_use':

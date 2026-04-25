@@ -24,7 +24,7 @@ export function resolveAgentModel(
   let finalModel = agentDef.model || parentModel;
 
   const resolvedParent = resolveProvider({ providerId: parentProviderId, model: parentModel });
-  if (resolvedParent.protocol === 'multi_head') {
+  if (resolvedParent._isMultiHead) {
     let useCase: 'default' | 'reasoning' | 'small' | 'sonnet' | 'opus' | 'haiku' = 'default';
     if (['architect', 'planner', 'critic', 'analyst', 'code-reviewer'].includes(agentDef.id)) {
       useCase = 'opus';

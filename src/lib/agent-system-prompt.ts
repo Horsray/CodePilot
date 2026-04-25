@@ -12,7 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
-import { getDb, getAllCustomRules } from './db';
+import { getDb, getAllCustomRules, getSetting } from './db';
 
 // ── Section: Identity ──────────────────────────────────────────
 
@@ -94,7 +94,25 @@ When you encounter an obstacle, do not use destructive actions as a shortcut to 
 
 // ── Section: Using Your Tools ──────────────────────────────────
 
-const TOOLS_SECTION = `# Using your tools
+function getToolsSection(): string {
+  const sdkFull = getSetting('sdk_full_capabilities') === 'true';
+
+  if (sdkFull) {
+    // OMC handles agent delegation, team orchestration, skills, session search.
+    // Only keep CodePilot-unique tool guidance.
+    return `# Using your tools
+
+- Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.
+  - To read files use Read instead of cat, head, tail, or sed
+  - To edit files use Edit instead of sed or awk
+  - To create files use Write instead of cat with heredoc or echo redirection
+  - To search for files use Glob instead of find or ls
+  - To search the content of files, use Grep instead of grep or rg
+- Reserve using the Bash exclusively for system commands and terminal operations.
+- Maximize efficiency by calling independent tools in parallel. Use sequential calls only when there is a strict data dependency.`;
+  }
+
+  return `# Using your tools
 
 - **Agent Delegation (CRITICAL)**: You have access to the \`Agent\` (or \`mcp__codepilot-agent__Agent\`) tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent (e.g., "explore" for codebase exploration, or a custom agent like "web search"), you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
 - **Team Orchestration**: You have access to the \`Team\` (or \`mcp__codepilot-team__Team\`) tool which runs a full multi-agent pipeline (explore + search + plan + execute + verify). If the user uses \`/team\`, call Team immediately and pass the remaining request as the goal.
@@ -114,6 +132,7 @@ const TOOLS_SECTION = `# Using your tools
   - To search local chat history, use codepilot_session_search instead of guessing what happened in earlier sessions
 - Reserve using the Bash exclusively for system commands and terminal operations.
 - Maximize efficiency by calling independent tools in parallel. Use sequential calls only when there is a strict data dependency.`;
+}
 
 // ── Section: Tone and Style ────────────────────────────────────
 
@@ -175,7 +194,7 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
     MANAGING_TASKS_SECTION,
     REASONING_SECTION,
     ACTIONS_SECTION,
-    TOOLS_SECTION,
+    getToolsSection(),
     TONE_SECTION,
     OUTPUT_SECTION,
     GLOBAL_PRINCIPLES_SECTION,
@@ -371,7 +390,10 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
   }
 
   // 2. User-level (~/.claude/CLAUDE.md)
-  if (options.includeClaudeMd !== false) {
+  // When sdk_full_capabilities is enabled, Claude Code natively loads CLAUDE.md
+  // via settingSources. Skip manual loading to avoid duplication.
+  const sdkFullCapabilities = getSetting('sdk_full_capabilities') === 'true';
+  if (options.includeClaudeMd !== false && !sdkFullCapabilities) {
     const userFile = path.join(os.homedir(), '.claude', 'CLAUDE.md');
     addSource(sources, seen, userFile, 'user', 'CLAUDE.md (user)');
   }
@@ -382,6 +404,9 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
     const isAgents = filename.includes('AGENTS.md');
     const isTraeRules = filename === '.trae/rules/rules.md';
 
+    // Skip CLAUDE.md when sdk_full_capabilities — Claude Code loads it natively.
+    // Keep AGENTS.md, CLAUDE.local.md, .trae/rules — these may not be native.
+    if (isClaude && filename !== 'CLAUDE.local.md' && sdkFullCapabilities) continue;
     if (isClaude && options.includeClaudeMd === false) continue;
     if (isAgents && options.includeAgentsMd === false) continue;
     if (isTraeRules && options.syncProjectRules === false) continue;
@@ -415,7 +440,7 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
   // 4. Parent directory (monorepo root)
   const parent = path.dirname(cwd);
   if (parent !== cwd) {
-    if (options.includeClaudeMd !== false) {
+    if (options.includeClaudeMd !== false && !sdkFullCapabilities) {
       addSource(sources, seen, path.join(parent, 'CLAUDE.md'), 'parent', 'CLAUDE.md (parent)');
     }
     if (options.includeAgentsMd !== false) {

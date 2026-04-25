@@ -335,7 +335,7 @@ export const MessageResponse = memo(
   ({ className, components, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "size-full prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
       plugins={streamdownPlugins}
@@ -420,7 +420,7 @@ export const MessageResponse = memo(
             const text = extractText(children).trim();
             if ((text.startsWith('/') || /^[a-zA-Z]:\\/.test(text)) && !text.includes(' ') && text.length > 2) {
               return (
-                <div 
+                <span 
                   className="inline-flex max-w-full items-start gap-2 px-2.5 py-1 text-[13px] bg-muted/30 hover:bg-muted/60 transition-colors text-left rounded-[6px] border border-border/60 cursor-pointer mt-1 mb-1 align-middle mx-1 group"
                   onClick={(e) => {
                     e.preventDefault();
@@ -431,7 +431,7 @@ export const MessageResponse = memo(
                 >
                   <FileText size={14} className="text-muted-foreground shrink-0 mt-[2px] group-hover:text-blue-500 transition-colors" />
                   <span className="font-mono text-foreground/80 break-all leading-[1.3] pt-[1px]">{text}</span>
-                </div>
+                </span>
               );
             }
           }
@@ -516,8 +516,8 @@ export const MessageResponse = memo(
             const text = extractText(children).trim();
             if ((text.startsWith('/') || /^[a-zA-Z]:\\/.test(text)) && !text.includes(' ') && text.length > 2) {
               return (
-                <div 
-                  className="flex w-fit max-w-full items-start gap-2 px-2.5 py-1.5 text-[13px] bg-muted/30 hover:bg-muted/60 transition-colors text-left rounded-[6px] border border-border/60 cursor-pointer mt-2 mb-2 group"
+                <span 
+                  className="inline-flex w-fit max-w-full items-start gap-2 px-2.5 py-1.5 text-[13px] bg-muted/30 hover:bg-muted/60 transition-colors text-left rounded-[6px] border border-border/60 cursor-pointer mt-2 mb-2 group"
                   onClick={() => {
                     // Optional: Dispatch an event to open the file
                     const evt = new CustomEvent('open-file', { detail: { path: text } });
@@ -526,7 +526,7 @@ export const MessageResponse = memo(
                 >
                   <FileText size={14} className="text-muted-foreground shrink-0 mt-[3px] group-hover:text-blue-500 transition-colors" />
                   <span className="font-mono text-foreground/80 break-all leading-[1.3] pt-[2px]">{text}</span>
-                </div>
+                </span>
               );
             }
           }

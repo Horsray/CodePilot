@@ -23,7 +23,6 @@ import { parseDBDate } from '@/lib/utils';
 import { usePanel } from '@/hooks/usePanel';
 import { extractTimelineStepsFromBlocks } from '@/lib/agent-timeline';
 import { ReferencedContexts } from '@/components/chat/ReferencedContexts';
-import { SubAgentTimeline } from './SubAgentTimeline';
 import type { PlannerOutput, MessageContentBlock } from '@/types';
 
 interface ImageGenRequest {
@@ -798,16 +797,8 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     return null;
   }, [message.content, isUser]);
 
-  // 当 SubAgentTimeline 卡片存在时，从 timeline 中过滤掉独立的 Agent/Team 工具调用，
-  // 避免同一批智能体在时间线和卡片中重复渲染。
-  const timelineTools = useMemo(() => {
-    if (!subAgents || subAgents.length === 0) return pairedTools;
-    return pairedTools.filter(tool => {
-      const lower = tool.name.toLowerCase();
-      // 这里过滤掉独立的 Agent 和 Team 工具调用，避免上方工具调用组出现重复卡片
-      return !(lower === 'agent' || lower === 'team' || lower === 'todowrite' || lower.includes('mcp__codepilot-agent__') || lower.includes('mcp__codepilot-team__') || lower.includes('mcp__codepilot-todo__'));
-    });
-  }, [pairedTools, subAgents]);
+  // SubAgentTimeline 卡片渲染已移除，不再过滤 agent/team 工具，全部交给时间线渲染
+  const timelineTools = pairedTools;
 
   const showAssistantAvatar = !isUser && isAssistantProject;
   const buddyInfo = isAssistantProject ? (globalThis as Record<string, unknown>).__codepilot_buddy_info__ as { emoji?: string; species?: string; rarity?: string } | undefined : undefined;
@@ -867,7 +858,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
               sessionId={sessionId}
               rewindUserMessageId={rewindUserMessageId}
               flat={true}
-              hideSubAgents={!!(subAgents && subAgents.length > 0)}
+              hideSubAgents={false}
             />
           </>
         )}
@@ -878,12 +869,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
         })()}
 
-        {/* Render SubAgentTimeline for historical messages if subAgents exist (before text content) */}
-        {!isUser && subAgents && subAgents.length > 0 && (
-          <div className="w-full mt-2 mb-2 relative z-10">
-            <SubAgentTimeline subAgents={subAgents} />
-          </div>
-        )}
+        {/* SubAgentTimeline 卡片渲染已移除，改由 ToolActionsGroup 内的 TeamAgentTimelines 时间线驱动 */}
 
         {/* Text content */}
         {displayText && (

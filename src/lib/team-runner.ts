@@ -311,8 +311,10 @@ async function executeAgentTask(
           if (!line.startsWith('data: ')) continue;
           try {
             const event = JSON.parse(line.slice(6));
-            lastActivityAt = Date.now(); // 更新活动时间戳
+            // 中文注释：功能名称「子agent活动检测」，用法是只有真实活动事件才更新活动时间戳
+            // keep_alive是心跳事件，不应刷新超时计时器，否则超时检测永远不触发
             if (event.type !== 'keep_alive') {
+              lastActivityAt = Date.now();
               progress.touch();
             }
             if (event.type === 'permission_request' && emitSSE) {

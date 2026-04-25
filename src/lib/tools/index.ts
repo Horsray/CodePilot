@@ -14,7 +14,8 @@ import { createBashTool } from './bash';
 import { createEditTool } from './edit';
 import { createSkillTool } from './skill';
 import { createAgentTool } from './agent';
-import { createTeamTool } from './team';
+// [DISABLED] CodePilot 原生 Team 编排已停用，改由 OMC 驱动多 Agent 协作
+// import { createTeamTool } from './team';
 import { createTodoWriteTool } from './todo-write';
 import { createSkillCreateTool } from '../builtin-tools/skill-create';
 import { createMcpActivateTool } from '../builtin-tools/mcp-activate';
@@ -76,16 +77,17 @@ export function createBuiltinTools(ctx: ToolContext): ToolSet {
       emitSSE: ctx.emitSSE,
       abortSignal: ctx.abortSignal,
     });
-    tools.Team = createTeamTool({
-      workingDirectory: ctx.workingDirectory,
-      providerId: ctx.providerId,
-      sessionProviderId: ctx.sessionProviderId,
-      parentModel: ctx.model,
-      permissionMode: ctx.permissionMode,
-      parentSessionId: ctx.sessionId,
-      emitSSE: ctx.emitSSE,
-      abortSignal: ctx.abortSignal,
-    });
+    // [DISABLED] CodePilot 原生 Team 编排已停用，改由 OMC 驱动多 Agent 协作
+    // tools.Team = createTeamTool({
+    //   workingDirectory: ctx.workingDirectory,
+    //   providerId: ctx.providerId,
+    //   sessionProviderId: ctx.sessionProviderId,
+    //   parentModel: ctx.model,
+    //   permissionMode: ctx.permissionMode,
+    //   parentSessionId: ctx.sessionId,
+    //   emitSSE: ctx.emitSSE,
+    //   abortSignal: ctx.abortSignal,
+    // });
   }
 
   return tools;

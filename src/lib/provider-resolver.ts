@@ -29,7 +29,7 @@ import {
 } from './db';
 import { ensureTokenFresh } from './openai-oauth-manager';
 import { CODEX_API_ENDPOINT } from './openai-oauth';
-import { hasClaudeSettingsCredentials, readClaudeSettingsEnv } from './claude-settings';
+import { hasClaudeSettingsCredentials, readClaudeSettingsEnv, readClaudeSettingsCredentials } from './claude-settings';
 
 // ── Resolution result ───────────────────────────────────────────
 
@@ -58,8 +58,15 @@ export interface ResolvedProvider {
   availableModels: CatalogModel[];
   /** Settings sources for Claude Code SDK */
   settingSources: string[];
+  /** Parent tier model — for multi_head, the target model for the parent's tier.
+   *  Used by toClaudeCodeEnv() to set ANTHROPIC_MODEL correctly so SDK
+   *  subprocesses and their sub-agents use the right model instead of the
+   *  multi_head default. */
+  parentTierModel?: string;
   /** Internal: true when resolved as OpenAI OAuth (Codex API) virtual provider */
   _openaiOAuth?: boolean;
+  /** Internal: true when original provider was multi_head (preserved across recursive resolution) */
+  _isMultiHead?: boolean;
 }
 
 // ── Public API ──────────────────────────────────────────────────
@@ -264,23 +271,43 @@ export function toClaudeCodeEnv(
     }
 
     // Inject role models as env vars
+    // 多头路由的 roleModels 格式为 "providerId:modelId"，需要去掉 providerId 前缀
+    // 只保留 modelId 部分，因为 Claude Code SDK 不认识 provider:model 格式
+    // 统一转小写：API 端点通常要求小写模型 ID（如 mimo-v2.5-pro），大写会导致 400 错误
+    const stripProviderPrefix = (v: string) => {
+      const modelId = v.includes(':') ? v.split(':').slice(1).join(':') : v;
+      return modelId.toLowerCase();
+    };
+    // 优先使用 roleModels.default（完整的上游模型 ID，如 "claude-sonnet-4-5"）
+    // 其次使用 parentTierModel（多头路由目标模型，如 "MiMo-V2.5-Pro"）
+    // 最后使用 upstreamModel（catalog 解析后的模型 ID）
     if (resolved.roleModels.default) {
-      env.ANTHROPIC_MODEL = resolved.roleModels.default;
+      env.ANTHROPIC_MODEL = stripProviderPrefix(resolved.roleModels.default);
+    } else if (resolved.parentTierModel) {
+      env.ANTHROPIC_MODEL = resolved.parentTierModel.toLowerCase();
+    } else if (resolved.upstreamModel) {
+      env.ANTHROPIC_MODEL = resolved.upstreamModel;
     }
     if (resolved.roleModels.reasoning) {
-      env.ANTHROPIC_REASONING_MODEL = resolved.roleModels.reasoning;
+      env.ANTHROPIC_REASONING_MODEL = stripProviderPrefix(resolved.roleModels.reasoning);
+    } else if (resolved.roleModels.opus) {
+      // Claude Code SDK uses ANTHROPIC_REASONING_MODEL for opus-equivalent agents (architect, planner, etc.)
+      // Fallback to opus when reasoning is not explicitly configured
+      env.ANTHROPIC_REASONING_MODEL = stripProviderPrefix(resolved.roleModels.opus);
     }
     if (resolved.roleModels.small) {
-      env.ANTHROPIC_SMALL_FAST_MODEL = resolved.roleModels.small;
+      env.ANTHROPIC_SMALL_FAST_MODEL = stripProviderPrefix(resolved.roleModels.small);
     }
     if (resolved.roleModels.haiku) {
-      env.ANTHROPIC_DEFAULT_HAIKU_MODEL = resolved.roleModels.haiku;
+      env.ANTHROPIC_DEFAULT_HAIKU_MODEL = stripProviderPrefix(resolved.roleModels.haiku);
+      // Claude Code SDK uses ANTHROPIC_SMALL_FAST_MODEL for haiku-equivalent agents
+      env.ANTHROPIC_SMALL_FAST_MODEL = stripProviderPrefix(resolved.roleModels.haiku);
     }
     if (resolved.roleModels.sonnet) {
-      env.ANTHROPIC_DEFAULT_SONNET_MODEL = resolved.roleModels.sonnet;
+      env.ANTHROPIC_DEFAULT_SONNET_MODEL = stripProviderPrefix(resolved.roleModels.sonnet);
     }
     if (resolved.roleModels.opus) {
-      env.ANTHROPIC_DEFAULT_OPUS_MODEL = resolved.roleModels.opus;
+      env.ANTHROPIC_DEFAULT_OPUS_MODEL = stripProviderPrefix(resolved.roleModels.opus);
     }
 
     // Inject extra headers
@@ -464,19 +491,34 @@ export function toAiSdkConfig(
     if (provider) {
       // Configured provider — use authStyle to decide
       if (resolved.authStyle === 'auth_token') {
-        return { apiKey: undefined, authToken: provider.api_key || undefined };
+        const token = provider.api_key || undefined;
+        // 多头路由的目标 provider 可能没有自己的 api_key，fallback 到 settings.json / 环境变量
+        if (!token) return resolveFallbackAuth();
+        return { apiKey: undefined, authToken: token };
       }
-      return { apiKey: provider.api_key || undefined, authToken: undefined };
+      const key = provider.api_key || undefined;
+      if (!key) return resolveFallbackAuth();
+      return { apiKey: key, authToken: undefined };
     }
-    // Env mode — check env vars and legacy DB settings.
+    return resolveFallbackAuth();
+  };
+
+  // Fallback auth: 环境变量 → ~/.claude/settings.json → legacy DB settings
+  const resolveFallbackAuth = (): { apiKey: string | undefined; authToken: string | undefined } => {
     // ANTHROPIC_AUTH_TOKEN takes precedence (it's the Claude Code SDK auth path).
     const envAuthToken = process.env.ANTHROPIC_AUTH_TOKEN || getSetting('anthropic_auth_token');
     if (envAuthToken) {
-      // If we also have an API key, prefer auth_token (matches Claude Code SDK behavior)
       return { apiKey: undefined, authToken: envAuthToken };
     }
     const envApiKey = process.env.ANTHROPIC_API_KEY;
-    return { apiKey: envApiKey || undefined, authToken: undefined };
+    if (envApiKey) {
+      return { apiKey: envApiKey, authToken: undefined };
+    }
+    // 多头路由子Agent: 从 ~/.claude/settings.json 读取 cc-switch 管理的凭证
+    const creds = readClaudeSettingsCredentials();
+    if (creds?.authToken) return { apiKey: undefined, authToken: creds.authToken };
+    if (creds?.apiKey) return { apiKey: creds.apiKey, authToken: undefined };
+    return { apiKey: undefined, authToken: undefined };
   };
 
   // @ai-sdk/anthropic builds request URLs as `${baseURL}/messages`.
@@ -729,6 +771,19 @@ function buildResolution(
     // Resolve upstream model from the alias table
     const catalogEntry = model ? envModels.find(m => m.modelId === model) : undefined;
 
+    // Enable full Claude Code capabilities (CLAUDE.md, skills, hooks, auto-memory,
+    // OMC) when the user has direct Anthropic credentials in their shell environment.
+    // These are real terminal Claude Code users who expect the same experience.
+    // cc-switch users (who get creds from ~/.claude/settings.json) keep [] for
+    // fast-start — CodePilot manages their auth and MCP injection.
+    const hasDirectAnthropicCreds = !!(
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.ANTHROPIC_AUTH_TOKEN
+    );
+    const envSettingSources = hasDirectAnthropicCreds
+      ? ['user', 'project', 'local']
+      : [];
+
     return {
       provider: undefined,
       protocol: 'anthropic',
@@ -741,7 +796,7 @@ function buildResolution(
       roleModels: {},
       hasCredentials: envHasCredentials,
       availableModels: envModels,
-      settingSources: [],
+      settingSources: envSettingSources,
     };
   }
 
@@ -802,6 +857,8 @@ function buildResolution(
   let model = requestedModel;
   let upstreamModel: string | undefined;
   let modelDisplayName: string | undefined;
+  // 多头路由：追踪父级实际使用的模型，用于 toClaudeCodeEnv() 设置 ANTHROPIC_MODEL
+  let parentTierModel: string | undefined;
 
   // If a use case is specified, check role models for that use case
   if (opts.useCase && opts.useCase !== 'default' && roleModels[opts.useCase]) {
@@ -821,15 +878,63 @@ function buildResolution(
     if (model && model.includes(':')) {
       const [targetProviderId, ...targetModelParts] = model.split(':');
       const targetModelId = targetModelParts.join(':');
-      
+
       // Prevent infinite recursion by removing providerId and setting explicitly
       const newOpts: ResolveOptions = {
         providerId: targetProviderId,
         model: targetModelId,
       };
-      
-      return resolveProvider(newOpts);
+
+      // 递归解析目标 provider，但保留多头路由的 roleModels
+      // 这样 toClaudeCodeEnv() 能正确设置每个层级的模型映射（sonnet→MiniMax, haiku→oLMX 等）
+      const targetResolved = resolveProvider(newOpts);
+
+      // 保留 roleModels 的 providerId:modelId 格式
+      // toClaudeCodeEnv() 用 stripProviderPrefix() 会自动去掉 providerId 前缀
+      // resolveAgentModel() 需要 providerId:modelId 格式来提取目标 provider
+      targetResolved.roleModels = {
+        default: targetResolved.upstreamModel || roleModels.default,
+        reasoning: roleModels.reasoning,
+        small: roleModels.small,
+        haiku: roleModels.haiku,
+        sonnet: roleModels.sonnet,
+        opus: roleModels.opus,
+      };
+      // 保存父级实际使用的模型，让 toClaudeCodeEnv() 设置正确的 ANTHROPIC_MODEL
+      // 这样 SDK 子进程及其子 agent 会使用正确的模型，而不是多头路由的默认模型
+      targetResolved.parentTierModel = targetModelId;
+      targetResolved._isMultiHead = true;
+      return targetResolved;
     } else {
+      // 模型名称不包含 ':'，可能是直接的模型名（如 "MiMo-V2.5-Pro"）
+      // 从 roleModels 中找到匹配的 tier，递归解析到目标 provider
+      // 这样子Agent能拿到目标 provider 的 api_key 和 base_url
+      if (model) {
+        for (const v of Object.values(roleModels)) {
+          if (v && v.includes(':')) {
+            const mId = v.split(':').slice(1).join(':');
+            if (mId === model) {
+              // 找到匹配的 tier，提取目标 provider 信息并递归解析
+              const [targetProviderId, ...targetModelParts] = v.split(':');
+              const targetModelId = targetModelParts.join(':');
+              console.log(`[provider-resolver] multi_head direct model "${model}" matched tier → provider=${targetProviderId.slice(0,12)}... model=${targetModelId}`);
+              const targetResolved = resolveProvider({ providerId: targetProviderId, model: targetModelId });
+              // 保留 roleModels 的 providerId:modelId 格式（同 model.includes(':') 分支）
+              targetResolved.roleModels = {
+                default: targetResolved.upstreamModel || roleModels.default,
+                reasoning: roleModels.reasoning,
+                small: roleModels.small,
+                haiku: roleModels.haiku,
+                sonnet: roleModels.sonnet,
+                opus: roleModels.opus,
+              };
+              targetResolved.parentTierModel = targetModelId;
+              targetResolved._isMultiHead = true;
+              return targetResolved;
+            }
+          }
+        }
+      }
       console.warn('[provider-resolver] multi_head provider requested but no valid provider:model mapping found for model:', model);
     }
   }
@@ -856,22 +961,61 @@ function buildResolution(
     roleModels = { ...roleModels, default: upstreamModel };
   }
 
-  // Has credentials?
-  const hasCredentials = !!(provider.api_key) || authStyle === 'env_only';
+  // 多头路由：将所有 roleModels 值解析为 upstream model ID
+  // roleModels 格式为 "providerId:modelId"，需要：
+  // 1. 去掉 providerId 前缀
+  // 2. 查找目标 provider 的 catalog，解析为 upstream model ID（小写格式）
+  // 这样 toClaudeCodeEnv() 设置 ANTHROPIC_DEFAULT_*_MODEL 时使用正确的 API 模型 ID
+  const resolveRoleModelUpstream = (value: string | undefined): string | undefined => {
+    if (!value || typeof value !== 'string') return value;
+    let modelId = value;
+    if (modelId.includes(':')) {
+      const parts = modelId.split(':');
+      const targetProviderId = parts[0];
+      modelId = parts.slice(1).join(':');
+      try {
+        // 通过 resolveProvider 获取目标 provider 的 upstreamModel
+        // 它会自动查 provider_models 表和 catalog
+        const targetResolved = resolveProvider({ providerId: targetProviderId, model: modelId });
+        if (targetResolved.upstreamModel) return targetResolved.upstreamModel;
+      } catch { /* fallback to original modelId */ }
+    }
+    return modelId;
+  };
+  roleModels = {
+    default: resolveRoleModelUpstream(roleModels.default),
+    reasoning: resolveRoleModelUpstream(roleModels.reasoning),
+    small: resolveRoleModelUpstream(roleModels.small),
+    haiku: resolveRoleModelUpstream(roleModels.haiku),
+    sonnet: resolveRoleModelUpstream(roleModels.sonnet),
+    opus: resolveRoleModelUpstream(roleModels.opus),
+  };
 
-  // Fast-start default: do not let the SDK auto-load filesystem settings.
-  // User/project MCP servers and plugins can add several seconds to the first
-  // turn, and some user MCPs may time out. CodePilot explicitly injects:
-  //   - DB-provider auth/model env via toClaudeCodeEnv()
-  //   - env-mode cc-switch auth/model env via readClaudeSettingsEnv()
-  //   - project instructions through context assembly
-  //   - MCP servers through keyword-gated injection in claude-client.ts
+  // Has credentials?
+  // 多头路由的目标 provider 可能没有自己的 api_key，但环境变量中可能有凭证
+  // 当 provider 有 base_url 时（说明是有效的目标端点），也检查环境变量
+  const hasCredentials = !!(provider.api_key) || authStyle === 'env_only' ||
+    (!!provider.base_url && !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || hasClaudeSettingsCredentials()));
+
+  // Full capabilities mode: let the SDK subprocess load user/project/local
+  // settings so CLAUDE.md, skills, hooks, auto-memory, and OMC all work.
   //
-  // This intentionally drops automatic user plugins/hooks/permissions from
-  // normal chat startup. Users still get Claude Code's built-in tools plus
-  // CodePilot's internal MCPs immediately; external MCPs are added only when
-  // the request appears to need them.
-  const settingSources: string[] = [];
+  // Enabled by default for official Anthropic API endpoints.
+  // For third-party proxies (Kimi, GLM, OpenRouter), can be force-enabled
+  // via the 'sdk_full_capabilities' setting. The shadow HOME mechanism
+  // already strips ANTHROPIC_* keys from user settings.json to prevent
+  // credential leakage, but project-level ANTHROPIC_BASE_URL could still
+  // conflict — users enabling this for third-party providers should ensure
+  // their project .claude/settings.json doesn't set ANTHROPIC_BASE_URL.
+  const baseUrl = provider.base_url || '';
+  const isOfficialAnthropic = !baseUrl ||
+    baseUrl.includes('api.anthropic.com') ||
+    baseUrl.endsWith('.anthropic.com');
+  const forceFullCapabilities = getSetting('sdk_full_capabilities') === 'true';
+  const settingSources: string[] =
+    (isOfficialAnthropic || forceFullCapabilities)
+      ? ['user', 'project', 'local']
+      : [];
 
   return {
     provider,
@@ -886,6 +1030,7 @@ function buildResolution(
     hasCredentials,
     availableModels,
     settingSources,
+    parentTierModel,
   };
 }
 

@@ -1,0 +1,122 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic:
+      - generic [ref=e6]:
+        - link "新闻" [ref=e7] [cursor=pointer]:
+          - /url: http://news.baidu.com
+        - link "hao123" [ref=e8] [cursor=pointer]:
+          - /url: https://www.hao123.com?src=from_pc
+        - link "地图" [ref=e9] [cursor=pointer]:
+          - /url: http://map.baidu.com
+        - link "贴吧" [ref=e10] [cursor=pointer]:
+          - /url: http://tieba.baidu.com/
+        - link "视频" [ref=e11] [cursor=pointer]:
+          - /url: https://haokan.baidu.com/?sfrom=baidu-top
+        - link "图片" [ref=e12] [cursor=pointer]:
+          - /url: http://image.baidu.com/
+        - link "网盘" [ref=e13] [cursor=pointer]:
+          - /url: https://pan.baidu.com?from=1026962h
+        - link "文库" [ref=e14] [cursor=pointer]:
+          - /url: https://wenku.baidu.com/?fr=bdpcindex
+        - link "文心" [ref=e15] [cursor=pointer]:
+          - /url: https://chat.baidu.com/search?isShowHello=1&pd=csaitab&setype=csaitab&extParamsJson=%7B%22enter_type%22%3A%22home_tab%22%7D
+        - link "搭子DuMate" [ref=e16] [cursor=pointer]:
+          - /url: https://cloud.baidu.com/product/dumate.html?track=bdsy
+        - link "更多" [ref=e18] [cursor=pointer]:
+          - /url: http://www.baidu.com/more/
+      - generic [ref=e19]:
+        - generic [ref=e20] [cursor=pointer]: 设置
+        - link "登录" [ref=e21] [cursor=pointer]:
+          - /url: https://passport.baidu.com/v2/?login&tpl=mn&u=http%3A%2F%2Fwww.baidu.com%2F&sms=5
+    - generic [ref=e24]:
+      - generic [ref=e25]:
+        - img [ref=e26]
+        - generic:
+          - link "点击一下，了解更多":
+            - /url: //www.baidu.com/s?wd=%E7%99%BE%E5%BA%A6%E7%83%AD%E6%90%9C&sa=ire_dl_gh_logo_texing&rsv_dl=igh_logo_pcs
+      - generic [ref=e31]:
+        - generic [ref=e34]:
+          - textbox "特朗普否认会对伊使用核武器" [active] [ref=e36]
+          - generic [ref=e38]:
+            - generic [ref=e39]:
+              - img [ref=e47] [cursor=pointer]
+              - generic [ref=e50]:
+                - img [ref=e54] [cursor=pointer]
+                - img [ref=e59] [cursor=pointer]
+            - button "百度一下" [ref=e63] [cursor=pointer]
+        - link "复杂问题就找文心助手，深入思考回答更优 " [ref=e67] [cursor=pointer]:
+          - /url: https://chat.baidu.com/search?extParams=%7B%22enter_type%22%3A%22home_operate%22%7D&isShowHello=1
+          - img [ref=e68]
+          - generic [ref=e69]:
+            - generic [ref=e70]: 复杂问题就找文心助手，深入思考回答更优
+            - generic [ref=e71]: 
+      - generic [ref=e74]:
+        - generic [ref=e75]:
+          - link "百度热搜":
+            - /url: https://top.baidu.com/board?platform=pc&sa=pcindex_entry
+            - generic "百度热搜" [ref=e76] [cursor=pointer]: 
+          - generic [ref=e77] [cursor=pointer]:
+            - generic [ref=e78]: 
+            - text: 换一换
+        - list:
+          - listitem [ref=e79]:
+            - link " 逐梦星辰 征途如虹" [ref=e80] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E9%80%90%E6%A2%A6%E6%98%9F%E8%BE%B0+%E5%BE%81%E9%80%94%E5%A6%82%E8%99%B9&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e81]: 
+              - text: 逐梦星辰 征途如虹
+          - listitem [ref=e83]:
+            - link "5 印度防长参观德国潜艇时被舱门卡住" [ref=e84] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E5%8D%B0%E5%BA%A6%E9%98%B2%E9%95%BF%E5%8F%82%E8%A7%82%E5%BE%B7%E5%9B%BD%E6%BD%9C%E8%89%87%E6%97%B6%E8%A2%AB%E8%88%B1%E9%97%A8%E5%8D%A1%E4%BD%8F&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e85]: "5"
+              - text: 印度防长参观德国潜艇时被舱门卡住
+            - generic [ref=e86]: 热
+          - listitem [ref=e87]:
+            - link "1 “妈 我在隧道救人我可能出不去了”" [ref=e88] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E2%80%9C%E5%A6%88+%E6%88%91%E5%9C%A8%E9%9A%A7%E9%81%93%E6%95%91%E4%BA%BA%E6%88%91%E5%8F%AF%E8%83%BD%E5%87%BA%E4%B8%8D%E5%8E%BB%E4%BA%86%E2%80%9D&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e89]: "1"
+              - text: “妈 我在隧道救人我可能出不去了”
+            - generic [ref=e90]: 热
+          - listitem [ref=e91]:
+            - link "6 伊朗外长将访问巴基斯坦等三国" [ref=e92] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E4%BC%8A%E6%9C%97%E5%A4%96%E9%95%BF%E5%B0%86%E8%AE%BF%E9%97%AE%E5%B7%B4%E5%9F%BA%E6%96%AF%E5%9D%A6%E7%AD%89%E4%B8%89%E5%9B%BD&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e93]: "6"
+              - text: 伊朗外长将访问巴基斯坦等三国
+            - generic [ref=e94]: 热
+          - listitem [ref=e95]:
+            - link "2 这5种隐形高热量食物别多吃" [ref=e96] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E8%BF%995%E7%A7%8D%E9%9A%90%E5%BD%A2%E9%AB%98%E7%83%AD%E9%87%8F%E9%A3%9F%E7%89%A9%E5%88%AB%E5%A4%9A%E5%90%83&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e97]: "2"
+              - text: 这5种隐形高热量食物别多吃
+            - generic [ref=e98]: 新
+          - listitem [ref=e99]:
+            - link "7 《浪姐》二公舞台上半场赛果出炉" [ref=e100] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E3%80%8A%E6%B5%AA%E5%A7%90%E3%80%8B%E4%BA%8C%E5%85%AC%E8%88%9E%E5%8F%B0%E4%B8%8A%E5%8D%8A%E5%9C%BA%E8%B5%9B%E6%9E%9C%E5%87%BA%E7%82%89&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e101]: "7"
+              - text: 《浪姐》二公舞台上半场赛果出炉
+            - generic [ref=e102]: 新
+          - listitem [ref=e103]:
+            - link "3 中国物流市场规模保持世界首位" [ref=e104] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E4%B8%AD%E5%9B%BD%E7%89%A9%E6%B5%81%E5%B8%82%E5%9C%BA%E8%A7%84%E6%A8%A1%E4%BF%9D%E6%8C%81%E4%B8%96%E7%95%8C%E9%A6%96%E4%BD%8D&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e105]: "3"
+              - text: 中国物流市场规模保持世界首位
+          - listitem [ref=e107]:
+            - link "8 6G跟5G最大的区别是啥 你知道吗" [ref=e108] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=6G%E8%B7%9F5G%E6%9C%80%E5%A4%A7%E7%9A%84%E5%8C%BA%E5%88%AB%E6%98%AF%E5%95%A5+%E4%BD%A0%E7%9F%A5%E9%81%93%E5%90%97&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e109]: "8"
+              - text: 6G跟5G最大的区别是啥 你知道吗
+          - listitem [ref=e111]:
+            - link "4 窗户正对邻居大门 竟被对方用画封住" [ref=e112] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E7%AA%97%E6%88%B7%E6%AD%A3%E5%AF%B9%E9%82%BB%E5%B1%85%E5%A4%A7%E9%97%A8+%E7%AB%9F%E8%A2%AB%E5%AF%B9%E6%96%B9%E7%94%A8%E7%94%BB%E5%B0%81%E4%BD%8F&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e113]: "4"
+              - text: 窗户正对邻居大门 竟被对方用画封住
+          - listitem [ref=e115]:
+            - link "9 铁路12306将发放3档满减券 最高519元" [ref=e116] [cursor=pointer]:
+              - /url: https://www.baidu.com/s?wd=%E9%93%81%E8%B7%AF12306%E5%B0%86%E5%8F%91%E6%94%BE3%E6%A1%A3%E6%BB%A1%E5%87%8F%E5%88%B8+%E6%9C%80%E9%AB%98519%E5%85%83&sa=fyb_n_homepage&rsv_dl=fyb_n_homepage&from=super&cl=3&tn=baidutop10&fr=top1000&rsv_idx=2&hisfilter=1
+              - generic [ref=e117]: "9"
+              - text: 铁路12306将发放3档满减券 最高519元
+  - generic [ref=e119]:
+    - generic:
+      - generic:
+        - generic:
+          - img
+    - img [ref=e124] [cursor=pointer]

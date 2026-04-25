@@ -330,7 +330,7 @@ export function ContextCompressionWidget({
         </div>
 
         {/* Progress Bar */}
-        <div className="flex items-center gap-3 mb-3" title={`规则: ${Math.round(rulesPct)}% | 联网: ${Math.round(webPct)}% | 文件: ${Math.round(filesPct)}% | 数据统计: ${Math.round(othersPct)}%`}>
+        <div className="flex items-center gap-3 mb-3" title={`规则: ${Math.round(rulesPct)}% | 联网: ${Math.round(webPct)}% | 文件: ${Math.round(filesPct)}% | 其他: ${Math.round(othersPct)}%`}>
           <div className="flex-1 h-1.5 flex rounded-full overflow-hidden bg-muted/40">
             <div className="bg-violet-500 transition-all duration-300" style={{ width: `${rulesPct}%` }} />
             <div className="bg-[#00a8ff] transition-all duration-300" style={{ width: `${webPct}%` }} />
@@ -382,6 +382,19 @@ export function ContextCompressionWidget({
             <div className="w-1.5 h-1.5 bg-cyan-300 rounded-[1px]" />
             文件
           </button>
+          {othersCount > 0 && (
+            <button
+              onClick={() => setActiveTab('others')}
+              className={cn(
+                "flex items-center gap-1 border-b pb-0.5 transition-colors whitespace-nowrap",
+                activeTab === 'others' ? "border-foreground/80 text-foreground/90 font-medium" : "border-transparent hover:text-foreground/70"
+              )}
+              title={`其他: ${Math.round(othersPct)}%`}
+            >
+              <div className="w-1.5 h-1.5 bg-muted-foreground/30 rounded-[1px]" />
+              其他
+            </button>
+          )}
           <button
             onClick={() => setActiveTab('stats')}
             className={cn(

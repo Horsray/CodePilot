@@ -16,7 +16,6 @@ import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview
 import { WidgetRenderer } from './WidgetRenderer';
 import { ReferencedContexts } from './ReferencedContexts';
 import { AgentTimeline } from './AgentTimeline';
-import { SubAgentTimeline } from './SubAgentTimeline';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
   appendTimelineReasoning,
@@ -312,93 +311,6 @@ function StreamingStatusBar({ statusText, onForceStop, startedAt }: { statusText
   );
 }
 
-// ---------------------------------------------------------------------------
-// Component to subscribe to team events and show SubAgentTimeline during streaming
-// ---------------------------------------------------------------------------
-// 中文注释：功能名称「子Agent时间线流适配器」，用法是在流式期间显示子Agent卡片，
-// 支持从streamSnapshot恢复初始数据，解决切换会话后卡片丢失的问题
-function SubAgentTimelineStreamAdapter({ sessionId, isStreaming, initialSubAgents }: { sessionId?: string, isStreaming?: boolean, initialSubAgents?: any[] }) {
-  const [subAgents, setSubAgents] = useState<any[]>(() => initialSubAgents ?? []);
-
-  // 中文注释：功能名称「子Agent快照同步」，用法是当initialSubAgents变化时（如切换会话恢复快照），
-  // 同步到本地状态，确保卡片始终显示
-  useEffect(() => {
-    if (initialSubAgents && initialSubAgents.length > 0 && subAgents.length === 0) {
-      setSubAgents(initialSubAgents);
-    }
-  }, [initialSubAgents]);
-
-  useEffect(() => {
-    if (!sessionId) return;
-    const handleSync = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.id) {
-        setSubAgents(prev => {
-          if (detail.error) {
-            // Error explicitly marks completion
-            return prev.map(a => a.id === detail.id ? { ...a, status: 'error', error: detail.error, report: detail.report, completedAt: Date.now() } : a);
-          } else if (detail.report) {
-            // Report marks successful completion
-            return prev.map(a => a.id === detail.id ? { ...a, status: 'completed', report: detail.report, completedAt: Date.now() } : a);
-          } else if (detail.detail) {
-            // Progress update (from subagent-progress event)
-            return prev.map(a => {
-              if (a.id === detail.id) {
-                const newProgress = detail.append ? (a.progress || '') + detail.detail : detail.detail;
-                // Limit the buffer size to avoid memory issues (keep last 10000 chars)
-                return { ...a, progress: newProgress.length > 10000 ? '...' + newProgress.slice(-10000) : newProgress };
-              }
-              return a;
-            });
-          } else {
-            // It's a start event
-            if (prev.some(a => a.id === detail.id)) return prev;
-            return [...prev, {
-              id: detail.id,
-              name: detail.name,
-              displayName: detail.displayName,
-              prompt: detail.prompt,
-              model: detail.model,
-              status: 'running',
-              startedAt: Date.now()
-            }];
-          }
-        });
-      }
-    };
-    
-    window.addEventListener('subagent-start', handleSync);
-    window.addEventListener('subagent-progress', handleSync);
-    window.addEventListener('subagent-complete', handleSync);
-    return () => {
-      window.removeEventListener('subagent-start', handleSync);
-      window.removeEventListener('subagent-progress', handleSync);
-      window.removeEventListener('subagent-complete', handleSync);
-    };
-  }, [sessionId]);
-
-  // Also clear timeline on unmount if streaming is stopped
-  // We DO need to clear it when a new stream starts or when not streaming,
-  // but we must be careful not to cause a flash.
-  useEffect(() => {
-    if (!isStreaming) {
-      // Delay clearing to allow React to mount the MessageItem replacement first
-      const t = setTimeout(() => setSubAgents([]), 2000);
-      return () => clearTimeout(t);
-    }
-  }, [isStreaming]);
-
-  // We should ONLY render if we are actively streaming. 
-  // Once stopped, the MessageItem will render the saved subAgents from the DB.
-  if (subAgents.length === 0) return null;
-
-  return (
-    <div className="w-full mt-2 mb-2 relative z-10">
-      <SubAgentTimeline subAgents={subAgents} />
-    </div>
-  );
-}
-
 export function StreamingMessage({
   content,
   isStreaming,
@@ -418,14 +330,8 @@ export function StreamingMessage({
   const { t } = useTranslation();
   const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
 
-  const timelineTools = useMemo(() => {
-    if (!streamingSubAgents || streamingSubAgents.length === 0) return toolUses;
-    return toolUses.filter(tool => {
-      const lower = tool.name.toLowerCase();
-      // 过滤掉独立的 Agent 和 Team 工具调用，避免上方工具调用组出现重复卡片
-      return !(lower === 'agent' || lower === 'team' || lower === 'todowrite' || lower.includes('mcp__codepilot-agent__') || lower.includes('mcp__codepilot-team__') || lower.includes('mcp__codepilot-todo__'));
-    });
-  }, [toolUses, streamingSubAgents]);
+  // SubAgentTimeline 卡片渲染已移除，不再过滤 agent/team 工具，全部交给时间线渲染
+  const timelineTools = toolUses;
   const [finalContentStart, setFinalContentStart] = useState(0);
   const timelineStateRef = useRef<ReturnType<typeof createTimelineAccumulator> | null>(null);
   const prevSnapshotRef = useRef<{
@@ -820,15 +726,14 @@ export function StreamingMessage({
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
             flat={true}
-            hideSubAgents={!!(streamingSubAgents && streamingSubAgents.length > 0)}
+            hideSubAgents={false}
           />
         )}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
         {mediaPreview}
 
-        {/* SubAgentTimeline for active team workflows during streaming (before text) */}
-        <SubAgentTimelineStreamAdapter sessionId={sessionId} isStreaming={isStreaming} initialSubAgents={streamingSubAgents} />
+        {/* SubAgentTimeline 卡片渲染已移除，改由 ToolActionsGroup 内的 TeamAgentTimelines 时间线驱动 */}
 
         {/* Streaming text content rendered via Streamdown */}
         {renderedContent}
