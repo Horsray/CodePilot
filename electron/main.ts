@@ -140,7 +140,7 @@ async function isBridgeActive(): Promise<boolean> {
     return await new Promise<boolean>((resolve) => {
       const req = http.get(`http://127.0.0.1:${serverPort}/api/bridge`, (res: { statusCode?: number; on: (event: string, cb: (data?: Buffer) => void) => void }) => {
         let body = '';
-        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+        res.on('data', (chunk?: Buffer) => { body += (chunk ?? '').toString(); });
         res.on('end', () => {
           try {
             const data = JSON.parse(body);
@@ -776,6 +776,7 @@ function createWindow(url?: string) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
     },
   };
 
@@ -792,6 +793,17 @@ function createWindow(url?: string) {
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+
+  // 中文注释：功能名称「webview 安全验证」，用法是在 webview 挂载时校验其 URL 和配置，
+  // 防止恶意页面通过 webview 提权访问 file:// 等危险协议
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    if (params.src && params.src.startsWith('file://')) {
+      event.preventDefault();
+    }
+  });
 
   // External links: open in system default browser instead of Electron
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {

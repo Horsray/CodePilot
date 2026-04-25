@@ -635,6 +635,7 @@ export type SSEEventType =
   | 'subagent_complete'  // sub-agent completed
   | 'subagent_progress'  // sub-agent progress update
   | 'terminal_mirror'    // terminal output mirror
+  | 'open-browser-panel' // 中文注释：功能名称「浏览器面板打开事件」，用法是通知前端打开内置浏览器面板
   | 'timeline'           // agent timeline update
   | 'aborted'            // stream aborted
   | 'done';              // stream complete

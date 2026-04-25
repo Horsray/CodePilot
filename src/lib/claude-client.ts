@@ -1697,6 +1697,27 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
                     }
                   }
 
+                  // 中文注释：功能名称「浏览器工具检测」，用法是检测SDK runtime中的浏览器工具调用，
+                  // 发射 open-browser-panel SSE事件，通知前端打开内置浏览器面板
+                  const browserToolNames = ['codepilot_open_browser', 'mcp__codepilot-browser__codepilot_open_browser'];
+                  if (browserToolNames.includes(block.name)) {
+                    try {
+                      const toolInput = block.input as { url?: string; title?: string };
+                      if (toolInput?.url) {
+                        controller.enqueue(formatSSE({
+                          type: 'open-browser-panel',
+                          data: JSON.stringify({
+                            url: toolInput.url,
+                            title: toolInput.title || '网页预览',
+                          }),
+                        }));
+                        console.log('[claude-client] Browser panel open requested:', toolInput.url);
+                      }
+                    } catch (e) {
+                      console.warn('[claude-client] Failed to emit open-browser-panel:', e);
+                    }
+                  }
+
                   // Track file modifications for checkpointing (review feature)
                   const fileToolNames = ['EditFile', 'WriteFile', 'Edit', 'Write', 'Replace', 'str_replace_editor'];
                   if (fileToolNames.includes(block.name)) {
@@ -2284,6 +2305,20 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
                   for (const block of aMsg.message.content) {
                     if (block.type === 'tool_use') {
                       controller.enqueue(formatSSE({ type: 'tool_use', data: JSON.stringify({ id: block.id, name: block.name, input: block.input }) }));
+                      // 中文注释：功能名称「恢复路径浏览器检测」，用法是在SDK session恢复路径中
+                      // 也检测浏览器工具调用，确保压缩重试后浏览器仍能正确打开
+                      const browserToolNames = ['codepilot_open_browser', 'mcp__codepilot-browser__codepilot_open_browser'];
+                      if (browserToolNames.includes(block.name)) {
+                        try {
+                          const toolInput = block.input as { url?: string; title?: string };
+                          if (toolInput?.url) {
+                            controller.enqueue(formatSSE({
+                              type: 'open-browser-panel',
+                              data: JSON.stringify({ url: toolInput.url, title: toolInput.title || '网页预览' }),
+                            }));
+                          }
+                        } catch { /* best effort */ }
+                      }
                     }
                   }
                   break;

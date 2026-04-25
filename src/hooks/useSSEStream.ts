@@ -412,13 +412,25 @@ function handleSSEEvent(
     }
 
     case 'terminal_mirror': {
-      // 中文注释：功能名称「终端镜像事件」，用法是将 AI Bash 工具执行的命令和输出
-      // 镜像到终端面板，通过 window 事件通知终端组件实时显示。
       try {
         const mirrorData = JSON.parse(event.data);
         window.dispatchEvent(new CustomEvent('terminal:mirror', { detail: mirrorData }));
       } catch {
         // skip malformed terminal_mirror data
+      }
+      return accumulated;
+    }
+
+    case 'open-browser-panel': {
+      // 中文注释：功能名称「浏览器面板打开」，用法是接收后端 SSE 事件，
+      // 转换为前端 window 事件，触发 AppShell 中注册的浏览器面板打开逻辑
+      try {
+        const browserData = JSON.parse(event.data);
+        window.dispatchEvent(new CustomEvent('action:open-browser-panel', {
+          detail: { url: browserData.url, title: browserData.title || '网页预览' }
+        }));
+      } catch {
+        // skip malformed open-browser-panel data
       }
       return accumulated;
     }

@@ -771,6 +771,22 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                   }
                 }
 
+                // 中文注释：功能名称「浏览器工具拦截」，用法是检测浏览器工具返回的特殊标记，
+                // 通过 SSE 事件通知前端打开浏览器面板，解决 native runtime 下浏览器无法自动打开的问题
+                if (currentToolName && /codepilot_open_browser|open_browser/i.test(currentToolName)) {
+                  const urlMatch = resultContent.match(/url=([^\s]+)/);
+                  const titleMatch = resultContent.match(/title=(.*)/);
+                  if (urlMatch) {
+                    controller.enqueue(formatSSE({
+                      type: 'open-browser-panel',
+                      data: JSON.stringify({
+                        url: urlMatch[1],
+                        title: titleMatch?.[1] || '网页预览',
+                      }),
+                    }));
+                  }
+                }
+
                 controller.enqueue(formatSSE({
                   type: 'tool_result',
                   data: JSON.stringify({
