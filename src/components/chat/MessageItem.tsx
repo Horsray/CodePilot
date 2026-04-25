@@ -701,7 +701,12 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       return { files, displayText: textWithoutFiles };
     }
     
-    const textBlocks = contentBlocks.filter((block): block is Extract<MessageContentBlock, { type: 'text' }> => block.type === 'text');
+    const textBlocks = contentBlocks.filter((block, i): block is Extract<MessageContentBlock, { type: 'text' }> => {
+      if (block.type !== 'text') return false;
+      // 仅保留后续没有工具调用（tool_use 或 tool_result）的文本作为最终结论
+      const hasSubsequentTool = contentBlocks.slice(i + 1).some(b => b.type === 'tool_use' || b.type === 'tool_result');
+      return !hasSubsequentTool;
+    });
     let finalOutputText = textBlocks.map(b => b.text).join('\n');
     
     // Always strip soft-heartbeat marker before rendering text blocks

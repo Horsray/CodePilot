@@ -19,6 +19,11 @@
         "--headless"
       ],
       "env": {}
+    },
+    "hueying-websearch": {
+      "command": "python3",
+      "args": ["/Users/horsray/Documents/codepilot/CodePilot/tools/hueying-websearch.py"],
+      "env": {}
     }
   }
 }

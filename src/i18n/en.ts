@@ -91,7 +91,7 @@ const en = {
   'messageInput.aiSuggested': 'AI Suggested',
 
   // ── Streaming message ───────────────────────────────────────
-  'streaming.thinking': 'Thinking...',
+  'streaming.thinking': 'Thinking',
   'streaming.thinkingDeep': 'Thinking deeply...',
   'streaming.verifying': 'Verifying connection...',
   'streaming.preparing': 'Preparing response...',

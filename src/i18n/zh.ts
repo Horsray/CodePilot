@@ -88,7 +88,7 @@ const zh: Record<TranslationKey, string> = {
   'messageInput.aiSuggested': 'AI 推荐',
 
   // ── Streaming message ───────────────────────────────────────
-  'streaming.thinking': '思考中...',
+  'streaming.thinking': '思考',
   'streaming.thinkingDeep': '深度思考中...',
   'streaming.verifying': '探测模型连通性...',
   'streaming.preparing': '组织回复中...',

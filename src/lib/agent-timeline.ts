@@ -520,16 +520,27 @@ export function extractTimelineStepsFromBlocks(blocks: MessageContentBlock[]): T
   const hasAgentActivity = blocks.some((block) => (
     block.type === 'thinking' || block.type === 'tool_use' || block.type === 'tool_result'
   ));
-  for (const block of blocks) {
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
     switch (block.type) {
       case 'thinking':
         appendTimelineReasoning(state, block.thinking, 0);
         break;
-      case 'text':
-        if (!hasAgentActivity) {
+      case 'text': {
+        // If there is no agent activity at all, we don't need to put text in the timeline.
+        // But if there IS agent activity, we should include intermediate text in the timeline.
+        // We only exclude the FINAL text block (which appears after all tools), 
+        // as that should be rendered as the main message body, not inside a timeline step.
+        const hasSubsequentTool = blocks.slice(i + 1).some(b => b.type === 'tool_use' || b.type === 'tool_result');
+        
+        if (hasAgentActivity && hasSubsequentTool) {
+          appendTimelineOutput(state, block.text, 0);
+        } else if (!hasAgentActivity) {
+          // Fallback for purely text messages (though usually timeline isn't rendered at all for them)
           appendTimelineOutput(state, block.text, 0);
         }
         break;
+      }
       case 'tool_use':
         appendTimelineToolUse(state, { id: block.id, name: block.name, input: block.input }, 0);
         break;

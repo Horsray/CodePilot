@@ -1035,7 +1035,7 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
             initial={{ height: 0 }}
             animate={{ height: 'auto' }}
             exit={{ height: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
             <div className="border-t border-border/20 bg-muted/10 p-2 space-y-1">
@@ -1064,7 +1064,10 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
 
   React.useEffect(() => {
     if (!isStreaming && userExpanded === null) {
-      setUserExpanded(false);
+      const timer = setTimeout(() => {
+        setUserExpanded(false);
+      }, 2000);
+      return () => clearTimeout(timer);
     }
   }, [isStreaming, userExpanded]);
 
@@ -1084,7 +1087,7 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
         <div className="flex items-center gap-2">
           <Brain size={14} className="text-violet-500" />
           <span className="text-foreground/80 truncate ml-1 text-left">
-            {isStreaming ? '正在思考' : '思考'}
+            思考
           </span>
         </div>
         <div className="flex items-center gap-2 text-muted-foreground">
@@ -1098,7 +1101,7 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
             <div className="px-3 py-2 text-[12px] text-foreground/80 prose prose-sm dark:prose-invert max-w-none border-l-2 border-violet-500/20 ml-3">
@@ -1122,7 +1125,28 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
                         {children}
                       </a>
                     );
-                  }
+                  },
+                  h1: ({ children }: any) => <span className="font-bold text-[12px] block mt-2 mb-1">{children}</span>,
+                  h2: ({ children }: any) => <span className="font-bold text-[12px] block mt-2 mb-1">{children}</span>,
+                  h3: ({ children }: any) => <span className="font-bold text-[12px] block mt-1">{children}</span>,
+                  h4: ({ children }: any) => <span className="font-bold text-[12px] block mt-1">{children}</span>,
+                  h5: ({ children }: any) => <span className="font-bold text-[12px] block mt-1">{children}</span>,
+                  h6: ({ children }: any) => <span className="font-bold text-[12px] block mt-1">{children}</span>,
+                  code: ({ children, ...codeProps }: any) => {
+                    // 如果代码块被 <pre> 包裹，说明是大段代码，此时类名通常会带有 'language-'，交给原本的 pre 处理即可
+                    if (codeProps.className && (codeProps.className.includes('language-') || codeProps.className.includes('!bg-['))) {
+                      return <code {...codeProps}>{children}</code>;
+                    }
+                    // 处理行内小段代码的样式：移除前后反引号，保留背景色，取消巨大的字体
+                    return (
+                      <code 
+                        className="bg-muted/40 px-1 py-[1px] rounded font-mono text-[12px] text-foreground/80 before:content-none after:content-none border border-border/30 mx-0.5" 
+                        {...codeProps}
+                      >
+                        {children}
+                      </code>
+                    );
+                  },
                 }}
               >
                 {content}
@@ -1220,7 +1244,16 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
 
   React.useEffect(() => {
     if (expandedOverride === undefined) {
-      setInternalExpanded((isTeam || isTodoWrite) ? false : status === 'running');
+      if (isTeam || isTodoWrite) {
+        setInternalExpanded(false);
+      } else if (status === 'running') {
+        setInternalExpanded(true);
+      } else {
+        const timer = setTimeout(() => {
+          setInternalExpanded(false);
+        }, 2000);
+        return () => clearTimeout(timer);
+      }
     }
   }, [status, expandedOverride, isTeam, isTodoWrite]);
 
@@ -1281,35 +1314,47 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           {status === 'error' && <XCircle size={14} className="text-red-500" />}
         </div>
       </button>
-      {detailVisible && expanded && renderer.renderDetail?.(tool, streamingToolOutput)}
-      {hasRawContent && showRaw ? (
-        <div className={cn(
-          "px-3 py-3 border-l-2 ml-3",
-          status === 'error' ? "border-red-500/20" : "border-blue-500/20"
-        )}>
-          {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
-            <div className="mb-3">
-              <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">Input</h5>
-              <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[200px] overflow-auto">
-                {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
-              </pre>
-            </div>
-          ) : null}
-          {tool.result ? (
-            <div>
-              <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
-                {tool.isError ? 'Error' : 'Result'}
-              </h5>
-              <pre className={cn(
-                "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
-                tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
+      <AnimatePresence initial={false}>
+        {(detailVisible && expanded) || (hasRawContent && showRaw) ? (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
+            style={{ overflow: 'hidden' }}
+          >
+            {detailVisible && expanded && renderer.renderDetail?.(tool, streamingToolOutput)}
+            {hasRawContent && showRaw ? (
+              <div className={cn(
+                "px-3 py-3 border-l-2 ml-3",
+                status === 'error' ? "border-red-500/20" : "border-blue-500/20"
               )}>
-                {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+                {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
+                  <div className="mb-3">
+                    <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">Input</h5>
+                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[200px] overflow-auto">
+                      {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
+                    </pre>
+                  </div>
+                ) : null}
+                {tool.result ? (
+                  <div>
+                    <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
+                      {tool.isError ? 'Error' : 'Result'}
+                    </h5>
+                    <pre className={cn(
+                      "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
+                      tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
+                    )}>
+                      {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
+                    </pre>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1718,7 +1763,7 @@ export function CompletionBar({
               initial={{ height: 0 }}
               animate={{ height: 'auto' }}
               exit={{ height: 0 }}
-              transition={{ duration: 0.16 }}
+              transition={{ duration: 0.3, ease: 'easeInOut' }}
               style={{ overflow: 'hidden' }}
             >
               <div className="border-t border-border/20 max-h-[480px] overflow-y-auto bg-muted/5">
@@ -1822,32 +1867,43 @@ export function ToolActionsGroup({
       } else if (segment.kind === 'text') {
         flushLineGroup();
         blocks.push(
-          <div key={`text-${idx}`} className="my-1.5 px-2 text-[12px] text-muted-foreground/60 leading-relaxed break-words prose prose-sm dark:prose-invert max-w-none">
-            <Streamdown
-              plugins={thinkingPlugins}
-              components={{
-                a: ({ node, href, children, ...aProps }: any) => {
-                  return (
-                    <a
-                      href={href}
-                      {...aProps}
-                      onClick={(e) => {
-                        if (href && LOCAL_URL_REGEX.test(href)) {
-                          e.preventDefault();
-                          usePanelStore.getState().openBrowserTab(href, "本地预览");
-                        } else if (aProps.onClick) {
-                          aProps.onClick(e);
-                        }
-                      }}
-                    >
-                      {children}
-                    </a>
-                  );
-                }
-              }}
-            >
-              {segment.content}
-            </Streamdown>
+          <div key={`text-${idx}`} className="my-1.5 flex items-start gap-2 px-2 py-1">
+            <div className="mt-[3px] flex shrink-0 items-center justify-center">
+              <FileText size={14} className="text-muted-foreground/50" />
+            </div>
+            <div className="flex-1 text-[13px] text-foreground/80 leading-relaxed break-words prose prose-sm dark:prose-invert max-w-none">
+              <Streamdown
+                plugins={thinkingPlugins}
+                components={{
+                  a: ({ node, href, children, ...aProps }: any) => {
+                    return (
+                      <a
+                        href={href}
+                        {...aProps}
+                        onClick={(e) => {
+                          if (href && LOCAL_URL_REGEX.test(href)) {
+                            e.preventDefault();
+                            usePanelStore.getState().openBrowserTab(href, "本地预览");
+                          } else if (aProps.onClick) {
+                            aProps.onClick(e);
+                          }
+                        }}
+                      >
+                        {children}
+                      </a>
+                    );
+                  },
+                  h1: ({ children }: any) => <span className="font-bold text-[13px] block mt-2 mb-1">{children}</span>,
+                  h2: ({ children }: any) => <span className="font-bold text-[13px] block mt-2 mb-1">{children}</span>,
+                  h3: ({ children }: any) => <span className="font-bold text-[13px] block mt-1">{children}</span>,
+                  h4: ({ children }: any) => <span className="font-bold text-[13px] block mt-1">{children}</span>,
+                  h5: ({ children }: any) => <span className="font-bold text-[13px] block mt-1">{children}</span>,
+                  h6: ({ children }: any) => <span className="font-bold text-[13px] block mt-1">{children}</span>,
+                }}
+              >
+                {segment.content}
+              </Streamdown>
+            </div>
           </div>
         );
       } else if (segment.kind === 'context_group') {
@@ -1880,13 +1936,13 @@ export function ToolActionsGroup({
   let statusTitle = '';
   if (hasTools) {
     if (isStreaming) {
-      statusTitle = hasRunningTool ? '正在执行任务...' : '正在思考...';
+      statusTitle = hasRunningTool ? '正在执行任务...' : '思考...';
     } else {
       statusTitle = groupStatus === 'error' ? '执行遇到错误' : `${tools.length}个已完成 · 思考与执行完毕`;
     }
   } else {
     if (isStreaming) {
-      statusTitle = '正在思考...';
+      statusTitle = '思考...';
     } else {
       statusTitle = '思考完毕';
     }
@@ -1935,7 +1991,7 @@ export function ToolActionsGroup({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
             <div className="py-2">

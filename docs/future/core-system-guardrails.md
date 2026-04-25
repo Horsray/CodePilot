@@ -227,7 +227,7 @@ Bridge 额外约束：`thinking=disabled`，`effort=medium`，`generativeUI=fals
 
 | 协议 | 认证方式 | 代表服务商 |
 |------|---------|-----------|
-| `anthropic` | api_key / auth_token | Anthropic 官方、智谱、Kimi、MiniMax、火山、百川、小米 |
+| `anthropic` | api_key / auth_token | Anthropic 官方、智谱、Kimi、MiniMax、火山、百炼、小米 |
 | `openai-compatible` | api_key | LiteLLM |
 | `openrouter` | api_key | OpenRouter |
 | `bedrock` | env_only (AWS credentials) | AWS Bedrock |
