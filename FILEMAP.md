@@ -299,6 +299,7 @@ src/components/layout/AppShell.tsx          # 根布局壳
 | 路由 | 方法 | 功能 |
 |------|------|------|
 | `/api/chat` | POST | 发送消息，SSE 流式响应 |
+| `/api/chat/warmup` | POST | 会话预热，提前启动 SDK 子进程 |
 | `/api/chat/messages` | POST/PUT | 创建/编辑消息 |
 | `/api/chat/sessions` | GET/POST | 会话列表/新建 |
 | `/api/chat/sessions/[id]` | GET/PATCH/DELETE | 单会话 CRUD |
@@ -410,6 +411,7 @@ src/components/layout/AppShell.tsx          # 根布局壳
 | 文件 | 职责 | 关键导出 |
 |------|------|---------|
 | `src/lib/claude-client.ts` | AI 客户端中心，流式响应 | `streamClaude()`, `streamClaudeSdk()`, `testProviderConnection()` |
+| `src/lib/persistent-claude-session.ts` | SDK 持久会话池，预热与复用 | `warmupPersistentClaudeSession()`, `getPersistentClaudeTurn()`, `buildPersistentClaudeSignature()` |
 | `src/lib/agent-loop.ts` | Native AI SDK Agent 循环 | `runAgentLoop()` |
 | `src/lib/agent-system-prompt.ts` | 系统提示词组装 | `buildSystemPrompt()` |
 | `src/lib/agent-routing.ts` | Agent 模型路由 | `resolveAgentModel()` |

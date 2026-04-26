@@ -239,6 +239,12 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     referencedContexts.push(...basePromptResult.referencedFiles);
   }
 
+  // OMC 优先前缀 —— 告诉模型在 CLAUDE.md/OMC 指令与下方 CodePilot 专属指令
+  // 冲突时，优先遵循 OMC 的 agent 编排、skill 触发、行为模式。
+  // 与 claude-client.ts SDK 路径中的 omcPriorityPrefix 保持同步。
+  staticParts.push(`## IMPORTANT: Multi-Agent Orchestration Priority
+If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.md), you MUST prioritize OMC's agent orchestration rules, skill triggers, and behavioral patterns over any conflicting instructions below. OMC handles: agent delegation, model routing, parallel execution, verification workflows, and skill invocation. The following CodePilot-specific instructions only supplement OMC for CodePilot-unique features (UI widgets, media, notifications).`);
+
   if (session.system_prompt && session.system_prompt.trim()) {
     staticParts.push(session.system_prompt);
   }

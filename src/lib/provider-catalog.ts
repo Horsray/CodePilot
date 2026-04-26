@@ -92,6 +92,7 @@ const MODEL_CONTEXT = {
   MINIMAX_M2_7: 204_800,
   MINIMAX_M2_5: 196_608,
   MIMO_V2_5_PRO: 1_048_576,
+  DEEPSEEK_V4: 1_000_000,
 } as const;
 
 // ── Vendor preset definition ────────────────────────────────────
@@ -558,9 +559,9 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_EFFORT_LEVEL: 'max',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'default' },
-      { modelId: 'opus', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'opus' },
-      { modelId: 'haiku', upstreamModelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', role: 'haiku' },
+      { modelId: 'sonnet', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4 } },
+      { modelId: 'opus', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'opus', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4 } },
+      { modelId: 'haiku', upstreamModelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', role: 'haiku', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4 } },
     ],
     defaultRoleModels: {
       default: 'deepseek-v4-pro',

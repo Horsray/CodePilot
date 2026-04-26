@@ -66,6 +66,26 @@ describe('persistent-claude-session', () => {
 
     const cwdChanged: Options = { ...options, cwd: '/tmp/project-b' };
     const modelChanged: Options = { ...options, model: 'opus' };
+
+    const original = buildPersistentClaudeSignature({ providerKey: 'provider-a', options });
+    assert.notEqual(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: cwdChanged }));
+    assert.notEqual(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: modelChanged }));
+    assert.notEqual(
+      original,
+      buildPersistentClaudeSignature({ providerKey: 'provider-b', options }),
+    );
+  });
+
+  it('does not change signatures when mcpServers or systemPrompt change (by design — these vary per-turn)', () => {
+    const options: Options = {
+      cwd: '/tmp/project-a',
+      model: 'sonnet',
+      settingSources: [],
+      mcpServers: {
+        fetch: { type: 'stdio', command: 'uvx', args: ['mcp-server-fetch'] },
+      },
+    };
+
     const mcpChanged: Options = {
       ...options,
       mcpServers: {
@@ -74,13 +94,7 @@ describe('persistent-claude-session', () => {
     };
 
     const original = buildPersistentClaudeSignature({ providerKey: 'provider-a', options });
-    assert.notEqual(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: cwdChanged }));
-    assert.notEqual(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: modelChanged }));
-    assert.notEqual(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: mcpChanged }));
-    assert.notEqual(
-      original,
-      buildPersistentClaudeSignature({ providerKey: 'provider-b', options }),
-    );
+    assert.equal(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: mcpChanged }));
   });
 
   it('does not include credential values in signatures', () => {

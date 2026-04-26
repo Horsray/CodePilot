@@ -19,6 +19,7 @@ import {
   Code,
   Eye,
   FileText,
+  ChatCircle,
   FilePlus,
   CaretDown,
   Play,
@@ -1157,12 +1158,12 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
 // ---------------------------------------------------------------------------
 
 function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
-  // Always expanded during streaming, collapsed when done
+  // 默认折叠运行，用户手动点击后才展开
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   const [, setHovered] = useState(false);
   const { stopScroll } = useStickToBottomContext();
 
-  const isExpanded = userExpanded !== null ? userExpanded : Boolean(isStreaming);
+  const isExpanded = userExpanded !== null ? userExpanded : false;
 
   // ---------------------------------------------------------------------------
   // 功能名称：思考卡片自动滚动控制
@@ -2050,11 +2051,11 @@ export function ToolActionsGroup({
       } else if (segment.kind === 'text') {
         flushLineGroup();
         blocks.push(
-          <div key={`text-${idx}`} className="my-1 flex items-start gap-2 px-2 py-1">
-            <div className="mt-[3px] flex shrink-0 items-center justify-center">
-              <FileText size={14} className="text-muted-foreground/50" />
+          <div key={`text-${idx}`} className="my-1 flex items-start gap-2.5 px-2 py-1.5">
+            <div className="flex shrink-0 items-center justify-center mt-[4px]">
+              <ChatCircle size={15} className="text-emerald-500/80" />
             </div>
-            <div className="flex-1 text-[13px] text-foreground/80 leading-relaxed break-words prose prose-sm dark:prose-invert max-w-none">
+            <div className="flex-1 text-[13px] text-foreground/80 leading-relaxed break-words prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
               <Streamdown
                 plugins={thinkingPlugins}
                 components={{

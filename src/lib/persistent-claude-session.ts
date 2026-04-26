@@ -1,7 +1,15 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, Query, SDKMessage, SDKUserMessage, SDKSystemMessage } from '@anthropic-ai/claude-agent-sdk';
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+// 中文注释：功能名称「会话预热超时」，用法是预热阶段等待 system/init 的最大时间，
+// 超时后放弃预热，正常进入对话界面，避免用户无限等待
+const WARMUP_TIMEOUT_MS = 15_000;
+
+// 中文注释：功能名称「预热后的空闲超时」，用法是预热完成后 session 保持存活的时间，
+// 与 IDLE_TIMEOUT_MS 相同为 30 分钟，确保相近对话不需要重新加载
+const WARMUP_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const GLOBAL_KEY = '__persistentClaudeSessions__' as const;
 
 class AsyncUserMessageQueue implements AsyncIterable<SDKUserMessage> {
@@ -65,12 +73,34 @@ interface PersistentClaudeEntry {
   idleTimer: ReturnType<typeof setTimeout> | null;
   lastUsedAt: number;
   shadowHandle?: { cleanup: () => void };
+  // 中文注释：预热数据缓存，warmup 阶段读取 system/init 后存入，后续 getPersistentClaudeTurn 复用
+  warmedUp: boolean;
+  initData?: {
+    model: string;
+    session_id: string;
+    tools?: unknown;
+    slash_commands?: unknown;
+    skills?: unknown;
+    plugins?: Array<{ name: string; path: string }>;
+    mcp_servers?: unknown;
+  };
 }
 
 export interface PersistentClaudeTurn {
   conversation: AsyncIterable<SDKMessage>;
   query: Query;
   reused: boolean;
+}
+
+// 中文注释：导出预热返回的 init 数据类型，供 warmup API 路由使用
+export interface PersistentClaudeInitData {
+  model: string;
+  session_id: string;
+  tools?: unknown;
+  slash_commands?: unknown;
+  skills?: unknown;
+  plugins?: Array<{ name: string; path: string }>;
+  mcp_servers?: unknown;
 }
 
 function getStore(): Map<string, PersistentClaudeEntry> {
@@ -111,17 +141,18 @@ export function buildPersistentClaudeSignature(params: {
   options: Options;
 }): string {
   const env = params.options.env || {};
+  // 中文注释：签名中排除 systemPrompt（每次消息都不同，包含用户消息和历史）
+  // 和 mcpServers（关键字门控的 MCP 会因消息内容变化），避免后续消息签名不匹配
+  // 导致持久化 session 被反复销毁重建，造成用户看到的"重新连接"延迟。
   return stableStringify({
     providerKey: params.providerKey,
     cwd: params.options.cwd,
     model: params.options.model,
-    systemPrompt: params.options.systemPrompt,
     settingSources: params.options.settingSources,
     permissionMode: params.options.permissionMode,
     allowedTools: params.options.allowedTools,
     disallowedTools: params.options.disallowedTools,
     tools: params.options.tools,
-    mcpServers: mcpSignature(params.options.mcpServers),
     outputFormat: params.options.outputFormat,
     extraArgs: params.options.extraArgs,
     agents: params.options.agents,
@@ -192,6 +223,7 @@ function createEntry(
     idleTimer: null,
     lastUsedAt: Date.now(),
     shadowHandle,
+    warmedUp: false,
   };
 }
 
@@ -266,6 +298,110 @@ export function getPersistentClaudeTurn(params: {
   })();
 
   return { conversation, query: entry.query, reused };
+}
+
+// 中文注释：功能名称「会话预热」，用法是在用户进入会话时提前启动 SDK 子进程，
+// 读取 system/init 事件后将 init 数据缓存到 entry 上。
+// 后续 getPersistentClaudeTurn 复用时，iterator 已越过 init 事件，直接处理用户消息。
+// 预热超时或签名不匹配时返回 null，前端正常进入对话界面，不阻塞用户操作。
+export async function warmupPersistentClaudeSession(params: {
+  codepilotSessionId: string;
+  signature: string;
+  options: Options;
+  shadowHandle?: { cleanup: () => void };
+}): Promise<PersistentClaudeInitData | null> {
+  const store = getStore();
+  const existing = store.get(params.codepilotSessionId);
+
+  // 中文注释：已预热且签名匹配，直接返回缓存的 init 数据
+  if (existing && existing.warmedUp && existing.signature === params.signature && existing.initData) {
+    return existing.initData;
+  }
+
+  // 中文注释：签名不匹配，销毁旧 session 重新预热
+  if (existing && existing.signature !== params.signature) {
+    closeEntry(existing);
+    store.delete(params.codepilotSessionId);
+  }
+
+  if (!existing) {
+    const entry = createEntry(
+      params.codepilotSessionId,
+      params.signature,
+      params.options,
+      params.shadowHandle,
+    );
+    store.set(params.codepilotSessionId, entry);
+
+    try {
+      // 中文注释：带超时的 system/init 等待，15s 内未收到则放弃预热
+      const initPromise = entry.iterator.next();
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Warmup timeout')), WARMUP_TIMEOUT_MS),
+      );
+
+      const next = await Promise.race([initPromise, timeoutPromise]);
+
+      if (next.done) {
+        closePersistentClaudeSession(params.codepilotSessionId);
+        return null;
+      }
+
+      const msg = next.value as SDKSystemMessage;
+      if (msg.type === 'system' && 'subtype' in msg && msg.subtype === 'init') {
+        const initData: PersistentClaudeInitData = {
+          model: (msg as Record<string, unknown>).model as string || '',
+          session_id: (msg as Record<string, unknown>).session_id as string || '',
+          tools: (msg as Record<string, unknown>).tools,
+          slash_commands: (msg as Record<string, unknown>).slash_commands,
+          skills: (msg as Record<string, unknown>).skills,
+          plugins: (msg as Record<string, unknown>).plugins as PersistentClaudeInitData['plugins'],
+          mcp_servers: (msg as Record<string, unknown>).mcp_servers,
+        };
+        entry.warmedUp = true;
+        entry.initData = initData;
+        entry.lastUsedAt = Date.now();
+
+        // 中文注释：预热完成后启动空闲超时，30 分钟内无消息则关闭 session
+        scheduleWarmupIdleClose(params.codepilotSessionId, entry);
+
+        return initData;
+      }
+
+      console.warn('[persistent-claude-session] Warmup: first message was not system/init, got:', msg.type);
+      closePersistentClaudeSession(params.codepilotSessionId);
+      return null;
+    } catch (error) {
+      console.warn('[persistent-claude-session] Warmup failed:', error);
+      closePersistentClaudeSession(params.codepilotSessionId);
+      return null;
+    }
+  }
+
+  return null;
+}
+
+// 中文注释：预热后空闲超时调度，与 IDLE_TIMEOUT_MS 相同为 30 分钟
+function scheduleWarmupIdleClose(sessionId: string, entry: PersistentClaudeEntry): void {
+  clearIdleTimer(entry);
+  entry.idleTimer = setTimeout(() => {
+    const current = getStore().get(sessionId);
+    if (current === entry && Date.now() - entry.lastUsedAt >= WARMUP_IDLE_TIMEOUT_MS) {
+      closePersistentClaudeSession(sessionId);
+    }
+  }, WARMUP_IDLE_TIMEOUT_MS);
+}
+
+// 中文注释：检查指定 session 是否已完成预热
+export function isSessionWarmedUp(sessionId: string): boolean {
+  const entry = getStore().get(sessionId);
+  return !!(entry?.warmedUp);
+}
+
+// 中文注释：获取预热缓存的 init 数据
+export function getWarmedUpInitData(sessionId: string): PersistentClaudeInitData | null {
+  const entry = getStore().get(sessionId);
+  return entry?.initData ?? null;
 }
 
 export function closePersistentClaudeSession(sessionId: string): void {

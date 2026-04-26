@@ -27,6 +27,9 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   const [sessionMode, setSessionMode] = useState<'code' | 'plan'>('code');
   const [sessionHasSummary, setSessionHasSummary] = useState(false);
   const [sessionSummaryBoundaryRowid, setSessionSummaryBoundaryRowid] = useState(0);
+  // 中文注释：会话预热状态，'idle' | 'warming' | 'ready' | 'failed'
+  const [warmupState, setWarmupState] = useState<'idle' | 'warming' | 'ready' | 'failed'>('idle');
+  const [warmupModel, setWarmupModel] = useState<string>('');
   const { setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
   const targetFilePath = searchParams.get('file') || undefined;
   const { t } = useTranslation();
@@ -118,6 +121,45 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     return () => { cancelled = true; };
   }, [id]);
 
+  // 中文注释：会话预热 — 在 session 信息和消息加载完成后，后台启动 SDK 子进程
+  // 预热成功后，用户发送消息时 persistent session 已存在，实现秒回体验
+  useEffect(() => {
+    if (!sessionInfoLoaded || loading) return;
+
+    let cancelled = false;
+    setWarmupState('warming');
+
+    async function warmup() {
+      try {
+        const res = await fetch('/api/chat/warmup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: id }),
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          if (data.warmed_up && data.model) {
+            setWarmupModel(data.model);
+          }
+          setWarmupState('ready');
+        } else {
+          // 预热失败不影响正常对话，后续发送消息时会自动创建 persistent session
+          console.warn('[warmup] Session warmup failed, will init on first message');
+          setWarmupState('failed');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[warmup] Session warmup error:', err);
+          setWarmupState('failed');
+        }
+      }
+    }
+
+    warmup();
+    return () => { cancelled = true; };
+  }, [id, sessionInfoLoaded, loading]);
+
   // Auto-open file tree when jumping from a file search result
   useEffect(() => {
     if (targetFilePath) {
@@ -165,10 +207,17 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     })();
   }, [id, targetFilePath, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen]);
 
-  if (loading || !sessionInfoLoaded) {
+  if (loading || !sessionInfoLoaded || warmupState === 'warming') {
     return (
       <div className="flex h-full items-center justify-center">
-        <SpinnerGap size={32} className="animate-spin text-muted-foreground" />
+        <div className="flex flex-col items-center gap-3">
+          <SpinnerGap size={32} className="animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
+            {!sessionInfoLoaded || loading
+              ? t('chat.loadingMessages')
+              : t('chat.warmingUp')}
+          </p>
+        </div>
       </div>
     );
   }

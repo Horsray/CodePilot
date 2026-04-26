@@ -100,6 +100,8 @@ const zh: Record<TranslationKey, string> = {
   // ── Chat view / session page ────────────────────────────────
   'chat.newConversation': '新对话',
   'chat.referencedContexts': '参考了 {{count}} 个上下文',
+  'chat.loadingMessages': '加载消息中...',
+  'chat.warmingUp': '正在初始化会话...',
   'chat.deleteConfirm': '确定要删除这条消息吗？',
   'chat.searchPlaceholder': '搜索历史对话...',
   'skillNudge.message': '本次工作流使用了 {step} 个步骤和 {toolCount} 种工具，可以保存为 Skill 以便一键复用。',

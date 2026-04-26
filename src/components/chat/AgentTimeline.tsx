@@ -371,9 +371,11 @@ function ActivityCard({
   onForceStop?: () => void;
 }) {
   const primaryTool = getPrimaryTool(step);
+  const activity = getActivityInfo(step);
   const isRunning = step.status === 'running' || step.status === 'retrying';
   const isCommandStep = Boolean(primaryTool && isCommandToolName(primaryTool.name));
   const isSearchTool = Boolean(primaryTool && ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search', 'searchcodebase', 'read', 'read_file', 'mcp__filesystem__read_file', 'mcp__filesystem__read_multiple_files', 'mcp__filesystem__list_directory', 'mcp__filesystem__directory_tree', 'view_file'].some(n => primaryTool.name.toLowerCase().includes(n)));
+  const isThinkingStep = activity.type === 'thinking';
   
   // ---------------------------------------------------------------------------
   // Initialize as open when running. When finished, only remain open if explicitly toggled by user.
@@ -386,11 +388,11 @@ function ActivityCard({
   // We don't want it permanently open, that looks cluttered.
   // ---------------------------------------------------------------------------
   const [userToggled, setUserToggled] = useState<boolean | null>(null);
-  const [internalExpanded, setInternalExpanded] = useState(isSearchTool ? false : isRunning);
+  const [internalExpanded, setInternalExpanded] = useState((isSearchTool || isThinkingStep) ? false : isRunning);
   
   useEffect(() => {
     if (userToggled !== null) return;
-    if (isSearchTool) {
+    if (isSearchTool || isThinkingStep) {
       setInternalExpanded(false);
     } else if (isRunning) {
       setInternalExpanded(true);
@@ -400,7 +402,7 @@ function ActivityCard({
       }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [isRunning, isSearchTool, userToggled]);
+  }, [isRunning, isSearchTool, isThinkingStep, userToggled]);
 
   const open = userToggled ?? internalExpanded;
 
@@ -425,7 +427,6 @@ function ActivityCard({
     setAutoScroll(isAtBottom);
   };
 
-  const activity = getActivityInfo(step);
   const reasoningText = cleanReasoningText(step.reasoning);
   const showReasoningDetail = Boolean(
     reasoningText

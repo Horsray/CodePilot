@@ -689,6 +689,13 @@ export default function NewChatPage() {
         sessionId = session.id;
         setCreatedSessionId(sessionId);
 
+        // 中文注释：新会话预热 — 后台启动 SDK 子进程，不阻塞消息发送
+        fetch('/api/chat/warmup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId }),
+        }).catch(() => {});
+
         // Notify ChatListPanel to refresh immediately
         window.dispatchEvent(new CustomEvent('session-created'));
 

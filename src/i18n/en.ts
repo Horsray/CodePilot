@@ -103,6 +103,8 @@ const en = {
   // ── Chat view / session page ────────────────────────────────
   'chat.newConversation': 'New Conversation',
   'chat.referencedContexts': 'Referenced {{count}} contexts',
+  'chat.loadingMessages': 'Loading messages...',
+  'chat.warmingUp': 'Initializing session...',
   'chat.deleteConfirm': 'Are you sure you want to delete this message?',
   'chat.searchPlaceholder': 'Search history...',
   'skillNudge.message': 'This workflow involved {step} steps across {toolCount} distinct tools. Save as a Skill for one-click replay.',

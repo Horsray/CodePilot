@@ -7,7 +7,6 @@
 
 import type { AgentRuntime, RuntimeStreamOptions } from './types';
 import { runAgentLoop } from '../agent-loop';
-import { buildSystemPrompt } from '../agent-system-prompt';
 import { resolveProvider } from '../provider-resolver';
 import { syncMcpConnections, disposeAll as disposeMcp } from '../mcp-connection-manager';
 import { isOAuthUsable } from '../openai-oauth-manager';
@@ -24,14 +23,9 @@ export const nativeRuntime: AgentRuntime = {
   stream(options: RuntimeStreamOptions): ReadableStream<string> {
     const cwd = options.workingDirectory || process.cwd();
 
-    const systemPromptResult = buildSystemPrompt({
-      userPrompt: options.systemPrompt,
-      workingDirectory: cwd,
-      modelId: options.model,
-    });
-    const systemPrompt = typeof systemPromptResult === 'string'
-      ? systemPromptResult
-      : (systemPromptResult as { prompt?: string }).prompt;
+    // 直接使用 assembleContext() 已完整组装的 system prompt，
+    // 不再二次调用 buildSystemPrompt() 避免 CLAUDE.md/OMC 指令被双重包装稀释
+    const systemPrompt = options.systemPrompt || '';
 
     // Create or reuse abort controller
     const abortController = options.abortController || new AbortController();
