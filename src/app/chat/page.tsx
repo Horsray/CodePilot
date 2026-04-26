@@ -689,7 +689,8 @@ export default function NewChatPage() {
         sessionId = session.id;
         setCreatedSessionId(sessionId);
 
-        // 中文注释：新会话预热 — 后台启动 SDK 子进程，不阻塞消息发送
+        // 中文注释：新会话预热 — 后台启动 SDK 子进程，不阻塞消息发送。
+        // 预热失败不影响正常流程，用户发消息时会走 cold start 路径。
         fetch('/api/chat/warmup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

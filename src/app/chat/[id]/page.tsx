@@ -122,8 +122,8 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     return () => { cancelled = true; };
   }, [id]);
 
-  // 中文注释：会话预热 — 在 session 信息和消息加载完成后，后台启动 SDK 子进程
-  // 预热成功后，用户发送消息时 persistent session 已存在，实现秒回体验。
+  // 中文注释：会话预热 — 在 session 信息和消息加载完成后，后台启动 SDK 子进程。
+  // 预热不阻塞 UI 渲染，用户可以立即看到对话界面并发送消息。
   // 如果当前已有活跃 stream（用户切换会话后又切回来），跳过预热，
   // 避免对已运行的 persistent session 造成干扰。
   useEffect(() => {
@@ -136,7 +136,6 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     }
 
     let cancelled = false;
-    setWarmupState('warming');
 
     async function warmup() {
       try {
@@ -216,15 +215,14 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     })();
   }, [id, targetFilePath, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen]);
 
-  if (loading || !sessionInfoLoaded || warmupState === 'warming') {
+  // 中文注释：仅在加载会话信息和消息时显示 loading，warmup 不阻塞 UI
+  if (loading || !sessionInfoLoaded) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <SpinnerGap size={32} className="animate-spin text-muted-foreground" />
           <p className="text-sm text-muted-foreground">
-            {!sessionInfoLoaded || loading
-              ? t('chat.loadingMessages')
-              : t('chat.warmingUp')}
+            {t('chat.loadingMessages')}
           </p>
         </div>
       </div>

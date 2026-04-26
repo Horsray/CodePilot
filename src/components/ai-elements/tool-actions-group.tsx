@@ -2059,8 +2059,9 @@ export function ToolActionsGroup({
         );
       } else if (segment.kind === 'thinking') {
         flushLineGroup();
+        const isSegmentStreaming = isStreaming && idx === segments.length - 1;
         blocks.push(
-          <ThinkingRow key={`think-${idx}`} content={segment.content} isStreaming={isStreaming} />
+          <ThinkingRow key={`think-${idx}`} content={segment.content} isStreaming={isSegmentStreaming} />
         );
       } else if (segment.kind === 'text') {
         flushLineGroup();
