@@ -141,27 +141,24 @@ export function buildPersistentClaudeSignature(params: {
   options: Options;
 }): string {
   const env = params.options.env || {};
-  // 中文注释：签名中排除 systemPrompt（每次消息都不同，包含用户消息和历史）
-  // 和 mcpServers（关键字门控的 MCP 会因消息内容变化），避免后续消息签名不匹配
-  // 导致持久化 session 被反复销毁重建，造成用户看到的"重新连接"延迟。
+  // 中文注释：签名仅包含 SDK session 身份字段（provider、cwd、model、env）。
+  // 排除的字段及其原因：
+  // - systemPrompt：每轮消息不同（包含用户消息和历史）
+  // - mcpServers：关键字门控的 MCP 会因消息内容变化
+  // - allowedTools / tools / disallowedTools：权限配置，不影响 session 身份
+  // - agents / agent：per-message 配置，warmup 不设置
+  // - thinking / effort / betas：per-message 配置，warmup 不设置
+  // - enableFileCheckpointing / outputFormat：per-message 配置
+  // 若这些字段纳入签名，warmup 和首轮消息签名必不匹配，预热 session 被销毁，
+  // 导致首轮消息 7-8s 冷启动延迟。
   return stableStringify({
     providerKey: params.providerKey,
     cwd: params.options.cwd,
     model: params.options.model,
     settingSources: params.options.settingSources,
     permissionMode: params.options.permissionMode,
-    // allowedTools / tools 从签名中排除：它们属于权限/可用工具配置，
-    // 不影响 SDK 子进程身份。warmup 和 streamClaudeSdk 中这两组值不同
-    // 会导致签名不匹配，预热 session 无法被复用，造成首轮消息 7-8s 延迟。
-    disallowedTools: params.options.disallowedTools,
-    outputFormat: params.options.outputFormat,
     extraArgs: params.options.extraArgs,
-    agents: params.options.agents,
-    agent: params.options.agent,
-    thinking: params.options.thinking,
-    effort: params.options.effort,
-    betas: params.options.betas,
-    enableFileCheckpointing: params.options.enableFileCheckpointing,
+    pathToClaudeCodeExecutable: params.options.pathToClaudeCodeExecutable,
     env: {
       ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
       ANTHROPIC_MODEL: env.ANTHROPIC_MODEL,
