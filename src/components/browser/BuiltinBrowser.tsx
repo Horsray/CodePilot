@@ -173,11 +173,14 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
 
     const syncNavState = (nextUrl: string, title?: string) => {
       setLoading(false);
-      setUrl(nextUrl);
-      setInputUrl(nextUrl);
+      // Only sync if URL has actually changed to avoid loop
+      if (nextUrl && nextUrl !== url && nextUrl !== url + '/' && url !== nextUrl + '/') {
+        setUrl(nextUrl);
+        setInputUrl(nextUrl);
+        syncHistoryState(nextUrl);
+      }
       setCanGoBack(webview.canGoBack());
       setCanGoForward(webview.canGoForward());
-      syncHistoryState(nextUrl);
       syncMeta(nextUrl, title);
     };
 
@@ -190,7 +193,9 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
       setCanGoForward(webview.canGoForward());
     };
     const handleDidNavigate = (event: Event) => {
-      const nextUrl = (event as Event & { url?: string }).url || webview.src;
+      const nextUrl = (event as Event & { url?: string }).url;
+      // Some navigations are internal or about:blank, ignore them
+      if (!nextUrl || nextUrl === 'about:blank') return;
       syncNavState(nextUrl);
     };
     const handleTitleUpdated = (event: Event) => {
@@ -228,12 +233,6 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
     };
   }, [isElectron, syncHistoryState, syncMeta, url]);
 
-  useEffect(() => {
-    if (!isElectron || !webviewRef.current || !url) return;
-    if (webviewRef.current.src !== url) {
-      webviewRef.current.src = url;
-    }
-  }, [isElectron, url]);
 
   useEffect(() => {
     if (initialNormalizedUrl) {
@@ -244,19 +243,53 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
   useEffect(() => {
     if (initialNormalizedUrl === lastInitialUrlRef.current) return;
     lastInitialUrlRef.current = initialNormalizedUrl;
-    setUrl(initialNormalizedUrl);
-    setInputUrl(initialNormalizedUrl);
-    setLoading(Boolean(initialNormalizedUrl));
+    
+    // CRITICAL: We MUST not setUrl or setInputUrl here if the url is exactly the same,
+    // otherwise the iframe will unmount and remount endlessly, causing the flickering issue.
+    setUrl((prev) => {
+      if (prev === initialNormalizedUrl || prev + '/' === initialNormalizedUrl || initialNormalizedUrl + '/' === prev) {
+        return prev;
+      }
+      return initialNormalizedUrl;
+    });
+    setInputUrl((prev) => {
+      if (prev === initialNormalizedUrl || prev + '/' === initialNormalizedUrl || initialNormalizedUrl + '/' === prev) {
+        return prev;
+      }
+      return initialNormalizedUrl;
+    });
+    
     if (initialNormalizedUrl) {
+      setLoading(true);
       syncHistoryState(initialNormalizedUrl, "replace");
       syncMeta(initialNormalizedUrl);
     } else {
+      setLoading(false);
       historyRef.current = [];
       historyIndexRef.current = -1;
       setCanGoBack(false);
       setCanGoForward(false);
     }
   }, [initialNormalizedUrl, syncHistoryState, syncMeta]);
+
+  // Keep webview.src in sync with our `url` state.
+  // Using a separate effect ensures we don't recreate the element, just update the src prop.
+  useEffect(() => {
+    if (!isElectron && iframeRef.current && url) {
+      const currentSrc = iframeRef.current.src;
+      if (currentSrc !== url && currentSrc !== url + '/' && url !== currentSrc + '/') {
+        iframeRef.current.src = url;
+      }
+    } else if (isElectron && webviewRef.current && url) {
+      // In Electron webview, we only update src if it's genuinely different,
+      // and we avoid setting it if it's currently loading the same URL or already at the same URL
+      const currentSrc = webviewRef.current.src;
+      // Some webviews might return empty string or about:blank initially
+      if (currentSrc !== url && currentSrc !== url + '/' && url !== currentSrc + '/') {
+        webviewRef.current.src = url;
+      }
+    }
+  }, [isElectron, url]);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -362,7 +395,6 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
             ) : (
               <iframe
                 ref={iframeRef}
-                src={url}
                 className="w-full h-full border-0"
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                 onLoad={handleIframeLoad}

@@ -18,6 +18,9 @@ const MAX_HEIGHT = 600;
 // 确保用户不会错过 AI 执行的命令和输出。
 const mirrorBuffer: Array<{ action: string; command?: string; output?: string; exitCode?: number }> = [];
 let mirrorBufferActive = true;
+// 中文注释：功能名称「终端历史回放缓存」，用法是缓存用户点击"在终端查看"时
+// 传递的命令和结果数据，等终端面板 ready 后写入 xterm.js
+let pendingHistory: { command: string; result: string; isError: boolean } | null = null;
 
 // 中文注释：功能名称「全局镜像事件监听」，用法是始终监听 terminal:mirror 事件，
 // 当终端面板未打开时将事件缓存到 mirrorBuffer 中。
@@ -26,6 +29,7 @@ if (typeof window !== 'undefined') {
     const customEvent = e as CustomEvent;
     const detail = customEvent.detail;
     if (!detail) return;
+    console.log('[TerminalDrawer] terminal:mirror received, bufferActive:', mirrorBufferActive, 'detail:', detail);
     if (mirrorBufferActive) {
       mirrorBuffer.push(detail);
       // 限制缓存大小，避免内存泄漏
@@ -33,6 +37,16 @@ if (typeof window !== 'undefined') {
         mirrorBuffer.splice(0, mirrorBuffer.length - 500);
       }
     }
+  });
+
+  // 中文注释：功能名称「终端历史回放监听」，用法是监听用户点击"在终端查看"事件，
+  // 缓存命令和结果数据，等终端面板 ready 后写入 xterm.js
+  window.addEventListener('terminal:show-history', (e: Event) => {
+    const customEvent = e as CustomEvent;
+    const detail = customEvent.detail as { command: string; result: string; isError: boolean } | undefined;
+    if (!detail) return;
+    console.log('[TerminalDrawer] terminal:show-history received:', detail.command?.slice(0, 100));
+    pendingHistory = detail;
   });
 }
 
@@ -138,6 +152,24 @@ export function TerminalDrawer() {
         xtermRef.current.write('\x1b[90m── 回放结束 ──\x1b[0m\r\n\r\n');
         mirrorBuffer.length = 0;
       }
+
+      // 中文注释：功能名称「历史命令回放」，用法是回放用户点击"在终端查看"时
+      // 传递的命令和结果，确保终端面板打开后能看到该条命令的完整执行记录
+      if (pendingHistory && xtermRef.current) {
+        const hist = pendingHistory;
+        pendingHistory = null;
+        xtermRef.current.write('\r\n\x1b[90m── 历史命令 ──\x1b[0m\r\n');
+        xtermRef.current.write(`\x1b[33m❯ ${hist.command}\x1b[0m\r\n`);
+        if (hist.result) {
+          xtermRef.current.write(hist.result + '\r\n');
+        }
+        if (hist.isError) {
+          xtermRef.current.write('\x1b[31m[执行失败]\x1b[0m\r\n');
+        } else {
+          xtermRef.current.write('\x1b[32m[执行成功]\x1b[0m\r\n');
+        }
+        xtermRef.current.write('\x1b[90m── 结束 ──\x1b[0m\r\n\r\n');
+      }
     },
     [terminal]
   );
@@ -172,6 +204,35 @@ export function TerminalDrawer() {
 
     window.addEventListener('terminal:mirror', handleMirror);
     return () => window.removeEventListener('terminal:mirror', handleMirror);
+  }, [ready]);
+
+  // 中文注释：功能名称「终端历史回放监听（组件内）」，用法是当终端面板已打开且 ready 时，
+  // 监听用户点击"在终端查看"事件，直接写入 xterm.js 显示命令和结果
+  useEffect(() => {
+    if (!ready) return;
+
+    const handleShowHistory = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const detail = customEvent.detail as { command: string; result: string; isError: boolean } | undefined;
+      if (!detail) return;
+      const term = xtermRef.current;
+      if (!term) return;
+
+      term.write('\r\n\x1b[90m── 历史命令 ──\x1b[0m\r\n');
+      term.write(`\x1b[33m❯ ${detail.command}\x1b[0m\r\n`);
+      if (detail.result) {
+        term.write(detail.result + '\r\n');
+      }
+      if (detail.isError) {
+        term.write('\x1b[31m[执行失败]\x1b[0m\r\n');
+      } else {
+        term.write('\x1b[32m[执行成功]\x1b[0m\r\n');
+      }
+      term.write('\x1b[90m── 结束 ──\x1b[0m\r\n\r\n');
+    };
+
+    window.addEventListener('terminal:show-history', handleShowHistory);
+    return () => window.removeEventListener('terminal:show-history', handleShowHistory);
   }, [ready]);
 
   // 中文注释：功能名称「终端面板关闭清理」，用法是面板关闭时销毁 PTY 会话和 xterm 实例，

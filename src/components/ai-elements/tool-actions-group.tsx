@@ -1523,7 +1523,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   // Unconditional hook calls at the top level
   const [expanded, setExpanded] = useState(k === 'team' ? false : status === 'running');
   const browserDispatchedRef = React.useRef(false);
-  const { setTerminalOpen } = usePanel();
+  const { setTerminalOpen, setBottomPanelOpen, setBottomPanelTab } = usePanel();
 
   // 浏览器面板打开：当工具成功完成时触发，不依赖 prevStatus 避免跳过 running 状态导致失效
   React.useEffect(() => {
@@ -1601,7 +1601,19 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
+                setBottomPanelTab('terminal');
+                setBottomPanelOpen(true);
                 setTerminalOpen(true);
+                // 中文注释：功能名称「终端历史回放」，用法是点击在终端查看时，
+                // 把该工具卡的命令和结果通过事件传递给终端面板显示
+                window.dispatchEvent(new CustomEvent('terminal:show-history', {
+                  detail: {
+                    command: cmd,
+                    result: tool.result || '',
+                    isError: tool.isError || false,
+                  },
+                }));
+                setTimeout(() => window.dispatchEvent(new CustomEvent('action:focus-terminal')), 50);
               }}
               className="flex items-center gap-1 hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded px-1"
             >

@@ -414,6 +414,7 @@ function handleSSEEvent(
     case 'terminal_mirror': {
       try {
         const mirrorData = JSON.parse(event.data);
+        console.log('[useSSEStream] terminal_mirror event received:', mirrorData);
         window.dispatchEvent(new CustomEvent('terminal:mirror', { detail: mirrorData }));
       } catch {
         // skip malformed terminal_mirror data

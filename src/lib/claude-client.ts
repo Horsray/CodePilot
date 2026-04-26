@@ -1602,6 +1602,9 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         // 中文注释：功能名称「SDK子Agent追踪」，用法是追踪SDK runtime中Agent工具的调用，
         // 发射合成的subagent_start/complete SSE事件，使子Agent卡片在会话切换后仍能恢复渲染
         const pendingAgentToolUse = new Map<string, { id: string; name: string; displayName: string; prompt: string; model?: string }>();
+        // 中文注释：功能名称「Bash命令追踪」，用法是追踪SDK runtime中Bash工具的调用，
+        // 在tool_result时发射terminal_mirror事件，将命令输出镜像到终端面板
+        const pendingBashCommands = new Map<string, string>();
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
             if (usingPersistentSession) {
@@ -1695,6 +1698,24 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
                     } catch (e) {
                       console.warn('[claude-client] Failed to emit synthetic subagent_start:', e);
                     }
+                  }
+
+                  // 中文注释：功能名称「Bash工具终端镜像」，用法是检测SDK runtime中的Bash工具调用，
+                  // 发射 terminal_mirror SSE事件，将命令和输出镜像到终端面板
+                  const bashToolPattern = /^Bash$|^mcp__.*bash$/i;
+                  if (bashToolPattern.test(block.name)) {
+                    try {
+                      const toolInput = block.input as { command?: string; cmd?: string };
+                      const cmd = toolInput?.command || toolInput?.cmd || '';
+                      console.log('[claude-client] Bash tool detected:', { id: block.id, name: block.name, cmd: cmd.slice(0, 100) });
+                      if (cmd) {
+                        pendingBashCommands.set(block.id, cmd);
+                        controller.enqueue(formatSSE({
+                          type: 'terminal_mirror',
+                          data: JSON.stringify({ action: 'command', command: cmd }),
+                        }));
+                      }
+                    } catch { /* best effort */ }
                   }
 
                   // 中文注释：功能名称「浏览器工具检测」，用法是检测SDK runtime中的浏览器工具调用，
@@ -1882,6 +1903,25 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
                         type: 'tool_files',
                         data: JSON.stringify({ files: allToolFiles }),
                       }));
+                    }
+
+                    // 中文注释：功能名称「Bash工具结果镜像」，用法是检测Bash工具的tool_result，
+                    // 发射terminal_mirror事件，将命令输出和退出码镜像到终端面板
+                    console.log('[claude-client] Checking pendingBashCommands for tool_use_id:', block.tool_use_id, 'has:', pendingBashCommands.has(block.tool_use_id));
+                    if (pendingBashCommands.has(block.tool_use_id)) {
+                      pendingBashCommands.delete(block.tool_use_id);
+                      try {
+                        if (resultContent) {
+                          controller.enqueue(formatSSE({
+                            type: 'terminal_mirror',
+                            data: JSON.stringify({ action: 'output', output: resultContent + '\n' }),
+                          }));
+                        }
+                        controller.enqueue(formatSSE({
+                          type: 'terminal_mirror',
+                          data: JSON.stringify({ action: 'exit', exitCode: block.is_error ? 1 : 0 }),
+                        }));
+                      } catch { /* best effort */ }
                     }
 
                     // 中文注释：功能名称「Agent工具完成检测」，用法是检测SDK runtime中Agent/Team工具的
