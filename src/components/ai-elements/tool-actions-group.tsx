@@ -2052,13 +2052,13 @@ export function ToolActionsGroup({
         flushLineGroup();
         blocks.push(
           <div key={`text-${idx}`} className="my-1 flex items-start gap-2.5 px-2 py-1.5">
-            <div className="flex shrink-0 items-center justify-center mt-[4px]">
+            <div className="flex shrink-0 items-center justify-center mt-[3px]">
               <ChatCircle size={15} className="text-emerald-500/80" />
             </div>
-            <div className="flex-1 text-[13px] text-foreground/80 leading-relaxed break-words prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-              <Streamdown
-                plugins={thinkingPlugins}
-                components={{
+            <Streamdown
+              className="flex-1 text-[13px] text-foreground/80 leading-relaxed break-words prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+              plugins={thinkingPlugins}
+              components={{
                   a: ({ node, href, children, ...aProps }: any) => {
                     return (
                       <a
@@ -2087,7 +2087,6 @@ export function ToolActionsGroup({
               >
                 {segment.content}
               </Streamdown>
-            </div>
           </div>
         );
       } else if (segment.kind === 'context_group') {
