@@ -1361,6 +1361,7 @@ function getToolDisplayName(name: string): string {
 
 function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggle }: { tool: ToolAction; streamingToolOutput?: string; expandedOverride?: boolean; onToggle?: () => void }) {
   const renderer = getRenderer(tool.name, tool.input);
+  const { openPreviewTab } = usePanel();
   
   // Use our smart display name function to replace raw MCP tool names
   const displayName = getToolDisplayName(tool.name);
@@ -1467,6 +1468,19 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
         )}
 
         <div className={cn("ml-auto flex shrink-0 items-center gap-2", isTeam ? "text-purple-500/80" : (isTodoWrite ? "text-blue-500/80" : "text-muted-foreground"))}>
+          {status === 'success' && ['read', 'read_file', 'mcp__filesystem__read_file', 'view_file'].some(n => tool.name.toLowerCase().includes(n)) && filePath && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openPreviewTab(filePath);
+              }}
+              className="flex items-center justify-center rounded-sm hover:text-primary transition-colors focus-visible:outline-none"
+              title="预览文件"
+            >
+              <Eye size={14} />
+            </button>
+          )}
           {status === 'running' && <SpinnerGap size={14} className={cn("animate-spin", isTeam ? "text-purple-500" : "text-primary")} />}
           {status === 'success' && <CheckCircle size={14} className={isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-emerald-500")} />}
           {status === 'error' && <XCircle size={14} className="text-red-500" />}
