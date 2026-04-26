@@ -150,9 +150,10 @@ export function buildPersistentClaudeSignature(params: {
     model: params.options.model,
     settingSources: params.options.settingSources,
     permissionMode: params.options.permissionMode,
-    allowedTools: params.options.allowedTools,
+    // allowedTools / tools 从签名中排除：它们属于权限/可用工具配置，
+    // 不影响 SDK 子进程身份。warmup 和 streamClaudeSdk 中这两组值不同
+    // 会导致签名不匹配，预热 session 无法被复用，造成首轮消息 7-8s 延迟。
     disallowedTools: params.options.disallowedTools,
-    tools: params.options.tools,
     outputFormat: params.options.outputFormat,
     extraArgs: params.options.extraArgs,
     agents: params.options.agents,

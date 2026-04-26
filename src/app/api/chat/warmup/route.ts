@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/db';
+import { getSession, updateSdkSessionId } from '@/lib/db';
 import { resolveForClaudeCode } from '@/lib/provider-resolver';
 import { prepareSdkSubprocessEnv } from '@/lib/sdk-subprocess-env';
 import { resolveWorkingDirectory } from '@/lib/working-directory';
@@ -122,6 +122,15 @@ export async function POST(request: NextRequest) {
         warmed_up: false,
         message: 'Session warmup timed out or failed. The session will be initialized on first message.',
       });
+    }
+
+    // 中文注释：预热成功后保存 SDK session ID 到数据库，让后续消息的
+    // shouldResume=true，跳过 streamClaudeSdk 第 1137 行的 stale session 检查，
+    // 避免预热创建的 persistent session 被误销毁
+    if (initData.session_id) {
+      try {
+        updateSdkSessionId(session_id, initData.session_id);
+      } catch { /* best effort — 不影响预热结果 */ }
     }
 
     return Response.json({ warmed_up: true, ...initData });
