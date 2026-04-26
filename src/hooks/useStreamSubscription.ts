@@ -26,66 +26,8 @@ export function useStreamSubscription({
   onStreamCompleted,
 }: UseStreamSubscriptionOpts): void {
   useEffect(() => {
-    // Restore snapshot if stream is already active (e.g., user switched away and back)
-    const existing = getSnapshot(sessionId);
-    if (existing) {
-      setStreamSnapshot(existing);
-      if (existing.phase === 'active') {
-        setStreamingSessionId(sessionId);
-      }
-      if (existing.pendingPermission && !existing.permissionResolved) {
-        setPendingApprovalSessionId(sessionId);
-      }
-      // If stream finished while this ChatView was unmounted, consume finalMessageContent now.
-      if (existing.phase !== 'active' && existing.finalMessageContent) {
-        if (existing.phase === 'completed') {
-          // Normal completion — both messages are persisted. Re-fetch from DB
-          // to get canonical state and avoid duplicating the temp assistant message.
-          fetch(`/api/chat/sessions/${sessionId}/messages?limit=50`)
-            .then(res => res.ok ? res.json() : null)
-            .then(data => {
-              if (data?.messages) {
-                setMessages(data.messages);
-              }
-            })
-            .catch(() => {
-              // Fallback: append locally if DB fetch fails
-              const assistantMessage: Message = {
-                id: 'temp-assistant-' + Date.now(),
-                session_id: sessionId,
-                role: 'assistant',
-                content: existing.finalMessageContent!,
-                created_at: new Date().toISOString(),
-                token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
-                referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
-                // 中文注释：功能名称「工具文件快照恢复」，用法是从快照恢复toolFiles到临时消息
-                tool_files: existing.toolFiles && existing.toolFiles.length > 0 ? JSON.stringify(existing.toolFiles) : undefined,
-              };
-              transferPendingToMessage(assistantMessage.id);
-              setMessages((prev) => [...prev, assistantMessage]);
-            });
-        } else {
-          // Error/stopped/idle-timeout — partial output may not be persisted yet.
-          // Append locally to preserve the content the user saw before unmount.
-          const assistantMessage: Message = {
-            id: 'temp-assistant-' + Date.now(),
-            session_id: sessionId,
-            role: 'assistant',
-            content: existing.finalMessageContent!,
-            created_at: new Date().toISOString(),
-            token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
-            referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
-            // 中文注释：功能名称「工具文件快照恢复」，用法是从快照恢复toolFiles到临时消息
-            tool_files: existing.toolFiles && existing.toolFiles.length > 0 ? JSON.stringify(existing.toolFiles) : undefined,
-          };
-          transferPendingToMessage(assistantMessage.id);
-          setMessages((prev) => [...prev, assistantMessage]);
-        }
-        clearSnapshot(sessionId);
-      }
-    } else {
-      setStreamSnapshot(null);
-    }
+    // 中文注释：先订阅再读快照，防止 subscribe 前 stream 恰好完成导致 completion 事件在 listener 真空期丢失
+    let completedViaEvent = false;
 
     const unsubscribe = subscribe(sessionId, (event) => {
       setStreamSnapshot(event.snapshot);
@@ -103,6 +45,7 @@ export function useStreamSubscription({
         setPendingApprovalSessionId(sessionId);
       }
       if (event.type === 'completed') {
+        completedViaEvent = true;
         setStreamingSessionId('');
         setPendingApprovalSessionId('');
 
@@ -117,11 +60,8 @@ export function useStreamSubscription({
             created_at: new Date().toISOString(),
             token_usage: event.snapshot.tokenUsage ? JSON.stringify(event.snapshot.tokenUsage) : null,
             referenced_contexts: event.snapshot.referencedContexts && event.snapshot.referencedContexts.length > 0 ? JSON.stringify(event.snapshot.referencedContexts) : undefined,
-            // 中文注释：功能名称「工具文件快照传递」，用法是将streamSnapshot中的toolFiles
-            // 传递给临时消息，使上下文统计在流结束后仍能显示文件/网页信息
             tool_files: event.snapshot.toolFiles && event.snapshot.toolFiles.length > 0 ? JSON.stringify(event.snapshot.toolFiles) : undefined,
           };
-          // Transfer pending reference images to this message ID
           transferPendingToMessage(assistantMessage.id);
           setMessages((prev) => [...prev, assistantMessage]);
         }
@@ -134,6 +74,62 @@ export function useStreamSubscription({
         onStreamCompleted?.(event.snapshot.phase);
       }
     });
+
+    // 中文注释：订阅后再读快照——订阅真空期内完成的 stream 会被此处捕获处理
+    const existing = getSnapshot(sessionId);
+    if (existing) {
+      setStreamSnapshot(existing);
+      if (existing.phase === 'active') {
+        setStreamingSessionId(sessionId);
+      }
+      if (existing.pendingPermission && !existing.permissionResolved) {
+        setPendingApprovalSessionId(sessionId);
+      }
+      // If stream finished while this ChatView was unmounted AND we didn't
+      // already handle it via the subscription callback, consume now.
+      if (!completedViaEvent && existing.phase !== 'active' && existing.finalMessageContent) {
+        if (existing.phase === 'completed') {
+          fetch(`/api/chat/sessions/${sessionId}/messages?limit=50`)
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+              if (data?.messages) {
+                setMessages(data.messages);
+              }
+            })
+            .catch(() => {
+              const assistantMessage: Message = {
+                id: 'temp-assistant-' + Date.now(),
+                session_id: sessionId,
+                role: 'assistant',
+                content: existing.finalMessageContent!,
+                created_at: new Date().toISOString(),
+                token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
+                referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
+                tool_files: existing.toolFiles && existing.toolFiles.length > 0 ? JSON.stringify(existing.toolFiles) : undefined,
+              };
+              transferPendingToMessage(assistantMessage.id);
+              setMessages((prev) => [...prev, assistantMessage]);
+            });
+        } else {
+          const assistantMessage: Message = {
+            id: 'temp-assistant-' + Date.now(),
+            session_id: sessionId,
+            role: 'assistant',
+            content: existing.finalMessageContent!,
+            created_at: new Date().toISOString(),
+            token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
+            referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
+            tool_files: existing.toolFiles && existing.toolFiles.length > 0 ? JSON.stringify(existing.toolFiles) : undefined,
+          };
+          transferPendingToMessage(assistantMessage.id);
+          setMessages((prev) => [...prev, assistantMessage]);
+        }
+        clearSnapshot(sessionId);
+        onStreamCompleted?.(existing.phase);
+      }
+    } else {
+      setStreamSnapshot(null);
+    }
 
     return () => {
       unsubscribe();

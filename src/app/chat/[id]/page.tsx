@@ -8,6 +8,7 @@ import { ChatView } from '@/components/chat/ChatView';
 import { SpinnerGap } from "@/components/ui/icon";
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
+import { isStreamActive } from '@/lib/stream-session-manager';
 
 interface ChatSessionPageProps {
   params: Promise<{ id: string }>;
@@ -122,9 +123,17 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   }, [id]);
 
   // 中文注释：会话预热 — 在 session 信息和消息加载完成后，后台启动 SDK 子进程
-  // 预热成功后，用户发送消息时 persistent session 已存在，实现秒回体验
+  // 预热成功后，用户发送消息时 persistent session 已存在，实现秒回体验。
+  // 如果当前已有活跃 stream（用户切换会话后又切回来），跳过预热，
+  // 避免对已运行的 persistent session 造成干扰。
   useEffect(() => {
     if (!sessionInfoLoaded || loading) return;
+
+    // 活跃 stream 已存在 → 服务器端正使用 persistent session，跳过预热
+    if (isStreamActive(id)) {
+      setWarmupState('ready');
+      return;
+    }
 
     let cancelled = false;
     setWarmupState('warming');
