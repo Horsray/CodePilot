@@ -8,6 +8,9 @@ import { useTerminal } from "@/hooks/useTerminal";
 import { useTranslation } from "@/hooks/useTranslation";
 import { XtermTerminal } from "./XtermTerminal";
 import type { Terminal } from "@xterm/xterm";
+import { Plus } from "@phosphor-icons/react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { PromptDialog } from "@/components/ui/prompt-dialog";
 
 const DEFAULT_HEIGHT = 260;
 const MIN_HEIGHT = 120;
@@ -21,6 +24,10 @@ let mirrorBufferActive = true;
 // 中文注释：功能名称「终端历史回放缓存」，用法是缓存用户点击"在终端查看"时
 // 传递的命令和结果数据，等终端面板 ready 后写入 xterm.js
 let pendingHistory: { command: string; result: string; isError: boolean } | null = null;
+
+// 中文注释：功能名称「等待执行的预设命令」，用法是当用户通过文件树或外部按钮请求在终端执行命令时，
+// 如果终端未打开，先将命令缓存，等终端面板 ready 后立刻写入 xterm.js
+let pendingExecuteCommand: string | null = null;
 
 // 中文注释：功能名称「全局镜像事件监听」，用法是始终监听 terminal:mirror 事件，
 // 当终端面板未打开时将事件缓存到 mirrorBuffer 中。
@@ -48,6 +55,14 @@ if (typeof window !== 'undefined') {
     console.log('[TerminalDrawer] terminal:show-history received:', detail.command?.slice(0, 100));
     pendingHistory = detail;
   });
+
+  window.addEventListener('terminal:execute-command', (e: Event) => {
+    const customEvent = e as CustomEvent;
+    const detail = customEvent.detail as { command: string } | undefined;
+    if (!detail) return;
+    console.log('[TerminalDrawer] terminal:execute-command received:', detail.command);
+    pendingExecuteCommand = detail.command;
+  });
 }
 
 /**
@@ -66,6 +81,42 @@ export function TerminalDrawer() {
   const xtermRef = useRef<Terminal | null>(null);
   const [terminalKey, setTerminalKey] = useState(0);
   const [ready, setReady] = useState(false);
+
+  // 中文注释：终端预设命令相关状态
+  const [presets, setPresets] = useState<string[]>([
+    "npm run dev",
+    "npm run test",
+    "npm run build:single",
+    "rm -rf dist-electron && npm run electron:build && npm run electron:pack:mac"
+  ]);
+  const [isPromptOpen, setIsPromptOpen] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("terminal_presets");
+    if (stored) {
+      try {
+        setPresets(JSON.parse(stored));
+      } catch (e) {
+        console.error("Failed to parse terminal presets", e);
+      }
+    }
+  }, []);
+
+  const handleAddPreset = (value: string) => {
+    if (value.trim()) {
+      const newPresets = [...presets, value.trim()];
+      setPresets(newPresets);
+      localStorage.setItem("terminal_presets", JSON.stringify(newPresets));
+    }
+    setIsPromptOpen(false);
+  };
+
+  const handleExecutePreset = (cmd: string) => {
+    if (xtermRef.current) {
+      // 写入命令到终端并执行 (模拟用户输入)
+      terminal.write(cmd + "\r");
+    }
+  };
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -167,12 +218,18 @@ export function TerminalDrawer() {
           xtermRef.current.write('\x1b[31m[执行失败]\x1b[0m\r\n');
         } else {
           xtermRef.current.write('\x1b[32m[执行成功]\x1b[0m\r\n');
-        }
-        xtermRef.current.write('\x1b[90m── 结束 ──\x1b[0m\r\n\r\n');
       }
-    },
-    [terminal]
-  );
+      xtermRef.current.write('\x1b[90m── 结束 ──\x1b[0m\r\n\r\n');
+    }
+
+    if (pendingExecuteCommand && xtermRef.current) {
+      const cmd = pendingExecuteCommand;
+      pendingExecuteCommand = null;
+      terminal.write(cmd + '\r');
+    }
+  },
+  [terminal]
+);
 
   // 中文注释：功能名称「AI 命令镜像监听」，用法是接收 AI Bash 工具执行的命令和输出，
   // 在终端面板中以特殊样式显示，与用户手动输入的命令区分开来。
@@ -234,6 +291,26 @@ export function TerminalDrawer() {
     window.addEventListener('terminal:show-history', handleShowHistory);
     return () => window.removeEventListener('terminal:show-history', handleShowHistory);
   }, [ready]);
+
+  // 中文注释：功能名称「组件内监听命令执行」，当终端已打开并 ready 时，实时接收并执行
+  useEffect(() => {
+    if (!ready) return;
+
+    const handleExecuteCommand = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const detail = customEvent.detail as { command: string } | undefined;
+      if (!detail) return;
+      const term = xtermRef.current;
+      if (!term) return;
+
+      terminal.write(detail.command + '\r');
+      // Execute command consumes it
+      pendingExecuteCommand = null;
+    };
+
+    window.addEventListener('terminal:execute-command', handleExecuteCommand);
+    return () => window.removeEventListener('terminal:execute-command', handleExecuteCommand);
+  }, [ready, terminal]);
 
   // 中文注释：功能名称「终端面板关闭清理」，用法是面板关闭时销毁 PTY 会话和 xterm 实例，
   // 重置 key 以便下次打开时重新初始化。同时重新启用镜像缓存。
@@ -322,6 +399,36 @@ export function TerminalDrawer() {
           {t("terminal.title")}
         </span>
         <div className="flex items-center gap-0.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title="预设命令"
+              >
+                <Plus size={11} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              {presets.map((cmd, idx) => (
+                <DropdownMenuItem
+                  key={idx}
+                  onClick={() => handleExecutePreset(cmd)}
+                  className="font-mono text-xs cursor-pointer truncate"
+                  title={cmd}
+                >
+                  {cmd}
+                </DropdownMenuItem>
+              ))}
+              {presets.length > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuItem
+                onClick={() => setIsPromptOpen(true)}
+                className="cursor-pointer justify-center text-primary font-medium text-xs"
+              >
+                新增预设
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -348,6 +455,17 @@ export function TerminalDrawer() {
           onReady={handleReady}
         />
       </div>
+
+      <PromptDialog
+        open={isPromptOpen}
+        onOpenChange={setIsPromptOpen}
+        title="新增终端预设命令"
+        description="请输入你要添加的预设命令，例如 npm run dev"
+        placeholder="npm run ..."
+        confirmLabel="确认"
+        cancelLabel="取消"
+        onConfirm={(value) => handleAddPreset(value)}
+      />
     </div>
   );
 }

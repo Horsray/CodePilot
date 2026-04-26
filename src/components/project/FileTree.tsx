@@ -12,9 +12,17 @@ import {
   FileTreeIcon,
   FileTreeName,
 } from "@/components/ai-elements/file-tree";
-import { Folder, FolderOpen, Plus } from "@phosphor-icons/react";
+import { Folder, FolderOpen, Plus, TerminalWindow } from "@phosphor-icons/react";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { ReactNode } from "react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { usePanelStore } from "@/store/usePanelStore";
+import { useTerminal } from "@/hooks/useTerminal";
 
 interface FileTreeProps {
   workingDirectory: string;
@@ -89,76 +97,107 @@ function FlatTreeNodeItem({
   const isHighlighted = highlightPath === node.path;
   const paddingLeft = level * 16 + 8; // 16px per level
 
+  const handleOpenInTerminal = () => {
+    let command = "";
+    if (isDirectory) {
+      command = `cd "${node.path}"`;
+    } else {
+      command = `"${node.path}"`;
+    }
+    usePanelStore.getState().setTerminalOpen(true);
+    window.dispatchEvent(new CustomEvent('terminal:execute-command', { detail: { command } }));
+  };
+
   if (isDirectory) {
     return (
-      <div
-        className={cn(
-          "flex w-full cursor-pointer items-center gap-1 rounded py-1 pr-2 text-left transition-colors hover:bg-muted/50",
-          isHighlighted && "file-tree-flash"
-        )}
-        style={{ paddingLeft }}
-        role="button"
-        tabIndex={0}
-        id={isHighlighted ? "file-tree-highlight" : undefined}
-        onClick={() => togglePath(node.path)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            togglePath(node.path);
-          }
-        }}
-      >
-        {/* 文件夹图标同时作为展开/折叠按钮 */}
-        <FileTreeIcon>
-          {isExpanded ? (
-            <FolderOpen size={16} className="text-blue-400" weight="fill" />
-          ) : (
-            <Folder size={16} className="text-blue-400" weight="fill" />
-          )}
-        </FileTreeIcon>
-        <FileTreeName>{node.name}</FileTreeName>
-      </div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            className={cn(
+              "flex w-full cursor-pointer items-center gap-1 rounded py-1 pr-2 text-left transition-colors hover:bg-muted/50",
+              isHighlighted && "file-tree-flash"
+            )}
+            style={{ paddingLeft }}
+            role="button"
+            tabIndex={0}
+            id={isHighlighted ? "file-tree-highlight" : undefined}
+            onClick={() => togglePath(node.path)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                togglePath(node.path);
+              }
+            }}
+          >
+            {/* 文件夹图标同时作为展开/折叠按钮 */}
+            <FileTreeIcon>
+              {isExpanded ? (
+                <FolderOpen size={16} className="text-blue-400" weight="fill" />
+              ) : (
+                <Folder size={16} className="text-blue-400" weight="fill" />
+              )}
+            </FileTreeIcon>
+            <FileTreeName>{node.name}</FileTreeName>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={handleOpenInTerminal}>
+            <TerminalWindow size={14} className="mr-2" />
+            <span>在终端中打开</span>
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     );
   }
 
   return (
-    <div
-      className={cn(
-        "group/file flex cursor-pointer items-center gap-1 rounded py-1 pr-2 transition-colors hover:bg-muted/50",
-        isSelected && "bg-muted",
-        isHighlighted && "file-tree-flash"
-      )}
-      style={{ paddingLeft: paddingLeft + 24 }} // Align with folder text (CaretRight width)
-      id={isHighlighted ? "file-tree-highlight" : undefined}
-      onClick={() => onSelect?.(node.path)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect?.(node.path);
-        }
-      }}
-      role="treeitem"
-      aria-selected={isSelected}
-      tabIndex={0}
-    >
-      <FileTreeIcon>
-        {getFileIcon(node.extension)}
-      </FileTreeIcon>
-      <FileTreeName>{node.name}</FileTreeName>
-      {onAdd && (
-        <button
-          type="button"
-          className="ml-auto flex size-5 shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted group-hover/file:opacity-100"
-          onClick={(e) => {
-            e.stopPropagation();
-            onAdd(node.path);
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          className={cn(
+            "group/file flex cursor-pointer items-center gap-1 rounded py-1 pr-2 transition-colors hover:bg-muted/50",
+            isSelected && "bg-muted",
+            isHighlighted && "file-tree-flash"
+          )}
+          style={{ paddingLeft: paddingLeft + 24 }} // Align with folder text (CaretRight width)
+          id={isHighlighted ? "file-tree-highlight" : undefined}
+          onClick={() => onSelect?.(node.path)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onSelect?.(node.path);
+            }
           }}
-          title="Add to chat"
+          role="treeitem"
+          aria-selected={isSelected}
+          tabIndex={0}
         >
-          <Plus size={12} className="text-muted-foreground" />
-        </button>
-      )}
-    </div>
+          <FileTreeIcon>
+            {getFileIcon(node.extension)}
+          </FileTreeIcon>
+          <FileTreeName>{node.name}</FileTreeName>
+          {onAdd && (
+            <button
+              type="button"
+              className="ml-auto flex size-5 shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted group-hover/file:opacity-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAdd(node.path);
+              }}
+              title="Add to chat"
+            >
+              <Plus size={12} className="text-muted-foreground" />
+            </button>
+          )}
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={handleOpenInTerminal}>
+          <TerminalWindow size={14} className="mr-2" />
+          <span>在终端中打开</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

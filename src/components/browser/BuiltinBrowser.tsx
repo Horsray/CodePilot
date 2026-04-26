@@ -104,7 +104,14 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
     setLoading(true);
     syncHistoryState(normalized);
     syncMeta(normalized);
-  }, [syncHistoryState, syncMeta]);
+
+    // Explicitly load URL when user submits
+    if (isElectron && webviewRef.current) {
+      webviewRef.current.src = normalized;
+    } else if (!isElectron && iframeRef.current) {
+      iframeRef.current.src = normalized;
+    }
+  }, [syncHistoryState, syncMeta, isElectron]);
 
   const handleSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -124,6 +131,10 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
       setCanGoBack(historyIndexRef.current > 0);
       setCanGoForward(true);
       syncMeta(prevUrl);
+
+      if (!isElectron && iframeRef.current) {
+        iframeRef.current.src = prevUrl;
+      }
     }
   }, [isElectron, syncMeta]);
 
@@ -140,6 +151,10 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
       setCanGoBack(true);
       setCanGoForward(historyIndexRef.current < historyRef.current.length - 1);
       syncMeta(nextUrl);
+
+      if (!isElectron && iframeRef.current) {
+        iframeRef.current.src = nextUrl;
+      }
     }
   }, [isElectron, syncMeta]);
 
@@ -263,6 +278,13 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
       setLoading(true);
       syncHistoryState(initialNormalizedUrl, "replace");
       syncMeta(initialNormalizedUrl);
+
+      // Force load the initial URL if it genuinely changes
+      if (isElectron && webviewRef.current) {
+        webviewRef.current.src = initialNormalizedUrl;
+      } else if (!isElectron && iframeRef.current) {
+        iframeRef.current.src = initialNormalizedUrl;
+      }
     } else {
       setLoading(false);
       historyRef.current = [];
@@ -270,26 +292,7 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
       setCanGoBack(false);
       setCanGoForward(false);
     }
-  }, [initialNormalizedUrl, syncHistoryState, syncMeta]);
-
-  // Keep webview.src in sync with our `url` state.
-  // Using a separate effect ensures we don't recreate the element, just update the src prop.
-  useEffect(() => {
-    if (!isElectron && iframeRef.current && url) {
-      const currentSrc = iframeRef.current.src;
-      if (currentSrc !== url && currentSrc !== url + '/' && url !== currentSrc + '/') {
-        iframeRef.current.src = url;
-      }
-    } else if (isElectron && webviewRef.current && url) {
-      // In Electron webview, we only update src if it's genuinely different,
-      // and we avoid setting it if it's currently loading the same URL or already at the same URL
-      const currentSrc = webviewRef.current.src;
-      // Some webviews might return empty string or about:blank initially
-      if (currentSrc !== url && currentSrc !== url + '/' && url !== currentSrc + '/') {
-        webviewRef.current.src = url;
-      }
-    }
-  }, [isElectron, url]);
+  }, [initialNormalizedUrl, syncHistoryState, syncMeta, isElectron]);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -388,9 +391,9 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
                 ref={(node) => {
                   webviewRef.current = node as ElectronWebviewElement | null;
                 }}
-                src={url}
                 className="w-full h-full border-0 bg-background"
                 partition="persist:codepilot-browser"
+                src={initialNormalizedUrl || "about:blank"}
               />
             ) : (
               <iframe
@@ -399,6 +402,7 @@ export function BuiltinBrowser({ initialUrl, onMetaChange }: BuiltinBrowserProps
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                 onLoad={handleIframeLoad}
                 title={t('browser.preview') || 'Preview'}
+                src={initialNormalizedUrl || "about:blank"}
               />
             )}
           </div>
