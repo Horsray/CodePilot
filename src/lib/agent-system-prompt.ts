@@ -103,7 +103,7 @@ function getToolsSection(): string {
   - The user's request matches a known skill's description or "whenToUse" criteria.
   - The user explicitly mentions using a skill (e.g., "use the X skill", or sends a message like "Use the X skill. User context: ...").
   - A complex task could benefit from a structured workflow that a skill provides.
-  To use: call \`Skill\` with \`skill_name\` to execute a specific skill. Call without arguments to list all available skills and discover what's available. **Always check available skills before starting complex multi-step tasks** — a skill may already encode the exact workflow needed.
+  To use: call \`Skill\` with \`name\` or \`skill_name\` to execute a specific skill. Call without arguments to list all available skills and discover what's available. **Always check available skills before starting complex multi-step tasks** — a skill may already encode the exact workflow needed.
 - **Skill Creation**: You have access to the \`codepilot_skill_create\` tool which saves a reusable workflow as a new Skill (SKILL.md). When you complete a complex multi-step task that could be reused, consider saving it as a skill for future one-click replay.
 - **Use Session Search Proactively**: When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`codepilot_session_search\` tool before guessing from memory.
 - Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.

@@ -16,15 +16,17 @@ export function createSkillTool(workingDirectory: string) {
   return tool({
     description:
       'Use a skill (reusable prompt template). ' +
-      'Call with just skill_name to execute a skill. ' +
+      'Call with just name or skill_name to execute a skill. ' +
       'Call without arguments to list all available skills.',
     inputSchema: z.object({
-      skill_name: z.string().optional().describe('Name of the skill to execute. Omit to list all skills.'),
+      name: z.string().optional().describe('Name of the skill to execute. Omit to list all skills.'),
+      skill_name: z.string().optional().describe('Name of the skill to execute (legacy). Omit to list all skills.'),
       arguments: z.record(z.string(), z.string()).optional().describe('Arguments to pass to the skill (key-value pairs)'),
     }),
-    execute: async ({ skill_name, arguments: args }) => {
+    execute: async ({ name, skill_name, arguments: args }) => {
+      const targetName = name || skill_name;
       // List mode
-      if (!skill_name) {
+      if (!targetName) {
         const skills = discoverSkills(workingDirectory);
         if (skills.length === 0) {
           return 'No skills available. Skills can be added as SKILL.md files in .claude/skills/ or ~/.claude/skills/.';
@@ -40,10 +42,10 @@ export function createSkillTool(workingDirectory: string) {
       }
 
       // Execute mode
-      const skill = getSkill(skill_name, workingDirectory);
+      const skill = getSkill(targetName, workingDirectory);
       if (!skill) {
         const available = discoverSkills(workingDirectory).map(s => s.name).join(', ');
-        return `Skill "${skill_name}" not found. Available skills: ${available || 'none'}`;
+        return `Skill "${targetName}" not found. Available skills: ${available || 'none'}`;
       }
 
       const result = prepareSkillExecution(skill, args);

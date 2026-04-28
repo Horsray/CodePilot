@@ -83,7 +83,11 @@ function extractSkillInvocations(
       parsedInput = use.input as Record<string, unknown>;
     }
 
-    const skillName = typeof parsedInput.skill_name === 'string' ? parsedInput.skill_name : 'unknown';
+    const skillName = typeof parsedInput.skill_name === 'string' 
+      ? parsedInput.skill_name 
+      : typeof parsedInput.name === 'string'
+        ? parsedInput.name
+        : 'unknown';
     const args = typeof parsedInput.arguments === 'object' && parsedInput.arguments !== null
       ? parsedInput.arguments as Record<string, string>
       : undefined;
