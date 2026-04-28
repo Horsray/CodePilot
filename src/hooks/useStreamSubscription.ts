@@ -53,7 +53,7 @@ export function useStreamSubscription({
         const finalContent = event.snapshot.finalMessageContent;
         if (finalContent) {
           const assistantMessage: Message = {
-            id: 'temp-assistant-' + Date.now(),
+            id: `temp-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             session_id: sessionId,
             role: 'assistant',
             content: finalContent,
@@ -98,7 +98,7 @@ export function useStreamSubscription({
             })
             .catch(() => {
               const assistantMessage: Message = {
-                id: 'temp-assistant-' + Date.now(),
+                id: `temp-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 session_id: sessionId,
                 role: 'assistant',
                 content: existing.finalMessageContent!,
@@ -112,7 +112,7 @@ export function useStreamSubscription({
             });
         } else {
           const assistantMessage: Message = {
-            id: 'temp-assistant-' + Date.now(),
+            id: `temp-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             session_id: sessionId,
             role: 'assistant',
             content: existing.finalMessageContent!,

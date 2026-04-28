@@ -1130,6 +1130,15 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
           options: queryOptions,
         });
 
+        // 中文注释：功能名称「预热会话复用检查」，用法是当数据库中没有 sdkSessionId 时，
+        // 如果内存中存在刚刚预热好的 persistent session（带有 initData 且签名匹配），
+        // 允许通过 isSessionWarmedUp 检查来复用这个预热进程，避免被下面的 stale session 逻辑误杀。
+        const isWarmedUp = sessionId ? !!(await import('./persistent-claude-session').then(m => m.isSessionWarmedUp(sessionId))) : false;
+        if (!shouldResume && isWarmedUp && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+          console.log(`[claude-client] Found warmed up persistent session ${sessionId}, allowing reuse despite missing sdkSessionId`);
+          shouldResume = true;
+        }
+
         // If we are starting a fresh session (!shouldResume) but a persistent session
         // exists for this ID, we MUST close the old one to avoid exponential history
         // explosion (sending the full history as a single prompt to a session that

@@ -775,7 +775,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       }
 
       const userMessage: Message = {
-        id: 'temp-' + Date.now(),
+        id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         session_id: sessionId,
         role: 'user',
         content: displayContent,
@@ -804,7 +804,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
       }
       const userMessage: Message = {
-        id: 'temp-' + Date.now(),
+        id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         session_id: sessionId,
         role: 'user',
         content: displayContent,

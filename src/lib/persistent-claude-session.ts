@@ -84,6 +84,8 @@ interface PersistentClaudeEntry {
     plugins?: Array<{ name: string; path: string }>;
     mcp_servers?: unknown;
   };
+  // 动态引用：用于在预热或后续复用时，将 SDK 内部触发的事件委托给最新一轮的回调函数
+  currentOptions?: Options;
 }
 
 export interface PersistentClaudeTurn {
@@ -209,20 +211,43 @@ function createEntry(
   shadowHandle?: { cleanup: () => void }
 ): PersistentClaudeEntry {
   const input = new AsyncUserMessageQueue();
-  const persistentQuery = query({ prompt: input, options });
-  return {
+  
+  const entry: Partial<PersistentClaudeEntry> = {
     codepilotSessionId,
     signature,
     input,
-    query: persistentQuery,
-    iterator: persistentQuery[Symbol.asyncIterator](),
     turnLock: Promise.resolve(),
     releaseTurn: null,
     idleTimer: null,
     lastUsedAt: Date.now(),
     shadowHandle,
     warmedUp: false,
+    currentOptions: options,
   };
+
+  // 使用 Proxy Options 包装，将底层 SDK 的回调委托给当轮最新的 currentOptions
+  const proxyOptions: Options = {
+    ...options,
+    canUseTool: async (toolName, toolInput, opts) => {
+      if (entry.currentOptions?.canUseTool) {
+        const result = await entry.currentOptions.canUseTool(toolName, toolInput, opts);
+        return result as any;
+      }
+      return false as any; // 默认拒绝
+    },
+    stderr: (data) => {
+      if (entry.currentOptions?.stderr) {
+        entry.currentOptions.stderr(data);
+      }
+    },
+    // 其他需要的动态回调如果后续加入也可以在这里拦截代理
+  };
+
+  const persistentQuery = query({ prompt: input, options: proxyOptions });
+  entry.query = persistentQuery;
+  entry.iterator = persistentQuery[Symbol.asyncIterator]();
+
+  return entry as PersistentClaudeEntry;
 }
 
 async function acquireTurn(entry: PersistentClaudeEntry): Promise<() => void> {
@@ -262,6 +287,11 @@ export function getPersistentClaudeTurn(params: {
     entry = createEntry(params.codepilotSessionId, params.signature, params.options, params.shadowHandle);
     store.set(params.codepilotSessionId, entry);
     reused = false;
+  } else if (reused) {
+    // 中文注释：功能名称「动态回调委托更新」，用法是在复用预热或旧 session 时，
+    // 将当前请求最新的 options（包含新的 canUseTool 和 stderr 等回调）赋值给 entry，
+    // 使得底层代理能够把事件正确路由到当前的 SSE 连接。
+    entry.currentOptions = params.options;
   }
 
   clearIdleTimer(entry);

@@ -376,11 +376,13 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     icon: TerminalWindow,
     label: '',
     getSummary: (input) => {
-      const cmd = ((input as Record<string, unknown>)?.command || (input as Record<string, unknown>)?.cmd || '') as string;
+      const rawCmd = ((input as Record<string, unknown>)?.command || (input as Record<string, unknown>)?.cmd || '') as string;
+      const cmd = rawCmd.replace(/^cd\s+(?:'[^']+'|"[^"]+"|[^&]+)\s*&&\s*/, '');
       return cmd ? (cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd) : 'bash';
     },
     renderDetail: (tool, streamingOutput) => {
-      const cmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
+      const rawCmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
+      const cmd = rawCmd.replace(/^cd\s+(?:'[^']+'|"[^"]+"|[^&]+)\s*&&\s*/, '');
       const isRunning = tool.result === undefined;
       // While running: show command + last 5 lines of output (rolling window)
       // When done: show command + full result (collapsible)
@@ -1177,8 +1179,13 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
 
   // Auto-scroll logic
   React.useEffect(() => {
+    // Wrap in a tiny timeout or requestAnimationFrame to ensure DOM layout has updated
+    // before we measure scrollHeight and update scrollTop
     if (isExpanded && autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const el = scrollRef.current;
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
     }
   }, [content, isExpanded, autoScroll]);
 
@@ -1582,7 +1589,9 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   }
   
   if (k === 'bash') {
-    const cmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
+    const rawCmd = ((tool.input as Record<string, unknown>)?.command || (tool.input as Record<string, unknown>)?.cmd || '') as string;
+    // 去除 AI SDK 自动添加的工作目录 cd 前缀，保留真实的执行命令
+    const cmd = rawCmd.replace(/^cd\s+(?:'[^']+'|"[^"]+"|[^&]+)\s*&&\s*/, '');
     const displayName = getToolDisplayName(tool.name);
 
     return (
@@ -1628,9 +1637,10 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
                 setTerminalOpen(true);
                 // 中文注释：功能名称「终端历史回放」，用法是点击在终端查看时，
                 // 把该工具卡的命令和结果通过事件传递给终端面板显示
+                // 注意这里传回 rawCmd 以保证完整回放
                 window.dispatchEvent(new CustomEvent('terminal:show-history', {
                   detail: {
-                    command: cmd,
+                    command: rawCmd,
                     result: tool.result || '',
                     isError: tool.isError || false,
                   },

@@ -39,6 +39,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   // Load session info and set working directory
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     // Clear stale state immediately so ChatView doesn't inherit previous session's values
     setWorkingDirectory('');
     setSessionModel('');
@@ -47,7 +48,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
     async function loadSession() {
       try {
-        const sessionRes = await fetch(`/api/chat/sessions/${id}`);
+        const sessionRes = await fetch(`/api/chat/sessions/${id}`, { signal: controller.signal });
         if (cancelled) return;
         if (sessionRes.ok) {
           const data: { session: ChatSession } = await sessionRes.json();
@@ -81,7 +82,10 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     }
 
     loadSession();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [id, setWorkingDirectory, setSessionId, setPanelSessionTitle, t]);
 
   useEffect(() => {
@@ -93,10 +97,11 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     setHasMore(false);
 
     let cancelled = false;
+    const controller = new AbortController();
 
     async function loadMessages() {
       try {
-        const res = await fetch(`/api/chat/sessions/${id}/messages?limit=30`);
+        const res = await fetch(`/api/chat/sessions/${id}/messages?limit=30`, { signal: controller.signal });
         if (cancelled) return;
         if (!res.ok) {
           if (res.status === 404) {
@@ -119,7 +124,10 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
     loadMessages();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [id]);
 
   // 中文注释：会话预热 — 在 session 信息和消息加载完成后，后台启动 SDK 子进程。
@@ -136,6 +144,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     }
 
     let cancelled = false;
+    const controller = new AbortController();
 
     async function warmup() {
       try {
@@ -143,6 +152,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: id }),
+          signal: controller.signal,
         });
         if (cancelled) return;
         if (res.ok) {
@@ -165,7 +175,10 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     }
 
     warmup();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [id, sessionInfoLoaded, loading]);
 
   // Auto-open file tree when jumping from a file search result

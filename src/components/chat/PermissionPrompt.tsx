@@ -333,11 +333,14 @@ function ToolInputDisplay({ input }: { input: Record<string, unknown> }) {
   const formatToolInput = (inp: Record<string, unknown>): string => {
     // For Bash, show command prominently
     if (inp.command) {
-      const cmd = String(inp.command);
+      let cmd = String(inp.command);
+      // 去除 AI SDK 自动添加的工作目录 cd 前缀
+      cmd = cmd.replace(/^cd\s+(?:'[^']+'|"[^"]+"|[^&]+)\s*&&\s*/, '');
+      
       // If there are other keys besides command/description, show full JSON
       const extraKeys = Object.keys(inp).filter(k => k !== 'command' && k !== 'description');
       if (extraKeys.length > 0) {
-        return JSON.stringify(inp, null, 2);
+        return JSON.stringify({ ...inp, command: cmd }, null, 2);
       }
       return cmd;
     }

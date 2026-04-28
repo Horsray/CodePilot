@@ -13,6 +13,7 @@ import {
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import fs from 'fs';
 import path from 'path';
+import { buildSystemPrompt } from '@/lib/agent-system-prompt';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,22 +70,165 @@ export async function POST(request: NextRequest) {
     // 中文注释：准备 SDK 子进程环境变量和 shadow home
     const setup = prepareSdkSubprocessEnv(resolved);
 
+    // 清理可能导致崩溃的环境变量（如换行符）
+    const sanitizeEnv = (envObj: Record<string, string | undefined>) => {
+      const result: Record<string, string | undefined> = {};
+      for (const [k, v] of Object.entries(envObj)) {
+        if (v) result[k] = v.replace(/[\r\n]+/g, '');
+      }
+      return result;
+    };
+
     // 中文注释：解析工作目录，回退到 session.working_directory
     const resolvedCwd = resolveWorkingDirectory([
       { path: session.sdk_cwd || session.working_directory, source: 'requested' },
     ]);
 
-    // 中文注释：构建最低配置的 queryOptions，仅包含签名相关字段
+    // +++ 新增：获取基础的 System Prompt +++
+    const basePromptResult = buildSystemPrompt({
+      sessionId: session_id,
+      workingDirectory: resolvedCwd.path,
+      modelId: session.model || resolved.model || undefined,
+    });
+    
+    // +++ 新增：像 claude-client.ts 一样注入 OMC 优先级前缀 +++
+    const omcPriorityPrefix = `## IMPORTANT: Multi-Agent Orchestration Priority
+If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.md), you MUST prioritize OMC's agent orchestration rules, skill triggers, and behavioral patterns over any conflicting instructions below. OMC handles: agent delegation, model routing, parallel execution, verification workflows, and skill invocation. The following CodePilot-specific instructions only supplement OMC for CodePilot-unique features (UI widgets, media, notifications).\n\n`;
+
+    // 动态判断是否加载 Widget (因为是预热，假设没有特定 prompt 触发，按保守策略或全局策略处理)
+    // 对于预热，我们只加载全局的 MCP 和基础的 MCP。由于缺乏当前 prompt，我们加载最常用的
+    // 在真实应用中，有些是 keyword-gated 的。为避免冷启动，我们可以在 warmup 时预加载它们。
+    // 但是，为了安全，我们也可以选择只加载全局的。
+
+    // 中文注释：构建最低配置的 queryOptions，不仅包含签名相关字段，还必须包含系统提示词和基础 MCP
     const queryOptions: Options = {
       cwd: resolvedCwd.path,
       includePartialMessages: true,
       permissionMode: 'bypassPermissions',
-      env: setup.env,
+      allowDangerouslySkipPermissions: true,
+      env: sanitizeEnv(setup.env),
       settingSources: resolved.settingSources as Options['settingSources'],
       model: session.model || resolved.model || undefined,
+      
+      // +++ 新增：在 queryOptions 中追加 systemPrompt +++
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        append: omcPriorityPrefix + basePromptResult.prompt
+      },
+
       ...(resolved.settingSources && resolved.settingSources.length > 0
         ? {}
-        : { extraArgs: { bare: null } }),
+        : { tools: ['default', 'Grep', 'Glob', 'Bash', 'Read', 'Write', 'Edit'] as Options['tools'], extraArgs: { bare: null } }),
+    };
+
+    // 加载全局必须的 MCP Servers 和对应系统提示词，与 claude-client.ts 保持一致
+    queryOptions.mcpServers = {};
+    
+    const { createMemorySearchMcpServer, MEMORY_SEARCH_SYSTEM_PROMPT } = await import('@/lib/memory-search-mcp');
+    const { createNotificationMcpServer, NOTIFICATION_MCP_SYSTEM_PROMPT } = await import('@/lib/notification-mcp');
+    const { createTodoMcpServer, TODO_MCP_SYSTEM_PROMPT } = await import('@/lib/todo-mcp');
+    const { createBrowserMcpServer, BROWSER_SYSTEM_PROMPT } = await import('@/lib/builtin-tools/browser');
+    const { createAskUserQuestionMcpServer, ASK_USER_QUESTION_MCP_SYSTEM_PROMPT } = await import('@/lib/ask-user-question-mcp');
+    
+    // Memory MCP (仅在匹配 assistant_workspace 时加载)
+    const { getSetting } = await import('@/lib/db');
+    const assistantWorkspacePath = getSetting('assistant_workspace_path');
+    if (assistantWorkspacePath && resolvedCwd.path === assistantWorkspacePath) {
+      queryOptions.mcpServers['codepilot-memory-search'] = createMemorySearchMcpServer(resolvedCwd.path);
+      if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+        queryOptions.systemPrompt.append += '\n\n' + MEMORY_SEARCH_SYSTEM_PROMPT;
+      }
+    }
+
+    // 全局 MCPs
+    queryOptions.mcpServers['codepilot-notify'] = createNotificationMcpServer();
+    queryOptions.mcpServers['codepilot-todo'] = createTodoMcpServer(resolvedCwd.path);
+    queryOptions.mcpServers['codepilot-browser'] = createBrowserMcpServer();
+    queryOptions.mcpServers['codepilot-ask-user'] = createAskUserQuestionMcpServer();
+    
+    if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+      queryOptions.systemPrompt.append += '\n\n' + NOTIFICATION_MCP_SYSTEM_PROMPT + '\n\n' + TODO_MCP_SYSTEM_PROMPT + '\n\n' + BROWSER_SYSTEM_PROMPT + '\n\n' + ASK_USER_QUESTION_MCP_SYSTEM_PROMPT;
+    }
+
+    // 加载 keyword-gated 的 MCP Servers
+    // 为了使预热后的进程拥有全量的功能，在 warmup 时，我们加载所有的 MCP Server。
+    // 这虽然会稍微增加启动时的 context 长度，但能保证预热进程能够应对首轮的任何 prompt。
+    const { createWidgetMcpServer } = await import('@/lib/widget-guidelines');
+    queryOptions.mcpServers['codepilot-widget'] = createWidgetMcpServer();
+
+    const { createMediaImportMcpServer, MEDIA_MCP_SYSTEM_PROMPT } = await import('@/lib/media-import-mcp');
+    const { createImageGenMcpServer } = await import('@/lib/image-gen-mcp');
+    queryOptions.mcpServers['codepilot-media'] = createMediaImportMcpServer(session_id, resolvedCwd.path);
+    queryOptions.mcpServers['codepilot-image-gen'] = createImageGenMcpServer(session_id, resolvedCwd.path);
+    if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+      queryOptions.systemPrompt.append += '\n\n' + MEDIA_MCP_SYSTEM_PROMPT;
+    }
+
+    const { createCliToolsMcpServer, CLI_TOOLS_MCP_SYSTEM_PROMPT } = await import('@/lib/cli-tools-mcp');
+    queryOptions.mcpServers['codepilot-cli-tools'] = createCliToolsMcpServer();
+    if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+      queryOptions.systemPrompt.append += '\n\n' + CLI_TOOLS_MCP_SYSTEM_PROMPT;
+    }
+
+    const { createDashboardMcpServer, DASHBOARD_MCP_SYSTEM_PROMPT } = await import('@/lib/dashboard-mcp');
+    queryOptions.mcpServers['codepilot-dashboard'] = createDashboardMcpServer(session_id, resolvedCwd.path);
+    if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+      queryOptions.systemPrompt.append += '\n\n' + DASHBOARD_MCP_SYSTEM_PROMPT;
+    }
+
+    // 加入所有内置 MCP 的 allowedTools 以防自动触发权限弹窗
+    const allowedTools = [
+      'codepilot_generate_image',
+      'codepilot_import_media',
+      'codepilot_load_widget_guidelines',
+      'codepilot_cli_tools_list',
+      'codepilot_cli_tools_add',
+      'codepilot_cli_tools_remove',
+      'codepilot_cli_tools_check_updates',
+      'codepilot_dashboard_pin',
+      'codepilot_dashboard_list',
+      'codepilot_dashboard_refresh',
+      'codepilot_dashboard_update',
+      'codepilot_dashboard_remove',
+      'TodoWrite',
+      'mcp__codepilot-todo__TodoWrite',
+      'codepilot_skill_create',
+      'mcp__codepilot-todo__codepilot_skill_create',
+      'codepilot_mcp_activate',
+      'mcp__codepilot-todo__codepilot_mcp_activate',
+      'Read',
+      'Write',
+      'Edit',
+      'Bash',
+      'Glob',
+      'Grep',
+      'Skill',
+      'Agent',
+      'mcp__filesystem__read_file',
+      'mcp__filesystem__read_multiple_files',
+      'mcp__filesystem__write_file',
+      'mcp__filesystem__edit_file',
+      'mcp__filesystem__create_directory',
+      'mcp__filesystem__list_directory',
+      'mcp__filesystem__directory_tree',
+      'mcp__filesystem__move_file',
+      'mcp__filesystem__search_files',
+      'mcp__filesystem__get_file_info',
+      'mcp__fetch__fetch_html',
+      'mcp__fetch__fetch_markdown',
+      'mcp__fetch__fetch_txt',
+      'mcp__fetch__fetch_json',
+      'mcp__fetch__fetch_readable',
+      'webfetch__fetch_fetch_readable',
+      'webfetch__fetch_fetch_markdown',
+      'mcp__github__get_file_contents',
+      'mcp__github__search_repositories',
+    ];
+
+    queryOptions.canUseTool = async (toolName) => {
+      if (allowedTools.includes(toolName)) return true as any;
+      return false as any; // 预热时不接受交互输入，如果命中其他 tool，直接阻止
     };
 
     // 中文注释：查找 Claude Code CLI 路径，加速 SDK 子进程启动

@@ -416,7 +416,10 @@ function ActivityCard({
 
   useEffect(() => {
     if (open && autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const el = scrollRef.current;
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
     }
   }, [step.reasoning, open, autoScroll]);
 
@@ -560,31 +563,35 @@ function ActivityCard({
                 <div key={tool.id} className="rounded-[8px] border border-border/30 bg-background/40 overflow-hidden">
                   <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-muted/10">
                     <div className="flex items-center gap-2 overflow-hidden">
-                      <Gear size={12} weight="bold" className="text-primary/60 shrink-0" />
+                      {tool.status === 'running' ? (
+                        <SpinnerGap size={12} weight="bold" className="text-primary/60 shrink-0 animate-spin" />
+                      ) : (
+                        <Gear size={12} weight="bold" className="text-primary/60 shrink-0" />
+                      )}
                       <span className="truncate font-mono text-[11px] text-foreground/70">
                         {tool.name}
                       </span>
                     </div>
                     <span className="text-[10px] text-muted-foreground/50">
-                      {tool.status === 'running' ? '运行中...' : tool.status === 'failed' ? '执行失败' : '执行完毕'}
+                      {tool.status === 'running' ? '运行中...' : tool.status === 'failed' || tool.isError ? '执行失败' : '执行完毕'}
                     </span>
                   </div>
                   {Boolean(tool.input) && (
                     <div className="p-2 border-b border-border/20 bg-muted/5 overflow-x-auto">
                       <span className="text-[10px] font-medium text-muted-foreground/50 uppercase mb-1 block">Input</span>
                       <pre className="whitespace-pre-wrap text-[11px] leading-5 font-mono text-muted-foreground/70">
-                        <Linkify>{formatResultText(JSON.stringify(tool.input, null, 2), compact)}</Linkify>
+                        <Linkify>{formatResultText(typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2), compact)}</Linkify>
                       </pre>
                     </div>
                   )}
-                  {tool.result && (
+                  {Boolean(tool.result) && (
                     <div className="p-2 overflow-x-auto">
                       <span className="text-[10px] font-medium text-muted-foreground/50 uppercase mb-1 block">Output</span>
                       <pre className={cn(
                         'whitespace-pre-wrap text-[11px] leading-5 font-mono',
                         tool.isError ? 'text-red-500/80' : 'text-foreground/60',
                       )}>
-                        <Linkify>{formatResultText(tool.result, compact)}</Linkify>
+                        <Linkify>{formatResultText(typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2), compact)}</Linkify>
                       </pre>
                     </div>
                   )}
