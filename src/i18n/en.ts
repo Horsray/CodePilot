@@ -1510,6 +1510,7 @@ const en = {
   'git.noBranch': 'No branch',
   'git.noUpstream': 'No upstream',
   'git.notARepo': 'Not a Git repository',
+  'git.connecting': 'Connecting...',
   'git.statusSection': 'Status',
   'git.branchSection': 'Branches',
   'git.historySection': 'History',

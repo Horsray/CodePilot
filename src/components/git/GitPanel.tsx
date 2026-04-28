@@ -15,7 +15,7 @@ import { DeriveWorktreeDialog } from "./DeriveWorktreeDialog";
 export function GitPanel() {
   const { workingDirectory, sessionId } = usePanel();
   const { t } = useTranslation();
-  const { status, refresh } = useGitStatus(workingDirectory);
+  const { status, loading, refresh } = useGitStatus(workingDirectory);
 
   // Collapsible sections
   const [statusOpen, setStatusOpen] = useState(true);
@@ -42,7 +42,15 @@ export function GitPanel() {
 
   const repoName = workingDirectory.split('/').pop() || '';
 
-  if (!status?.isRepo) {
+  if (loading || !status) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-4">
+        {t('git.connecting')}
+      </div>
+    );
+  }
+
+  if (!status.isRepo) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-4">
         {t('git.notARepo')}

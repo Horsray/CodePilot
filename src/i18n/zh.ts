@@ -1507,6 +1507,7 @@ const zh: Record<TranslationKey, string> = {
   'git.noBranch': '无分支',
   'git.noUpstream': '无上游',
   'git.notARepo': '不是 Git 仓库',
+  'git.connecting': '连接中...',
   'git.statusSection': '状态',
   'git.branchSection': '分支',
   'git.historySection': '历史',
