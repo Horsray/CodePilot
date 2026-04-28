@@ -151,31 +151,9 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
       queryOptions.systemPrompt.append += '\n\n' + NOTIFICATION_MCP_SYSTEM_PROMPT + '\n\n' + TODO_MCP_SYSTEM_PROMPT + '\n\n' + BROWSER_SYSTEM_PROMPT + '\n\n' + ASK_USER_QUESTION_MCP_SYSTEM_PROMPT;
     }
 
-    // 加载 keyword-gated 的 MCP Servers
-    // 为了使预热后的进程拥有全量的功能，在 warmup 时，我们加载所有的 MCP Server。
-    // 这虽然会稍微增加启动时的 context 长度，但能保证预热进程能够应对首轮的任何 prompt。
-    const { createWidgetMcpServer } = await import('@/lib/widget-guidelines');
-    queryOptions.mcpServers['codepilot-widget'] = createWidgetMcpServer();
-
-    const { createMediaImportMcpServer, MEDIA_MCP_SYSTEM_PROMPT } = await import('@/lib/media-import-mcp');
-    const { createImageGenMcpServer } = await import('@/lib/image-gen-mcp');
-    queryOptions.mcpServers['codepilot-media'] = createMediaImportMcpServer(session_id, resolvedCwd.path);
-    queryOptions.mcpServers['codepilot-image-gen'] = createImageGenMcpServer(session_id, resolvedCwd.path);
-    if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-      queryOptions.systemPrompt.append += '\n\n' + MEDIA_MCP_SYSTEM_PROMPT;
-    }
-
-    const { createCliToolsMcpServer, CLI_TOOLS_MCP_SYSTEM_PROMPT } = await import('@/lib/cli-tools-mcp');
-    queryOptions.mcpServers['codepilot-cli-tools'] = createCliToolsMcpServer();
-    if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-      queryOptions.systemPrompt.append += '\n\n' + CLI_TOOLS_MCP_SYSTEM_PROMPT;
-    }
-
-    const { createDashboardMcpServer, DASHBOARD_MCP_SYSTEM_PROMPT } = await import('@/lib/dashboard-mcp');
-    queryOptions.mcpServers['codepilot-dashboard'] = createDashboardMcpServer(session_id, resolvedCwd.path);
-    if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-      queryOptions.systemPrompt.append += '\n\n' + DASHBOARD_MCP_SYSTEM_PROMPT;
-    }
+    // 加载 keyword-gated 的 MCP Servers (预热时不加载，避免拖慢预热和首次回复)
+    // 对于这类按需 MCP，如果用户的首条消息命中，系统会在 claude-client.ts 中检测到并开启全新的会话，不会强行复用预热进程
+    // 删除预热时对 widget, media, cli-tools, dashboard 的挂载
 
     // 加入所有内置 MCP 的 allowedTools 以防自动触发权限弹窗
     const allowedTools = [
@@ -226,9 +204,15 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
       'mcp__github__search_repositories',
     ];
 
-    queryOptions.canUseTool = async (toolName) => {
-      if (allowedTools.includes(toolName)) return true as any;
-      return false as any; // 预热时不接受交互输入，如果命中其他 tool，直接阻止
+    queryOptions.canUseTool = async (toolName, input) => {
+      if (allowedTools.includes(toolName) || allowedTools.some(t => toolName.endsWith(`__${t}`))) {
+        return { behavior: 'allow' as const, updatedInput: input };
+      }
+      return {
+        behavior: 'deny' as const,
+        message: 'Tool not allowed during warmup',
+        interrupt: false,
+      };
     };
 
     // 中文注释：查找 Claude Code CLI 路径，加速 SDK 子进程启动

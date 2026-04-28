@@ -141,7 +141,7 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     actionControllerRef.current?.abort();
     const controller = new AbortController();
     actionControllerRef.current = controller;
-    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+    const timeoutId = window.setTimeout(() => controller.abort(), 60000);
     try {
       const res = await fetch('/api/chat/review', {
         method: 'POST',
@@ -178,7 +178,7 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     actionControllerRef.current?.abort();
     const controller = new AbortController();
     actionControllerRef.current = controller;
-    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+    const timeoutId = window.setTimeout(() => controller.abort(), 60000);
     try {
       const res = await fetch('/api/chat/review', {
         method: 'POST',

@@ -161,6 +161,26 @@ interface FlatNode {
   isExpanded: boolean;
 }
 
+type CacheEntry<T> = { value: T; ts: number };
+
+const FILE_TREE_CACHE_TTL_MS = 30_000;
+const rootTreeCache = new Map<string, CacheEntry<FileTreeNode[]>>();
+const directoryChildrenCache = new Map<string, CacheEntry<FileTreeNode[]>>();
+
+function getCached<T>(cache: Map<string, CacheEntry<T>>, key: string): T | null {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > FILE_TREE_CACHE_TTL_MS) {
+    cache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setCached<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T) {
+  cache.set(key, { value, ts: Date.now() });
+}
+
 // 树节点组件
 interface TreeNodeProps {
   flatNode: FlatNode;
@@ -174,6 +194,7 @@ interface TreeNodeProps {
   onCopyPath: (path: string) => void;
   onOpenInFinder: (path: string) => void;
   onAddToChat: (path: string) => void;
+  isLoading?: boolean;
   isHighlighted?: boolean;
 }
 
@@ -189,6 +210,7 @@ function TreeNode({
   onCopyPath,
   onOpenInFinder,
   onAddToChat,
+  isLoading,
   isHighlighted,
 }: TreeNodeProps) {
   const { node, level, isExpanded } = flatNode;
@@ -232,6 +254,9 @@ function TreeNode({
 
             {/* 文件名 */}
             <span className="truncate flex-1">{node.name}</span>
+            {isDirectory && isExpanded && isLoading ? (
+              <ArrowsClockwise size={13} className="shrink-0 animate-spin text-muted-foreground" />
+            ) : null}
           </div>
         </ContextMenuTrigger>
 
@@ -315,6 +340,11 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
   const abortRef = useRef<AbortController | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const seekKeyRef = useRef<string | null>(null);
+  const treeRef = useRef<FileTreeNode[]>([]);
+  const expandedRef = useRef<Set<string>>(new Set());
+  const loadingDirectoriesRef = useRef<Set<string>>(new Set());
+  // 中文注释：用于渲染“目录展开加载中”的占位状态，避免用户误以为点击无响应。
+  const [loadingDirectories, setLoadingDirectories] = useState<Set<string>>(new Set());
 
   // 新建文件/文件夹对话框状态
   const [newItemDialog, setNewItemDialog] = useState<{
@@ -365,6 +395,108 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
     return new Set();
   }, [workingDirectory]);
 
+  useEffect(() => {
+    treeRef.current = tree;
+  }, [tree]);
+
+  useEffect(() => {
+    expandedRef.current = expanded;
+  }, [expanded]);
+
+  const updateTreeChildren = useCallback((nodes: FileTreeNode[], targetPath: string, children: FileTreeNode[]): FileTreeNode[] => {
+    let changed = false;
+    const next = nodes.map((node) => {
+      if (node.path === targetPath) {
+        if (node.type !== "directory") return node;
+        changed = true;
+        return { ...node, children };
+      }
+      if (node.type === "directory" && node.children) {
+        const updatedChildren = updateTreeChildren(node.children, targetPath, children);
+        if (updatedChildren !== node.children) {
+          changed = true;
+          return { ...node, children: updatedChildren };
+        }
+      }
+      return node;
+    });
+    return changed ? next : nodes;
+  }, []);
+
+  const findNode = useCallback((nodes: FileTreeNode[], targetPath: string): FileTreeNode | null => {
+    for (const node of nodes) {
+      if (node.path === targetPath) return node;
+      if (node.type === "directory" && node.children) {
+        const found = findNode(node.children, targetPath);
+        if (found) return found;
+      }
+    }
+    return null;
+  }, []);
+
+  const ensureDirectoryChildrenLoaded = useCallback(
+    async (dirPath: string, signal?: AbortSignal) => {
+      if (!workingDirectory) return;
+
+      const cached = getCached(directoryChildrenCache, dirPath);
+      if (cached) {
+        setTree((prev) => {
+          const next = updateTreeChildren(prev, dirPath, cached);
+          treeRef.current = next;
+          return next;
+        });
+        return;
+      }
+
+      if (loadingDirectoriesRef.current.has(dirPath)) return;
+      loadingDirectoriesRef.current.add(dirPath);
+      setLoadingDirectories((prev) => {
+        const next = new Set(prev);
+        next.add(dirPath);
+        return next;
+      });
+      try {
+        const res = await fetch(
+          `/api/files?dir=${encodeURIComponent(dirPath)}&baseDir=${encodeURIComponent(workingDirectory)}&depth=1`,
+          signal ? { signal } : undefined
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const children = (data.tree || []) as FileTreeNode[];
+        setCached(directoryChildrenCache, dirPath, children);
+        setTree((prev) => {
+          const next = updateTreeChildren(prev, dirPath, children);
+          treeRef.current = next;
+          return next;
+        });
+      } finally {
+        loadingDirectoriesRef.current.delete(dirPath);
+        setLoadingDirectories((prev) => {
+          const next = new Set(prev);
+          next.delete(dirPath);
+          return next;
+        });
+      }
+    },
+    [workingDirectory, updateTreeChildren]
+  );
+
+  const hydrateExpandedDirectories = useCallback(
+    async (expandedSet: Set<string>, signal?: AbortSignal) => {
+      if (!workingDirectory) return;
+      const paths = Array.from(expandedSet);
+      paths.sort((a, b) => a.split("/").length - b.split("/").length);
+
+      for (const dirPath of paths) {
+        const node = findNode(treeRef.current, dirPath);
+        if (!node || node.type !== "directory") continue;
+        if (node.children !== undefined) continue;
+        await ensureDirectoryChildrenLoaded(dirPath, signal);
+      }
+    },
+    [workingDirectory, findNode, ensureDirectoryChildrenLoaded]
+  );
+
   // 获取文件树
   const fetchTree = useCallback(async () => {
     if (abortRef.current) {
@@ -373,6 +505,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
 
     if (!workingDirectory) {
       abortRef.current = null;
+      treeRef.current = [];
       setTree([]);
       setError(null);
       setLoading(false);
@@ -385,16 +518,25 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
     setLoading(true);
     setError(null);
     try {
+      const cachedRoot = getCached(rootTreeCache, workingDirectory);
+      if (cachedRoot && treeRef.current.length === 0) {
+        treeRef.current = cachedRoot;
+        setTree(cachedRoot);
+      }
+
       const res = await fetch(
-        `/api/files?dir=${encodeURIComponent(workingDirectory)}&baseDir=${encodeURIComponent(workingDirectory)}&depth=4&_t=${Date.now()}`,
+        `/api/files?dir=${encodeURIComponent(workingDirectory)}&baseDir=${encodeURIComponent(workingDirectory)}&depth=1`,
         { signal: controller.signal }
       );
       if (controller.signal.aborted) return;
       if (res.ok) {
         const data = await res.json();
         if (controller.signal.aborted) return;
-        setTree(data.tree || []);
-        // 加载保存的展开状态，默认所有文件夹都是折叠的
+        const nextTree = (data.tree || []) as FileTreeNode[];
+        treeRef.current = nextTree;
+        setTree(nextTree);
+        setCached(rootTreeCache, workingDirectory, nextTree);
+
         const savedExpanded = loadExpandedState();
         if (highlightPath) {
           const next = new Set(savedExpanded);
@@ -402,16 +544,20 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
             next.add(parent);
           }
           setExpanded(next);
+          void hydrateExpandedDirectories(next, controller.signal);
         } else {
           setExpanded(savedExpanded);
+          void hydrateExpandedDirectories(savedExpanded, controller.signal);
         }
       } else {
         const errData = await res.json().catch(() => ({ error: res.statusText }));
+        treeRef.current = [];
         setTree([]);
         setError(errData.error || `Failed to load (${res.status})`);
       }
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
+      treeRef.current = [];
       setTree([]);
       setError("Failed to load file tree");
     } finally {
@@ -419,7 +565,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
         setLoading(false);
       }
     }
-  }, [workingDirectory, loadExpandedState, highlightPath]);
+  }, [workingDirectory, loadExpandedState, highlightPath, hydrateExpandedDirectories]);
 
   useEffect(() => {
     fetchTree();
@@ -478,20 +624,28 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
     };
   }, []);
 
-  // 展开/折叠
-  const handleToggle = useCallback((path: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      // 保存展开状态
-      saveExpandedState(next);
-      return next;
-    });
-  }, [saveExpandedState]);
+  const handleToggle = useCallback(
+    (path: string) => {
+      const shouldExpand = !expandedRef.current.has(path);
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        saveExpandedState(next);
+        return next;
+      });
+
+      if (!shouldExpand) return;
+      const node = findNode(treeRef.current, path);
+      if (!node || node.type !== "directory") return;
+      if (node.children !== undefined) return;
+      void ensureDirectoryChildrenLoaded(path, abortRef.current?.signal);
+    },
+    [saveExpandedState, findNode, ensureDirectoryChildrenLoaded]
+  );
 
   useEffect(() => {
     if (!highlightPath) return;
@@ -856,6 +1010,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
                 onCopyPath={handleCopyPath}
                 onOpenInFinder={handleOpenInFinder}
                 onAddToChat={handleAddToChat}
+                isLoading={loadingDirectories.has(flatNode.node.path)}
                 isHighlighted={flatNode.node.path === highlightPath}
               />
             )}

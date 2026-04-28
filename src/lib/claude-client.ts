@@ -953,6 +953,8 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
           }
         }
 
+        let hasOnDemandMcpServers = onDemandMcpNames.size > 0;
+
         // Widget guidelines: progressive loading strategy.
         // The system prompt always includes WIDGET_SYSTEM_PROMPT with format rules.
         // The MCP server (detailed design specs) is only registered when the
@@ -972,6 +974,7 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
           })();
 
           if (needsWidgetSpecs) {
+            hasOnDemandMcpServers = true;
             const { createWidgetMcpServer } = await import('@/lib/widget-guidelines');
             const widgetServer = createWidgetMcpServer();
             queryOptions.mcpServers = {
@@ -996,6 +999,7 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         })();
 
         if (needsMediaMcp) {
+          hasOnDemandMcpServers = true;
           const { createMediaImportMcpServer, MEDIA_MCP_SYSTEM_PROMPT } = await import('@/lib/media-import-mcp');
           const { createImageGenMcpServer } = await import('@/lib/image-gen-mcp');
           queryOptions.mcpServers = {
@@ -1020,6 +1024,7 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         })();
 
         if (needsCliToolsMcp) {
+          hasOnDemandMcpServers = true;
           const { createCliToolsMcpServer, CLI_TOOLS_MCP_SYSTEM_PROMPT } = await import('@/lib/cli-tools-mcp');
           queryOptions.mcpServers = {
             ...(queryOptions.mcpServers || {}),
@@ -1039,6 +1044,7 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         })();
 
         if (needsDashboardMcp) {
+          hasOnDemandMcpServers = true;
           const { createDashboardMcpServer, DASHBOARD_MCP_SYSTEM_PROMPT } = await import('@/lib/dashboard-mcp');
           queryOptions.mcpServers = {
             ...(queryOptions.mcpServers || {}),
@@ -1133,8 +1139,11 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         // 中文注释：功能名称「预热会话复用检查」，用法是当数据库中没有 sdkSessionId 时，
         // 如果内存中存在刚刚预热好的 persistent session（带有 initData 且签名匹配），
         // 允许通过 isSessionWarmedUp 检查来复用这个预热进程，避免被下面的 stale session 逻辑误杀。
+        // 但注意：如果本次请求加载了预热进程中没有的按需 MCP Server，则不能复用预热进程！
         const isWarmedUp = sessionId ? !!(await import('./persistent-claude-session').then(m => m.isSessionWarmedUp(sessionId))) : false;
-        if (!shouldResume && isWarmedUp && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+        const canReuseWarmup = isWarmedUp && !hasOnDemandMcpServers;
+
+        if (!shouldResume && canReuseWarmup && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
           console.log(`[claude-client] Found warmed up persistent session ${sessionId}, allowing reuse despite missing sdkSessionId`);
           shouldResume = true;
         }

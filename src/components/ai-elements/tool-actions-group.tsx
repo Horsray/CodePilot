@@ -1425,13 +1425,24 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
       "my-1 overflow-hidden",
       status === 'error' ? "border border-red-500/20 rounded-[6px]" : ""
     )}>
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => {
           if (detailVisible || hasRawContent) {
             if (hasRawContent) setShowRaw(prev => !prev);
             else if (onToggle) onToggle();
             else setInternalExpanded((prev) => !prev);
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            if (detailVisible || hasRawContent) {
+              if (hasRawContent) setShowRaw(prev => !prev);
+              else if (onToggle) onToggle();
+              else setInternalExpanded((prev) => !prev);
+            }
           }
         }}
         className={cn(
@@ -1496,7 +1507,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           {status === 'success' && <CheckCircle size={14} className={isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-emerald-500")} />}
           {status === 'error' && <XCircle size={14} className="text-red-500" />}
         </div>
-      </button>
+      </div>
       <AnimatePresence initial={false}>
         {(detailVisible && expanded) || (hasRawContent && showRaw) ? (
           <motion.div
@@ -1663,6 +1674,11 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
               style={{ overflow: 'hidden' }}
             >
               <div className="px-4 pb-2.5 pt-0.5 border-l-2 border-violet-500/20 ml-3">
+                {cmd && (
+                  <div className="mb-1 whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/70">
+                    $ {cmd}
+                  </div>
+                )}
                 <pre className="whitespace-pre-wrap break-all font-mono text-[12px] text-muted-foreground/80 max-h-[300px] overflow-auto">
                   {status === 'running' ? streamingToolOutput : tool.result}
                 </pre>

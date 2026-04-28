@@ -133,12 +133,11 @@ async function scanDirectoryRecursive(dir: string, depth: number): Promise<FileT
     if (entry.isDirectory()) {
       if (IGNORED_DIRS.has(entry.name)) continue;
 
-      const children = await scanDirectoryRecursive(fullPath, depth - 1);
       nodes.push({
         name: entry.name,
         path: fullPath,
         type: 'directory',
-        children,
+        children: depth > 1 ? await scanDirectoryRecursive(fullPath, depth - 1) : undefined,
       });
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).replace(/^\./, '');

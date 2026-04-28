@@ -230,10 +230,13 @@ function createEntry(
     ...options,
     canUseTool: async (toolName, toolInput, opts) => {
       if (entry.currentOptions?.canUseTool) {
-        const result = await entry.currentOptions.canUseTool(toolName, toolInput, opts);
-        return result as any;
+        return entry.currentOptions.canUseTool(toolName, toolInput, opts);
       }
-      return false as any; // 默认拒绝
+      return {
+        behavior: 'deny',
+        message: 'Permission handler unavailable',
+        interrupt: false,
+      } as any;
     },
     stderr: (data) => {
       if (entry.currentOptions?.stderr) {

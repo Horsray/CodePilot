@@ -146,7 +146,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         });
       })
       .catch(() => { /* keep current state as-is */ });
-  }, [sessionId]);
+  }, [sessionId, t]);
 
   const cappedSetMessages: typeof setMessages = useCallback((action) => {
     setMessages((prev) => {
@@ -236,36 +236,27 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const permissionResolved = streamSnapshot?.permissionResolved ?? null;
   const rewindPoints = getRewindPoints(sessionId);
   const subAgents = streamSnapshot?.subAgents ?? [];
-  const [skillNudge, setSkillNudge] = useState<{
-    message: string;
-    step: number;
-    distinctToolCount: number;
-    toolNames: string[];
-  } | null>(null);
 
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
-        setSkillNudge({
-          message: detail.message || '',
-          step: detail.step || 0,
-          distinctToolCount: detail.distinctToolCount || 0,
-          toolNames: detail.toolNames || [],
-        });
         showToast({
           type: "success",
-          message: "检测到高价值工作流！建议点击顶部横幅将其保存为 Skill",
+          message: `检测到高价值工作流（${detail.step || 0} 步 / ${detail.distinctToolCount || 0} 个工具）`,
+          description: (detail.toolNames && detail.toolNames.length > 0)
+            ? `包含工具：${detail.toolNames.slice(0, 6).join('、')}${detail.toolNames.length > 6 ? ` 等 ${detail.toolNames.length} 个` : ''}`
+            : "可将本次流程保存为 Skill，后续一键复用",
+          action: {
+            label: "保存为 Skill",
+            onClick: () => sendMessageRef.current?.(t('skillNudge.savePrompt')),
+          },
         });
       }
     };
     window.addEventListener('skill-nudge', handler);
     return () => window.removeEventListener('skill-nudge', handler);
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (isStreaming) setSkillNudge(null);
-  }, [isStreaming]);
+  }, [sessionId, t]);
 
   // ── Message queue — allows sending while AI is responding ──
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
@@ -1026,39 +1017,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {/* Skill nudge banner — shown after complex multi-step workflows */}
-      {skillNudge && !isStreaming && (
-        <div className="mx-auto w-full max-w-3xl border-t border-border bg-background px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="flex-1 text-sm text-muted-foreground">
-              {t('skillNudge.message')
-                .replace('{step}', String(skillNudge.step))
-                .replace('{toolCount}', String(skillNudge.distinctToolCount))}
-            </p>
-            <div className="flex items-center gap-2 shrink-0">
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs"
-                onClick={() => {
-                  setSkillNudge(null);
-                  sendMessageRef.current?.(t('skillNudge.savePrompt'));
-                }}
-              >
-                {t('skillNudge.saveButton')}
-              </Button>
-              <button
-                type="button"
-                onClick={() => setSkillNudge(null)}
-                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                aria-label="Dismiss"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Batch image generation panels */}
       <BatchExecutionDashboard />
       <BatchContextSync />
