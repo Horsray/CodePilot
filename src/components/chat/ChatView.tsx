@@ -537,12 +537,20 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     }
   }, [findLastUserMessage, runTerminalAction]);
 
+  // Per-session thinking mode toggle (separate from provider-level thinking_mode option).
+  // When null/undefined, falls back to the provider-level thinking_mode from DB.
+  const [sessionThinkingMode, setSessionThinkingMode] = useState<'enabled' | 'disabled' | undefined>(undefined);
+
   const buildThinkingConfig = useCallback((): { type: string } | undefined => {
+    // Per-session toggle overrides provider-level setting
+    if (sessionThinkingMode === 'enabled') return { type: 'enabled' };
+    if (sessionThinkingMode === 'disabled') return { type: 'disabled' };
+    // Fall back to provider-level thinking_mode from DB
     if (!thinkingMode || thinkingMode === 'adaptive') return { type: 'adaptive' };
     if (thinkingMode === 'enabled') return { type: 'enabled' };
     if (thinkingMode === 'disabled') return { type: 'disabled' };
     return undefined;
-  }, [thinkingMode]);
+  }, [thinkingMode, sessionThinkingMode]);
 
   const checkAssistantTrigger = useAssistantTrigger({
     sessionId,
@@ -1123,6 +1131,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onAssistantTrigger={checkAssistantTrigger}
         effort={selectedEffort}
         onEffortChange={setSelectedEffort}
+        thinkingMode={sessionThinkingMode}
+        onThinkingModeChange={setSessionThinkingMode}
         sdkInitMeta={initMetaRef.current}
         isAssistantProject={isAssistantProject}
         hasMessages={messages.length > 0}

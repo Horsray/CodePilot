@@ -196,7 +196,18 @@ export async function GET() {
       // leave rawModels empty — do NOT fall back to DEFAULT_MODELS (Sonnet/Opus/Haiku).
       if (dbModels.length > 0) {
         const dbIds = new Set(dbModels.map(m => m.value));
-        rawModels = [...dbModels, ...catalogRaw.filter(m => !dbIds.has(m.value))];
+        const catalogById = new Map(catalogRaw.map(m => [m.value, m]));
+        // Merge catalog capabilities into DB models — DB capabilities take
+        // priority for existing keys, catalog fills in missing ones (e.g. a
+        // newly added supportsThinkingToggle). Without this, provider
+        // capabilities added to the catalog never reach the frontend when
+        // the provider_models table already has rows.
+        const enhancedDbModels = dbModels.map(m => {
+          const cat = catalogById.get(m.value);
+          if (!cat?.capabilities) return m;
+          return { ...m, capabilities: { ...(cat.capabilities as Record<string, unknown>), ...(m.capabilities || {}) } };
+        });
+        rawModels = [...enhancedDbModels, ...catalogRaw.filter(m => !dbIds.has(m.value))];
       } else {
         rawModels = [...catalogRaw];
       }
@@ -254,6 +265,7 @@ export async function GET() {
           ...(caps.supportsEffort != null ? { supportsEffort: caps.supportsEffort as boolean } : {}),
           ...(caps.supportedEffortLevels != null ? { supportedEffortLevels: caps.supportedEffortLevels as string[] } : {}),
           ...(caps.supportsAdaptiveThinking != null ? { supportsAdaptiveThinking: caps.supportsAdaptiveThinking as boolean } : {}),
+          ...(caps.supportsThinkingToggle != null ? { supportsThinkingToggle: caps.supportsThinkingToggle as boolean } : {}),
         };
         return {
           ...m,

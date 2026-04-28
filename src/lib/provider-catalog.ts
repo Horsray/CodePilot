@@ -67,6 +67,8 @@ export interface CatalogModel {
     supportedEffortLevels?: ('low' | 'medium' | 'high' | 'xhigh' | 'max')[];
     /** Whether this model supports adaptive thinking */
     supportsAdaptiveThinking?: boolean;
+    /** Whether this model supports a user-facing thinking toggle (e.g. Deepseek) */
+    supportsThinkingToggle?: boolean;
   };
 }
 
@@ -180,6 +182,10 @@ export const PresetSchema = z.object({
       vision: z.boolean().optional(),
       pdf: z.boolean().optional(),
       contextWindow: z.number().optional(),
+      supportsEffort: z.boolean().optional(),
+      supportedEffortLevels: z.array(z.enum(['low', 'medium', 'high', 'xhigh', 'max'])).optional(),
+      supportsAdaptiveThinking: z.boolean().optional(),
+      supportsThinkingToggle: z.boolean().optional(),
     }).optional(),
   })),
   fields: z.array(z.string()),
@@ -559,9 +565,9 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_EFFORT_LEVEL: 'max',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4 } },
-      { modelId: 'opus', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'opus', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4 } },
-      { modelId: 'haiku', upstreamModelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', role: 'haiku', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4 } },
+      { modelId: 'sonnet', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4, supportsEffort: true, supportedEffortLevels: ['high', 'max'], supportsThinkingToggle: true } },
+      { modelId: 'opus', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'opus', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4, supportsEffort: true, supportedEffortLevels: ['high', 'max'], supportsThinkingToggle: true } },
+      { modelId: 'haiku', upstreamModelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', role: 'haiku', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4, supportsEffort: true, supportedEffortLevels: ['high', 'max'], supportsThinkingToggle: true } },
     ],
     defaultRoleModels: {
       default: 'deepseek-v4-pro',

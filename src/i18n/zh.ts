@@ -1281,6 +1281,10 @@ const zh: Record<TranslationKey, string> = {
   'messageInput.effort.xhigh': '极高',
   'messageInput.effort.max': '最大',
 
+  // ── Thinking mode toggle (Deepseek) ──
+  'messageInput.thinking.on': '思考: 开启',
+  'messageInput.thinking.off': '思考: 关闭',
+
   // ── SDK Capabilities: Terminal Reason (Phase 1 of agent-sdk-0-2-111) ──
   'terminal.completed': '已完成',
   'terminal.max_turns': '已达到轮数上限',

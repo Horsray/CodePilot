@@ -1284,6 +1284,10 @@ const en = {
   'messageInput.effort.xhigh': 'XHigh',
   'messageInput.effort.max': 'Max',
 
+  // ── Thinking mode toggle (Deepseek) ──
+  'messageInput.thinking.on': 'Thinking: On',
+  'messageInput.thinking.off': 'Thinking: Off',
+
   // ── SDK Capabilities: Terminal Reason (Phase 1 of agent-sdk-0-2-111) ──
   'terminal.completed': 'Completed',
   'terminal.max_turns': 'Max turns reached',

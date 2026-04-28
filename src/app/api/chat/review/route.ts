@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
   const db = getDb();
   const rows = db.prepare(
     'SELECT file_path, original_content FROM file_checkpoints WHERE session_id = ?'
-  ).all(sessionId) as Array<{ file_path: string; original_content: string }>;
+  ).all(sessionId) as Array<{ file_path: string; original_content: string | null }>;
 
   for (const row of rows) {
     const fullPath = path.isAbsolute(row.file_path) ? row.file_path : path.join(wd, row.file_path);
@@ -46,21 +46,26 @@ export async function GET(request: NextRequest) {
       console.warn(`[review-api] Failed to read ${fullPath}:`, err);
     }
 
-    const diffLines = computeDiff(row.original_content, currentContent);
+    const diffLines = computeDiff(row.original_content || '', currentContent || '');
+    
+    // Calculate simple stats based on diff result
     const added = diffLines.filter(l => l.type === 'added').length;
     const removed = diffLines.filter(l => l.type === 'removed').length;
     
-    totalAdded += added;
-    totalRemoved += removed;
+    // Only include files that actually have changes
+    if (added > 0 || removed > 0) {
+      totalAdded += added;
+      totalRemoved += removed;
 
-    modifiedFiles.push({
-      path: row.file_path,
-      added,
-      removed,
-      originalContent: row.original_content,
-      currentContent,
-      diffLines // Pass computed diff to frontend
-    });
+      modifiedFiles.push({
+        path: row.file_path,
+        added,
+        removed,
+        originalContent: row.original_content,
+        currentContent,
+        diffLines // Pass computed diff to frontend
+      });
+    }
   }
 
   return NextResponse.json({

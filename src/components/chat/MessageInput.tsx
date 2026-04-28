@@ -60,6 +60,9 @@ interface MessageInputProps {
   /** Effort selection lifted to parent for inclusion in the stream chain */
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
+  /** Thinking mode toggle — on/off for Deepseek-style thinking control */
+  thinkingMode?: 'enabled' | 'disabled';
+  onThinkingModeChange?: (mode: 'enabled' | 'disabled') => void;
   /** SDK init metadata — when available, used to validate command/skill availability */
   sdkInitMeta?: { tools?: unknown; slash_commands?: unknown; skills?: unknown } | null;
   /** Initial value to prefill in the input */
@@ -122,6 +125,8 @@ export function MessageInput({
   onAssistantTrigger,
   effort: effortProp,
   onEffortChange,
+  thinkingMode,
+  onThinkingModeChange,
   sdkInitMeta,
   initialValue,
   isAssistantProject,
@@ -740,8 +745,9 @@ export function MessageInput({
   }, [normalizeMentionPath]);
 
   // Effort selector state — guard against undefined when model not found in current provider's list
-  const currentModelMeta = currentModelOption as (typeof currentModelOption & { supportsEffort?: boolean; supportedEffortLevels?: string[] }) | undefined;
+  const currentModelMeta = currentModelOption as (typeof currentModelOption & { supportsEffort?: boolean; supportedEffortLevels?: string[]; supportsThinkingToggle?: boolean }) | undefined;
   const showEffortSelector = currentModelMeta?.supportsEffort === true;
+  const showThinkingToggle = currentModelMeta?.supportsThinkingToggle === true;
   // Default label is 'auto' — the UI displays "默认 / Auto" and no explicit
   // effort value is sent to the backend. This lets Claude Code apply its
   // per-model default (e.g. xhigh on Opus 4.7). If we initialized to 'high'
@@ -939,6 +945,24 @@ export function MessageInput({
                     onEffortChange={setSelectedEffort}
                     supportedEffortLevels={currentModelMeta?.supportedEffortLevels}
                   />
+                )}
+
+                {/* Thinking mode toggle — visible for Deepseek-style models */}
+                {showThinkingToggle && (
+                  <PromptInputButton
+                    className={thinkingMode === 'enabled' ? '!bg-green-500/15 !text-green-600 dark:!text-green-400' : ''}
+                    onClick={() => {
+                      const next = thinkingMode === 'enabled' ? 'disabled' : 'enabled';
+                      onThinkingModeChange?.(next);
+                    }}
+                  >
+                    <span className="text-xs">
+                      {thinkingMode === 'enabled'
+                        ? t('messageInput.thinking.on' as TranslationKey)
+                        : t('messageInput.thinking.off' as TranslationKey)
+                      }
+                    </span>
+                  </PromptInputButton>
                 )}
 
               </PromptInputTools>
