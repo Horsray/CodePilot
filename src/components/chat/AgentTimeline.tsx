@@ -388,21 +388,21 @@ function ActivityCard({
   // We don't want it permanently open, that looks cluttered.
   // ---------------------------------------------------------------------------
   const [userToggled, setUserToggled] = useState<boolean | null>(null);
-  const [internalExpanded, setInternalExpanded] = useState((isSearchTool || isThinkingStep) ? false : isRunning);
+  const [internalExpanded, setInternalExpanded] = useState(isSearchTool ? false : isRunning);
   
   useEffect(() => {
     if (userToggled !== null) return;
-    if (isSearchTool || isThinkingStep) {
+    if (isSearchTool) {
       setInternalExpanded(false);
     } else if (isRunning) {
       setInternalExpanded(true);
     } else {
       const timer = setTimeout(() => {
         setInternalExpanded(false);
-      }, 1000);
+      }, 500);
       return () => clearTimeout(timer);
     }
-  }, [isRunning, isSearchTool, isThinkingStep, userToggled]);
+  }, [isRunning, isSearchTool, userToggled]);
 
   const open = userToggled ?? internalExpanded;
 

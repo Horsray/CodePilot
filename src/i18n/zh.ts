@@ -1354,6 +1354,8 @@ const zh: Record<TranslationKey, string> = {
   // ── SDK Capabilities: Thinking ────────────────────────────
   'settings.thinkingMode': '思考模式',
   'settings.thinkingModeDesc': '控制 Claude 的扩展思考行为',
+  'settings.thinkingModeDeepseek': '思考模式 (DeepSeek)',
+  'settings.thinkingModeDeepseekDesc': '开启后模型在输出前会先进行思维链推理，提升答案准确性',
   'settings.thinkingAdaptive': '自适应',
   'settings.thinkingEnabled': '启用',
   'settings.thinkingDisabled': '禁用',

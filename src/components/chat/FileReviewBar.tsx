@@ -52,6 +52,7 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
   const [processing, setProcessing] = useState(false);
   const [diffModalFile, setDiffModalFile] = useState<ModifiedFile | null>(null);
   const fetchControllerRef = useRef<AbortController | null>(null);
+  const actionControllerRef = useRef<AbortController | null>(null);
 
   // 文件审查状态重置：切换会话、放弃修改或接口返回空结果时调用。
   const resetReviewState = useCallback(() => {
@@ -64,7 +65,7 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
 
   // 文件审查状态拉取：同一时间只保留一个请求，开始流式回复或切换会话时立即中止。
   const fetchStatus = useCallback(async () => {
-    if (!sessionId || isStreaming) return;
+    if (!sessionId || isStreaming || processing) return;
     fetchControllerRef.current?.abort();
     const controller = new AbortController();
     fetchControllerRef.current = controller;
@@ -84,7 +85,6 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
 
       const data = await res.json();
       if (controller.signal.aborted) return;
-      console.log('FileReviewBar data:', data);
 
       const nextFiles = Array.isArray(data.modifiedFiles) ? data.modifiedFiles : [];
       setModifiedFiles(nextFiles);
@@ -104,11 +104,12 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
         fetchControllerRef.current = null;
       }
     }
-  }, [isStreaming, resetReviewState, sessionId]);
+  }, [isStreaming, processing, resetReviewState, sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
       fetchControllerRef.current?.abort();
+      actionControllerRef.current?.abort();
       resetReviewState();
       return;
     }
@@ -127,6 +128,7 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     return () => {
       window.clearInterval(interval);
       fetchControllerRef.current?.abort();
+      actionControllerRef.current?.abort();
     };
   }, [fetchStatus, isStreaming, resetReviewState, sessionId]);
 
@@ -136,20 +138,34 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     e.stopPropagation();
     setProcessing(true);
     fetchControllerRef.current?.abort();
+    actionControllerRef.current?.abort();
+    const controller = new AbortController();
+    actionControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
     try {
       const res = await fetch('/api/chat/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, action: 'accept' }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timeoutId);
       if (!res.ok) {
         throw new Error(`accept failed: ${res.status}`);
       }
       resetReviewState();
       setExpanded(false);
     } catch (e) {
+      if (controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
+        console.error('Failed to accept changes: request timed out.');
+        return;
+      }
       console.error('Failed to accept changes:', e);
     } finally {
+      window.clearTimeout(timeoutId);
+      if (actionControllerRef.current === controller) {
+        actionControllerRef.current = null;
+      }
       setProcessing(false);
     }
   };
@@ -159,12 +175,18 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     if (!window.confirm(`确定要放弃这 ${pendingCount} 个文件的所有更改吗？此操作不可撤销。`)) return;
     setProcessing(true);
     fetchControllerRef.current?.abort();
+    actionControllerRef.current?.abort();
+    const controller = new AbortController();
+    actionControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
     try {
       const res = await fetch('/api/chat/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, action: 'discard' }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timeoutId);
       if (!res.ok) {
         throw new Error(`discard failed: ${res.status}`);
       }
@@ -174,8 +196,16 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
       window.dispatchEvent(new CustomEvent('session-updated'));
       window.dispatchEvent(new CustomEvent('files-changed'));
     } catch (e) {
+      if (controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
+        console.error('Failed to discard changes: request timed out.');
+        return;
+      }
       console.error('Failed to discard changes:', e);
     } finally {
+      window.clearTimeout(timeoutId);
+      if (actionControllerRef.current === controller) {
+        actionControllerRef.current = null;
+      }
       setProcessing(false);
     }
   };
@@ -186,8 +216,8 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     <>
       <div className="px-4 pb-2 flex justify-start pointer-events-none">
         <div className={cn(
-          "overflow-hidden rounded-[8px] border bg-[#F6F6F6] dark:bg-[#1E1E1E] shadow-[0_4px_24px_rgba(0,0,0,0.08)] transition-all duration-300 w-fit min-w-[360px] max-w-[600px] pointer-events-auto",
-          pendingCount > 0 ? "border-border/60 opacity-100 translate-y-0 scale-100" : "border-border/10 opacity-0 translate-y-4 scale-95 pointer-events-none"
+          "overflow-hidden rounded-xl border bg-background shadow-lg backdrop-blur-md transition-all duration-300 w-fit min-w-[320px] max-w-[500px] pointer-events-auto",
+          pendingCount > 0 ? "border-primary/30 opacity-100 translate-y-0 scale-100" : "border-border/10 opacity-0 translate-y-4 scale-95 pointer-events-none"
         )}>
           {/* Expanded list of files */}
           <AnimatePresence>
@@ -212,45 +242,43 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
           </AnimatePresence>
 
           {/* Bottom Bar */}
-          <div className="flex items-center h-[52px]">
+          <div className="flex items-center h-10">
             {/* Left Icon Box */}
-            <div className="flex h-full w-[40px] shrink-0 items-center justify-center pl-1.5">
-              <div className="flex h-[20px] w-[20px] items-center justify-center rounded-full bg-[#0066cc] text-white shadow-sm">
-                <span className="text-[12px] font-bold font-serif leading-none mt-[-1px]">i</span>
-              </div>
+            <div className="flex h-full w-10 shrink-0 items-center justify-center border-r border-border/10 text-primary/80">
+              <NotePencil size={18} weight="bold" className="text-[#7C3AED]" />
             </div>
 
             <button 
               onClick={() => setExpanded(!expanded)}
-              className="flex flex-1 items-center gap-2 px-2 hover:bg-black/5 dark:hover:bg-white/5 transition-colors h-full text-left min-w-0 group rounded-md my-[6px]"
+              className="flex flex-1 items-center gap-2 px-3 hover:bg-muted/10 transition-colors h-full text-left min-w-0 group"
             >
-              <span className="text-[13.5px] font-medium text-foreground/90 truncate ml-0.5">
-                审查文件 {pendingCount}
+              <span className="text-[13px] font-medium text-foreground/80 truncate">
+                当前会话有 {pendingCount} 个文件待审查
               </span>
               <CaretUpDown size={14} className="text-muted-foreground/40 group-hover:text-muted-foreground transition-transform" />
               
-              <div className="flex items-center gap-1.5 font-mono text-[12px] ml-auto pr-1 opacity-80 group-hover:opacity-100 transition-opacity">
-                {totalAdded > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{totalAdded}</span>}
-                {totalRemoved > 0 && <span className="text-red-600 dark:text-red-400">-{totalRemoved}</span>}
+              <div className="flex items-center gap-1.5 font-mono text-[11px] ml-auto pr-2">
+                <span className="text-emerald-500/80">+{totalAdded}</span>
+                <span className="text-red-500/70">-{totalRemoved}</span>
               </div>
             </button>
 
-            <div className="flex items-center gap-2 px-3 h-full shrink-0">
+            <div className="flex items-center gap-1 px-2 border-l border-border/10 h-full">
               <button
                 onClick={handleDiscard}
                 disabled={processing}
-                className="flex h-8 w-8 items-center justify-center text-muted-foreground/60 hover:text-foreground hover:bg-black/5 dark:hover:bg-white/10 rounded-[6px] transition-all disabled:opacity-50"
-                title="放弃全部"
+                className="flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground transition-all disabled:opacity-50"
+                title="放弃整个会话中的全部修改"
               >
                 <X size={16} />
               </button>
               <button
                 onClick={handleAccept}
                 disabled={processing}
-                className="flex h-[30px] px-3.5 items-center justify-center bg-[#0066cc] text-white hover:bg-[#0055b3] shadow-[0_1px_2px_rgba(0,0,0,0.1)] rounded-[6px] text-[13px] font-medium transition-all disabled:opacity-50 active:scale-95"
-                title="接受全部"
+                className="flex h-7 w-7 items-center justify-center bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm rounded-lg transition-all disabled:opacity-50 active:scale-95 ml-1"
+                title="接受整个会话中的全部修改"
               >
-                全部接受
+                <Check size={14} weight="bold" />
               </button>
             </div>
           </div>

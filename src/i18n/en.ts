@@ -1357,6 +1357,8 @@ const en = {
   // ── SDK Capabilities: Thinking ────────────────────────────
   'settings.thinkingMode': 'Thinking Mode',
   'settings.thinkingModeDesc': 'Control Claude\'s extended thinking behavior',
+  'settings.thinkingModeDeepseek': 'Thinking Mode (DeepSeek)',
+  'settings.thinkingModeDeepseekDesc': 'Enable chain-of-thought reasoning before output, improving answer accuracy',
   'settings.thinkingAdaptive': 'Adaptive',
   'settings.thinkingEnabled': 'Enabled',
   'settings.thinkingDisabled': 'Disabled',

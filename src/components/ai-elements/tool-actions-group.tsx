@@ -1158,12 +1158,13 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
 // ---------------------------------------------------------------------------
 
 function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
-  // 默认折叠运行，用户手动点击后才展开
+  // 默认展开运行，用户手动点击后才接管状态
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
+  const [autoExpanded, setAutoExpanded] = useState(!!isStreaming);
   const [, setHovered] = useState(false);
   const { stopScroll } = useStickToBottomContext();
 
-  const isExpanded = userExpanded !== null ? userExpanded : false;
+  const isExpanded = userExpanded !== null ? userExpanded : autoExpanded;
 
   // ---------------------------------------------------------------------------
   // 功能名称：思考卡片自动滚动控制
@@ -1190,10 +1191,13 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
   };
 
   React.useEffect(() => {
-    if (!isStreaming && userExpanded === null) {
+    if (userExpanded !== null) return;
+    if (isStreaming) {
+      setAutoExpanded(true);
+    } else {
       const timer = setTimeout(() => {
-        setUserExpanded(false);
-      }, 1000);
+        setAutoExpanded(false);
+      }, 500);
       return () => clearTimeout(timer);
     }
   }, [isStreaming, userExpanded]);
@@ -1401,7 +1405,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
       } else {
         const timer = setTimeout(() => {
           setInternalExpanded(false);
-        }, 1000);
+        }, 500);
         return () => clearTimeout(timer);
       }
     }
@@ -1536,7 +1540,10 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   const status = getStatus(tool);
 
   // Unconditional hook calls at the top level
-  const [expanded, setExpanded] = useState(k === 'team' ? false : status === 'running');
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
+  const [autoExpanded, setAutoExpanded] = useState(k === 'team' ? false : status === 'running');
+  const expanded = userExpanded !== null ? userExpanded : autoExpanded;
+  
   const browserDispatchedRef = React.useRef(false);
   const { setTerminalOpen, setBottomPanelOpen, setBottomPanelTab } = usePanel();
 
@@ -1556,16 +1563,16 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   }, [tool.name, status, tool.input]);
 
   React.useEffect(() => {
-    if (k === 'team' || k === 'todowrite') return; // Do not auto-expand team or todowrite
+    if (k === 'team' || k === 'todowrite' || userExpanded !== null) return; // Do not auto-expand team or todowrite, nor if user interacted
     if (status === 'running') {
-      setExpanded(true);
+      setAutoExpanded(true);
     } else {
       const timer = setTimeout(() => {
-        setExpanded(false);
-      }, 2000);
+        setAutoExpanded(false);
+      }, 500);
       return () => clearTimeout(timer);
     }
-  }, [status, k]);
+  }, [status, k, userExpanded]);
 
   if (k === 'write' || k === 'create') {
     const diff = extractDiff(tool);
@@ -1583,11 +1590,11 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
         <div
           role="button"
           tabIndex={0}
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => setUserExpanded(!expanded)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              setExpanded(!expanded);
+              setUserExpanded(!expanded);
             }
           }}
           className="flex w-full items-center justify-between px-2 py-1 text-[11px] hover:bg-muted/40 transition-colors rounded-[6px] cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -1661,7 +1668,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
     return (
       <div className="my-1 ml-4 border-l-[2px] border-border/50 pl-4 py-1">
         <div className="border border-blue-500/30 bg-muted/20 rounded-[8px] overflow-hidden shadow-sm">
-          <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
+          <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setUserExpanded(!expanded)} />
         </div>
       </div>
     );
@@ -1670,7 +1677,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   if (k === 'todowrite') {
     return (
       <div className="my-1 border border-blue-500/30 bg-blue-500/[0.05] rounded-[8px] overflow-hidden shadow-sm">
-        <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
+        <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setUserExpanded(!expanded)} />
       </div>
     );
   }
@@ -1678,14 +1685,14 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   if (k === 'team') {
     return (
       <div className="my-1 border border-purple-500/30 bg-purple-500/[0.05] rounded-[8px] overflow-hidden shadow-sm">
-        <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
+        <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setUserExpanded(!expanded)} />
       </div>
     );
   }
 
   return (
     <div className="bg-muted/30 my-1 border border-border/50 rounded-[6px] overflow-hidden">
-      <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setExpanded(!expanded)} />
+      <ContextSingleRow tool={tool} streamingToolOutput={streamingToolOutput} expandedOverride={expanded} onToggle={() => setUserExpanded(!expanded)} />
     </div>
   );
 }

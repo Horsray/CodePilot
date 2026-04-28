@@ -950,13 +950,13 @@ export function MessageInput({
                 {/* Thinking mode toggle — visible for Deepseek-style models */}
                 {showThinkingToggle && (
                   <PromptInputButton
-                    className={thinkingMode === 'enabled' ? '!bg-green-500/15 !text-green-600 dark:!text-green-400' : ''}
                     onClick={() => {
                       const next = thinkingMode === 'enabled' ? 'disabled' : 'enabled';
                       onThinkingModeChange?.(next);
                     }}
+                    className="hover:bg-transparent hover:border-transparent active:bg-transparent"
                   >
-                    <span className="text-xs">
+                    <span className={`text-xs ${thinkingMode === 'enabled' ? '!text-green-600 dark:!text-green-400' : 'text-muted-foreground'}`}>
                       {thinkingMode === 'enabled'
                         ? t('messageInput.thinking.on' as TranslationKey)
                         : t('messageInput.thinking.off' as TranslationKey)

@@ -629,11 +629,15 @@ export function ProviderManager() {
                     </Button>
                   </div>
                 </div>
-                {/* Provider options — thinking/1M for Anthropic-official only */}
-                {provider.provider_type !== 'gemini-image' && provider.provider_type !== 'openai-image' && provider.base_url === 'https://api.anthropic.com' && (
+                {/* Provider options — thinking/1M for Anthropic-official and Deepseek */}
+                {provider.provider_type !== 'gemini-image' && provider.provider_type !== 'openai-image'
+                  && (provider.base_url === 'https://api.anthropic.com'
+                    || provider.base_url?.includes('deepseek.com')
+                    || provider.name?.toLowerCase().includes('deepseek')) && (
                   <ProviderOptionsSection
                     providerId={provider.id}
                     showThinkingOptions
+                    isDeepseek={!!(provider.base_url?.includes('deepseek.com') || provider.name?.toLowerCase().includes('deepseek'))}
                   />
                 )}
                 {/* Media-provider model selector — capsule buttons */}

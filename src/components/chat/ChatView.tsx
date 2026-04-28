@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup, SubAgentInfo } from '@/types';
 import { MessageList } from './MessageList';
@@ -161,8 +161,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const [mode, setMode] = useState<'code' | 'plan'>(initialMode || 'code');
   const [currentModel, setCurrentModel] = useState(() => modelName || (typeof window !== 'undefined' ? localStorage.getItem('codepilot:last-model') : null) || 'sonnet');
   const [currentProviderId, setCurrentProviderId] = useState(() => providerId || (typeof window !== 'undefined' ? localStorage.getItem('codepilot:last-provider-id') : null) || '');
-  const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
-  const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
+  const [selectedEffort, setSelectedEffort] = useState<string | undefined>('max');
+  const [thinkingMode, setThinkingMode] = useState<string>('enabled'); // Deepseek 默认开启思考
   const [context1m, setContext1m] = useState(false);
   const [hasSummary, setHasSummary] = useState(initialHasSummary || false);
   const [summaryBoundaryRowid, setSummaryBoundaryRowid] = useState(initialSummaryBoundaryRowid || 0);
@@ -540,6 +540,19 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // Per-session thinking mode toggle (separate from provider-level thinking_mode option).
   // When null/undefined, falls back to the provider-level thinking_mode from DB.
   const [sessionThinkingMode, setSessionThinkingMode] = useState<'enabled' | 'disabled' | undefined>(undefined);
+
+  // Effective toggle display: per-session override or provider default.
+  // For Deepseek, 'adaptive' is not applicable — treated as 'enabled' (per API docs: 默认开启).
+  const resolvedThinkingMode = useMemo(() => {
+    if (sessionThinkingMode) return sessionThinkingMode;
+    if (thinkingMode === 'disabled') return 'disabled';
+    return 'enabled'; // adaptive or enabled → toggle ON
+  }, [thinkingMode, sessionThinkingMode]);
+
+  const handleToggleThinking = useCallback((mode: 'enabled' | 'disabled') => {
+    // When user explicitly toggles, store as per-session override
+    setSessionThinkingMode(mode);
+  }, []);
 
   const buildThinkingConfig = useCallback((): { type: string } | undefined => {
     // Per-session toggle overrides provider-level setting
@@ -1131,8 +1144,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onAssistantTrigger={checkAssistantTrigger}
         effort={selectedEffort}
         onEffortChange={setSelectedEffort}
-        thinkingMode={sessionThinkingMode}
-        onThinkingModeChange={setSessionThinkingMode}
+        thinkingMode={resolvedThinkingMode}
+        onThinkingModeChange={handleToggleThinking}
         sdkInitMeta={initMetaRef.current}
         isAssistantProject={isAssistantProject}
         hasMessages={messages.length > 0}

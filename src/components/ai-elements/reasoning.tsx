@@ -56,7 +56,7 @@ export type ReasoningProps = ComponentProps<typeof Collapsible> & {
   duration?: number;
 };
 
-const AUTO_CLOSE_DELAY = 1000;
+const AUTO_CLOSE_DELAY = 500;
 const MS_IN_S = 1000;
 
 export const Reasoning = memo(

@@ -379,6 +379,7 @@ export interface UpdateProviderRequest {
 /** Provider options stored in options_json (per-provider) or settings (global) */
 export interface ProviderOptions {
   thinking_mode?: 'adaptive' | 'enabled' | 'disabled';
+  reasoning_effort?: 'min' | 'low' | 'medium' | 'high' | 'max';
   context_1m?: boolean;
   media_protocol?: "custom-image" | "openai-images";
   media_endpoint?: string;
