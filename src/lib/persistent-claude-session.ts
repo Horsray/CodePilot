@@ -75,6 +75,7 @@ interface PersistentClaudeEntry {
   shadowHandle?: { cleanup: () => void };
   // 中文注释：预热数据缓存，warmup 阶段读取 system/init 后存入，后续 getPersistentClaudeTurn 复用
   warmedUp: boolean;
+  warmupPromise?: Promise<PersistentClaudeInitData | null> | null;
   initData?: {
     model: string;
     session_id: string;
@@ -222,6 +223,7 @@ function createEntry(
     lastUsedAt: Date.now(),
     shadowHandle,
     warmedUp: false,
+    warmupPromise: null,
     currentOptions: options,
   };
 
@@ -342,71 +344,81 @@ export async function warmupPersistentClaudeSession(params: {
   shadowHandle?: { cleanup: () => void };
 }): Promise<PersistentClaudeInitData | null> {
   const store = getStore();
-  const existing = store.get(params.codepilotSessionId);
+  let entry = store.get(params.codepilotSessionId);
 
   // 中文注释：已预热且签名匹配，直接返回缓存的 init 数据
-  if (existing && existing.warmedUp && existing.signature === params.signature && existing.initData) {
-    return existing.initData;
+  if (entry && entry.warmedUp && entry.signature === params.signature && entry.initData) {
+    return entry.initData;
+  }
+
+  if (entry && entry.signature === params.signature && entry.warmupPromise) {
+    return entry.warmupPromise;
   }
 
   // 中文注释：签名不匹配，销毁旧 session 重新预热
-  if (existing && existing.signature !== params.signature) {
-    closeEntry(existing);
+  if (entry && entry.signature !== params.signature) {
+    closeEntry(entry);
     store.delete(params.codepilotSessionId);
+    entry = undefined;
   }
 
-  if (!existing) {
-    const entry = createEntry(
+  if (!entry) {
+    entry = createEntry(
       params.codepilotSessionId,
       params.signature,
       params.options,
       params.shadowHandle,
     );
     store.set(params.codepilotSessionId, entry);
+    entry.warmupPromise = (async () => {
+      try {
+        // 中文注释：带超时的 system/init 等待，15s 内未收到则放弃预热
+        const initPromise = entry.iterator.next();
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Warmup timeout')), WARMUP_TIMEOUT_MS),
+        );
 
-    try {
-      // 中文注释：带超时的 system/init 等待，15s 内未收到则放弃预热
-      const initPromise = entry.iterator.next();
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Warmup timeout')), WARMUP_TIMEOUT_MS),
-      );
+        const next = await Promise.race([initPromise, timeoutPromise]);
 
-      const next = await Promise.race([initPromise, timeoutPromise]);
+        if (next.done) {
+          closePersistentClaudeSession(params.codepilotSessionId);
+          return null;
+        }
 
-      if (next.done) {
+        const msg = next.value as SDKSystemMessage;
+        if (msg.type === 'system' && 'subtype' in msg && msg.subtype === 'init') {
+          const initData: PersistentClaudeInitData = {
+            model: (msg as Record<string, unknown>).model as string || '',
+            session_id: (msg as Record<string, unknown>).session_id as string || '',
+            tools: (msg as Record<string, unknown>).tools,
+            slash_commands: (msg as Record<string, unknown>).slash_commands,
+            skills: (msg as Record<string, unknown>).skills,
+            plugins: (msg as Record<string, unknown>).plugins as PersistentClaudeInitData['plugins'],
+            mcp_servers: (msg as Record<string, unknown>).mcp_servers,
+          };
+          entry.warmedUp = true;
+          entry.initData = initData;
+          entry.lastUsedAt = Date.now();
+
+          // 中文注释：预热完成后启动空闲超时，30 分钟内无消息则关闭 session
+          scheduleWarmupIdleClose(params.codepilotSessionId, entry);
+
+          return initData;
+        }
+
+        console.warn('[persistent-claude-session] Warmup: first message was not system/init, got:', msg.type);
         closePersistentClaudeSession(params.codepilotSessionId);
         return null;
+      } catch (error) {
+        console.warn('[persistent-claude-session] Warmup failed:', error);
+        closePersistentClaudeSession(params.codepilotSessionId);
+        return null;
+      } finally {
+        entry.warmupPromise = null;
       }
+    })();
 
-      const msg = next.value as SDKSystemMessage;
-      if (msg.type === 'system' && 'subtype' in msg && msg.subtype === 'init') {
-        const initData: PersistentClaudeInitData = {
-          model: (msg as Record<string, unknown>).model as string || '',
-          session_id: (msg as Record<string, unknown>).session_id as string || '',
-          tools: (msg as Record<string, unknown>).tools,
-          slash_commands: (msg as Record<string, unknown>).slash_commands,
-          skills: (msg as Record<string, unknown>).skills,
-          plugins: (msg as Record<string, unknown>).plugins as PersistentClaudeInitData['plugins'],
-          mcp_servers: (msg as Record<string, unknown>).mcp_servers,
-        };
-        entry.warmedUp = true;
-        entry.initData = initData;
-        entry.lastUsedAt = Date.now();
-
-        // 中文注释：预热完成后启动空闲超时，30 分钟内无消息则关闭 session
-        scheduleWarmupIdleClose(params.codepilotSessionId, entry);
-
-        return initData;
-      }
-
-      console.warn('[persistent-claude-session] Warmup: first message was not system/init, got:', msg.type);
-      closePersistentClaudeSession(params.codepilotSessionId);
-      return null;
-    } catch (error) {
-      console.warn('[persistent-claude-session] Warmup failed:', error);
-      closePersistentClaudeSession(params.codepilotSessionId);
-      return null;
-    }
+    return entry.warmupPromise;
   }
 
   return null;

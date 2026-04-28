@@ -65,6 +65,7 @@ interface ActiveStream {
 export interface StartStreamParams {
   sessionId: string;
   content: string;
+  clientMessageId?: string;
   mode: string;
   model: string;
   providerId: string;
@@ -357,6 +358,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       body: JSON.stringify({
         session_id: params.sessionId,
         content: effectiveContent,
+        ...(params.clientMessageId ? { client_message_id: params.clientMessageId } : {}),
         mode: params.mode,
         model: params.model,
         provider_id: params.providerId,
@@ -407,6 +409,18 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         consumeActivityText();
         stream.thinkingPhaseEnded = true;
         throttledTextEmit();
+      },
+      onUserMessageAck: (data) => {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('chat:user-message-acked', {
+            detail: {
+              sessionId: params.sessionId,
+              clientMessageId: data.clientMessageId,
+              serverMessageId: data.serverMessageId,
+              createdAt: data.createdAt,
+            },
+          }));
+        }
       },
       onThinking: (delta) => {
         markActive();

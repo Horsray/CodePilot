@@ -2,7 +2,7 @@
 
 > **用途**：AI 执行任务时的快速查找表。先查此文件定位目标，避免全项目搜索。
 > **维护**：每次新增/删除页面、组件、API 路由、lib 文件后更新此索引。
-> **最后更新**：2026-04-26
+> **最后更新**：2026-04-28
 
 ---
 
@@ -27,6 +27,7 @@
 |------|---------|----------|----------|
 | 聊天主界面 | `src/app/chat/page.tsx` | `src/app/api/chat/route.ts` (POST) | `src/lib/claude-client.ts` |
 | 聊天会话视图 | `src/app/chat/[id]/page.tsx` | — | `src/lib/stream-session-manager.ts` |
+| 首轮消息挂起与转交 | `src/app/chat/page.tsx` → `src/app/chat/[id]/page.tsx` | `src/app/api/chat/warmup/route.ts` | `src/lib/pending-session-message.ts` |
 | 消息列表 | `src/components/chat/MessageList.tsx` | `src/app/api/chat/sessions/[id]/messages/route.ts` | `src/lib/db.ts` getMessages |
 | 消息输入框 | `src/components/chat/MessageInput.tsx` | — | `src/lib/message-input-logic.ts` |
 | 流式消息渲染 | `src/components/chat/StreamingMessage.tsx` | — | `src/lib/agent-timeline.ts` |
@@ -418,6 +419,7 @@ src/components/layout/AppShell.tsx          # 根布局壳
 | `src/lib/agent-timeline.ts` | 时间线步骤解析 | `extractTimelineStepsFromBlocks()` |
 | `src/lib/agent-tools.ts` | Agent 工具集构建 | Tool definitions |
 | `src/lib/stream-session-manager.ts` | 流式会话状态管理 | `startStream()`, `stopStream()`, `subscribe()`, `getSnapshot()` |
+| `src/lib/pending-session-message.ts` | 首轮消息暂存与会话跳转交接 | `stagePendingSessionMessage()`, `consumePendingSessionMessage()` |
 
 ### Provider / 模型
 

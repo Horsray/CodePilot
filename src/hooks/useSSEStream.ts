@@ -23,6 +23,7 @@ export interface SkillNudgeData {
 
 export interface SSECallbacks {
   onText: (accumulated: string) => void;
+  onUserMessageAck?: (data: { clientMessageId: string; serverMessageId: string; createdAt?: string }) => void;
   onToolUse: (tool: ToolUseInfo) => void;
   onToolResult: (result: ToolResultInfo) => void;
   onToolOutput: (data: string) => void;
@@ -134,6 +135,26 @@ function handleSSEEvent(
       const next = accumulated + event.data;
       callbacks.onText(next);
       return next;
+    }
+
+    case 'user_message_ack': {
+      try {
+        const ackData = JSON.parse(event.data) as {
+          client_message_id?: string;
+          server_message_id?: string;
+          created_at?: string;
+        };
+        if (ackData.client_message_id && ackData.server_message_id) {
+          callbacks.onUserMessageAck?.({
+            clientMessageId: ackData.client_message_id,
+            serverMessageId: ackData.server_message_id,
+            createdAt: ackData.created_at,
+          });
+        }
+      } catch {
+        // skip malformed user_message_ack data
+      }
+      return accumulated;
     }
 
     case 'thinking': {

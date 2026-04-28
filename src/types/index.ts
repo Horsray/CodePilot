@@ -433,6 +433,7 @@ export interface SendMessageRequest {
   model?: string;
   mode?: string;
   provider_id?: string;
+  client_message_id?: string;
   mentions?: MentionRef[];
 }
 
@@ -615,6 +616,7 @@ export interface SubAgentInfo {
 
 export type SSEEventType =
   | 'text'               // text content delta
+  | 'user_message_ack'   // persisted user message acknowledgment
   | 'thinking'           // extended thinking content delta
   | 'tool_use'           // tool invocation info
   | 'tool_result'        // tool execution result

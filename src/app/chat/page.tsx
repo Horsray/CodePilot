@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, SSEEvent, SessionResponse, TokenUsage, PermissionRequestEvent, FileAttachment, MentionRef } from '@/types';
+import type { Message, SessionResponse, PermissionRequestEvent, FileAttachment, MentionRef } from '@/types';
 import { MessageList } from '@/components/chat/MessageList';
 import { MessageInput } from '@/components/chat/MessageInput';
 import { ChatComposerActionBar } from '@/components/chat/ChatComposerActionBar';
@@ -17,8 +17,7 @@ import { FolderPicker } from '@/components/chat/FolderPicker';
 import { useNativeFolderPicker } from '@/hooks/useNativeFolderPicker';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePanel } from '@/hooks/usePanel';
-import { maybeShowStatusToast } from '@/hooks/useSSEStream';
-import { seedSnapshotPatch } from '@/lib/stream-session-manager';
+import { createClientMessageId, stagePendingSessionMessage } from '@/lib/pending-session-message';
 
 interface ToolUseInfo {
   id: string;
@@ -277,8 +276,8 @@ export default function NewChatPage() {
   // Effort level — lifted here so the first message includes it
   const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
   // Provider options (thinking mode + 1M context)
-  const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
-  const [context1m, setContext1m] = useState(false);
+  const [, setThinkingMode] = useState<string>('adaptive');
+  const [, setContext1m] = useState(false);
 
   // Fetch provider-specific options (with abort to prevent stale responses on fast switch)
   useEffect(() => {
@@ -656,10 +655,7 @@ export default function NewChatPage() {
       });
 
       let sessionId = '';
-      let accumulated = '';
-      let thinkingAccumulated = '';
-      const toolUsesLocal: ToolUseInfo[] = [];
-      const toolResultsLocal: ToolResultInfo[] = [];
+      let shouldResetUi = true;
 
       try {
         // Create a new session with working directory + model/provider
@@ -677,6 +673,7 @@ export default function NewChatPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(createBody),
+          signal: controller.signal,
         });
         perfTrace.end('session.create.fetch', { status: createRes.status });
 
@@ -688,25 +685,15 @@ export default function NewChatPage() {
         const { session }: SessionResponse = await createRes.json();
         sessionId = session.id;
         setCreatedSessionId(sessionId);
+        setStatusText('Preparing session...');
 
-        // 中文注释：新会话预热 — 后台启动 SDK 子进程，不阻塞消息发送。
-        // 预热失败不影响正常流程，用户发消息时会走 cold start 路径。
-        fetch('/api/chat/warmup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sessionId }),
-        }).catch(() => {});
-
-        // Notify ChatListPanel to refresh immediately
-        window.dispatchEvent(new CustomEvent('session-created'));
-
-        // Add user message to UI — use displayOverride for chat bubble if provided
+        const clientMessageId = createClientMessageId();
         const displayUserContent = displayOverride || content;
         const contentWithFileMeta = files && files.length > 0
           ? `<!--files:${JSON.stringify(files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size })))}-->${displayUserContent}`
           : displayUserContent;
         const userMessage: Message = {
-          id: 'temp-' + Date.now(),
+          id: clientMessageId,
           session_id: session.id,
           role: 'user',
           content: contentWithFileMeta,
@@ -715,382 +702,58 @@ export default function NewChatPage() {
         };
         setMessages([userMessage]);
 
-        // Build thinking config from settings
-        const thinkingConfig = thinkingMode && thinkingMode !== 'adaptive'
-          ? { type: thinkingMode }
-          : thinkingMode === 'adaptive' ? { type: 'adaptive' } : undefined;
-
-        // Send the message via streaming API
-        perfTrace.start('chat.fetch.headers');
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-codepilot-trace-id': perfTrace.id,
-          },
-          body: JSON.stringify({
-            session_id: session.id,
-            content,
-            mode,
-            model: currentModel,
-            provider_id: currentProviderId,
-            ...(files && files.length > 0 ? { files } : {}),
-            ...(mentions && mentions.length > 0 ? { mentions } : {}),
-            ...(systemPromptAppend ? { systemPromptAppend } : {}),
-            // 'auto' sentinel means "no explicit effort" — omit so Claude
-            // Code CLI applies its per-model default (Opus 4.7 → xhigh).
-            ...(selectedEffort && selectedEffort !== 'auto' ? { effort: selectedEffort } : {}),
-            ...(thinkingConfig ? { thinking: thinkingConfig } : {}),
-            ...(context1m ? { context_1m: true } : {}),
-            ...(displayOverride ? { displayOverride } : {}),
-          }),
-          signal: controller.signal,
-        });
-        perfTrace.end('chat.fetch.headers', {
-          status: response.status,
-          traceId: response.headers.get('x-codepilot-trace-id') || perfTrace.id,
-        });
-
-        if (!response.ok) {
-          let err: any = {};
-          let rawText = '';
-          try {
-            rawText = await response.text();
-            err = JSON.parse(rawText);
-          } catch (e) {
-            err = { raw: rawText };
-          }
-
-          if (err?.code === 'NEEDS_PROVIDER_SETUP' && typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('open-setup-center', {
-              detail: { initialCard: err.initialCard ?? 'provider' },
-            }));
-          }
-          
-          // 特殊处理 413 Payload Too Large
-          if (response.status === 413) {
-            throw new Error('请求体积过大：发送的消息、附件或提及的文件过多。请减少内容后重试。');
-          }
-          
-          const fallbackMsg = `Failed to send message (HTTP ${response.status}). ${err.raw ? 'Raw response: ' + err.raw.slice(0, 200) : ''}`;
-          throw new Error(err?.error || err?.message || fallbackMsg);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('No response stream');
-
-        const decoder = new TextDecoder();
-        let tokenUsage: TokenUsage | null = null;
-        let buffer = '';
-        let firstChunkSeen = false;
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!firstChunkSeen) {
-            firstChunkSeen = true;
-            perfTrace.record('chat.stream.first_chunk', 'frontend');
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-
-            try {
-              const event: SSEEvent = JSON.parse(line.slice(6));
-
-              switch (event.type) {
-                case 'text': {
-                  accumulated += event.data;
-                  setStreamingContent(accumulated);
-                  break;
-                }
-                case 'thinking': {
-                  thinkingAccumulated += event.data;
-                  setStreamingThinkingContent((prev) => prev + event.data);
-                  break;
-                }
-                case 'referenced_contexts': {
-                  break;
-                }
-                case 'tool_use': {
-                  try {
-                    const toolData = JSON.parse(event.data);
-                    if (!toolUsesLocal.some((t) => t.id === toolData.id)) {
-                      toolUsesLocal.push({ id: toolData.id, name: toolData.name, input: toolData.input });
-                    }
-                    setStreamingToolOutput('');
-                    setToolUses((prev) => {
-                      if (prev.some((t) => t.id === toolData.id)) return prev;
-                      return [...prev, { id: toolData.id, name: toolData.name, input: toolData.input }];
-                    });
-                  } catch { /* skip */ }
-                  break;
-                }
-                case 'tool_result': {
-                  try {
-                    const resultData = JSON.parse(event.data);
-                    toolResultsLocal.push({
-                      tool_use_id: resultData.tool_use_id,
-                      content: resultData.content,
-                      ...(resultData.is_error ? { is_error: true } : {}),
-                      ...(Array.isArray(resultData.media) && resultData.media.length > 0 ? { media: resultData.media } : {}),
-                    });
-                    setStreamingToolOutput('');
-                    setToolResults((prev) => [...prev, { tool_use_id: resultData.tool_use_id, content: resultData.content }]);
-                  } catch { /* skip */ }
-                  break;
-                }
-                case 'tool_output': {
-                  try {
-                    const parsed = JSON.parse(event.data);
-                    if (parsed._progress) {
-                      setStatusText(`Running ${parsed.tool_name}... (${Math.round(parsed.elapsed_time_seconds)}s)`);
-                      break;
-                    }
-                  } catch {
-                    // Not JSON — raw stderr output
-                  }
-                  setStreamingToolOutput((prev) => {
-                    const next = prev + (prev ? '\n' : '') + event.data;
-                    return next.length > 5000 ? next.slice(-5000) : next;
-                  });
-                  break;
-                }
-                case 'status': {
-                  try {
-                    const statusData = JSON.parse(event.data);
-                    if (statusData.subtype === 'perf') {
-                      const source = statusData.source === 'route' ? 'route' : 'native';
-                      perfTrace.addServerPerf(source, statusData as Record<string, unknown>);
-                    } else if (statusData.subtype === 'step_complete') {
-                      // silently ignore internal step_complete payloads
-                    } else if (statusData.subtype === 'ui_action' && statusData.action) {
-                      if (statusData.action === 'open_browser' && typeof statusData.url === 'string') {
-                        window.dispatchEvent(new CustomEvent('browser-navigate', {
-                          detail: {
-                            url: statusData.url,
-                            newTab: statusData.newTab !== false,
-                          },
-                        }));
-                      }
-                      if (statusData.action === 'open_terminal') {
-                        window.dispatchEvent(new CustomEvent('terminal-ensure-visible', {
-                          detail: {
-                            tab: statusData.tab || 'terminal',
-                            terminalId: statusData.terminalId,
-                          },
-                        }));
-                      }
-                    } else if (statusData.session_id) {
-                      setStatusText(`Connected (${statusData.model || 'claude'})`);
-                      setTimeout(() => setStatusText(undefined), 2000);
-                    } else if (statusData.notification) {
-                      // Shared toast routing so code-driven notifications
-                      // (e.g. RUNTIME_EFFORT_IGNORED) survive the next
-                      // status-text update on both the first-message flow
-                      // (this page) and the ongoing session flow
-                      // (useSSEStream via stream-session-manager).
-                      maybeShowStatusToast(statusData);
-                      setStatusText(statusData.message || statusData.title || undefined);
-                    } else {
-                      setStatusText(event.data || undefined);
-                    }
-                  } catch {
-                    setStatusText(event.data || undefined);
-                  }
-                  break;
-                }
-                case 'result': {
-                  try {
-                    const resultData = JSON.parse(event.data);
-                    if (resultData.usage) tokenUsage = resultData.usage;
-                    // Phase 1: seed terminal_reason into the snapshot the
-                    // redirected ChatView will read so first-turn
-                    // prompt_too_long / blocking_limit / max_turns /
-                    // hook_stopped can still surface the chip + action
-                    // buttons in the post-redirect view.
-                    if (resultData.terminal_reason && session?.id) {
-                      seedSnapshotPatch(session.id, {
-                        terminalReason: resultData.terminal_reason as string,
-                      });
-                    }
-                  } catch { /* skip */ }
-                  setStatusText(undefined);
-                  break;
-                }
-                case 'rate_limit': {
-                  // Phase 2: subscription rate-limit telemetry. Seed the
-                  // snapshot so RateLimitBanner renders after redirect.
-                  try {
-                    const info = JSON.parse(event.data);
-                    if (session?.id) {
-                      seedSnapshotPatch(session.id, { rateLimitInfo: info });
-                    }
-                  } catch { /* skip */ }
-                  break;
-                }
-                case 'context_usage': {
-                  // Phase 5 extension-point; no producer currently (see
-                  // b65c6ac). Seed the snapshot for forward compatibility.
-                  try {
-                    const snap = JSON.parse(event.data);
-                    if (session?.id) {
-                      seedSnapshotPatch(session.id, { contextUsageSnapshot: snap });
-                    }
-                  } catch { /* skip */ }
-                  break;
-                }
-                case 'thinking': {
-                  // Opus 4.7 with display: 'summarized' streams reasoning
-                  // as thinking deltas. Accumulate them into the same
-                  // streamingThinkingContent surface that ChatView's
-                  // MessageList already renders, so the first-turn UI
-                  // shows the reasoning block as it streams in. Backend
-                  // /api/chat/route.ts separately persists thinking as a
-                  // content-block JSON on the assistant message, so the
-                  // redirected ChatView gets a fully-formed message from
-                  // DB — this branch is for the pre-redirect live view.
-                  thinkingAccumulated += event.data;
-                  setStreamingThinkingContent((prev) => prev + event.data);
-                  break;
-                }
-                case 'permission_request': {
-                  try {
-                    const permData: PermissionRequestEvent = JSON.parse(event.data);
-                    setPendingPermission(permData);
-                    setPermissionResolved(null);
-                    setPendingApprovalSessionId(sessionId);
-                  } catch {
-                    // skip malformed permission_request data
-                  }
-                  break;
-                }
-                case 'error': {
-                  let rawErrorStr = '';
-                  try {
-                    const parsed = JSON.parse(event.data);
-                    if (parsed.category && parsed.userMessage) {
-                      rawErrorStr = parsed.userMessage;
-                      if (parsed.actionHint) rawErrorStr += `\n\nWhat to do: ${parsed.actionHint}`;
-                      if (parsed.details) rawErrorStr += `\n\nDetails: ${parsed.details}`;
-                    } else {
-                      rawErrorStr = event.data;
-                    }
-                  } catch {
-                    rawErrorStr = event.data;
-                  }
-
-                  let explain = '模型服务连接中断或遇到错误';
-                  const lowerErr = rawErrorStr.toLowerCase();
-                  if (lowerErr.includes('rate') && lowerErr.includes('limit')) explain = '触发了模型提供商的速率限制 (Rate Limit) 或限流，请稍后重试';
-                  else if (lowerErr.includes('overloaded') || lowerErr.includes('503') || lowerErr.includes('502') || lowerErr.includes('timeout')) explain = '模型提供商的服务器当前拥堵或响应超时';
-                  else if (lowerErr.includes('api_key') || lowerErr.includes('unauthorized') || lowerErr.includes('401')) explain = 'API 密钥无效或未授权';
-                  else if (lowerErr.includes('fetch') || lowerErr.includes('network') || lowerErr.includes('econnrefused')) explain = '网络连接失败，请检查网络或系统代理设置';
-
-                  const errPayload = JSON.stringify({ explain, raw: rawErrorStr });
-                  accumulated += `\n\n\`\`\`chat-error\n${errPayload}\n\`\`\``;
-                  setStreamingContent(accumulated);
-                  break;
-                }
-                case 'done':
-                  break;
-              }
-            } catch {
-              // skip
-            }
-          }
-        }
-        perfTrace.record('chat.stream.completed', 'frontend');
-
-        // Add the completed assistant message
-        if (accumulated.trim()) {
-          const assistantMessage: Message = {
-            id: 'temp-assistant-' + Date.now(),
-            session_id: session.id,
-            role: 'assistant',
-            content: accumulated.trim(),
-            created_at: new Date().toISOString(),
-            token_usage: tokenUsage ? JSON.stringify(tokenUsage) : null,
-          };
-          setMessages((prev) => [...prev, assistantMessage]);
-        }
-
-        // Navigate to the session page after response is complete
-        perfTrace.finish('completed', {
+        stagePendingSessionMessage({
           sessionId: session.id,
-          outputLength: accumulated.length,
+          clientMessageId,
+          content,
+          ...(files && files.length > 0 ? { files } : {}),
+          ...(mentions && mentions.length > 0 ? { mentions } : {}),
+          ...(systemPromptAppend ? { systemPromptAppend } : {}),
+          ...(displayOverride ? { displayOverride } : {}),
+          createdAt: Date.now(),
         });
+
+        perfTrace.record('session.warmup.kickoff', 'frontend');
+        fetch('/api/chat/warmup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId }),
+        }).catch(() => {});
+
+        window.dispatchEvent(new CustomEvent('session-created'));
+
+        perfTrace.finish('redirected', {
+          sessionId: session.id,
+          model: currentModel,
+          providerId: currentProviderId,
+        });
+        shouldResetUi = false;
         router.push(`/chat/${session.id}`);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') {
           perfTrace.finish('aborted', { sessionId });
-          // User stopped - navigate to session if we have one
-          if (sessionId) {
-            router.push(`/chat/${sessionId}`);
-          }
         } else {
           const errMsg = error instanceof Error ? error.message : 'Unknown error';
           perfTrace.finish('failed', { sessionId, message: errMsg });
-          const hasPartial = Boolean(
-            accumulated.trim()
-              || thinkingAccumulated.trim()
-              || toolUsesLocal.length > 0
-              || toolResultsLocal.length > 0
-          );
-          if (hasPartial && sessionId) {
-            let explain = '模型服务连接中断或遇到错误';
-            const lowerErr = String(errMsg).toLowerCase();
-            if (lowerErr.includes('rate') && lowerErr.includes('limit')) explain = '触发了模型提供商的速率限制 (Rate Limit) 或限流，请稍后重试';
-            else if (lowerErr.includes('overloaded') || lowerErr.includes('503') || lowerErr.includes('502') || lowerErr.includes('timeout')) explain = '模型提供商的服务器当前拥堵或响应超时';
-            else if (lowerErr.includes('api_key') || lowerErr.includes('unauthorized') || lowerErr.includes('401')) explain = 'API 密钥无效或未授权';
-            else if (lowerErr.includes('fetch') || lowerErr.includes('network') || lowerErr.includes('econnrefused')) explain = '网络连接失败，请检查网络或系统代理设置';
-
-            const errPayload = JSON.stringify({ explain, raw: errMsg });
-            const errorFence = `\n\n\`\`\`chat-error\n${errPayload}\n\`\`\``;
-            const textPart = accumulated.trim() ? accumulated.trim() + errorFence : errorFence;
-
-            const blocks: Array<Record<string, unknown>> = [];
-            if (thinkingAccumulated.trim()) {
-              blocks.push({ type: 'thinking', thinking: thinkingAccumulated.trim() });
-            }
-            for (const tu of toolUsesLocal) {
-              blocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
-              const tr = toolResultsLocal.find((r) => r.tool_use_id === tu.id);
-              if (tr) blocks.push({ type: 'tool_result', tool_use_id: tr.tool_use_id, content: tr.content });
-            }
-            blocks.push({ type: 'text', text: textPart.trim() });
-
-            const assistantMessage: Message = {
-              id: 'temp-assistant-error-' + Date.now(),
-              session_id: sessionId,
-              role: 'assistant',
-              content: JSON.stringify(blocks),
-              created_at: new Date().toISOString(),
-              token_usage: null,
-            };
-            setMessages((prev) => [...prev, assistantMessage]);
-          }
           setErrorBanner({ message: t('error.sessionCreateFailed'), description: errMsg });
         }
       } finally {
-        setIsStreaming(false);
-        setStreamingContent('');
-        setStreamingThinkingContent('');
-        setToolUses([]);
-        setToolResults([]);
-        setStreamingToolOutput('');
-        setStatusText(undefined);
-        setPendingPermission(null);
-        setPermissionResolved(null);
-        setPendingApprovalSessionId('');
-        abortControllerRef.current = null;
+        if (shouldResetUi) {
+          setIsStreaming(false);
+          setStreamingContent('');
+          setStreamingThinkingContent('');
+          setToolUses([]);
+          setToolResults([]);
+          setStreamingToolOutput('');
+          setStatusText(undefined);
+          setPendingPermission(null);
+          setPermissionResolved(null);
+          setPendingApprovalSessionId('');
+          abortControllerRef.current = null;
+        }
       }
     },
-    [isStreaming, router, workingDir, mode, currentModel, currentProviderId, permissionProfile, selectedEffort, thinkingMode, context1m, setPendingApprovalSessionId, t, hasProvider, modelReady]
+    [isStreaming, router, workingDir, mode, currentModel, currentProviderId, permissionProfile, setPendingApprovalSessionId, t, hasProvider, modelReady]
   );
 
   const handleCommand = useCallback((command: string) => {

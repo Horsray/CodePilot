@@ -135,7 +135,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   // 如果当前已有活跃 stream（用户切换会话后又切回来），跳过预热，
   // 避免对已运行的 persistent session 造成干扰。
   useEffect(() => {
-    if (!sessionInfoLoaded || loading) return;
+    if (!sessionInfoLoaded) return;
 
     // 活跃 stream 已存在 → 服务器端正使用 persistent session，跳过预热
     if (isStreamActive(id)) {
@@ -148,6 +148,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
     async function warmup() {
       try {
+        setWarmupState('warming');
         const res = await fetch('/api/chat/warmup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -179,7 +180,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
       cancelled = true;
       controller.abort();
     };
-  }, [id, sessionInfoLoaded, loading]);
+  }, [id, sessionInfoLoaded]);
 
   // Auto-open file tree when jumping from a file search result
   useEffect(() => {
@@ -257,7 +258,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} initialSummaryBoundaryRowid={sessionSummaryBoundaryRowid} />
+      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} warmupState={warmupState} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} initialSummaryBoundaryRowid={sessionSummaryBoundaryRowid} />
     </div>
   );
 }

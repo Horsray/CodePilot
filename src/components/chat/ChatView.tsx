@@ -36,6 +36,7 @@ import { setLastGeneratedImages, loadLastGenerated } from '@/lib/image-ref-store
 import { useChatCommands } from '@/hooks/useChatCommands';
 import { useAssistantTrigger } from '@/hooks/useAssistantTrigger';
 import { useStreamSubscription } from '@/hooks/useStreamSubscription';
+import { consumePendingSessionMessage, peekPendingSessionMessage } from '@/lib/pending-session-message';
 import {
   startStream,
   stopStream,
@@ -45,6 +46,7 @@ import {
 } from '@/lib/stream-session-manager';
 
 interface QueuedMessage {
+  clientMessageId?: string;
   content: string;
   files?: FileAttachment[];
   systemPromptAppend?: string;
@@ -58,6 +60,7 @@ interface ChatViewProps {
   initialHasMore?: boolean;
   modelName?: string;
   providerId?: string;
+  warmupState?: 'idle' | 'warming' | 'ready' | 'failed';
   initialPermissionProfile?: 'default' | 'full_access';
   initialMode?: 'code' | 'plan';
   initialHasSummary?: boolean;
@@ -66,8 +69,21 @@ interface ChatViewProps {
 
 /** Maximum messages kept in React state. Older messages are trimmed and reloaded on scroll. */
 const MAX_MESSAGES_IN_MEMORY = 300;
+const FIRST_TURN_WARMUP_BUDGET_MS = 1200;
 
-export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialHasSummary, initialSummaryBoundaryRowid }: ChatViewProps) {
+function stripLeadingFileComment(content: string): string {
+  return content.replace(/^<!--files:.*?-->/, '');
+}
+
+function isOptimisticUserMessage(message: Message): boolean {
+  return message.role === 'user' && message.id.startsWith('temp-');
+}
+
+function normalizedUserContent(content: string): string {
+  return stripLeadingFileComment(content).trim();
+}
+
+export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, warmupState = 'idle', initialPermissionProfile, initialMode, initialHasSummary, initialSummaryBoundaryRowid }: ChatViewProps) {
   const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setIsAssistantWorkspace } = usePanel();
   const { t } = useTranslation();
   const router = useRouter();
@@ -109,10 +125,22 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         const dbMessages: Message[] = data.messages;
         setMessages(current => {
           const localCommands = current.filter(m => m.id.startsWith('cmd-'));
+          const optimisticUsers = current.filter(isOptimisticUserMessage);
           const realMessages = current.filter(m => !m.id.startsWith('cmd-'));
+          const dbUserKeys = new Set(
+            dbMessages
+              .filter((m) => m.role === 'user')
+              .map((m) => normalizedUserContent(m.content))
+          );
+          const unmatchedOptimisticUsers = optimisticUsers.filter(
+            (m) => !dbUserKeys.has(normalizedUserContent(m.content))
+          );
           
           if (realMessages.length === 0) {
-            return localCommands.length === 0 ? dbMessages : [...dbMessages, ...localCommands];
+            const merged = [...dbMessages, ...unmatchedOptimisticUsers, ...localCommands];
+            return merged.length > MAX_MESSAGES_IN_MEMORY
+              ? merged.slice(-MAX_MESSAGES_IN_MEMORY)
+              : merged;
           }
 
           // Check if we can safely merge by finding where dbMessages starts within current
@@ -123,7 +151,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
               // Replace everything from overlapIdx onwards with the fresh dbMessages, 
               // preserving local commands at the very end
               const base = current.slice(0, overlapIdx);
-              const merged = [...base, ...dbMessages, ...localCommands];
+              const merged = [...base, ...dbMessages, ...unmatchedOptimisticUsers, ...localCommands];
               
               // Optimization: Check if the merged array is actually different from current
               // to avoid unnecessary React re-renders
@@ -139,7 +167,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           }
 
           // If there's a huge gap or no overlap (e.g. tail was trimmed), replace entirely
-          const merged = [...dbMessages, ...localCommands];
+          const merged = [...dbMessages, ...unmatchedOptimisticUsers, ...localCommands];
           return merged.length > MAX_MESSAGES_IN_MEMORY
             ? merged.slice(-MAX_MESSAGES_IN_MEMORY)
             : merged;
@@ -696,7 +724,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
   /** Start an API stream for the given content. Does NOT add a user message to the list. */
   const doStartStream = useCallback(
-    (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => {
+    (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[], clientMessageId?: string) => {
       const notices = pendingImageNoticesRef.current.length > 0
         ? [...pendingImageNoticesRef.current]
         : undefined;
@@ -705,6 +733,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       startStream({
         sessionId,
         content,
+        clientMessageId,
         mode,
         model: currentModel,
         providerId: currentProviderId,
@@ -734,8 +763,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     [sessionId, mode, currentModel, currentProviderId, selectedEffort, context1m, buildThinkingConfig, handleModeChange]
   );
 
-  const sendMessage = useCallback(
-    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => {
+  const sendMessageInternal = useCallback(
+    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[], clientMessageId?: string) => {
       const displayUserContent = displayOverride || content;
       let displayContent = displayUserContent;
       if (files && files.length > 0) {
@@ -761,12 +790,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
       // Queue message if currently streaming — hold above input, send after completion
       if (isStreaming) {
-        setMessageQueue((prev) => [...prev, { content, files, systemPromptAppend, displayOverride, mentions }]);
+        setMessageQueue((prev) => [...prev, { clientMessageId, content, files, systemPromptAppend, displayOverride, mentions }]);
         return;
       }
 
+      const messageId = clientMessageId || `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const userMessage: Message = {
-        id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: messageId,
         session_id: sessionId,
         role: 'user',
         content: displayContent,
@@ -774,12 +804,67 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         token_usage: null,
       };
       cappedSetMessages((prev) => [...prev, userMessage]);
-      doStartStream(content, files, systemPromptAppend, displayOverride, mentions);
+      doStartStream(content, files, systemPromptAppend, displayOverride, mentions, messageId);
     },
     [sessionId, isStreaming, doStartStream, cappedSetMessages]
   );
 
+  const sendMessage = useCallback(
+    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) =>
+      sendMessageInternal(content, files, systemPromptAppend, displayOverride, mentions),
+    [sendMessageInternal]
+  );
+
   sendMessageRef.current = sendMessage;
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        sessionId?: string;
+        clientMessageId?: string;
+        serverMessageId?: string;
+        createdAt?: string;
+      } | undefined;
+      if (!detail || detail.sessionId !== sessionId || !detail.clientMessageId || !detail.serverMessageId) return;
+      setMessages((prev) => prev.map((message) => {
+        if (message.id !== detail.clientMessageId) return message;
+        return {
+          ...message,
+          id: detail.serverMessageId!,
+          created_at: detail.createdAt || message.created_at,
+        };
+      }));
+    };
+    window.addEventListener('chat:user-message-acked', handler);
+    return () => window.removeEventListener('chat:user-message-acked', handler);
+  }, [sessionId]);
+
+  const pendingInitialMessageRef = useRef(peekPendingSessionMessage(sessionId));
+  useEffect(() => {
+    pendingInitialMessageRef.current = peekPendingSessionMessage(sessionId);
+  }, [sessionId]);
+
+  useEffect(() => {
+    const pending = pendingInitialMessageRef.current;
+    if (!pending || isStreaming) return;
+    const elapsed = Date.now() - pending.createdAt;
+    const shouldStart =
+      warmupState === 'ready' ||
+      warmupState === 'failed' ||
+      elapsed >= FIRST_TURN_WARMUP_BUDGET_MS;
+    if (!shouldStart) return;
+
+    pendingInitialMessageRef.current = null;
+    consumePendingSessionMessage(sessionId);
+    void sendMessageInternal(
+      pending.content,
+      pending.files,
+      pending.systemPromptAppend,
+      pending.displayOverride,
+      pending.mentions,
+      pending.clientMessageId,
+    );
+  }, [sessionId, warmupState, isStreaming, sendMessageInternal]);
 
   // ── Dequeue: when streaming finishes and queue is non-empty, send next ──
   useEffect(() => {
@@ -795,7 +880,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
       }
       const userMessage: Message = {
-        id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: next.clientMessageId || `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         session_id: sessionId,
         role: 'user',
         content: displayContent,
@@ -803,7 +888,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         token_usage: null,
       };
       cappedSetMessages((prev) => [...prev, userMessage]);
-      doStartStream(next.content, next.files, next.systemPromptAppend, next.displayOverride, next.mentions);
+      doStartStream(next.content, next.files, next.systemPromptAppend, next.displayOverride, next.mentions, next.clientMessageId || userMessage.id);
     }
     if (isStreaming) {
       dequeuingRef.current = false;

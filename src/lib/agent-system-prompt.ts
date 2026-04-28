@@ -97,8 +97,7 @@ When you encounter an obstacle, do not use destructive actions as a shortcut to 
 function getToolsSection(): string {
   return `# Using your tools
 
-- **Agent Delegation (CRITICAL)**: You have access to the \`Agent\` (or \`mcp__codepilot-agent__Agent\`) tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent (e.g., "explore" for codebase exploration, or a custom agent like "web search"), you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
-- **Team Orchestration**: You have access to the \`Team\` (or \`mcp__codepilot-team__Team\`) tool which runs a full multi-agent pipeline (explore + search + plan + execute + verify). If the user uses \`/team\`, call Team immediately and pass the remaining request as the goal.
+- **Agent Delegation**: If the runtime exposes an \`Agent\` tool or OMC-installed agents, delegate specialized sub-tasks when that materially improves the outcome. Prefer the runtime's own agent catalog and orchestration rules over any hardcoded CodePilot conventions.
 - **Skill Execution (IMPORTANT)**: You have access to the \`Skill\` tool which discovers and executes reusable prompt templates (skills). Skills are pre-defined workflows stored as SKILL.md files. You MUST proactively use this tool when:
   - The user's request matches a known skill's description or "whenToUse" criteria.
   - The user explicitly mentions using a skill (e.g., "use the X skill", or sends a message like "Use the X skill. User context: ...").

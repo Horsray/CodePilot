@@ -51,119 +51,138 @@ function detectSmartTimeout(command: string, userTimeout?: number): number {
 
 // ── Sub-agent spawn execution (isolated, no PTY) ────────────────
 
-function executeViaSpawn(
+async function executeViaSpawn(
   command: string,
   cwd: string,
   timeoutMs: number,
   abortSignal: AbortSignal | undefined,
   emitSSE: ToolContext['emitSSE'],
 ): Promise<string> {
-  return new Promise<string>((resolve) => {
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-    let truncated = false;
-    let isResolved = false;
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...(process.env as NodeJS.ProcessEnv),
+    TERM: 'dumb',
+    PAGER: 'cat',
+    GIT_PAGER: 'cat',
+    DEBIAN_FRONTEND: 'noninteractive',
+    NPM_CONFIG_YES: 'true',
+    NODE_ENV: process.env.NODE_ENV || 'production',
+  };
 
-    const proc = spawn('bash', ['-c', command], {
-      cwd,
-      env: {
-        ...process.env,
-        TERM: 'dumb',
-        PAGER: 'cat',
-        GIT_PAGER: 'cat',
-        DEBIAN_FRONTEND: 'noninteractive',
-        NPM_CONFIG_YES: 'true',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
-    });
+  const runAttempt = (opts: { detached: boolean; allowRetry: boolean }) => {
+    return new Promise<string>((resolve) => {
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      let truncated = false;
+      let isResolved = false;
 
-    const collect = (data: Buffer) => {
-      if (truncated) return;
-      totalBytes += data.length;
-      let chunkStr = '';
-      if (totalBytes > MAX_OUTPUT_BYTES) {
-        truncated = true;
-        const allowedLen = MAX_OUTPUT_BYTES - (totalBytes - data.length);
-        const allowed = allowedLen > 0 ? data.subarray(0, allowedLen) : Buffer.alloc(0);
-        chunks.push(allowed);
-        chunkStr = allowed.toString('utf-8');
-      } else {
-        chunks.push(data);
-        chunkStr = data.toString('utf-8');
-      }
-      if (emitSSE && chunkStr) {
-        emitSSE({ type: 'tool_output', data: chunkStr });
-      }
-    };
+      const proc = spawn('bash', ['-c', command], {
+        cwd,
+        env: baseEnv,
+        stdio: ['ignore', 'pipe', 'pipe'] as const,
+        detached: opts.detached,
+      });
 
-    proc.stdout?.on('data', collect);
-    proc.stderr?.on('data', collect);
-
-    const killProc = () => {
-      try {
-        if (proc.pid && process.platform !== 'win32') {
-          process.kill(-proc.pid, 'SIGTERM');
-          setTimeout(() => {
-            try { process.kill(-proc.pid!, 'SIGKILL'); } catch {}
-          }, 2000);
+      const collect = (data: Buffer) => {
+        if (truncated) return;
+        totalBytes += data.length;
+        let chunkStr = '';
+        if (totalBytes > MAX_OUTPUT_BYTES) {
+          truncated = true;
+          const allowedLen = MAX_OUTPUT_BYTES - (totalBytes - data.length);
+          const allowed = allowedLen > 0 ? data.subarray(0, allowedLen) : Buffer.alloc(0);
+          chunks.push(allowed);
+          chunkStr = allowed.toString('utf-8');
         } else {
-          proc.kill('SIGTERM');
+          chunks.push(data);
+          chunkStr = data.toString('utf-8');
         }
-      } catch {
-        try { proc.kill('SIGKILL'); } catch {}
-      }
-    };
+        if (emitSSE && chunkStr) {
+          emitSSE({ type: 'tool_output', data: chunkStr });
+        }
+      };
 
-    const onAbort = () => { if (!isResolved) { killProc(); } };
-    abortSignal?.addEventListener('abort', onAbort, { once: true });
+      proc.stdout?.on('data', collect);
+      proc.stderr?.on('data', collect);
 
-    const finish = (output: string) => {
-      if (isResolved) return;
-      isResolved = true;
-      clearTimeout(absoluteTimer);
-      abortSignal?.removeEventListener('abort', onAbort);
-      resolve(output);
-    };
+      const killProc = () => {
+        try {
+          if (opts.detached && proc.pid && process.platform !== 'win32') {
+            process.kill(-proc.pid, 'SIGTERM');
+            setTimeout(() => {
+              try { process.kill(-proc.pid!, 'SIGKILL'); } catch {}
+            }, 2000);
+          } else {
+            proc.kill('SIGTERM');
+            setTimeout(() => {
+              try { proc.kill('SIGKILL'); } catch {}
+            }, 2000);
+          }
+        } catch {
+          try { proc.kill('SIGKILL'); } catch {}
+        }
+      };
 
-    const absoluteTimer = setTimeout(() => {
-      killProc();
-      proc.stdout?.destroy();
-      proc.stderr?.destroy();
-      let output = Buffer.concat(chunks).toString('utf-8');
-      if (truncated) output += '\n\n[Output truncated — exceeded 1MB limit]';
-      output += `\n\n[Process killed: Timeout after ${timeoutMs}ms]`;
-      if (emitSSE) {
-        emitSSE({
-          type: 'terminal_mirror',
-          data: JSON.stringify({ action: 'exit', exitCode: -1, signal: 'SIGTERM' }),
-        });
-      }
-      finish(output);
-    }, timeoutMs + 1000);
+      const onAbort = () => { if (!isResolved) { killProc(); } };
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
 
-    proc.on('close', (code, signal) => {
-      let output = Buffer.concat(chunks).toString('utf-8');
-      if (truncated) output += '\n\n[Output truncated — exceeded 1MB limit]';
-      if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-        output += `\n\n[Process killed: ${signal}]`;
-      }
-      if (code !== null && code !== 0) {
-        output += `\n\n[Exit code: ${code}]`;
-      }
-      if (emitSSE) {
-        emitSSE({
-          type: 'terminal_mirror',
-          data: JSON.stringify({ action: 'exit', exitCode: code ?? 0, signal: signal || undefined }),
-        });
-      }
-      finish(output || '(no output)');
+      const finish = (output: string) => {
+        if (isResolved) return;
+        isResolved = true;
+        clearTimeout(absoluteTimer);
+        abortSignal?.removeEventListener('abort', onAbort);
+        resolve(output);
+      };
+
+      const absoluteTimer = setTimeout(() => {
+        killProc();
+        proc.stdout?.destroy();
+        proc.stderr?.destroy();
+        let output = Buffer.concat(chunks).toString('utf-8');
+        if (truncated) output += '\n\n[Output truncated — exceeded 1MB limit]';
+        output += `\n\n[Process killed: Timeout after ${timeoutMs}ms]`;
+        if (emitSSE) {
+          emitSSE({
+            type: 'terminal_mirror',
+            data: JSON.stringify({ action: 'exit', exitCode: -1, signal: 'SIGTERM' }),
+          });
+        }
+        finish(output);
+      }, timeoutMs + 1000);
+
+      proc.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+        let output = Buffer.concat(chunks).toString('utf-8');
+        if (truncated) output += '\n\n[Output truncated — exceeded 1MB limit]';
+        if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+          output += `\n\n[Process killed: ${signal}]`;
+        }
+        if (code !== null && code !== 0) {
+          output += `\n\n[Exit code: ${code}]`;
+        }
+        if (emitSSE) {
+          emitSSE({
+            type: 'terminal_mirror',
+            data: JSON.stringify({ action: 'exit', exitCode: code ?? 0, signal: signal || undefined }),
+          });
+        }
+        finish(output || '(no output)');
+      });
+
+      proc.on('error', (err: NodeJS.ErrnoException) => {
+        const e = err;
+        if (opts.allowRetry && e.code === 'EBADF' && opts.detached) {
+          clearTimeout(absoluteTimer);
+          abortSignal?.removeEventListener('abort', onAbort);
+          try { proc.kill('SIGKILL'); } catch {}
+          resolve(runAttempt({ detached: false, allowRetry: false }));
+          return;
+        }
+        const codeText = e.code ? ` (code: ${e.code})` : '';
+        finish(`Error executing command: ${e.message}${codeText}`);
+      });
     });
+  };
 
-    proc.on('error', (err) => {
-      finish(`Error executing command: ${err.message}`);
-    });
-  });
+  return runAttempt({ detached: process.platform !== 'win32', allowRetry: true });
 }
 
 // ── PTY execution (primary agent, shared session) ───────────────
