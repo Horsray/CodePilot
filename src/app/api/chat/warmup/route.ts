@@ -94,23 +94,15 @@ export async function POST(request: NextRequest) {
       session_id
       || `warmup:${resolved.provider?.id || requestedProviderId || 'env'}:${requestedModel || session?.model || resolved.model || 'default'}:${resolvedCwd.path}`;
 
-    // 中文注释：功能名称「OMC 预热跳过」，用法是在检测到已启用 OMC 插件时，
-    // 不再启动持久会话预热，避免首轮消息进入结构化消息队列路径，尽量保持与终端版
-    // Claude Code 更一致的原生 query / resume 行为。
+    // 中文注释：功能名称「OMC 预热对齐」，用法是在检测到已启用 OMC 插件时仍然允许
+    // 启动持久会话预热，避免首轮消息每次都重新冷启动 Claude Code 进程。
+    // OMC 的 agent/skill/hook 决策已经回到原生链路，这里只负责性能层面的会话保活。
     let enabledPlugins: Array<{ type: 'local'; path: string }> = [];
     let omcPluginEnabled = false;
     try {
       const { getEnabledPluginConfigs, hasEnabledOmcPlugin } = await import('@/lib/plugin-discovery');
       enabledPlugins = getEnabledPluginConfigs(resolvedCwd.path);
       omcPluginEnabled = hasEnabledOmcPlugin(enabledPlugins);
-      if (omcPluginEnabled) {
-        return Response.json({
-          warmed_up: false,
-          skipped: true,
-          reason: 'omc-native-query',
-          message: 'OMC 已启用，已跳过持久预热以保持原生终端式会话链路。',
-        });
-      }
     } catch (error) {
       console.warn('[warmup API] Failed to resolve enabled plugins for warmup decision:', error);
     }

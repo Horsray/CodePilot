@@ -74,9 +74,12 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
     parts.push(envSection);
   }
 
-  // 中文注释：功能名称「项目规则手工注入开关」，用法是在 Claude Code CLI
-  // 主链路下关闭这里的手工拼接，改为让 Claude Code/OMC 自己原生发现
-  // `CLAUDE.md`、`AGENTS.md`、`.trae/rules`，避免重复注入干扰决策。
+  // 注意：当前处于过渡状态。
+  // 此处的 discoverProjectInstructions() 手工拼接路径仍然保留，
+  // 但 warmup 和 chat 路由均已显式传入 includeDiscoveredProjectInstructions: false，
+  // 实际运行时此分支不会执行。
+  // 目标状态：当 Claude Code/OMC 能原生发现 `CLAUDE.md`、`AGENTS.md`、`.trae/rules` 后，
+  // 可移除此手工拼接逻辑，避免重复注入干扰决策。
   if (options.workingDirectory && options.includeDiscoveredProjectInstructions !== false) {
     const projectInstructions = discoverProjectInstructions(options.workingDirectory, options);
     if (projectInstructions) {

@@ -1119,10 +1119,10 @@ if (claudePath) {
           providerKey,
           options: queryOptions,
         });
-        // 中文注释：功能名称「OMC 原生链路优先」，用法是在检测到 OMC 插件启用时，
-        // 禁用 CodePilot 的持久会话池，避免把纯文本 prompt 重新包装成结构化
-        // SDKUserMessage 数组，尽量让 query/resume 形态更接近终端版 Claude Code。
-        const shouldBypassPersistentSession = omcPluginEnabled;
+        // 中文注释：功能名称「OMC 会话复用保活」，用法是在 OMC 启用时也继续允许
+        // CodePilot 的持久会话池与预热结果复用，解决每轮对话都重新连接 Claude Code
+        // 进程、首轮和后续轮次都明显变慢的问题。
+        const shouldBypassPersistentSession = false;
 
         if (!shouldBypassPersistentSession && sessionId && !sdkSessionId && !canReusePersistentClaudeSession(sessionId, persistentSignature)) {
           adoptPersistentClaudeSessionBySignature(persistentSignature, sessionId);
@@ -1148,11 +1148,6 @@ if (claudePath) {
         // already has the history).
         if (!shouldBypassPersistentSession && !shouldResume && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
           console.log(`[claude-client] Closing stale persistent session ${sessionId} before starting fresh`);
-          closePersistentClaudeSession(sessionId);
-        }
-
-        if (shouldBypassPersistentSession && sessionId && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
-          console.log(`[claude-client] OMC enabled, closing persistent session ${sessionId} to preserve native prompt shape`);
           closePersistentClaudeSession(sessionId);
         }
 
@@ -1499,7 +1494,7 @@ if (claudePath) {
             controlQuery = oneShot;
           }
         } else {
-          console.log('[claude-client] OMC enabled, using direct query path instead of persistent session pool');
+          console.log('[claude-client] Using direct query path instead of persistent session pool');
           const oneShot = query({
             prompt: finalPrompt,
             options: queryOptions,
