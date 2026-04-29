@@ -63,7 +63,7 @@ Use multiple passes and end with findings first.
     assert.doesNotMatch(catalog!, /This is a long body that should not be injected directly/);
   });
 
-  it('keeps a lightweight skills visibility index when OMC is enabled', () => {
+  it('does not auto-inject skill catalogs into the host supplement prompt', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-omc-skill-catalog-'));
     tempDirs.push(tmpDir);
     swapTempHome(tmpDir);
@@ -86,21 +86,19 @@ when_to_use: When the user asks for reviews
     const promptWithoutOmc = buildSystemPrompt({ workingDirectory: tmpDir, omcPluginEnabled: false });
     const promptWithOmc = buildSystemPrompt({ workingDirectory: tmpDir, omcPluginEnabled: true });
 
-    assert.match(promptWithoutOmc.prompt, /Auto-Discovered Skills Catalog/);
-    assert.doesNotMatch(promptWithOmc.prompt, /Auto-Discovered Skills Catalog/);
-    assert.match(promptWithOmc.prompt, /Lightweight Skills Visibility/);
-    assert.match(promptWithOmc.prompt, /auto-review/);
+    assert.doesNotMatch(promptWithoutOmc.prompt, /Auto-Discovered Skills Catalog|Lightweight Skills Visibility|auto-review/);
+    assert.doesNotMatch(promptWithOmc.prompt, /Auto-Discovered Skills Catalog|Lightweight Skills Visibility|auto-review/);
   });
 
-  it('adds explicit external research guidance to the tools section', () => {
+  it('keeps only the minimal host supplement guidance', () => {
     const prompt = buildSystemPrompt();
-    assert.match(prompt.prompt, /External Research \(IMPORTANT\)/);
-    assert.match(prompt.prompt, /proactively use `WebSearch` first and then `WebFetch`/);
-    assert.match(prompt.prompt, /even if the user did not explicitly ask you to "search the web"/);
-    assert.match(prompt.prompt, /Runtime Focus \(IMPORTANT\)/);
+    assert.match(prompt.prompt, /CodePilot Host Supplement/);
+    assert.match(prompt.prompt, /Claude Code native behavior/);
+    assert.match(prompt.prompt, /Output Hygiene/);
+    assert.doesNotMatch(prompt.prompt, /External Research \(IMPORTANT\)|Runtime Focus \(IMPORTANT\)/);
   });
 
-  it('adds relevant skill hints for the current request before the broader catalog', () => {
+  it('does not inject request-specific skill hints into the host supplement prompt', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-relevant-skills-'));
     tempDirs.push(tmpDir);
     swapTempHome(tmpDir);
@@ -139,13 +137,8 @@ when_to_use: When the user asks for release notes or changelog drafting
       userPrompt: '请帮我做一次代码审查并定位性能瓶颈，先别直接改代码。',
     });
 
-    assert.match(prompt.prompt, /Relevant Skill Hints/);
-    assert.match(prompt.prompt, /code-review-helper/);
-    const relevantIndex = prompt.prompt.indexOf('Relevant Skill Hints');
-    const reviewIndex = prompt.prompt.indexOf('code-review-helper');
-    const releaseIndex = prompt.prompt.indexOf('release-notes');
-    assert.ok(relevantIndex >= 0);
-    assert.ok(reviewIndex > relevantIndex);
-    assert.ok(releaseIndex === -1 || reviewIndex < releaseIndex);
+    assert.doesNotMatch(prompt.prompt, /Relevant Skill Hints|code-review-helper|release-notes/);
+    assert.match(prompt.prompt, /CodePilot Host Supplement/);
+    assert.doesNotMatch(prompt.prompt, /请帮我做一次代码审查并定位性能瓶颈/);
   });
 });

@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import '@/lib/runtime';
 import { streamClaude } from '@/lib/claude-client';
 import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTitle, updateSdkSessionId, updateSessionModel, updateSessionProvider, updateSessionProviderId, getSetting, acquireSessionLock, renewSessionLock, releaseSessionLock, setSessionRuntimeStatus, syncSdkTasks, getProvider } from '@/lib/db';
 import { resolveProvider as resolveProviderUnified } from '@/lib/provider-resolver';
@@ -382,9 +383,6 @@ export async function POST(request: NextRequest) {
         autoTrigger: !!autoTrigger,
         omcPluginEnabled,
       }),
-      // 中文注释：功能名称「Claude Code 全量 MCP 暴露」，用法是桌面聊天在单一
-      // Claude Code CLI 主路径下直接传入当前有效的全部外部 MCP，避免再依赖
-      // 关键词补载导致联网/技能相关工具“本轮其实不可见”。
       Promise.resolve(loadAllMcpServers(projectCwd)),
     ]);
     const finalSystemPrompt = assembled.systemPrompt;

@@ -668,6 +668,18 @@ export interface PromptInstructionSourceMeta {
   filePath?: string;
 }
 
+// 中文注释：功能名称「Claude Code 初始化元数据」，用法是承接 system/init 返回的
+// tools、skills、plugins、MCP 等能力快照，供输入框、状态栏与诊断界面共用。
+export interface ClaudeInitMeta {
+  tools?: unknown;
+  slash_commands?: unknown;
+  skills?: unknown;
+  plugins?: Array<{ name: string; path: string }>;
+  mcp_servers?: unknown;
+  output_style?: string;
+  instruction_sources?: PromptInstructionSourceMeta[];
+}
+
 // ==========================================
 // Permission Types
 // ==========================================

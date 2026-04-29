@@ -10,7 +10,7 @@
  *   Bridge:  workspace + session + assistant instructions + CLI tools (no widget)
  */
 
-import type { ChatSession, PromptInstructionSourceMeta } from '@/types';
+import type { ChatSession } from '@/types';
 import { getProviderOptions, getSetting } from '@/lib/db';
 import { EGG_IMAGE_URL } from '@/lib/buddy';
 import { buildSystemPrompt } from './agent-system-prompt';
@@ -44,7 +44,7 @@ export interface AssembledContext {
   /** Files discovered and referenced in the prompt (CLAUDE.md, etc.) */
   referencedContexts?: string[];
   /** Structured rule/index sources actually injected into this turn */
-  instructionSources?: PromptInstructionSourceMeta[];
+  instructionSources?: import('@/types').PromptInstructionSourceMeta[];
   /** Whether generative UI is enabled (affects widget MCP server + streamClaude param) */
   generativeUIEnabled: boolean;
   /** Onboarding/checkin instructions (route.ts uses this for server-side completion detection) */
@@ -62,7 +62,7 @@ export interface AssembledContext {
 // ── Main function ────────────────────────────────────────────────────
 
 export async function assembleContext(config: ContextAssemblyConfig): Promise<AssembledContext> {
-  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, files, omcPluginEnabled } = config;
+  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, files } = config;
   const _unused_history = conversationHistory;
   const t0 = Date.now();
 
@@ -70,7 +70,6 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   let memoryHint = '';
   let assistantProjectInstructions = '';
   const referencedContexts: string[] = [];
-  const instructionSources: PromptInstructionSourceMeta[] = [];
   let isAssistantProject = false;
   let includeAgentsMd = getSetting('include_agents_md') !== 'false';
   let includeClaudeMd = getSetting('include_claude_md') !== 'false';
@@ -92,13 +91,18 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
           const { loadWorkspaceFiles, assembleWorkspacePrompt, loadState, shouldRunHeartbeat } =
             await import('@/lib/assistant-workspace');
 
-          // 中文注释：功能名称「工作区索引后台刷新」，用法是在保留索引新鲜度的同时，
-          // 不让当前对话请求同步等待索引完成，避免大工作区拖慢首轮 connected 和首字输出。
+          // Incremental reindex BEFORE MCP search so tool calls see latest content.
+          // Timeout after 5s to prevent blocking on large workspaces (e.g. Obsidian vaults).
           try {
-            const { scheduleWorkspaceIndex } = await import('@/lib/workspace-indexer');
-            scheduleWorkspaceIndex(workspacePath);
+            const { indexWorkspace } = await import('@/lib/workspace-indexer');
+            const indexStart = Date.now();
+            indexWorkspace(workspacePath);
+            const indexMs = Date.now() - indexStart;
+            if (indexMs > 3000) {
+              console.warn(`[context-assembler] Workspace indexing took ${indexMs}ms — consider reducing workspace size`);
+            }
           } catch {
-            // indexer not available, skip — MCP search will use existing index
+            // indexer not available or timed out, skip — MCP search will use stale index
           }
 
           const files = loadWorkspaceFiles(workspacePath);
@@ -227,21 +231,17 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   const basePromptResult = buildSystemPrompt({
     sessionId: session.id,
     workingDirectory: session.working_directory || undefined,
-    userPrompt,
     modelId: session.model,
-    omcPluginEnabled,
     includeAgentsMd,
     includeClaudeMd,
     enableAgentsSkills,
     syncProjectRules,
     knowledgeBaseEnabled,
+    includeDiscoveredProjectInstructions: false,
   });
   staticParts.push(basePromptResult.prompt);
   if (basePromptResult.referencedFiles) {
     referencedContexts.push(...basePromptResult.referencedFiles);
-  }
-  if (basePromptResult.instructionSources) {
-    instructionSources.push(...basePromptResult.instructionSources);
   }
 
   if (session.system_prompt && session.system_prompt.trim()) {
@@ -287,10 +287,12 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     const { getTasksBySession } = await import('@/lib/db');
     const tasks = getTasksBySession(session.id);
     if (tasks && tasks.length > 0) {
-      const activeTasks = tasks.filter(t => t.status !== 'completed');
+      // 中文注释：功能名称「轻量 Todo 上下文」，用法是只把当前任务状态作为会话事实提供，
+      // 不再在宿主提示里强制要求“先 Todo 再执行”或“必须立刻改状态”，避免和 OMC /
+      // Claude Code 原生编排发生冲突。
       let taskPrompt = `<current-todo-list>\n`;
-      taskPrompt += `Here is the CURRENT state of the global Todo list for this session. It may be out of sync if you were interrupted or if a Team sub-agent finished a task.\n`;
-      taskPrompt += `CRITICAL: You MUST review these tasks. If any "in_progress" or "pending" tasks are actually completed, or if the plan needs updating based on recent findings, use the TodoWrite tool IMMEDIATELY to update their status.\n\n`;
+      taskPrompt += `Here is the CURRENT state of the Todo list for this session.\n`;
+      taskPrompt += `Use it as progress context. If you naturally decide to update task status, you may use TodoWrite.\n\n`;
       tasks.forEach((t, i) => {
         const check = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
         const desc = t.description ? ` - ${t.description}` : '';
@@ -317,7 +319,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   return {
     systemPrompt: finalSystemPrompt,
     referencedContexts,
-    instructionSources,
+    instructionSources: basePromptResult.instructionSources || [],
     generativeUIEnabled,
     assistantProjectInstructions,
     isAssistantProject,

@@ -11,10 +11,12 @@ import {
   getWarmedUpInitData,
   adoptPersistentClaudeSessionBySignature,
 } from '@/lib/persistent-claude-session';
+import { loadAllMcpServers } from '@/lib/mcp-loader';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import fs from 'fs';
 import path from 'path';
 import { buildSystemPrompt } from '@/lib/agent-system-prompt';
+import { toSdkMcpConfig } from '@/lib/claude-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -119,6 +121,10 @@ export async function POST(request: NextRequest) {
       workingDirectory: resolvedCwd.path,
       modelId: requestedModel || session?.model || resolved.model || undefined,
       omcPluginEnabled,
+      // 中文注释：功能名称「预热阶段原生规则发现优先」，用法是在 Claude Code CLI
+      // 预热链路中不再手工拼接项目 `CLAUDE.md/AGENTS.md`，改由 Claude Code
+      // 自己按 settingSources 与插件机制发现，避免正式聊天前就产生重复规则。
+      includeDiscoveredProjectInstructions: false,
     });
 
     // 动态判断是否加载 Widget (因为是预热，假设没有特定 prompt 触发，按保守策略或全局策略处理)
@@ -156,8 +162,9 @@ export async function POST(request: NextRequest) {
     // 主路径后，让预热进程始终与正式聊天保持同一套 hook 生命周期观测能力。
     queryOptions.includeHookEvents = true;
 
-    // 加载全局必须的 MCP Servers 和对应系统提示词，与 claude-client.ts 保持一致
-    queryOptions.mcpServers = {};
+    // 中文注释：功能名称「预热全量 MCP 对齐」，用法是让预热进程与正式聊天一样
+    // 直接暴露当前工作区可用的全部外部 MCP，避免复用一个“工具列表不完整”的热身会话。
+    queryOptions.mcpServers = toSdkMcpConfig(loadAllMcpServers(resolvedCwd.path) || {});
     
     const { createMemorySearchMcpServer, MEMORY_SEARCH_SYSTEM_PROMPT } = await import('@/lib/memory-search-mcp');
     const { createNotificationMcpServer, NOTIFICATION_MCP_SYSTEM_PROMPT } = await import('@/lib/notification-mcp');

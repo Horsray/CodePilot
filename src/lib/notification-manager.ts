@@ -19,6 +19,8 @@ export interface QueuedNotification {
   priority: 'low' | 'normal' | 'urgent';
   sound?: boolean;
   timestamp: number;
+  /** 通知类型：task_complete 仅显示系统通知，其他仅显示右下角 toast */
+  notificationType?: 'task_complete' | 'default';
 }
 
 const QUEUE_KEY = '__codepilot_notification_queue__';
@@ -32,7 +34,13 @@ function getQueue(): QueuedNotification[] {
 }
 
 /** Push a notification into the server-side queue for frontend polling. */
-export function enqueueNotification(title: string, body: string, priority: 'low' | 'normal' | 'urgent', sound?: boolean): void {
+export function enqueueNotification(
+  title: string,
+  body: string,
+  priority: 'low' | 'normal' | 'urgent',
+  sound?: boolean,
+  notificationType: 'task_complete' | 'default' = 'default'
+): void {
   const queue = getQueue();
   queue.push({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -41,6 +49,7 @@ export function enqueueNotification(title: string, body: string, priority: 'low'
     priority,
     sound,
     timestamp: Date.now(),
+    notificationType,
   });
   // Ring buffer: drop oldest if over limit
   while (queue.length > MAX_QUEUE_SIZE) queue.shift();
@@ -66,11 +75,12 @@ export async function sendNotification(opts: {
   priority: 'low' | 'normal' | 'urgent';
   sound?: boolean;
   action?: { type: string; payload: string };
+  notificationType?: 'task_complete' | 'default';
 }): Promise<{ sent: string[] }> {
   const sent: string[] = [];
 
   // Channel 1: Queue for frontend polling (all priorities)
-  enqueueNotification(opts.title, opts.body, opts.priority, opts.sound);
+  enqueueNotification(opts.title, opts.body, opts.priority, opts.sound, opts.notificationType || 'default');
   sent.push('queued');
 
   // Channel 2: Telegram for urgent (direct server-side call)

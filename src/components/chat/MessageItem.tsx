@@ -11,7 +11,7 @@ import {
 import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
 import { Button } from "@/components/ui/button";
-import { Copy, Check, CheckCircle, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise } from "@/components/ui/icon";
+import { Copy, Check, CheckCircle, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise, XCircle, PauseCircle } from "@/components/ui/icon";
 import { FileAttachmentDisplay } from './FileAttachmentDisplay';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { ImageGenCard } from './ImageGenCard';
@@ -633,21 +633,47 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
   const taskCompletionInfo = useMemo(() => {
     if (isUser || timelineSteps.length === 0) return null;
     try {
+      // Determine task status by checking for chat-error text blocks in message content
+      let status: 'completed' | 'interrupted' | 'failed' = 'completed';
+      try {
+        const blocks = JSON.parse(message.content) as MessageContentBlock[];
+        for (const block of blocks) {
+          if (block.type === 'text' && 'text' in block) {
+            const chatErrorMatch = (block.text as string).match(/```chat-error\n(\{.*?\})\n```/s);
+            if (chatErrorMatch) {
+              try {
+                const errPayload = JSON.parse(chatErrorMatch[1]);
+                if (errPayload.raw === 'Task stopped by user') {
+                  status = 'interrupted';
+                } else {
+                  status = 'failed';
+                }
+              } catch {
+                status = 'failed';
+              }
+              break;
+            }
+          }
+        }
+      } catch {
+        // content parse failed, assume completed
+      }
+
       // If the backend has recorded duration_sec in token_usage, use it
       const usageStr = message.token_usage;
       if (usageStr) {
         const usageObj = JSON.parse(usageStr);
         if (typeof usageObj.duration_sec === 'number' && usageObj.duration_sec >= 0) {
-          return { durationSec: usageObj.duration_sec };
+          return { durationSec: usageObj.duration_sec, status };
         }
       }
-      
+
       // Fallback for older messages
       const endStr = (message as any).updated_at || message.created_at;
       const start = parseDBDate(message.created_at).getTime();
       const end = parseDBDate(endStr).getTime();
       const durationSec = Math.max(0, Math.floor((end - start) / 1000));
-      return { durationSec };
+      return { durationSec, status };
     } catch {
       return null;
     }
@@ -925,10 +951,24 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
 
         {!isUser && taskCompletionInfo && (
           <div className="flex items-center gap-2 mt-3 mb-2 text-[12px] text-muted-foreground">
-            <div className="flex items-center gap-1.5 text-emerald-500 font-medium">
-              <CheckCircle size={14} weight="fill" />
-              <span>任务完成</span>
-            </div>
+            {taskCompletionInfo.status === 'completed' && (
+              <div className="flex items-center gap-1.5 text-emerald-500 font-medium">
+                <CheckCircle size={14} weight="fill" />
+                <span>任务完成</span>
+              </div>
+            )}
+            {taskCompletionInfo.status === 'interrupted' && (
+              <div className="flex items-center gap-1.5 text-amber-500 font-medium">
+                <PauseCircle size={14} weight="fill" />
+                <span>任务中断</span>
+              </div>
+            )}
+            {taskCompletionInfo.status === 'failed' && (
+              <div className="flex items-center gap-1.5 text-red-500 font-medium">
+                <XCircle size={14} weight="fill" />
+                <span>任务异常</span>
+              </div>
+            )}
             <span className="text-border">|</span>
             <span>任务耗时 {formatDuration(taskCompletionInfo.durationSec)}</span>
           </div>

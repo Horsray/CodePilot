@@ -69,28 +69,29 @@ export function useNotificationPoll() {
             playNotificationSound();
           }
 
-          // In-app toast for all priorities
-          showToast({
-            type: PRIORITY_TO_TOAST[notif.priority] || 'info',
-            message: notif.body ? `${notif.title}: ${notif.body}` : notif.title,
-          });
+          // 根据 notificationType 决定显示方式
+          const notifType = notif.notificationType || 'default';
 
-          // System notification for normal/urgent via Electron IPC bridge
-          if (notif.priority === 'normal' || notif.priority === 'urgent') {
+          if (notifType === 'task_complete') {
+            // 任务完成：仅显示系统级通知，不显示右下角 toast
             if (typeof window !== 'undefined' && window.electronAPI?.notification) {
-              // Electron: use native notification via IPC (supports click-to-focus)
               window.electronAPI.notification.show({
                 title: notif.title,
                 body: notif.body || '',
-              }).catch(() => {}); // best effort
+              }).catch(() => {});
             } else if (
               typeof window !== 'undefined' &&
               'Notification' in window &&
               Notification.permission === 'granted'
             ) {
-              // Browser fallback (dev mode)
               new Notification(notif.title, { body: notif.body || '' });
             }
+          } else {
+            // 其他通知：仅显示右下角 toast，不显示系统级通知
+            showToast({
+              type: PRIORITY_TO_TOAST[notif.priority] || 'info',
+              message: notif.body ? `${notif.title}: ${notif.body}` : notif.title,
+            });
           }
         }
       } catch {

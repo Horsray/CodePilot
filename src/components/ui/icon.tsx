@@ -122,6 +122,7 @@ export { ChartLineUp } from "@phosphor-icons/react/ChartLineUp";
 export { BellSimple } from "@phosphor-icons/react/BellSimple";
 export { Calendar } from "@phosphor-icons/react/Calendar";
 export { Pause } from "@phosphor-icons/react/Pause";
+export { PauseCircle } from "@phosphor-icons/react/PauseCircle";
 
 export type { Icon, IconProps } from "@phosphor-icons/react";
 

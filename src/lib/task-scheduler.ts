@@ -511,6 +511,7 @@ ${finalOutput}
         `✅ ${task.name}`,
         `${task.prompt}\n\n---\n执行结果：\n${((task as any)._cleanOutput || result).slice(0, 1000)}`,
         task.priority || 'normal',
+        'task_complete'
       );
     }
 
@@ -574,6 +575,7 @@ ${finalOutput}
           `❌ ${task.name}`,
           `任务执行失败：\n${task.prompt}\n\n错误信息：\n${errorMsg.slice(0, 300)}`,
           'urgent',
+          'task_complete'
         ).catch(() => {});
       }
       console.error(`[scheduler] Session task ${task.id} (${task.name}) error:`, errorMsg);
@@ -603,6 +605,7 @@ ${finalOutput}
         `❌ ${task.name}`,
         `任务执行失败：\n${task.prompt}\n\n错误信息：\n${errorMsg.slice(0, 300)}`,
         'urgent',
+        'task_complete'
       );
     }
 
@@ -755,24 +758,26 @@ async function sendTaskNotification(title: string, body: string, priority: 'low'
  * @param title Notification title
  * @param body Notification body
  * @param priority Notification priority (controls Telegram delivery)
+ * @param notificationType 通知类型：task_complete 仅显示系统通知，其他仅显示右下角 toast
  */
 async function sendMultiChannelNotification(
   channels: NotificationChannel[],
   title: string,
   body: string,
-  priority: 'low' | 'normal' | 'urgent'
+  priority: 'low' | 'normal' | 'urgent',
+  notificationType: 'task_complete' | 'default' = 'default'
 ): Promise<void> {
   try {
     const { sendNotification, enqueueNotification } = await import('@/lib/notification-manager');
 
-    // Channel 1: Toast (in-app) — always via notification queue
-    if (channels.includes('toast')) {
-      enqueueNotification(title, body, priority);
+    // Channel 1: Toast (in-app) — 仅当不是 task_complete 类型时显示
+    if (channels.includes('toast') && notificationType !== 'task_complete') {
+      enqueueNotification(title, body, priority, undefined, 'default');
     }
 
-    // Channel 2: System notification (Electron) — for normal/urgent priority
-    if (channels.includes('system')) {
-      enqueueNotification(title, body, priority);
+    // Channel 2: System notification (Electron) — 仅当是 task_complete 类型时显示
+    if (channels.includes('system') && notificationType === 'task_complete') {
+      enqueueNotification(title, body, priority, undefined, 'task_complete');
     }
 
     // Channel 3: Telegram (mobile) — only for urgent priority

@@ -231,7 +231,7 @@ describe('System prompt builder', () => {
   it('includes base prompt', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
     const result = buildSystemPrompt();
-    assert.ok(result.prompt.includes('HueyingAgent'));
+    assert.ok(result.prompt.includes('CodePilot Host Supplement'));
   });
 
   it('includes working directory', async () => {
@@ -240,10 +240,10 @@ describe('System prompt builder', () => {
     assert.ok(result.prompt.includes('/test/dir'));
   });
 
-  it('includes user prompt', async () => {
+  it('does not duplicate the user prompt into the host supplement', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
     const result = buildSystemPrompt({ userPrompt: 'Be concise' });
-    assert.ok(result.prompt.includes('Be concise'));
+    assert.ok(!result.prompt.includes('Be concise'));
   });
 
   it('includes context snippets', async () => {

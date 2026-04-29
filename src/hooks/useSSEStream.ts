@@ -1,5 +1,5 @@
 import { useRef, useCallback } from 'react';
-import type { SSEEvent, TokenUsage, PermissionRequestEvent, MediaBlock, PromptInstructionSourceMeta, SubAgentSource } from '@/types';
+import type { SSEEvent, TokenUsage, PermissionRequestEvent, MediaBlock, PromptInstructionSourceMeta, SubAgentSource, ClaudeInitMeta } from '@/types';
 
 interface ToolUseInfo {
   id: string;
@@ -56,15 +56,7 @@ export interface SSECallbacks {
   onSubAgentStart?: (data: { id: string; name: string; displayName: string; prompt: string; model?: string; source?: SubAgentSource }) => void;
   onSubAgentProgress?: (data: { id: string; status: string; detail?: string }) => void;
   onSubAgentComplete?: (data: { id: string; report: string; error?: string; source?: SubAgentSource }) => void;
-  onInitMeta?: (meta: {
-    tools?: unknown;
-    slash_commands?: unknown;
-    skills?: unknown;
-    plugins?: Array<{ name: string; path: string }>;
-    mcp_servers?: unknown;
-    output_style?: string;
-    instruction_sources?: PromptInstructionSourceMeta[];
-  }) => void;
+  onInitMeta?: (meta: ClaudeInitMeta) => void;
 }
 
 /**

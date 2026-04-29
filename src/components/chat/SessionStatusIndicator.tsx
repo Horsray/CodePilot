@@ -19,7 +19,7 @@ import {
   HoverCardContent,
 } from '@/components/ui/hover-card';
 import { useTranslation } from '@/hooks/useTranslation';
-import type { PromptInstructionSourceMeta, SubAgentInfo } from '@/types';
+import type { ClaudeInitMeta, PromptInstructionSourceMeta, SubAgentInfo } from '@/types';
 
 /** 组件属性 */
 interface SessionStatusIndicatorProps {
@@ -29,8 +29,33 @@ interface SessionStatusIndicatorProps {
   toolCount?: number;
   /** 技能调用总数 */
   skillCount?: number;
+  /** Claude Code system/init 返回的能力快照 */
+  initMeta?: ClaudeInitMeta | null;
   /** 本轮实际注入的规则/索引来源 */
   instructionSources?: PromptInstructionSourceMeta[];
+}
+
+function pickEntryName(entry: unknown, fallback: string): string {
+  if (typeof entry === 'string') return entry;
+  if (entry && typeof entry === 'object') {
+    const candidate = entry as Record<string, unknown>;
+    const raw = candidate.name ?? candidate.id ?? candidate.command ?? candidate.slug ?? candidate.title;
+    if (typeof raw === 'string' && raw.trim()) return raw;
+  }
+  return fallback;
+}
+
+function normalizeNamedEntries(value: unknown): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((entry, index) => pickEntryName(entry, `item-${index + 1}`))
+      .filter(Boolean);
+  }
+  if (typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>);
+  }
+  return [];
 }
 
 /**
@@ -38,7 +63,7 @@ interface SessionStatusIndicatorProps {
  * 功能：紧凑显示当前会话的 agent 数量、工具调用数、技能调用数
  * 用法：放置在 ChatComposerActionBar 的右侧区域
  */
-export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCount = 0, instructionSources = [] }: SessionStatusIndicatorProps) {
+export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCount = 0, initMeta = null, instructionSources = [] }: SessionStatusIndicatorProps) {
   const { t } = useTranslation();
 
   // 计算 agent 统计
@@ -55,8 +80,37 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCou
     [instructionSources],
   );
 
+  const initSummary = useMemo(() => {
+    const tools = normalizeNamedEntries(initMeta?.tools);
+    const slashCommands = normalizeNamedEntries(initMeta?.slash_commands);
+    const skills = normalizeNamedEntries(initMeta?.skills);
+    const mcpServers = normalizeNamedEntries(initMeta?.mcp_servers);
+    const plugins = Array.isArray(initMeta?.plugins)
+      ? initMeta!.plugins
+        .map((plugin) => plugin?.name || plugin?.path)
+        .filter(Boolean)
+      : [];
+
+    return {
+      tools,
+      slashCommands,
+      skills,
+      mcpServers,
+      plugins,
+      outputStyle: typeof initMeta?.output_style === 'string' ? initMeta.output_style : '',
+    };
+  }, [initMeta]);
+
+  const hasInitDiagnostics =
+    initSummary.tools.length > 0 ||
+    initSummary.slashCommands.length > 0 ||
+    initSummary.skills.length > 0 ||
+    initSummary.mcpServers.length > 0 ||
+    initSummary.plugins.length > 0 ||
+    !!initSummary.outputStyle;
+
   // 无活跃数据时不显示
-  if (agentStats.total === 0 && toolCount === 0 && skillCount === 0 && visibleInstructionSources.length === 0) return null;
+  if (agentStats.total === 0 && toolCount === 0 && skillCount === 0 && visibleInstructionSources.length === 0 && !hasInitDiagnostics) return null;
 
   return (
     <HoverCard openDelay={200} closeDelay={100}>
@@ -96,6 +150,13 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCou
             <span className="flex items-center gap-0.5">
               <span>规</span>
               <span>{visibleInstructionSources.length}</span>
+            </span>
+          )}
+
+          {hasInitDiagnostics && (
+            <span className="flex items-center gap-0.5">
+              <span>载</span>
+              <span>{initSummary.skills.length + initSummary.mcpServers.length + initSummary.plugins.length}</span>
             </span>
           )}
         </button>
@@ -153,6 +214,78 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCou
               <span className="text-muted-foreground">技能调用</span>
               <span className="font-medium">{skillCount}</span>
             </div>
+          )}
+
+          {hasInitDiagnostics && (
+            <>
+              <div className="flex justify-between border-t border-border pt-1.5 mt-1.5">
+                <span className="text-muted-foreground">CLI 已加载能力</span>
+                <span className="font-medium">
+                  技能 {initSummary.skills.length} / MCP {initSummary.mcpServers.length}
+                </span>
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">工具</span>
+                  <span className="font-medium">{initSummary.tools.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Slash 命令</span>
+                  <span className="font-medium">{initSummary.slashCommands.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Skills</span>
+                  <span className="font-medium">{initSummary.skills.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">MCP</span>
+                  <span className="font-medium">{initSummary.mcpServers.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Plugins</span>
+                  <span className="font-medium">{initSummary.plugins.length}</span>
+                </div>
+                {initSummary.outputStyle && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">输出风格</span>
+                    <span className="font-medium">{initSummary.outputStyle}</span>
+                  </div>
+                )}
+                {initSummary.skills.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-muted-foreground">已加载 Skills</div>
+                    {initSummary.skills.slice(0, 5).map((name) => (
+                      <div key={name} className="truncate text-foreground/85">{name}</div>
+                    ))}
+                    {initSummary.skills.length > 5 && (
+                      <div className="text-[10px] text-muted-foreground">+{initSummary.skills.length - 5} 个 Skills</div>
+                    )}
+                  </div>
+                )}
+                {initSummary.mcpServers.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-muted-foreground">已加载 MCP</div>
+                    {initSummary.mcpServers.slice(0, 5).map((name) => (
+                      <div key={name} className="truncate text-foreground/85">{name}</div>
+                    ))}
+                    {initSummary.mcpServers.length > 5 && (
+                      <div className="text-[10px] text-muted-foreground">+{initSummary.mcpServers.length - 5} 个 MCP</div>
+                    )}
+                  </div>
+                )}
+                {initSummary.plugins.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-muted-foreground">已加载插件</div>
+                    {initSummary.plugins.slice(0, 4).map((name) => (
+                      <div key={name} className="truncate text-foreground/85">{name}</div>
+                    ))}
+                    {initSummary.plugins.length > 4 && (
+                      <div className="text-[10px] text-muted-foreground">+{initSummary.plugins.length - 4} 个插件</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
           )}
 
           {visibleInstructionSources.length > 0 && (

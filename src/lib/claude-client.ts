@@ -818,30 +818,28 @@ if (claudePath) {
 
         if (systemPrompt) {
           // Use preset append mode to keep Claude Code's default system prompt
-          // (which includes skills, working directory awareness, etc.)
-          //
-          // IMPORTANT: OMC (oh-my-claudecode) instructions are loaded via
-          // CLAUDE.md before this append. The append must NOT override OMC's
-          // agent orchestration, skill invocation, or behavioral triggers.
-          const omcPriorityPrefix = `## IMPORTANT: Multi-Agent Orchestration Priority
-If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.md), you MUST prioritize OMC's agent orchestration rules, skill triggers, and behavioral patterns over any conflicting instructions below. OMC handles: agent delegation, model routing, parallel execution, verification workflows, and skill invocation. The following CodePilot-specific instructions only supplement OMC for CodePilot-unique features (UI widgets, media, notifications).
-
-`;
+          // (which includes Claude Code native behavior, plugin discovery,
+          // rules loading, and working directory awareness).
+          // 中文注释：功能名称「原生系统提示优先」，用法是这里只追加 CodePilot 的宿主补充，
+          // 不再额外注入 OMC 优先前缀，避免和原生 `CLAUDE.md` / hooks / plugins 重复打架。
           queryOptions.systemPrompt = {
             type: 'preset',
             preset: 'claude_code',
-            append: omcPriorityPrefix + systemPrompt,
+            append: systemPrompt,
           };
         }
 
-        // MCP servers: pass explicitly provided config (e.g. from CodePilot UI).
-        // User/project MCP config is no longer auto-loaded through SDK
-        // settingSources; slow external servers are selected on demand below.
+        // 中文注释：功能名称「CLI 主路径全量 MCP 透传」，用法是聊天入口已经按当前
+        // 工作区解析好全部有效 MCP，这里直接透传给 Claude Code，会话内不再依赖
+        // 关键词补载来“碰运气”暴露联网或其他外部工具。
         if (mcpServers && Object.keys(mcpServers).length > 0) {
           queryOptions.mcpServers = toSdkMcpConfig(mcpServers);
         }
 
-        const onDemandMcpNames = selectOnDemandMcpServerNames(prompt, conversationHistory, resolvedWorkingDirectory.path);
+        const hasPreloadedMcpServers = !!(mcpServers && Object.keys(mcpServers).length > 0);
+        const onDemandMcpNames = hasPreloadedMcpServers
+          ? new Set<string>()
+          : selectOnDemandMcpServerNames(prompt, conversationHistory, resolvedWorkingDirectory.path);
         if (onDemandMcpNames.size > 0) {
           const { loadOnDemandMcpServers } = await import('@/lib/mcp-loader');
           const onDemandMcps = loadOnDemandMcpServers(resolvedWorkingDirectory.path, onDemandMcpNames);
@@ -920,6 +918,14 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         //   'codepilot-team': createTeamMcpServer({ ... }),
         // };
 
+        let hasOnDemandMcpServers = onDemandMcpNames.size > 0;
+
+        // Widget guidelines: progressive loading strategy.
+        // The system prompt always includes WIDGET_SYSTEM_PROMPT with format rules.
+        // The MCP server (detailed design specs) is only registered when the
+        // conversation likely involves widget generation — detected by keywords in
+        // the user's prompt or existing show-widget output in conversation history.
+        // This avoids SDK tool discovery overhead (~1s) on plain text conversations.
         // Browser MCP: globally available in all contexts
         {
           const { createBrowserMcpServer, BROWSER_SYSTEM_PROMPT } = await import('@/lib/builtin-tools/browser');
@@ -945,14 +951,6 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
           }
         }
 
-        let hasOnDemandMcpServers = onDemandMcpNames.size > 0;
-
-        // Widget guidelines: progressive loading strategy.
-        // The system prompt always includes WIDGET_SYSTEM_PROMPT with format rules.
-        // The MCP server (detailed design specs) is only registered when the
-        // conversation likely involves widget generation — detected by keywords in
-        // the user's prompt or existing show-widget output in conversation history.
-        // This avoids SDK tool discovery overhead (~1s) on plain text conversations.
         if (generativeUI !== false) {
           const needsWidgetSpecs = (() => {
             const widgetKeywords = /可视化|图表|流程图|时间线|架构图|对比|visualiz|diagram|chart|flowchart|timeline|infographic|interactive|widget|show-widget|hierarchy|dashboard/i;

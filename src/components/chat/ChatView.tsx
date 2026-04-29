@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup, PromptInstructionSourceMeta } from '@/types';
+import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup, ClaudeInitMeta } from '@/types';
 import { MessageList } from './MessageList';
 import { TerminalReasonChip } from './TerminalReasonChip';
 import { RateLimitBanner } from './RateLimitBanner';
@@ -305,18 +305,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // Pending image generation notices
   const pendingImageNoticesRef = useRef<string[]>([]);
   const sendMessageRef = useRef<(content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => Promise<void>>(undefined);
-  const [sdkInitMeta, setSdkInitMeta] = useState<{
-    tools?: unknown;
-    slash_commands?: unknown;
-    skills?: unknown;
-    instruction_sources?: PromptInstructionSourceMeta[];
-  } | null>(null);
-  const initMetaRef = useRef<{
-    tools?: unknown;
-    slash_commands?: unknown;
-    skills?: unknown;
-    instruction_sources?: PromptInstructionSourceMeta[];
-  } | null>(null);
+  const [sdkInitMeta, setSdkInitMeta] = useState<ClaudeInitMeta | null>(null);
+  const initMetaRef = useRef<ClaudeInitMeta | null>(null);
 
   const handleModeChange = useCallback((newMode: string) => {
     if (newMode === 'ask') return; // Not supported in this view yet
@@ -1281,6 +1271,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
               subAgents={subAgents}
               toolCount={toolUses.length}
               skillCount={toolUses.filter((t: any) => t.name === 'Skill').length}
+              initMeta={sdkInitMeta}
               instructionSources={sdkInitMeta?.instruction_sources}
             />
             <RuntimeBadge providerId={currentProviderId} />
