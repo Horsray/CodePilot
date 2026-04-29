@@ -44,6 +44,8 @@ interface FileReviewBarProps {
   isStreaming?: boolean;
 }
 
+const REVIEW_POLL_INTERVAL_MS = 10000;
+
 export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarProps) {
   const [modifiedFiles, setModifiedFiles] = useState<ModifiedFile[]>([]);
   const [totalAdded, setTotalAdded] = useState(0);
@@ -123,7 +125,7 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     // 文件审查轮询：仅在当前会话空闲时启用，避免与聊天主请求并发争抢。
     const interval = window.setInterval(() => {
       void fetchStatus();
-    }, 3000);
+    }, REVIEW_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(interval);
@@ -141,15 +143,15 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     actionControllerRef.current?.abort();
     const controller = new AbortController();
     actionControllerRef.current = controller;
-    const timeoutId = window.setTimeout(() => controller.abort(), 60000);
     try {
+      // 中文注释：功能名称「文件审查动作提交」，用法是在用户点击接受/放弃后持续等待
+      // 后端真实完成，不再由前端 60 秒定时器提前中止，避免持久化回滚链路被误判超时。
       const res = await fetch('/api/chat/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, action: 'accept' }),
         signal: controller.signal,
       });
-      window.clearTimeout(timeoutId);
       if (!res.ok) {
         throw new Error(`accept failed: ${res.status}`);
       }
@@ -162,7 +164,6 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
       }
       console.error('Failed to accept changes:', e);
     } finally {
-      window.clearTimeout(timeoutId);
       if (actionControllerRef.current === controller) {
         actionControllerRef.current = null;
       }
@@ -178,7 +179,6 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
     actionControllerRef.current?.abort();
     const controller = new AbortController();
     actionControllerRef.current = controller;
-    const timeoutId = window.setTimeout(() => controller.abort(), 60000);
     try {
       const res = await fetch('/api/chat/review', {
         method: 'POST',
@@ -186,7 +186,6 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
         body: JSON.stringify({ sessionId, action: 'discard' }),
         signal: controller.signal,
       });
-      window.clearTimeout(timeoutId);
       if (!res.ok) {
         throw new Error(`discard failed: ${res.status}`);
       }
@@ -202,7 +201,6 @@ export function FileReviewBar({ sessionId, isStreaming = false }: FileReviewBarP
       }
       console.error('Failed to discard changes:', e);
     } finally {
-      window.clearTimeout(timeoutId);
       if (actionControllerRef.current === controller) {
         actionControllerRef.current = null;
       }

@@ -12,16 +12,17 @@ import type { GitStatus, GitChangedFile } from "@/types";
 
 interface GitStatusSectionProps {
   status: GitStatus;
+  commitMessage: string;
+  onCommitMessageChange: (message: string) => void;
 }
 
-export function GitStatusSection({ status }: GitStatusSectionProps) {
+export function GitStatusSection({ status, commitMessage, onCommitMessageChange }: GitStatusSectionProps) {
   const { t } = useTranslation();
   const { workingDirectory, sessionId } = usePanel();
   const [pulling, setPulling] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [diffFile, setDiffFile] = useState<{ path: string; staged: boolean } | null>(null);
 
-  const [commitMessage, setCommitMessage] = useState('');
   const [committing, setCommitting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [pushing, setPushing] = useState(false);
@@ -46,13 +47,13 @@ export function GitStatusSection({ status }: GitStatusSectionProps) {
         return;
       }
       const data = await res.json();
-      setCommitMessage(data.result);
+      onCommitMessageChange(data.result);
     } catch (err) {
       showToast({ type: 'error', message: err instanceof Error ? err.message : 'Generate failed' });
     } finally {
       setGenerating(false);
     }
-  }, [workingDirectory, generating]);
+  }, [workingDirectory, generating, sessionId]);
 
   const handleCommit = useCallback(async () => {
     if (!workingDirectory || committing || !status.dirty) return;
@@ -68,7 +69,7 @@ export function GitStatusSection({ status }: GitStatusSectionProps) {
         showToast({ type: 'error', message: data.error || 'Commit failed' });
         return;
       }
-      setCommitMessage('');
+      onCommitMessageChange('');
       showToast({ type: 'success', message: '提交成功' });
       handleCommitSuccess();
     } catch (err) {
@@ -96,7 +97,7 @@ export function GitStatusSection({ status }: GitStatusSectionProps) {
         setCommitting(false);
         return;
       }
-      setCommitMessage('');
+      onCommitMessageChange('');
       commitSuccess = true;
     } catch (err) {
       showToast({ type: 'error', message: err instanceof Error ? err.message : 'Commit failed' });
@@ -359,7 +360,7 @@ export function GitStatusSection({ status }: GitStatusSectionProps) {
             <div className="relative">
               <Textarea
                 value={commitMessage}
-                onChange={(e) => setCommitMessage(e.target.value)}
+                onChange={(e) => onCommitMessageChange(e.target.value)}
                 placeholder={`提交变更内容(⌘↵ 在"${status.branch}"上)`}
                 className="min-h-[32px] text-xs pr-8 py-2 resize-y"
                 onKeyDown={(e) => {

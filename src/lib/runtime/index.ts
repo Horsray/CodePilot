@@ -9,9 +9,8 @@ export type { AgentRuntime, RuntimeStreamOptions } from './types';
 export { registerRuntime, getRuntime, getAllRuntimes, getAvailableRuntimes, resolveRuntime, predictNativeRuntime } from './registry';
 
 import { registerRuntime } from './registry';
-import { nativeRuntime } from './native-runtime';
 import { sdkRuntime } from './sdk-runtime';
 
-// Register built-in runtimes
-registerRuntime(nativeRuntime);
+// 中文注释：功能名称「单运行时注册」，用法是应用启动时只注册 Claude Code CLI，
+// 不再把 Native / AI SDK 运行时挂进全局注册表，避免任何隐式回退。
 registerRuntime(sdkRuntime);

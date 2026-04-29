@@ -1870,6 +1870,8 @@ const zh: Record<TranslationKey, string> = {
   'session.completed': '已完成',
   'session.errors': '异常',
   'session.toolCalls': '工具调用',
+  'session.injectedRules': '本轮规则',
+  'session.moreRules': '条规则未展开',
 };
 
 export default zh;

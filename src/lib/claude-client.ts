@@ -33,7 +33,9 @@ import { resolveWorkingDirectory } from './working-directory';
 import { wrapController } from './safe-stream';
 import { type ShadowHome } from './claude-home-shadow';
 import { prepareSdkSubprocessEnv } from './sdk-subprocess-env';
+import { buildSkillNudgeStatusEvent, shouldSuggestSkill } from './skill-nudge';
 import {
+  adoptPersistentClaudeSessionBySignature,
   buildPersistentClaudeSignature,
   canReusePersistentClaudeSession,
   closePersistentClaudeSession,
@@ -56,8 +58,7 @@ import {
 // registry.ts only imports types/db/claude-settings — no cycle. The actual
 // runtime registration still happens elsewhere (runtime/index is imported
 // via its own entry points at app startup).
-import { resolveRuntime, getRuntime } from './runtime/registry';
-import { detectTransport, isNativeCompatible } from './provider-transport';
+import { resolveRuntime } from './runtime/registry';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -130,6 +131,14 @@ export function selectOnDemandMcpServerNames(
   }
   if (/chrome[-\s]?devtools|devtools|console|控制台|页面截图|截图|inspect|调试页面|localhost:\d+|http:\/\/localhost/i.test(text)) {
     add('chrome-devtools');
+  }
+  // 中文注释：功能名称「联网研究意图扩展识别」，用法是覆盖“官方文档、版本兼容、
+  // 上游实现、SDK/API 变化、最佳实践”等自然表述；用户不一定会明确说“帮我搜索”，
+  // 但这类问题本质上已经依赖外部资料，应提前把 WebSearch/fetch 暴露给 CLI 主路径。
+  const needsExternalResearch = /web\s*search|websearch|联网搜索|网页搜索|搜索网页|查一下|查找.*网页|最新信息|latest|官方文档|官方说明|文档|docs?\b|documentation|release\s*notes?|changelog|breaking\s*change|migration|compatib(?:le|ility)|版本|依赖变化|第三方|upstream|上游|仓库实现|开源仓库|源码实现|最佳实践|community|sdk\b|api\b|package\b|library\b|framework\b/i.test(text);
+  const likelyExternalTopic = /终端版|claude\s*code|oh[-\s]?my[-\s]?claudecode|omc|hook|插件|provider|settings\.json|cc\s*switch|mcp|skill/i.test(text);
+  if (needsExternalResearch || (likelyExternalTopic && /怎么实现|如何实现|原理|差异|为什么|支持情况|兼容/i.test(text))) {
+    add('WebSearch', 'bailian-web-search', 'fetch');
   }
   if (/web\s*search|websearch|联网搜索|网页搜索|搜索网页|查一下|查找.*网页|最新信息|latest/i.test(text)) {
     add('WebSearch', 'bailian-web-search', 'fetch');
@@ -528,40 +537,11 @@ export async function generateTextViaSdk(params: {
  * the appropriate runtime, and delegates.
  */
 export function streamClaude(options: ClaudeStreamOptions): ReadableStream<string> {
-  // ── Capability-aware routing ────────────────────────────────
-  // Route to the right runtime based on provider + user setting.
-  const cliDisabled = getSetting('cli_enabled') === 'false';
-  const effectiveProvider = options.providerId || options.sessionProviderId || '';
-  let runtime;
-
-  // Non-Anthropic providers (OpenAI OAuth, etc.) MUST use Native Runtime
-  // because Claude Code SDK only supports Anthropic models.
-  const isNonAnthropicProvider = effectiveProvider === 'openai-oauth';
-
-  if (isNonAnthropicProvider) {
-    runtime = getRuntime('native');
-  } else if (!cliDisabled) {
-    // Only attempt transport-based SDK forcing when CLI is enabled
-    try {
-      const { transport } = detectTransport({
-        providerId: options.providerId,
-        sessionProviderId: options.sessionProviderId,
-      });
-
-      if (!isNativeCompatible(transport)) {
-        const sdkRt = getRuntime('claude-code-sdk');
-        if (sdkRt?.isAvailable()) {
-          runtime = sdkRt;
-        }
-      }
-    } catch { /* ignore detection errors — fall through to normal routing */ }
-  }
-
-  if (!runtime) {
-    runtime = resolveRuntime(getSetting('agent_runtime') || undefined, effectiveProvider || undefined);
-  }
-
-  console.log(`[streamClaude] Using runtime: ${runtime.id} (setting: ${getSetting('agent_runtime') || 'auto'})`);
+  // 中文注释：功能名称「Claude Code 单主路径调度」，用法是聊天流始终只走
+  // Claude Code CLI runtime；若 CLI 不可用，直接在 resolveRuntime 中报错，
+  // 不再根据 provider 或设置切回 Native / AI SDK 分支。
+  const runtime = resolveRuntime();
+  console.log(`[streamClaude] Using runtime: ${runtime.id}`);
 
   return runtime.stream({
     // Universal fields
@@ -634,6 +614,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
     autoTrigger,
     context1m,
     generativeUI,
+    instructionSources,
   } = options;
 
   return new ReadableStream<string>({
@@ -701,6 +682,19 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         const globalSkip = getSetting('dangerously_skip_permissions') === 'true';
         const skipPermissions = globalSkip || !!sessionBypassPermissions;
 
+        let enabledPlugins: Array<{ type: 'local'; path: string }> = [];
+        let omcPluginEnabled = false;
+        try {
+          const { getEnabledPluginConfigs, hasEnabledOmcPlugin } = await import('@/lib/plugin-discovery');
+          enabledPlugins = getEnabledPluginConfigs(resolvedWorkingDirectory.path);
+          omcPluginEnabled = hasEnabledOmcPlugin(enabledPlugins);
+        } catch (error) {
+          console.warn('[claude-client] Failed to resolve enabled plugins for SDK session:', error);
+        }
+        const shouldUseFullClaudeCapabilities =
+          !!(resolved.settingSources && resolved.settingSources.length > 0) ||
+          enabledPlugins.length > 0;
+
         const queryOptions: Options = {
           cwd: resolvedWorkingDirectory.path,
           abortController,
@@ -708,17 +702,15 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
           env: sanitizeEnv(sdkEnv),
-          // When settingSources is non-empty (native Anthropic auth users),
-          // do NOT pass --bare so Claude Code runs with full capabilities:
-          // hooks, auto-memory, CLAUDE.md discovery, skill discovery, OMC.
-          // When settingSources is empty (DB providers / cc-switch), keep
-          // --bare for fast startup since CodePilot manages everything.
-          ...(resolved.settingSources && resolved.settingSources.length > 0
-            ? {}
-            : { extraArgs: { bare: null } }),
+          // 中文注释：功能名称「Claude Full Capabilities 选择」，用法是在检测到
+          // 已启用 Claude 插件（尤其 OMC）时，即使当前 provider 没有 settingSources，
+          // 也不要走 `--bare` 快速路径，保证 hooks、规则发现和插件编排能力能稳定接管。
+          ...(shouldUseFullClaudeCapabilities ? {} : { extraArgs: { bare: null } }),
           settingSources: resolved.settingSources as Options['settingSources'],
           // Debug: log runtime mode to verify --bare / settingSources behavior
-          ...(console.log(`[claude-client] SDK mode: ${resolved.settingSources?.length ? 'FULL (--bare off, settingSources=' + resolved.settingSources.join(',') + ')' : 'FAST (--bare on, settingSources=[])'}`) , {}),
+          ...(console.log(
+            `[claude-client] SDK mode: ${shouldUseFullClaudeCapabilities ? `FULL (--bare off, settingSources=${resolved.settingSources?.join(',') || '[]'}, plugins=${enabledPlugins.length})` : 'FAST (--bare on, settingSources=[], plugins=0)'}`,
+          ), {}),
           // Auto-allow all CodePilot built-in MCPs. These are host-defined
           // in-process servers (createSdkMcpServer in claude-client.ts below)
           // that ship with CodePilot — they're not third-party plugins and
@@ -786,7 +778,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           // When --bare is active (settingSources empty), explicitly declare
           // tools to bypass CLAUDE_CODE_SIMPLE's hard limit to just Bash/Read/Edit.
           // When --bare is NOT active, Claude Code discovers tools natively.
-          ...(resolved.settingSources && resolved.settingSources.length > 0
+          ...(shouldUseFullClaudeCapabilities
             ? {}
             : { tools: ['default', 'Grep', 'Glob', 'Bash', 'Read', 'Write', 'Edit'] as Options['tools'] }),
         };
@@ -1013,26 +1005,19 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
           }
         }
 
-        // CLI tools MCP: tool management capabilities (keyword-gated).
-        // Wide regex to cover natural phrasing like "帮我装 jq", "install uv",
-        // "brew install", "pip install", "npm install -g", etc.
-        const needsCliToolsMcp = (() => {
-          const cliKeywords = /CLI\s*工具|cli.tool|安装.*工具|卸载.*工具|添加.*工具|更新.*工具|升级.*工具|入库.*工具|工具.*入库|加入.*工具库|添加到.*库|工具库|tool\s*library|codepilot_cli_tools|帮我装|帮我安装|帮我更新|帮我升级|\binstall\s+[@\w./-]+|\buninstall\s+[@\w./-]+|\bupdate\s+[@\w./-]+|\bupgrade\s+[@\w./-]+|brew\s+install|brew\s+upgrade|pip\s+install|pipx\s+install|npm\s+install\s+-g|npm\s+update\s+-g|cargo\s+install|apt\s+install|apt-get\s+install/i;
-          if (cliKeywords.test(prompt)) return true;
-          if (conversationHistory?.some(m => cliKeywords.test(m.content))) return true;
-          return false;
-        })();
-
-        if (needsCliToolsMcp) {
-          hasOnDemandMcpServers = true;
-          const { createCliToolsMcpServer, CLI_TOOLS_MCP_SYSTEM_PROMPT } = await import('@/lib/cli-tools-mcp');
-          queryOptions.mcpServers = {
-            ...(queryOptions.mcpServers || {}),
-            'codepilot-cli-tools': createCliToolsMcpServer(),
-          };
-          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + CLI_TOOLS_MCP_SYSTEM_PROMPT;
-          }
+        // 中文注释：功能名称「CLI 工具 MCP 常驻挂载」，用法是每轮 Claude Code 会话都显式
+        // 注入 CodePilot 的 CLI 工具管理 MCP，避免前端能看到 CLI 能力但会话里因为关键词门控
+        // 没注册，导致 AI “知道有功能却调不到”。
+        // 注意：不设置 hasOnDemandMcpServers，因为 CLI tools 是常驻加载的（预热时也加载），
+        // 不属于 keyword-gated 的按需 MCP。设为 true 会导致预热进程永远无法复用。
+        // hasOnDemandMcpServers = true;  // 已移至预热阶段常驻加载
+        const { createCliToolsMcpServer, CLI_TOOLS_MCP_SYSTEM_PROMPT } = await import('@/lib/cli-tools-mcp');
+        queryOptions.mcpServers = {
+          ...(queryOptions.mcpServers || {}),
+          'codepilot-cli-tools': createCliToolsMcpServer(),
+        };
+        if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+          queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + CLI_TOOLS_MCP_SYSTEM_PROMPT;
         }
 
         // Dashboard MCP: widget management capabilities (keyword-gated).
@@ -1103,9 +1088,10 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
           ];
         }
 
-        // Plugins are intentionally not loaded by default. Loading the user
-        // plugin graph on every first turn is one of the main SDK-mode startup
-        // costs; fast chat keeps the default surface small.
+        if (enabledPlugins.length > 0) {
+          queryOptions.plugins = enabledPlugins as Options['plugins'];
+          console.log('[claude-client] Injecting enabled plugins:', enabledPlugins.map(p => path.basename(p.path)).join(', '));
+        }
 
         // Resume session if we have an SDK session ID from a previous conversation turn.
         // Pre-check: verify working_directory exists before attempting resume.
@@ -1135,15 +1121,25 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
           providerKey,
           options: queryOptions,
         });
+        // 中文注释：功能名称「OMC 原生链路优先」，用法是在检测到 OMC 插件启用时，
+        // 禁用 CodePilot 的持久会话池，避免把纯文本 prompt 重新包装成结构化
+        // SDKUserMessage 数组，尽量让 query/resume 形态更接近终端版 Claude Code。
+        const shouldBypassPersistentSession = omcPluginEnabled;
+
+        if (!shouldBypassPersistentSession && sessionId && !sdkSessionId && !canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+          adoptPersistentClaudeSessionBySignature(persistentSignature, sessionId);
+        }
 
         // 中文注释：功能名称「预热会话复用检查」，用法是当数据库中没有 sdkSessionId 时，
         // 如果内存中存在刚刚预热好的 persistent session（带有 initData 且签名匹配），
         // 允许通过 isSessionWarmedUp 检查来复用这个预热进程，避免被下面的 stale session 逻辑误杀。
         // 但注意：如果本次请求加载了预热进程中没有的按需 MCP Server，则不能复用预热进程！
-        const isWarmedUp = sessionId ? !!(await import('./persistent-claude-session').then(m => m.isSessionWarmedUp(sessionId))) : false;
+        const isWarmedUp = !shouldBypassPersistentSession && sessionId
+          ? !!(await import('./persistent-claude-session').then(m => m.isSessionWarmedUp(sessionId)))
+          : false;
         const canReuseWarmup = isWarmedUp && !hasOnDemandMcpServers;
 
-        if (!shouldResume && canReuseWarmup && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+        if (!shouldBypassPersistentSession && !shouldResume && canReuseWarmup && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
           console.log(`[claude-client] Found warmed up persistent session ${sessionId}, allowing reuse despite missing sdkSessionId`);
           shouldResume = true;
         }
@@ -1152,12 +1148,17 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         // exists for this ID, we MUST close the old one to avoid exponential history
         // explosion (sending the full history as a single prompt to a session that
         // already has the history).
-        if (!shouldResume && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+        if (!shouldBypassPersistentSession && !shouldResume && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
           console.log(`[claude-client] Closing stale persistent session ${sessionId} before starting fresh`);
           closePersistentClaudeSession(sessionId);
         }
 
-        const willReusePersistentSession = canReusePersistentClaudeSession(sessionId, persistentSignature);
+        if (shouldBypassPersistentSession && sessionId && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+          console.log(`[claude-client] OMC enabled, closing persistent session ${sessionId} to preserve native prompt shape`);
+          closePersistentClaudeSession(sessionId);
+        }
+
+        const willReusePersistentSession = !shouldBypassPersistentSession && canReusePersistentClaudeSession(sessionId, persistentSignature);
         const shouldPassResume = shouldResume && !willReusePersistentSession;
 
         if (shouldPassResume) {
@@ -1296,11 +1297,14 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
           workingDirectory: resolvedWorkingDirectory.path,
         };
 
-        // No queryOptions.hooks — all hook types (Notification, PostToolUse) use
-        // the SDK's hook_callback control_request transport, which fails with
-        // "CLI output was not valid JSON" when the CLI mixes control frames with
-        // normal stdout. Notifications are derived from stream messages instead
-        // (task_notification, result). TodoWrite sync uses tool_use → tool_result.
+        // 中文注释：功能名称「Hook 生命周期可观测性恢复」，用法是在 Claude Code
+        // Full Capabilities 主路径下开启 hook 事件流，让插件/OMC 的 SessionStart、
+        // InstructionsLoaded、SubagentStart 等生命周期可以被观测与诊断。
+        // 这里先恢复 includeHookEvents，不额外注入应用侧控制 hooks，避免重新引入
+        // 旧版本 SDK 的 control-frame 污染问题。
+        if (shouldUseFullClaudeCapabilities) {
+          queryOptions.includeHookEvents = true;
+        }
 
         // Capture real-time stderr output from Claude Code process
         queryOptions.stderr = (data: string) => {
@@ -1465,30 +1469,39 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         // time. Reassigned on resume-fallback to point at the fresh Query.
         let controlQuery: Query;
 
-        const persistentMessages = await promptToUserMessages(finalPrompt, sdkSessionId);
-
-        try {
-          const persistentTurn = getPersistentClaudeTurn({
-            codepilotSessionId: sessionId,
-            signature: persistentSignature,
-            options: {
-              ...queryOptions,
-              // Persistent sessions use an internal lifecycle; per-request
-              // aborts close the pooled process explicitly below.
-              abortController: undefined,
-            },
-            messages: persistentMessages,
-            shadowHandle: shadowHome || undefined,
-          });
-          conversation = persistentTurn.conversation;
-          controlQuery = persistentTurn.query;
-          usingPersistentSession = true;
-          if (!persistentTurn.reused) {
-            shadowHandleOwnedByPersistentSession = true;
+        if (!shouldBypassPersistentSession) {
+          const persistentMessages = await promptToUserMessages(finalPrompt, sdkSessionId);
+          try {
+            const persistentTurn = getPersistentClaudeTurn({
+              codepilotSessionId: sessionId,
+              signature: persistentSignature,
+              options: {
+                ...queryOptions,
+                // Persistent sessions use an internal lifecycle; per-request
+                // aborts close the pooled process explicitly below.
+                abortController: undefined,
+              },
+              messages: persistentMessages,
+              shadowHandle: shadowHome || undefined,
+            });
+            conversation = persistentTurn.conversation;
+            controlQuery = persistentTurn.query;
+            usingPersistentSession = true;
+            if (!persistentTurn.reused) {
+              shadowHandleOwnedByPersistentSession = true;
+            }
+            console.log('[claude-client] Persistent Claude session:', persistentTurn.reused ? 'reused' : 'started');
+          } catch (persistentStartError) {
+            console.warn('[claude-client] Persistent Claude session failed to start, falling back to one-shot query:', persistentStartError);
+            const oneShot = query({
+              prompt: finalPrompt,
+              options: queryOptions,
+            });
+            conversation = oneShot;
+            controlQuery = oneShot;
           }
-          console.log('[claude-client] Persistent Claude session:', persistentTurn.reused ? 'reused' : 'started');
-        } catch (persistentStartError) {
-          console.warn('[claude-client] Persistent Claude session failed to start, falling back to one-shot query:', persistentStartError);
+        } else {
+          console.log('[claude-client] OMC enabled, using direct query path instead of persistent session pool');
           const oneShot = query({
             prompt: finalPrompt,
             options: queryOptions,
@@ -1611,6 +1624,10 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         let capturePending = !isCacheFresh(capProviderId);
 
         let tokenUsage: TokenUsage | null = null;
+        // 中文注释：功能名称「SDK 工作流统计」，用法是统计 SDK 主路径中实际发生的
+        // tool_use 次数与去重后的工具集合，为 self-improvement / 自动技能提炼提供依据。
+        let sdkToolUseCount = 0;
+        const sdkDistinctTools = new Set<string>();
         // Track pending TodoWrite tool_use_ids so we can sync after successful execution
         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
         // Track pending file modifications so we can record checkpoints
@@ -1619,7 +1636,14 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
         const toolFilesAccumulator = new Set<string>();
         // 中文注释：功能名称「SDK子Agent追踪」，用法是追踪SDK runtime中Agent工具的调用，
         // 发射合成的subagent_start/complete SSE事件，使子Agent卡片在会话切换后仍能恢复渲染
-        const pendingAgentToolUse = new Map<string, { id: string; name: string; displayName: string; prompt: string; model?: string }>();
+        const pendingAgentToolUse = new Map<string, {
+          id: string;
+          name: string;
+          displayName: string;
+          prompt: string;
+          model?: string;
+          source?: 'omc_plugin' | 'sdk_agent_tool';
+        }>();
         // 中文注释：功能名称「Bash命令追踪」，用法是追踪SDK runtime中Bash工具的调用，
         // 在tool_result时发射terminal_mirror事件，将命令输出镜像到终端面板
         const pendingBashCommands = new Map<string, string>();
@@ -1647,6 +1671,8 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
               // Check for tool use blocks
               for (const block of assistantMsg.message.content) {
                 if (block.type === 'tool_use') {
+                  sdkToolUseCount += 1;
+                  sdkDistinctTools.add(block.name);
                   console.log('[claude-client] tool_use:', { id: block.id, name: block.name, input: block.input });
                   controller.enqueue(formatSSE({
                     type: 'tool_use',
@@ -1700,12 +1726,14 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
                         console.warn('[claude-client] Skipping Agent tool_use with empty prompt:', block.id);
                       } else {
                         const subAgentId = `subagent-${agentId}-${Date.now()}`;
+                        const agentSource: 'omc_plugin' | 'sdk_agent_tool' = omcPluginEnabled ? 'omc_plugin' : 'sdk_agent_tool';
                         const agentInfo = {
                           id: subAgentId,
                           name: agentId,
                           displayName: agentDisplayName,
                           prompt: agentPrompt.length > 200 ? agentPrompt.slice(0, 197) + '...' : agentPrompt,
                           model: toolInput?.model,
+                          source: agentSource,
                         };
                         pendingAgentToolUse.set(block.id, agentInfo);
                         controller.enqueue(formatSSE({
@@ -1956,6 +1984,7 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
                           id: agentInfo.id,
                           report: block.is_error ? undefined : reportText,
                           error: block.is_error ? reportText : undefined,
+                          source: agentInfo.source,
                         }),
                       }));
                     }
@@ -2041,6 +2070,7 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
                       plugins: initMsg.plugins,
                       mcp_servers: initMsg.mcp_servers,
                       output_style: initMsg.output_style,
+                      instruction_sources: instructionSources,
                     }),
                   }));
 
@@ -2075,6 +2105,36 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
                   if (!autoTrigger) {
                     notifyGeneric(title, taskMsg.summary || '', telegramOpts).catch(() => {});
                   }
+                } else if (
+                  sysMsg.subtype === 'hook_started' ||
+                  sysMsg.subtype === 'hook_progress' ||
+                  sysMsg.subtype === 'hook_response' ||
+                  sysMsg.subtype === 'hook_additional_context'
+                ) {
+                  const hookMsg = sysMsg as SDKSystemMessage & {
+                    hook_name?: string;
+                    hook_event_name?: string;
+                    status?: string;
+                    additional_context?: string;
+                    content?: string[] | string;
+                    decision?: string;
+                  };
+                  const additionalContext = hookMsg.additional_context
+                    || (Array.isArray(hookMsg.content)
+                      ? hookMsg.content.join('\n\n')
+                      : hookMsg.content);
+                  controller.enqueue(formatSSE({
+                    type: 'status',
+                    data: JSON.stringify({
+                      _internal: true,
+                      hook_event: sysMsg.subtype,
+                      hook_name: hookMsg.hook_name,
+                      hook_event_name: hookMsg.hook_event_name,
+                      status: hookMsg.status,
+                      additional_context: additionalContext,
+                      decision: hookMsg.decision,
+                    }),
+                  }));
                 }
               }
               break;
@@ -2211,6 +2271,71 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
             type: 'tool_files',
             data: JSON.stringify({ files: allToolFiles }),
           }));
+        }
+
+        // 中文注释：功能名称「SDK 自动技能提炼」，用法是让 Claude Code SDK 主路径在
+        // 复杂多步工具工作流后，也像 native runtime 一样触发 skill_nudge 与自动保存技能，
+        // 避免 self-improvement 仅在 native 链路生效。
+        if (shouldSuggestSkill({ step: sdkToolUseCount, distinctTools: sdkDistinctTools })) {
+          controller.enqueue(formatSSE({
+            type: 'status',
+            data: JSON.stringify(buildSkillNudgeStatusEvent({
+              step: sdkToolUseCount,
+              distinctTools: sdkDistinctTools,
+            })),
+          }));
+
+          if (resolvedWorkingDirectory.path) {
+            try {
+              const { generateTextFromProvider } = await import('./text-generator');
+              const { resolveProvider } = await import('./provider-resolver');
+              const activeResolved = resolveProvider({ sessionProviderId: options.providerId || options.sessionProviderId, sessionModel: model });
+
+              if (activeResolved.hasCredentials) {
+                console.log(`[claude-client] Auto-creating skill for SDK workflow (${sdkToolUseCount} tool uses, ${sdkDistinctTools.size} distinct tools)...`);
+                const recentHistory = (conversationHistory || [])
+                  .slice(-20)
+                  .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content}`)
+                  .join('\n\n');
+
+                const result = await generateTextFromProvider({
+                  providerId: activeResolved.provider?.id || '',
+                  model: activeResolved.upstreamModel || activeResolved.model || 'haiku',
+                  system: `你是一个 AI 技能提取助手。分析提供的聊天记录，提取可复用的技能定义。
+所有输出必须使用中文（name 字段除外，name 必须为英文小写加连字符格式）。
+严格按以下 JSON 格式输出，不要包裹在 \`\`\`json 代码块中：
+{
+  "name": "英文小写连字符名称",
+  "description": "一句话中文描述",
+  "whenToUse": "当用户需要...时使用",
+  "content": "Markdown 格式的详细步骤、命令或代码片段（中文）"
+}`,
+                  prompt: `用户请求：\n${prompt}\n\n最近聊天记录：\n${recentHistory}`,
+                  maxTokens: 2000,
+                });
+
+                const rawJson = result.replace(/^```json/i, '').replace(/```$/i, '').trim();
+                const skillDef = JSON.parse(rawJson);
+
+                if (skillDef.name && skillDef.content) {
+                  const { createSkillCreateTool } = await import('./builtin-tools/skill-create');
+                  const tool = createSkillCreateTool(resolvedWorkingDirectory.path);
+                  await tool.execute!(skillDef, { toolCallId: 'sdk-auto-skill', messages: [] });
+                  console.log(`[claude-client] Auto-created SDK skill: ${skillDef.name}`);
+                  controller.enqueue(formatSSE({
+                    type: 'status',
+                    data: JSON.stringify({
+                      notification: true,
+                      message: `已自动将此工作流提炼并保存为技能：${skillDef.name}`,
+                      subtype: 'skill_nudge',
+                    }),
+                  }));
+                }
+              }
+            } catch (err) {
+              console.error('[claude-client] SDK auto-skill creation failed:', err);
+            }
+          }
         }
 
         controller.enqueue(formatSSE({ type: 'done', data: '' }));

@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { invalidateMcpCache } from '@/lib/mcp-loader';
+import {
+  getBuiltinMcpCatalog,
+  readEffectiveExternalMcpServers,
+  readGlobalMcpServers,
+  readProjectMcpServers,
+  writeGlobalMcpServers,
+  writeProjectMcpServers,
+} from '@/lib/mcp-registry';
 import type {
   MCPServerConfig,
   MCPConfigResponse,
@@ -10,82 +15,33 @@ import type {
   SuccessResponse,
 } from '@/types';
 
-function getSettingsPath(): string {
-  return path.join(os.homedir(), '.claude', 'settings.json');
-}
-
-// ~/.claude.json — Claude CLI stores user-scoped MCP servers here
-function getUserConfigPath(): string {
-  return path.join(os.homedir(), '.claude.json');
-}
-
-function readJsonFile(filePath: string): Record<string, unknown> {
-  if (!fs.existsSync(filePath)) return {};
+export async function GET(request: NextRequest): Promise<NextResponse<MCPConfigResponse | ErrorResponse>> {
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  } catch {
-    return {};
-  }
-}
+    const cwd = request.nextUrl.searchParams.get('cwd') || undefined;
+    const externalServers = readEffectiveExternalMcpServers(cwd);
+    const builtinServers = getBuiltinMcpCatalog();
+    const mcpServers: Record<string, MCPServerConfig & Record<string, unknown>> = {};
 
-function readSettings(): Record<string, unknown> {
-  return readJsonFile(getSettingsPath());
-}
-
-function writeSettings(settings: Record<string, unknown>): void {
-  const settingsPath = getSettingsPath();
-  const dir = path.dirname(settingsPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
-}
-
-export async function GET(): Promise<NextResponse<MCPConfigResponse | ErrorResponse>> {
-  try {
-    const settings = readSettings();
-    const userConfig = readJsonFile(getUserConfigPath());
-    const settingsServers = (settings.mcpServers || {}) as Record<string, MCPServerConfig>;
-    const userConfigServers = (userConfig.mcpServers || {}) as Record<string, MCPServerConfig>;
-
-    // Also read project-level .mcp.json and claude.json so the UI can display and toggle project servers
-    const cwd = process.cwd(); // Assuming UI operates in global scope or defaults to process.cwd
-    const projectMcp = readJsonFile(path.join(cwd, '.mcp.json'));
-    const projectClaudeMcp = readJsonFile(path.join(cwd, 'claude.json'));
-    
-    const projectServers = {
-      ...((projectMcp.mcpServers || {}) as Record<string, MCPServerConfig>),
-      ...((projectClaudeMcp.mcpServers || {}) as Record<string, MCPServerConfig>),
-    };
-
-    // Extract Claude CLI's per-project mcpServers from ~/.claude.json's "projects" block
-    if (userConfig.projects && typeof userConfig.projects === 'object') {
-      const projConfig = (userConfig.projects as Record<string, any>)[cwd];
-      if (projConfig && projConfig.mcpServers) {
-        Object.assign(projectServers, projConfig.mcpServers);
-      }
+    for (const [name, entry] of Object.entries(externalServers)) {
+      mcpServers[name] = {
+        ...entry.config,
+        _source: entry.source,
+        _scope: entry.scope,
+        _activation: entry.activation,
+        ...(entry.migratedFrom ? { _migratedFrom: entry.migratedFrom } : {}),
+      };
     }
 
-    // Merge: settings.json > claude.json > project files
-    // Tag each server with _source so UI knows where it came from
-    const mcpServers: Record<string, MCPServerConfig & { _source?: string }> = {};
-    for (const [name, server] of Object.entries(projectServers)) {
-      mcpServers[name] = { ...server, _source: 'project' };
-    }
-    for (const [name, server] of Object.entries(userConfigServers)) {
-      mcpServers[name] = { ...server, _source: 'claude.json' };
-    }
-    for (const [name, server] of Object.entries(settingsServers)) {
-      mcpServers[name] = { ...server, _source: 'settings.json' };
-    }
-
-    // For project-source servers, check if settings.json has an enabled override
-    // (project .mcp.json is read-only; we persist enabled state to settings.json)
-    const settingsOverrides = (settings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
-    for (const [name, server] of Object.entries(mcpServers)) {
-      if (server._source === 'project' && settingsOverrides[name]?.enabled !== undefined) {
-        mcpServers[name] = { ...server, enabled: settingsOverrides[name].enabled };
-      }
+    for (const [name, entry] of Object.entries(builtinServers)) {
+      mcpServers[name] = {
+        ...entry.config,
+        enabled: true,
+        _source: entry.source,
+        _scope: entry.scope,
+        _activation: entry.activation,
+        _builtin: true,
+        _readonly: true,
+      };
     }
 
     return NextResponse.json({ mcpServers });
@@ -103,46 +59,33 @@ export async function PUT(
   try {
     const body = await request.json();
     const incoming = body.mcpServers as Record<string, MCPServerConfig & { _source?: string }>;
-
-    // Split incoming servers by source and write to the correct file.
-    // Servers without _source or with _source='settings.json' → settings.json
-    // Servers with _source='claude.json' → ~/.claude.json
-    const forSettings: Record<string, MCPServerConfig> = {};
-    const forUserConfig: Record<string, MCPServerConfig> = {};
-    let forProjectOverrides: Record<string, { enabled?: boolean }> | undefined;
+    const cwd = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined;
+    const nextGlobalServers: Record<string, MCPServerConfig> = {};
+    const nextProjectServers: Record<string, MCPServerConfig> = {};
 
     for (const [name, server] of Object.entries(incoming)) {
-      const { _source, ...cleanServer } = server;
-      if (_source === 'project') {
-        // Project servers are read-only — only persist enabled override to settings.json
-        if (cleanServer.enabled !== undefined) {
-          if (!forProjectOverrides) forProjectOverrides = {};
-          forProjectOverrides[name] = { enabled: cleanServer.enabled };
-        }
-      } else if (_source === 'claude.json') {
-        forUserConfig[name] = cleanServer;
+      const {
+        _source,
+        _scope: _ignoredScope,
+        _activation: _ignoredActivation,
+        _builtin: _ignoredBuiltin,
+        _readonly: _ignoredReadonly,
+        _migratedFrom: _ignoredMigratedFrom,
+        ...cleanServer
+      } = server as MCPServerConfig & Record<string, unknown>;
+
+      if (_source === 'builtin') continue;
+      if (_source === 'project-file' || _source === 'project') {
+        nextProjectServers[name] = cleanServer;
       } else {
-        forSettings[name] = cleanServer;
+        nextGlobalServers[name] = cleanServer;
       }
     }
 
-    // Write settings.json
-    const settings = readSettings();
-    settings.mcpServers = forSettings;
-    if (forProjectOverrides) {
-      settings.mcpServerOverrides = forProjectOverrides;
+    writeGlobalMcpServers(nextGlobalServers);
+    if (cwd) {
+      writeProjectMcpServers(cwd, nextProjectServers);
     }
-    writeSettings(settings);
-
-    // Write ~/.claude.json (only the mcpServers key, preserve other fields)
-    const userConfig = readJsonFile(getUserConfigPath());
-    userConfig.mcpServers = forUserConfig;
-    const userConfigPath = getUserConfigPath();
-    const dir = path.dirname(userConfigPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(userConfigPath, JSON.stringify(userConfig, null, 2), 'utf-8');
 
     invalidateMcpCache();
     return NextResponse.json({ success: true });
@@ -159,7 +102,12 @@ export async function POST(
 ): Promise<NextResponse<SuccessResponse | ErrorResponse>> {
   try {
     const body = await request.json();
-    const { name, server } = body as { name: string; server: MCPServerConfig };
+    const { name, server, scope, cwd } = body as {
+      name: string;
+      server: MCPServerConfig;
+      scope?: 'global' | 'project';
+      cwd?: string;
+    };
 
     // stdio servers require command; sse/http servers require url
     const isRemote = server?.type === 'sse' || server?.type === 'http';
@@ -170,26 +118,24 @@ export async function POST(
       );
     }
 
-    // Check both config files for name collision (merged namespace)
-    const settings = readSettings();
-    const userConfig = readJsonFile(getUserConfigPath());
-    if (!settings.mcpServers) {
-      settings.mcpServers = {};
-    }
-
-    const settingsServers = settings.mcpServers as Record<string, MCPServerConfig>;
-    const userConfigServers = (userConfig.mcpServers || {}) as Record<string, MCPServerConfig>;
-    if (settingsServers[name] || userConfigServers[name]) {
+    const normalizedCwd = typeof cwd === 'string' && cwd.trim() ? cwd.trim() : undefined;
+    const existing = readEffectiveExternalMcpServers(normalizedCwd);
+    if (existing[name]) {
       return NextResponse.json(
         { error: `MCP server "${name}" already exists` },
         { status: 409 }
       );
     }
 
-    const mcpServers = settingsServers;
-
-    mcpServers[name] = server;
-    writeSettings(settings);
+    if (scope === 'project' && normalizedCwd) {
+      const projectServers = readProjectMcpServers(normalizedCwd);
+      projectServers[name] = server;
+      writeProjectMcpServers(normalizedCwd, projectServers);
+    } else {
+      const globalServers = readGlobalMcpServers();
+      globalServers[name] = server;
+      writeGlobalMcpServers(globalServers);
+    }
 
     invalidateMcpCache();
     return NextResponse.json({ success: true });

@@ -177,6 +177,7 @@ async function executeAgentTask(
         displayName: agentDef.displayName || role,
         prompt: task.desc,
         model: finalModel,
+        source: 'native_team_runner',
       }),
     });
     emitSSE({ type: 'tool_output', data: `[subagent:${role}] ${task.desc}\n` });
@@ -242,6 +243,7 @@ async function executeAgentTask(
         data: JSON.stringify({
           id: subAgentId,
           report,
+          source: 'native_team_runner',
         }),
       });
       emitSSE({ type: 'tool_output', data: `[+] done\n\n` });
@@ -450,6 +452,7 @@ async function executeAgentTask(
         data: JSON.stringify({
           id: subAgentId,
           report: timeoutReport,
+          source: 'native_team_runner',
         }),
       });
       emitSSE({ type: 'tool_output', data: `[+] done (timeout)\n\n` });
@@ -567,6 +570,7 @@ async function executeAgentTask(
         id: subAgentId,
         report,
         error: errorEvent || undefined,
+        source: 'native_team_runner',
       }),
     });
     emitSSE({ type: 'tool_output', data: `[+] done\n\n` });

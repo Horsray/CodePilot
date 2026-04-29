@@ -3,6 +3,7 @@
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import { Trash, PencilSimple, HardDrives, WifiHigh, Globe, ArrowsClockwise, SpinnerGap } from "@/components/ui/icon";
 import { Switch } from '@/components/ui/switch';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -17,7 +18,14 @@ interface McpRuntimeStatus {
 }
 
 interface McpServerListProps {
-  servers: Record<string, MCPServer>;
+  servers: Record<string, MCPServer & {
+    _source?: string;
+    _scope?: string;
+    _activation?: string;
+    _builtin?: boolean;
+    _readonly?: boolean;
+    _migratedFrom?: string[];
+  }>;
   onEdit: (name: string, server: MCPServer) => void;
   onDelete: (name: string) => void;
   onToggleEnabled?: (name: string, enabled: boolean) => void;
@@ -52,6 +60,23 @@ function getStatusBadge(status: McpRuntimeStatus['status']) {
     default:
       return { label: status, className: '' };
   }
+}
+
+function getBuiltinServerDescription(name: string): string {
+  const descriptions: Record<string, string> = {
+    'codepilot-notify': 'CodePilot 内置通知能力',
+    'codepilot-todo': 'CodePilot 内置待办管理能力',
+    'codepilot-browser': 'CodePilot 内置浏览器自动化能力',
+    'codepilot-ask-user': 'CodePilot 内置追问与澄清能力',
+    'codepilot-memory-search': 'CodePilot 内置记忆检索能力',
+    'codepilot-widget': 'CodePilot 内置组件与挂件能力',
+    'codepilot-media': 'CodePilot 内置媒体导入能力',
+    'codepilot-image-gen': 'CodePilot 内置图片生成能力',
+    'codepilot-cli-tools': 'CodePilot 内置 CLI 工具管理能力',
+    'codepilot-dashboard': 'CodePilot 内置仪表盘能力',
+  };
+
+  return descriptions[name] || 'CodePilot 内置 MCP 能力';
 }
 
 export function McpServerList({ servers, onEdit, onDelete, onToggleEnabled, runtimeStatus, activeSessionId }: McpServerListProps) {
@@ -130,13 +155,22 @@ export function McpServerList({ servers, onEdit, onDelete, onToggleEnabled, runt
         const isToggling = toggling.has(name);
 
         const isDisabled = server.enabled === false;
+        const isBuiltin = !!server._builtin;
+        const isReadonly = !!server._readonly || isBuiltin;
+        const sourceLabel = server._source === 'project-file'
+          ? 'Project'
+          : server._source === 'claude.json'
+            ? 'Global'
+            : server._source === 'builtin'
+              ? 'Builtin'
+              : null;
 
         return (
           <Card key={name} className={isDisabled ? 'opacity-50' : undefined}>
             <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
               <div className="flex-1 min-w-0 mr-3">
                 <div className="flex items-center gap-2 mb-1">
-                  {onToggleEnabled && (
+                  {onToggleEnabled && !isBuiltin && (
                     <Switch
                       size="sm"
                       checked={!isDisabled}
@@ -148,6 +182,21 @@ export function McpServerList({ servers, onEdit, onDelete, onToggleEnabled, runt
                   <Badge variant="outline" className="text-xs shrink-0">
                     {typeInfo.label}
                   </Badge>
+                  {sourceLabel && (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-xs shrink-0",
+                        isBuiltin
+                          ? "border-violet-500/30 text-violet-500"
+                          : server._source === 'project-file'
+                            ? "border-blue-500/30 text-blue-500"
+                            : "border-border text-muted-foreground",
+                      )}
+                    >
+                      {sourceLabel}
+                    </Badge>
+                  )}
                   {statusBadge ? (
                     <Badge variant="outline" className={`text-xs shrink-0 ${statusBadge.className}`}>
                       {statusBadge.label}
@@ -159,7 +208,9 @@ export function McpServerList({ servers, onEdit, onDelete, onToggleEnabled, runt
                   )}
                 </div>
                 <CardDescription className="text-xs mt-1 font-mono">
-                  {server.url
+                  {isBuiltin
+                    ? getBuiltinServerDescription(name)
+                    : server.url
                     ? server.url
                     : `${server.command} ${server.args?.join(' ') || ''}`}
                 </CardDescription>
@@ -168,10 +219,15 @@ export function McpServerList({ servers, onEdit, onDelete, onToggleEnabled, runt
                     {runtime.serverInfo.name} v{runtime.serverInfo.version}
                   </p>
                 )}
+                {server._migratedFrom && server._migratedFrom.length > 0 && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    迁移来源：{server._migratedFrom.join(', ')}
+                  </p>
+                )}
               </div>
               <div className="flex gap-1 shrink-0">
                 {/* Reconnect button — only for failed servers */}
-                {runtime?.status === 'failed' && activeSessionId && (
+                {runtime?.status === 'failed' && activeSessionId && !isBuiltin && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -188,7 +244,7 @@ export function McpServerList({ servers, onEdit, onDelete, onToggleEnabled, runt
                   </Button>
                 )}
                 {/* Enable button — only for disabled servers */}
-                {runtime?.status === 'disabled' && activeSessionId && (
+                {runtime?.status === 'disabled' && activeSessionId && !isBuiltin && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -202,22 +258,26 @@ export function McpServerList({ servers, onEdit, onDelete, onToggleEnabled, runt
                     {t('mcp.enable' as TranslationKey)}
                   </Button>
                 )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => onEdit(name, server)}
-                >
-                  <PencilSimple size={14} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-destructive hover:text-destructive"
-                  onClick={() => onDelete(name)}
-                >
-                  <Trash size={14} />
-                </Button>
+                {!isReadonly && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => onEdit(name, server)}
+                    >
+                      <PencilSimple size={14} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-destructive hover:text-destructive"
+                      onClick={() => onDelete(name)}
+                    >
+                      <Trash size={14} />
+                    </Button>
+                  </>
+                )}
               </div>
             </CardHeader>
             {(server.env && Object.keys(server.env).length > 0) ||

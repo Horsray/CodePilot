@@ -37,9 +37,11 @@ export function SkillListItem({
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const canDelete = skill.source === "global" || skill.source === "project";
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!canDelete) return;
     if (confirmDelete) {
       onDelete(skill);
       setConfirmDelete(false);
@@ -85,7 +87,7 @@ export function SkillListItem({
           {skill.description}
         </p>
       </div>
-      {(hovered || confirmDelete) && (
+      {canDelete && (hovered || confirmDelete) && (
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

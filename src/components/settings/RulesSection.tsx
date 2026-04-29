@@ -48,7 +48,7 @@ export function RulesSection() {
   const [knowledgeBaseEnabled, setKnowledgeBaseEnabled] = useState(true);
   const [basicSaving, setBasicSaving] = useState(false);
 
-  const [discoveredRules, setDiscoveredRules] = useState<Array<{ projectName: string, path: string, content: string }>>([]);
+  const [discoveredRules, setDiscoveredRules] = useState<Array<{ projectName: string, path: string, content: string, scope?: 'project' | 'global' | 'user' }>>([]);
 
   const fetchAppSettings = useCallback(async () => {
     try {
@@ -349,15 +349,27 @@ export function RulesSection() {
                 <RuleItem key={rule.id} rule={rule} onEdit={() => { setEditingRule(rule); setDialogOpen(true); }} onDelete={() => handleDelete(rule.id)} />
               ))}
               
-              {/* Synced Rules from .trae/rules/rules.md */}
+              {/* Synced Rules from project and external sources */}
               {syncProjectRules && discoveredRules.map((dr, i) => (
                 <div key={`synced-${i}`} className="flex items-center justify-between p-4 group hover:bg-muted/30 transition-colors border-t border-border/30 first:border-t-0">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-2 h-2 rounded-full bg-blue-500/50 shadow-[0_0_8px_rgba(59,130,246,0.3)]" />
+                    <div className={cn(
+                      "w-2 h-2 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.3)]",
+                      dr.scope === 'global' ? "bg-violet-500/60 shadow-[0_0_8px_rgba(139,92,246,0.3)]" :
+                      dr.scope === 'user' ? "bg-amber-500/60 shadow-[0_0_8px_rgba(245,158,11,0.3)]" :
+                      "bg-blue-500/50"
+                    )} />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <h4 className="text-sm font-medium truncate">{dr.projectName}</h4>
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-bold uppercase tracking-wider">Synced</span>
+                        <span className={cn(
+                          "text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider",
+                          dr.scope === 'global' ? "bg-violet-500/10 text-violet-500" :
+                          dr.scope === 'user' ? "bg-amber-500/10 text-amber-500" :
+                          "bg-blue-500/10 text-blue-500"
+                        )}>
+                          {dr.scope === 'global' ? 'Global' : dr.scope === 'user' ? 'User' : 'Synced'}
+                        </span>
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-[10px] text-muted-foreground truncate max-w-[250px]">

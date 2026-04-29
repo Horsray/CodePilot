@@ -19,7 +19,7 @@ import {
   HoverCardContent,
 } from '@/components/ui/hover-card';
 import { useTranslation } from '@/hooks/useTranslation';
-import type { SubAgentInfo } from '@/types';
+import type { PromptInstructionSourceMeta, SubAgentInfo } from '@/types';
 
 /** 组件属性 */
 interface SessionStatusIndicatorProps {
@@ -29,6 +29,8 @@ interface SessionStatusIndicatorProps {
   toolCount?: number;
   /** 技能调用总数 */
   skillCount?: number;
+  /** 本轮实际注入的规则/索引来源 */
+  instructionSources?: PromptInstructionSourceMeta[];
 }
 
 /**
@@ -36,7 +38,7 @@ interface SessionStatusIndicatorProps {
  * 功能：紧凑显示当前会话的 agent 数量、工具调用数、技能调用数
  * 用法：放置在 ChatComposerActionBar 的右侧区域
  */
-export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCount = 0 }: SessionStatusIndicatorProps) {
+export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCount = 0, instructionSources = [] }: SessionStatusIndicatorProps) {
   const { t } = useTranslation();
 
   // 计算 agent 统计
@@ -48,8 +50,13 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCou
     return { total, running, completed, error };
   }, [subAgents]);
 
+  const visibleInstructionSources = useMemo(
+    () => instructionSources.filter((source) => source.category === 'hard_rule' || source.category === 'repo_instruction' || source.category === 'index_doc'),
+    [instructionSources],
+  );
+
   // 无活跃数据时不显示
-  if (agentStats.total === 0 && toolCount === 0 && skillCount === 0) return null;
+  if (agentStats.total === 0 && toolCount === 0 && skillCount === 0 && visibleInstructionSources.length === 0) return null;
 
   return (
     <HoverCard openDelay={200} closeDelay={100}>
@@ -82,6 +89,13 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCou
             <span className="flex items-center gap-0.5">
               <PuzzlePiece size={10} />
               <span>{skillCount}</span>
+            </span>
+          )}
+
+          {visibleInstructionSources.length > 0 && (
+            <span className="flex items-center gap-0.5">
+              <span>规</span>
+              <span>{visibleInstructionSources.length}</span>
             </span>
           )}
         </button>
@@ -139,6 +153,28 @@ export function SessionStatusIndicator({ subAgents = [], toolCount = 0, skillCou
               <span className="text-muted-foreground">技能调用</span>
               <span className="font-medium">{skillCount}</span>
             </div>
+          )}
+
+          {visibleInstructionSources.length > 0 && (
+            <>
+              <div className="flex justify-between border-t border-border pt-1.5 mt-1.5">
+                <span className="text-muted-foreground">{t('session.injectedRules')}</span>
+                <span className="font-medium">{visibleInstructionSources.length}</span>
+              </div>
+              <div className="space-y-1">
+                {visibleInstructionSources.slice(0, 6).map((source) => (
+                  <div key={`${source.level}:${source.filename}`} className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 truncate text-muted-foreground">{source.filename}</span>
+                    <span className="shrink-0 text-[10px] text-foreground/80">{source.level}</span>
+                  </div>
+                ))}
+                {visibleInstructionSources.length > 6 && (
+                  <div className="text-[10px] text-muted-foreground">
+                    +{visibleInstructionSources.length - 6} {t('session.moreRules')}
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       </HoverCardContent>

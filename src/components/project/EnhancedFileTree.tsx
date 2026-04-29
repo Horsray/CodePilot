@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { useTranslation } from "@/hooks/useTranslation";
 import { showToast } from "@/hooks/useToast";
 import type { FileTreeNode } from "@/types";
+import { getCachedRootFileTree, setCachedRootFileTree } from "@/lib/file-tree-cache";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -164,7 +165,6 @@ interface FlatNode {
 type CacheEntry<T> = { value: T; ts: number };
 
 const FILE_TREE_CACHE_TTL_MS = 30_000;
-const rootTreeCache = new Map<string, CacheEntry<FileTreeNode[]>>();
 const directoryChildrenCache = new Map<string, CacheEntry<FileTreeNode[]>>();
 
 function getCached<T>(cache: Map<string, CacheEntry<T>>, key: string): T | null {
@@ -518,7 +518,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
     setLoading(true);
     setError(null);
     try {
-      const cachedRoot = getCached(rootTreeCache, workingDirectory);
+      const cachedRoot = getCachedRootFileTree(workingDirectory);
       if (cachedRoot && treeRef.current.length === 0) {
         treeRef.current = cachedRoot;
         setTree(cachedRoot);
@@ -535,7 +535,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, hi
         const nextTree = (data.tree || []) as FileTreeNode[];
         treeRef.current = nextTree;
         setTree(nextTree);
-        setCached(rootTreeCache, workingDirectory, nextTree);
+        setCachedRootFileTree(workingDirectory, nextTree);
 
         const savedExpanded = loadExpandedState();
         if (highlightPath) {

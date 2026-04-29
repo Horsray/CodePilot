@@ -15,6 +15,7 @@ import {
   Lightning,
   Robot,
   Eyeglasses,
+  Globe,
   ArrowSquareOut,
   Code,
   Eye,
@@ -29,7 +30,7 @@ import {
   FolderOpen
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
-import { usePanel } from '@/hooks/usePanel';
+import { defaultViewMode, usePanel } from '@/hooks/usePanel';
 
 const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.tsx', '.jsx', '.csv', '.tsv']);
 
@@ -148,6 +149,187 @@ function getFilePath(input: unknown): string {
 function truncatePath(path: string, maxLen = 50): string {
   if (path.length <= maxLen) return path;
   return '...' + path.slice(path.length - maxLen + 3);
+}
+
+type ContextGroupKind = 'search' | 'read' | 'other';
+
+interface ContextGroupItem {
+  label: string;
+  path?: string;
+  title?: string;
+}
+
+function isSearchLikeTool(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return [
+    'search',
+    'glob',
+    'grep',
+    'find_files',
+    'search_files',
+    'websearch',
+    'web_search',
+    'searchcodebase',
+    'toolsearch',
+  ].some((keyword) => lowerName.includes(keyword));
+}
+
+function isReadLikeTool(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return [
+    'read',
+    'read_file',
+    'read_multiple_files',
+    'view_file',
+    'list_directory',
+    'directory_tree',
+  ].some((keyword) => lowerName.includes(keyword));
+}
+
+function getContextGroupKind(tool: ToolAction): ContextGroupKind {
+  if (isSearchLikeTool(tool.name)) return 'search';
+  if (isReadLikeTool(tool.name)) return 'read';
+  return 'other';
+}
+
+function isLikelyFilePath(value: string): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (/^(https?:)?\/\//i.test(trimmed)) return false;
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
+  if (trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../')) return true;
+  return /(^|[\\/])[^\\/\s]+\.[A-Za-z0-9_-]+(?::\d+)?(?::.*)?$/.test(trimmed);
+}
+
+function dedupeGroupItems(items: ContextGroupItem[]): ContextGroupItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = item.path ? `path:${item.path}` : `label:${item.label}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getContextToolSignature(tool: ToolAction): string {
+  const input = tool.input as Record<string, unknown> | undefined;
+  const name = tool.name.toLowerCase();
+  const keyParts: string[] = [name];
+
+  if (input) {
+    const query = String(input.pattern || input.query || input.glob || input.url || getFilePath(input) || '').trim();
+    if (query) keyParts.push(query);
+    if (Array.isArray(input.paths)) {
+      keyParts.push((input.paths.filter((value): value is string => typeof value === 'string')).join('|'));
+    }
+  }
+
+  return keyParts.join('::');
+}
+
+function extractReadPaths(tool: ToolAction): string[] {
+  const input = tool.input as Record<string, unknown> | undefined;
+  if (!input) return [];
+  const values: string[] = [];
+  if (Array.isArray(input.paths)) {
+    values.push(...input.paths.filter((value): value is string => typeof value === 'string'));
+  }
+  const singlePath = getFilePath(input);
+  if (singlePath) values.push(singlePath);
+  return Array.from(new Set(values));
+}
+
+function extractSearchOutputLines(outputText?: string): string[] {
+  if (!outputText) return [];
+  let lines = outputText.split('\n').filter((line) => line.trim().length > 0);
+
+  try {
+    const parsed = JSON.parse(outputText);
+    if (Array.isArray(parsed)) {
+      lines = parsed.map((item) => typeof item === 'string' ? item : JSON.stringify(item));
+    } else if (parsed && typeof parsed === 'object') {
+      if (Array.isArray((parsed as Record<string, unknown>).files)) {
+        lines = ((parsed as Record<string, unknown>).files as unknown[]).map((item) => String(item));
+      } else if (Array.isArray((parsed as Record<string, unknown>).results)) {
+        lines = ((parsed as Record<string, unknown>).results as unknown[]).map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object') {
+            const record = item as Record<string, unknown>;
+            return String(record.path || record.url || record.title || JSON.stringify(record));
+          }
+          return String(item);
+        });
+      }
+    }
+  } catch {
+    // 中文注释：功能名称「搜索结果行提取容错」，用法是搜索输出不是 JSON 时继续按纯文本行处理，避免聚合详情丢失。
+  }
+
+  if (lines.length > 0 && (/^found\s+\d+/i.test(lines[0]) || /^找到\s+\d+/i.test(lines[0]) || /^匹配\s+\d+/i.test(lines[0]) || /^\d+\s+matches/i.test(lines[0]) || /^\d+\s+results/i.test(lines[0]))) {
+    lines = lines.slice(1);
+  }
+
+  return lines;
+}
+
+function extractSearchGroupItems(tool: ToolAction): ContextGroupItem[] {
+  const items: ContextGroupItem[] = [];
+  const input = tool.input as Record<string, unknown> | undefined;
+  const query = String(input?.pattern || input?.query || input?.glob || '').trim();
+  if (query) {
+    items.push({
+      label: `"${query.length > 80 ? `${query.slice(0, 77)}...` : query}"`,
+      title: query,
+    });
+  }
+
+  const outputLines = extractSearchOutputLines(tool.result);
+  outputLines.forEach((line) => {
+    const grepMatch = line.match(/^([^:]+):(\d+):(.*)$/);
+    if (grepMatch && isLikelyFilePath(grepMatch[1])) {
+      items.push({
+        label: `${extractFilename(grepMatch[1])}:${grepMatch[2]}`,
+        path: grepMatch[1],
+        title: `${grepMatch[1]}:${grepMatch[2]}`,
+      });
+      return;
+    }
+
+    if (isLikelyFilePath(line)) {
+      const cleanPath = line.replace(/:\d+(?::.*)?$/, '');
+      items.push({
+        label: extractFilename(cleanPath),
+        path: cleanPath,
+        title: cleanPath,
+      });
+      return;
+    }
+
+    items.push({
+      label: line.length > 120 ? `${line.slice(0, 117)}...` : line,
+      title: line,
+    });
+  });
+
+  return dedupeGroupItems(items);
+}
+
+export function extractReadGroupItems(tools: ToolAction[]): ContextGroupItem[] {
+  return dedupeGroupItems(
+    tools.flatMap((tool) => extractReadPaths(tool).map((path) => ({
+      label: extractFilename(path),
+      path,
+      title: path,
+    })))
+  );
+}
+
+export function extractSearchGroupSummary(tools: ToolAction[]): { queryCount: number; resultCount: number; items: ContextGroupItem[] } {
+  const items = dedupeGroupItems(tools.flatMap(extractSearchGroupItems));
+  const queryCount = tools.length;
+  const resultCount = items.filter((item) => item.path).length || items.length;
+  return { queryCount, resultCount, items };
 }
 
 export const AGENT_META: Record<string, { icon: React.ElementType, color: string, bg: string, label: string }> = {
@@ -440,16 +622,30 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
           </div>
         );
       }
-      const outputText = tool.result;
-      if (!outputText) return null;
-      
-      const cleanText = parseMcpResultText(outputText);
-      
+      const paths = extractReadPaths(tool);
+      if (paths.length === 0) return null;
+
       return (
         <div className="mt-2 ml-3 border-l-2 border-blue-500/30 pl-3 py-2 bg-background/30 rounded-r-md">
-          <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[300px] overflow-auto">
-            {cleanText.length > 5000 ? cleanText.slice(0, 5000) + `\n… (已截断，共 ${cleanText.length} 字符)` : cleanText}
-          </pre>
+          <div className="space-y-1">
+            {paths.map((path, index) => (
+              <button
+                key={`${path}-${index}`}
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  usePanelStore.getState().openPreviewTab(path, defaultViewMode);
+                }}
+                className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-muted/50 transition-colors"
+                title={path}
+              >
+                <FileText size={12} className="text-muted-foreground shrink-0" />
+                <span className="font-mono text-[11px] text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 truncate underline">
+                  {path}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       );
     }
@@ -484,6 +680,26 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
         </div>
       );
     }
+  },
+  {
+    match: (n) => ['websearch', 'web_search'].includes(n.toLowerCase()),
+    icon: Globe,
+    label: '联网搜索',
+    getSummary: (input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      const query = (inp?.query || inp?.pattern || '') as string;
+      return query ? `"${query.length > 50 ? query.slice(0, 47) + '...' : query}"` : '联网检索内容';
+    },
+  },
+  {
+    match: (n) => n.toLowerCase().includes('webfetch') || (n.toLowerCase().includes('fetch') && !n.toLowerCase().includes('filesystem')),
+    icon: Globe,
+    label: '网页抓取',
+    getSummary: (input) => {
+      const inp = input as Record<string, unknown> | undefined;
+      const url = (inp?.url || inp?.uri || '') as string;
+      return url ? (url.length > 60 ? url.slice(0, 57) + '...' : url) : '抓取网页内容';
+    },
   },
   {
     match: (n) => ['search', 'glob', 'grep', 'find_files', 'search_files', 'websearch', 'web_search'].includes(n.toLowerCase()),
@@ -937,6 +1153,10 @@ function getRenderer(name: string, input?: unknown): ToolRendererDef {
     if (lowerName.includes('memory') || name === 'mcp__codepilot-memory-search__codepilot_memory_recent') {
       return { ...match, icon: Brain };
     }
+
+    if (lowerName.includes('websearch') || lowerName.includes('web_search') || lowerName.includes('webfetch') || (lowerName.includes('fetch') && !lowerName.includes('filesystem'))) {
+      return { ...match, icon: Globe };
+    }
     
     if (lowerName.includes('search')) {
       return { ...match, icon: MagnifyingGlass };
@@ -985,11 +1205,48 @@ function isActionTool(name: string): boolean {
 }
 
 type Segment =
-  | { kind: 'context_group'; tools: ToolAction[] }
+  | { kind: 'context_group'; tools: ToolAction[]; groupType: ContextGroupKind }
   | { kind: 'context_single'; tool: ToolAction }
   | { kind: 'action'; tool: ToolAction }
   | { kind: 'text'; content: string }
   | { kind: 'thinking'; content: string };
+
+export function buildContextSegments(tools: ToolAction[]): Segment[] {
+  const segments: Segment[] = [];
+  let currentKind: ContextGroupKind | null = null;
+  let bucket: ToolAction[] = [];
+
+  const flushBucket = () => {
+    if (bucket.length === 0 || currentKind === null) return;
+    if (currentKind !== 'other' && bucket.length > 1) {
+      segments.push({ kind: 'context_group', tools: bucket, groupType: currentKind });
+    } else {
+      bucket.forEach((tool) => segments.push({ kind: 'context_single', tool }));
+    }
+    bucket = [];
+    currentKind = null;
+  };
+
+  tools.forEach((tool) => {
+    const nextKind = getContextGroupKind(tool);
+    const previousTool = bucket[bucket.length - 1];
+    if (previousTool && getContextToolSignature(previousTool) === getContextToolSignature(tool)) {
+      return;
+    }
+    if (currentKind === null || currentKind === nextKind) {
+      currentKind = nextKind;
+      bucket.push(tool);
+      return;
+    }
+
+    flushBucket();
+    currentKind = nextKind;
+    bucket = [tool];
+  });
+
+  flushBucket();
+  return segments;
+}
 
 function computeSegments(
   tools: ToolAction[],
@@ -1049,9 +1306,7 @@ function computeSegments(
     let contextBuffer: ToolAction[] = [];
 
     const flushContext = () => {
-      for (const t of contextBuffer) {
-        segments.push({ kind: 'context_single', tool: t });
-      }
+      segments.push(...buildContextSegments(contextBuffer));
       contextBuffer = [];
     };
 
@@ -1082,9 +1337,7 @@ function computeSegments(
 
   let contextBuffer: ToolAction[] = [];
   const flushContext = () => {
-    for (const t of contextBuffer) {
-      segments.push({ kind: 'context_single', tool: t });
-    }
+    segments.push(...buildContextSegments(contextBuffer));
     contextBuffer = [];
   };
 
@@ -1100,10 +1353,30 @@ function computeSegments(
   return segments;
 }
 
-function ContextGroup({ tools }: { tools: ToolAction[] }) {
+function ContextGroup({ tools, groupType }: { tools: ToolAction[]; groupType: ContextGroupKind }) {
   const [expanded, setExpanded] = useState(false);
+  const { openPreviewTab } = usePanel();
   const hasRunning = tools.some((t) => t.result === undefined);
   const hasError = tools.some((t) => t.isError);
+  const readItems = React.useMemo(() => extractReadGroupItems(tools), [tools]);
+  const searchSummary = React.useMemo(() => extractSearchGroupSummary(tools), [tools]);
+
+  const meta = groupType === 'read'
+    ? {
+        icon: Eyeglasses,
+        title: hasRunning ? `正在读取 ${tools.length} 个文件` : `读取了 ${readItems.length || tools.length} 个文件`,
+        detailItems: readItems,
+        emptyText: '暂无已读取的文件清单',
+      }
+    : {
+        icon: MagnifyingGlass,
+        title: hasRunning
+          ? `正在搜索（${searchSummary.queryCount} 次）`
+          : `搜索了 ${searchSummary.queryCount} 次，命中 ${searchSummary.resultCount} 项`,
+        detailItems: searchSummary.items,
+        emptyText: '暂无可展示的搜索结果',
+      };
+  const GroupIcon = meta.icon;
 
   return (
     <div className="my-1 overflow-hidden">
@@ -1113,25 +1386,25 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
         className="flex w-full items-center justify-between px-2 py-1 text-[11px] hover:bg-muted/40 transition-colors rounded-[6px]"
       >
         <div className="flex items-center gap-2 overflow-hidden min-w-0 pr-2">
-          <MagnifyingGlass size={14} className="text-blue-500 shrink-0" />
+          <CaretDown
+            size={12}
+            className={cn(
+              "shrink-0 text-muted-foreground/55 transition-transform duration-200",
+              expanded ? "rotate-0" : "-rotate-90"
+            )}
+          />
+          <GroupIcon size={14} className="text-blue-500 shrink-0" />
           <span 
             className="text-foreground/80 ml-1 truncate"
-            title={hasRunning ? `正在检索 (${tools.length})` : `检索了 ${tools.length} 个文件`}
+            title={meta.title}
           >
-            {hasRunning ? `正在检索 (${tools.length})` : `检索了 ${tools.length} 个文件`}
+            {meta.title}
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {hasRunning && <SpinnerGap size={14} className="animate-spin text-primary" />}
           {!hasRunning && hasError && <XCircle size={14} className="text-red-500" />}
           {!hasRunning && !hasError && <CheckCircle size={14} className="text-emerald-500" />}
-          <CaretDown
-            size={12}
-            className={cn(
-              "shrink-0 text-muted-foreground/60 transition-transform duration-200 ml-1",
-              expanded && "rotate-180"
-            )}
-          />
         </div>
       </button>
       <AnimatePresence initial={false}>
@@ -1143,10 +1416,46 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="border-t border-border/20 bg-muted/10 p-2 space-y-1">
-              {tools.map((tool, i) => (
-                <ContextSingleRow key={tool.id || `ctx-${i}`} tool={tool} />
-              ))}
+            <div className="border-t border-border/20 bg-muted/10 p-2">
+              {meta.detailItems.length === 0 ? (
+                <div className="px-2 py-1 text-[11px] text-muted-foreground/60">
+                  {meta.emptyText}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {meta.detailItems.map((item, index) => (
+                    <button
+                      key={`${item.path || item.label}-${index}`}
+                      type="button"
+                      disabled={!item.path}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (item.path) openPreviewTab(item.path);
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[11px] transition-colors",
+                        item.path ? "hover:bg-muted/60 cursor-pointer" : "cursor-default"
+                      )}
+                      title={item.title || item.label}
+                    >
+                      <div className="w-1 h-1 rounded-full bg-blue-500/40 shrink-0" />
+                      <span className={cn("truncate", item.path ? "text-blue-500 underline underline-offset-2" : "text-muted-foreground/75")}>
+                        {item.label}
+                      </span>
+                      {item.path && (
+                        <span className="truncate text-[10px] text-muted-foreground/45 min-w-0 ml-auto">
+                          {item.path}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {groupType === 'search' && (
+                <div className="px-2 pt-2 text-[10px] text-muted-foreground/45">
+                  已合并连续搜索调用，避免重复占用消息区域。
+                </div>
+              )}
             </div>
           </motion.div>
         )}
@@ -1349,6 +1658,14 @@ function getToolDisplayName(name: string): string {
 
   const lowerName = name.toLowerCase();
 
+  if (lowerName === 'websearch' || lowerName === 'web_search') {
+    return '联网搜索';
+  }
+
+  if (lowerName.includes('webfetch') || (lowerName.includes('fetch') && !lowerName.includes('filesystem'))) {
+    return '网页抓取';
+  }
+
   // If it's a memory tool that wasn't exactly matched above
   if (lowerName.includes('memory')) {
     if (lowerName.includes('search') || lowerName.includes('recent')) return '记忆召回';
@@ -1419,6 +1736,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
   }, [status, expandedOverride, isTeam, isTodoWrite, isFileOrSearch]);
 
   const hasRawContent = !hasDetail && (tool.result || (tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0));
+  const currentOpen = hasRawContent ? showRaw : expanded;
 
   return (
     <div className={cn(
@@ -1452,6 +1770,17 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
           isTodoWrite ? "bg-blue-500/[0.05] hover:bg-blue-500/[0.1] text-blue-500" : ""
         )}
       >
+        {(detailVisible || hasRawContent) ? (
+          <CaretDown
+            size={12}
+            className={cn(
+              "shrink-0 text-muted-foreground/55 transition-transform duration-200",
+              currentOpen ? "rotate-0" : "-rotate-90"
+            )}
+          />
+        ) : (
+          <span className="w-3 shrink-0" />
+        )}
         <div className="flex shrink-0 items-center justify-center">
           {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-blue-500")) })}
         </div>
@@ -1595,7 +1924,30 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
   if (k === 'write' || k === 'create') {
     const diff = extractDiff(tool);
     if (diff) {
-      return <FileReviewRow diff={diff} sessionId={sessionId} rewindId={rewindId} />;
+      return <FileReviewRow diff={diff} status={status} sessionId={sessionId} rewindId={rewindId} />;
+    }
+    if (status === 'running') {
+      const path = fp2(tool.input);
+      if (path) {
+        return (
+          <FileReviewRow
+            diff={{
+              filename: fname2(path),
+              fullPath: path,
+              mode: k === 'create' ? 'create' : 'edit',
+              added: 0,
+              removed: 0,
+              beforeLines: [],
+              afterLines: [],
+              moreB: 0,
+              moreA: 0,
+            }}
+            status={status}
+            sessionId={sessionId}
+            rewindId={rewindId}
+          />
+        );
+      }
     }
   }
   
@@ -1852,7 +2204,7 @@ export function extractDiff(t: ToolAction): DiffInfo | null {
 // Completion summary — fork-specific export
 // ---------------------------------------------------------------------------
 
-function FileReviewRow({ diff }: { diff: DiffInfo; sessionId?: string; rewindId?: string }) {
+function FileReviewRow({ diff, status }: { diff: DiffInfo; status?: 'running' | 'success' | 'error'; sessionId?: string; rewindId?: string }) {
   const [open, setOpen] = useState(false);
   const { stopScroll } = useStickToBottomContext();
   const { openPreviewTab } = usePanel();
@@ -1886,6 +2238,9 @@ function FileReviewRow({ diff }: { diff: DiffInfo; sessionId?: string; rewindId?
           {diff.removed > 0 && <span className="text-red-500/80">-{diff.removed}</span>}
         </div>
         <div className="ml-2 flex items-center gap-1 shrink-0">
+          {status === 'running' && <SpinnerGap size={14} className="animate-spin text-primary" />}
+          {status === 'success' && <CheckCircle size={14} className="text-emerald-500" />}
+          {status === 'error' && <XCircle size={14} className="text-red-500" />}
           {showPreviewBtn && (
              <button
                type="button"
@@ -2138,7 +2493,7 @@ export function ToolActionsGroup({
           </div>
         );
       } else if (segment.kind === 'context_group') {
-        currentLineGroup.push(<ContextGroup key={`ctx-group-${idx}`} tools={segment.tools} />);
+        currentLineGroup.push(<ContextGroup key={`ctx-group-${idx}`} tools={segment.tools} groupType={segment.groupType} />);
       } else if (segment.kind === 'context_single') {
         currentLineGroup.push(<ContextSingleRow key={`ctx-single-${idx}`} tool={segment.tool} streamingToolOutput={isStreaming && segment.tool.result === undefined ? streamingToolOutput : undefined} />);
       }

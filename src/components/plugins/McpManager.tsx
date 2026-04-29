@@ -18,11 +18,18 @@ interface McpRuntimeStatus {
   serverInfo?: { name: string; version: string };
 }
 
-type MCPServerWithSource = MCPServer & { _source?: string };
+type MCPServerWithMeta = MCPServer & {
+  _source?: string;
+  _scope?: string;
+  _activation?: string;
+  _builtin?: boolean;
+  _readonly?: boolean;
+  _migratedFrom?: string[];
+};
 
 export function McpManager() {
   const { t } = useTranslation();
-  const [servers, setServers] = useState<Record<string, MCPServerWithSource>>({});
+  const [servers, setServers] = useState<Record<string, MCPServerWithMeta>>({});
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | undefined>();
@@ -32,11 +39,18 @@ export function McpManager() {
   const [runtimeStatus, setRuntimeStatus] = useState<McpRuntimeStatus[]>([]);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeProjectCwd, setActiveProjectCwd] = useState<string | null>(null);
 
   const fetchServers = useCallback(async () => {
     try {
+      setLoading(true);
       setError(null);
-      const res = await fetch("/api/plugins/mcp");
+      const params = new URLSearchParams();
+      if (activeProjectCwd) {
+        params.set("cwd", activeProjectCwd);
+      }
+      const qs = params.toString();
+      const res = await fetch(`/api/plugins/mcp${qs ? `?${qs}` : ""}`);
       const data = await res.json();
       if (data.mcpServers) {
         setServers(data.mcpServers);
@@ -49,7 +63,7 @@ export function McpManager() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeProjectCwd]);
 
   const fetchRuntimeStatus = useCallback(async () => {
     setRuntimeLoading(true);
@@ -61,11 +75,13 @@ export function McpManager() {
 
       if (!sessionId) {
         setActiveSessionId(null);
+        setActiveProjectCwd(null);
         setRuntimeStatus([]);
         return;
       }
 
       setActiveSessionId(sessionId);
+      setActiveProjectCwd(sessionsData?.sessions?.[0]?.working_directory || null);
       const res = await fetch(`/api/plugins/mcp/status?sessionId=${encodeURIComponent(sessionId)}`);
       const data = await res.json();
       if (data.servers) {
@@ -80,8 +96,11 @@ export function McpManager() {
 
   useEffect(() => {
     fetchServers();
+  }, [fetchServers]);
+
+  useEffect(() => {
     fetchRuntimeStatus();
-  }, [fetchServers, fetchRuntimeStatus]);
+  }, [fetchRuntimeStatus]);
 
   function handleEdit(name: string, server: MCPServer) {
     setEditingName(name);
@@ -103,7 +122,7 @@ export function McpManager() {
       const res = await fetch('/api/plugins/mcp', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mcpServers: updated }),
+        body: JSON.stringify({ mcpServers: updated, cwd: activeProjectCwd || undefined }),
       });
       if (!res.ok) {
         throw new Error(`Server returned ${res.status}`);
@@ -113,11 +132,15 @@ export function McpManager() {
       // Revert on failure
       fetchServers();
     }
-  }, [servers, fetchServers]);
+  }, [servers, fetchServers, activeProjectCwd]);
 
   async function handleDelete(name: string) {
     try {
-      const res = await fetch(`/api/plugins/mcp/${encodeURIComponent(name)}`, {
+      const source = servers[name]?._source;
+      const requestUrl = activeProjectCwd
+        ? `/api/plugins/mcp/${encodeURIComponent(name)}?cwd=${encodeURIComponent(activeProjectCwd)}${source ? `&source=${encodeURIComponent(source)}` : ""}`
+        : `/api/plugins/mcp/${encodeURIComponent(name)}${source ? `?source=${encodeURIComponent(source)}` : ""}`;
+      const res = await fetch(requestUrl, {
         method: "DELETE",
       });
       if (res.ok) {
@@ -146,7 +169,7 @@ export function McpManager() {
         await fetch("/api/plugins/mcp", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mcpServers: updated }),
+          body: JSON.stringify({ mcpServers: updated, cwd: activeProjectCwd || undefined }),
         });
         setServers(updated);
       } catch (err) {
@@ -161,7 +184,7 @@ export function McpManager() {
         await fetch("/api/plugins/mcp", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mcpServers: updated }),
+          body: JSON.stringify({ mcpServers: updated, cwd: activeProjectCwd || undefined }),
         });
         setServers(updated);
       } catch (err) {
@@ -172,10 +195,10 @@ export function McpManager() {
         const res = await fetch("/api/plugins/mcp", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, server }),
+          body: JSON.stringify({ name, server, scope: "global", cwd: activeProjectCwd || undefined }),
         });
         if (res.ok) {
-          setServers((prev) => ({ ...prev, [name]: server }));
+          setServers((prev) => ({ ...prev, [name]: { ...server, _source: 'claude.json' } }));
         } else {
           const data = await res.json();
           console.error("Failed to add MCP server:", data.error);
@@ -189,23 +212,29 @@ export function McpManager() {
   async function handleJsonSave(jsonStr: string) {
     try {
       const parsed = JSON.parse(jsonStr) as Record<string, MCPServer>;
-      // JSON editor only manages settings.json servers.
-      // Merge back: keep claude.json servers untouched, replace settings.json servers.
-      const claudeJsonServers: Record<string, MCPServerWithSource> = {};
+      // 中文注释：功能名称「全局 MCP JSON 保存」，用法是只编辑 Claude 全局 MCP，
+      // 项目 `.mcp.json` 和内置 MCP 仍保留在列表页查看，避免 JSON 编辑器误改项目范围配置。
+      const globalServers: Record<string, MCPServerWithMeta> = {};
       for (const [name, server] of Object.entries(servers)) {
         if (server._source === 'claude.json') {
-          claudeJsonServers[name] = server;
+          globalServers[name] = server;
         }
       }
-      const settingsServers: Record<string, MCPServerWithSource> = {};
+      const parsedServers: Record<string, MCPServerWithMeta> = {};
       for (const [name, server] of Object.entries(parsed)) {
-        settingsServers[name] = { ...server, _source: 'settings.json' };
+        parsedServers[name] = { ...server, _source: 'claude.json' };
       }
-      const merged = { ...claudeJsonServers, ...settingsServers };
+      const merged = {
+        ...Object.fromEntries(
+          Object.entries(servers).filter(([, value]) => value._source === 'project-file' || value._builtin)
+        ),
+        ...globalServers,
+        ...parsedServers,
+      };
       await fetch("/api/plugins/mcp", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mcpServers: merged }),
+        body: JSON.stringify({ mcpServers: merged, cwd: activeProjectCwd || undefined }),
       });
       setServers(merged);
     } catch (err) {
@@ -280,17 +309,16 @@ export function McpManager() {
         </TabsContent>
 
         <TabsContent value="json" className="mt-4">
-          {Object.values(servers).some(s => s._source === 'claude.json') && (
+          {Object.values(servers).some(s => s._source === 'project-file' || s._builtin) && (
             <p className="text-xs text-muted-foreground mb-2">
-              Servers from ~/.claude.json are managed by Claude CLI and not shown here.
-              Use the list tab to edit or delete them.
+              JSON 编辑器只管理 Claude 全局 MCP。当前项目的 `.mcp.json` 和 CodePilot 内置 MCP 请在列表页查看。
             </p>
           )}
           <ConfigEditor
             value={JSON.stringify(
               Object.fromEntries(
                 Object.entries(servers)
-                  .filter(([, v]) => v._source !== 'claude.json')
+                  .filter(([, v]) => v._source === 'claude.json')
                   .map(([k, v]) => {
                     const { _source: _unused, ...rest } = v; // eslint-disable-line @typescript-eslint/no-unused-vars
                     return [k, rest];

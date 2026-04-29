@@ -23,6 +23,10 @@ export function GitPanel() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [worktreeOpen, setWorktreeOpen] = useState(false);
 
+  // 中文注释：功能名称「提交信息状态提升」，用法是将 commitMessage 从 GitStatusSection 提升到 GitPanel，
+  // 避免 GitStatusSection 因 status 变更导致的条件渲染卸载而丢失生成结果。
+  const [commitMessage, setCommitMessage] = useState('');
+
   // Dialogs
   const [commitDetailSha, setCommitDetailSha] = useState<string | null>(null);
   const [showDeriveDialog, setShowDeriveDialog] = useState(false);
@@ -42,7 +46,8 @@ export function GitPanel() {
 
   const repoName = workingDirectory.split('/').pop() || '';
 
-  if (loading || !status) {
+  // 中文注释：功能名称「Git 面板首屏加载保护」，用法是仅在首次还没有任何状态时展示连接中，后续轮询刷新期间保留当前表单和生成结果。
+  if (!status) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-4">
         {t('git.connecting')}
@@ -66,7 +71,7 @@ export function GitPanel() {
         open={statusOpen}
         onToggle={() => setStatusOpen(!statusOpen)}
       >
-        <GitStatusSection status={status} />
+        <GitStatusSection status={status} commitMessage={commitMessage} onCommitMessageChange={setCommitMessage} />
       </CollapsibleSection>
 
       {/* Branch section */}

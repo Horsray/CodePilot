@@ -596,6 +596,13 @@ export interface SkillResponse {
   skill: SkillDefinition;
 }
 
+export type SubAgentSource =
+  | 'omc_plugin'
+  | 'sdk_agent_tool'
+  | 'native_agent_tool'
+  | 'native_team_runner'
+  | 'unknown';
+
 export interface SubAgentInfo {
   id: string;
   name: string;
@@ -608,6 +615,7 @@ export interface SubAgentInfo {
   completedAt?: number;
   progress?: string;
   model?: string;
+  source?: SubAgentSource;
 }
 
 // ==========================================
@@ -646,6 +654,18 @@ export type SSEEventType =
 export interface SSEEvent {
   type: SSEEventType;
   data: string;
+}
+
+// 中文注释：功能名称「提示词规则来源元数据」，用法是标记本轮系统提示里实际注入的规则/索引/技能目录来源，
+// 供前端状态栏和诊断界面区分“已发现”和“本轮已注入”。
+export type PromptInstructionLevel = 'global' | 'personal' | 'user' | 'project' | 'workspace' | 'parent';
+export type PromptInstructionCategory = 'hard_rule' | 'repo_instruction' | 'index_doc' | 'skill_catalog' | 'workspace_hint';
+
+export interface PromptInstructionSourceMeta {
+  filename: string;
+  level: PromptInstructionLevel;
+  category: PromptInstructionCategory;
+  filePath?: string;
 }
 
 // ==========================================
@@ -1154,6 +1174,8 @@ export interface SessionStreamSnapshot {
   terminalReason?: string;
   /** Files referenced in the system prompt for this turn */
   referencedContexts?: string[];
+  /** Structured rule/index sources actually injected into this turn's system prompt */
+  instructionSources?: PromptInstructionSourceMeta[];
   /** Files read/written by tool calls during this session (for context stats) */
   toolFiles?: string[];
   /** Active sub-agents being tracked for nested timeline display */
@@ -1265,6 +1287,8 @@ export interface ClaudeStreamOptions {
   generativeUI?: boolean;
   /** Files referenced in the system prompt for this turn */
   referencedContexts?: string[];
+  /** Structured instruction sources actually injected into this turn */
+  instructionSources?: PromptInstructionSourceMeta[];
 }
 
 // ==========================================

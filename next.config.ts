@@ -2,9 +2,11 @@ import type { NextConfig } from "next";
 import pkg from "./package.json" with { type: "json" };
 
 const nextConfig: NextConfig = {
-  // 中文注释：功能名称「包导入优化」，用法是让 Next.js 在打包和开发环境中自动摇树优化（Tree-shaking）大型图标库等包，
-  // 避免因引入整个包而导致的巨大 Chunk 解析，解决点击包含这些图标的组件（如文件树、控制台）时界面卡死十多秒的问题。
-  optimizePackageImports: ['@phosphor-icons/react', '@lobehub/icons'],
+  experimental: {
+    // 中文注释：功能名称「实验性包导入优化」，用法是启用 Next.js 16 支持的按需包导入，
+    // 减少大型图标库在开发态和生产态的解析体积，避免面板首次打开时卡顿。
+    optimizePackageImports: ['@phosphor-icons/react', '@lobehub/icons'],
+  },
   output: 'standalone',
   // Next.js 16 默认启用了 Turbopack，如果提供了 webpack 配置，需要显式加上 webpack: true 或 turbopack: {} 来消解警告
   turbopack: {},

@@ -10,7 +10,7 @@
  *   Bridge:  workspace + session + assistant instructions + CLI tools (no widget)
  */
 
-import type { ChatSession } from '@/types';
+import type { ChatSession, PromptInstructionSourceMeta } from '@/types';
 import { getProviderOptions, getSetting } from '@/lib/db';
 import { EGG_IMAGE_URL } from '@/lib/buddy';
 import { buildSystemPrompt } from './agent-system-prompt';
@@ -34,6 +34,8 @@ export interface ContextAssemblyConfig {
   autoTrigger?: boolean;
   /** User attachments for complexity analysis */
   files?: import('@/types').FileAttachment[];
+  /** Whether OMC plugin is enabled for this workspace */
+  omcPluginEnabled?: boolean;
 }
 
 export interface AssembledContext {
@@ -41,6 +43,8 @@ export interface AssembledContext {
   systemPrompt: string | undefined;
   /** Files discovered and referenced in the prompt (CLAUDE.md, etc.) */
   referencedContexts?: string[];
+  /** Structured rule/index sources actually injected into this turn */
+  instructionSources?: PromptInstructionSourceMeta[];
   /** Whether generative UI is enabled (affects widget MCP server + streamClaude param) */
   generativeUIEnabled: boolean;
   /** Onboarding/checkin instructions (route.ts uses this for server-side completion detection) */
@@ -58,7 +62,7 @@ export interface AssembledContext {
 // ── Main function ────────────────────────────────────────────────────
 
 export async function assembleContext(config: ContextAssemblyConfig): Promise<AssembledContext> {
-  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, files } = config;
+  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, files, omcPluginEnabled } = config;
   const _unused_history = conversationHistory;
   const t0 = Date.now();
 
@@ -66,6 +70,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   let memoryHint = '';
   let assistantProjectInstructions = '';
   const referencedContexts: string[] = [];
+  const instructionSources: PromptInstructionSourceMeta[] = [];
   let isAssistantProject = false;
   let includeAgentsMd = getSetting('include_agents_md') !== 'false';
   let includeClaudeMd = getSetting('include_claude_md') !== 'false';
@@ -87,18 +92,13 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
           const { loadWorkspaceFiles, assembleWorkspacePrompt, loadState, shouldRunHeartbeat } =
             await import('@/lib/assistant-workspace');
 
-          // Incremental reindex BEFORE MCP search so tool calls see latest content.
-          // Timeout after 5s to prevent blocking on large workspaces (e.g. Obsidian vaults).
+          // 中文注释：功能名称「工作区索引后台刷新」，用法是在保留索引新鲜度的同时，
+          // 不让当前对话请求同步等待索引完成，避免大工作区拖慢首轮 connected 和首字输出。
           try {
-            const { indexWorkspace } = await import('@/lib/workspace-indexer');
-            const indexStart = Date.now();
-            indexWorkspace(workspacePath);
-            const indexMs = Date.now() - indexStart;
-            if (indexMs > 3000) {
-              console.warn(`[context-assembler] Workspace indexing took ${indexMs}ms — consider reducing workspace size`);
-            }
+            const { scheduleWorkspaceIndex } = await import('@/lib/workspace-indexer');
+            scheduleWorkspaceIndex(workspacePath);
           } catch {
-            // indexer not available or timed out, skip — MCP search will use stale index
+            // indexer not available, skip — MCP search will use existing index
           }
 
           const files = loadWorkspaceFiles(workspacePath);
@@ -227,7 +227,9 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   const basePromptResult = buildSystemPrompt({
     sessionId: session.id,
     workingDirectory: session.working_directory || undefined,
+    userPrompt,
     modelId: session.model,
+    omcPluginEnabled,
     includeAgentsMd,
     includeClaudeMd,
     enableAgentsSkills,
@@ -238,12 +240,9 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   if (basePromptResult.referencedFiles) {
     referencedContexts.push(...basePromptResult.referencedFiles);
   }
-
-  // OMC 优先前缀 —— 告诉模型在 CLAUDE.md/OMC 指令与下方 CodePilot 专属指令
-  // 冲突时，优先遵循 OMC 的 agent 编排、skill 触发、行为模式。
-  // 与 claude-client.ts SDK 路径中的 omcPriorityPrefix 保持同步。
-  staticParts.push(`## IMPORTANT: Multi-Agent Orchestration Priority
-If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.md), you MUST prioritize OMC's agent orchestration rules, skill triggers, and behavioral patterns over any conflicting instructions below. OMC handles: agent delegation, model routing, parallel execution, verification workflows, and skill invocation. The following CodePilot-specific instructions only supplement OMC for CodePilot-unique features (UI widgets, media, notifications).`);
+  if (basePromptResult.instructionSources) {
+    instructionSources.push(...basePromptResult.instructionSources);
+  }
 
   if (session.system_prompt && session.system_prompt.trim()) {
     staticParts.push(session.system_prompt);
@@ -318,6 +317,7 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
   return {
     systemPrompt: finalSystemPrompt,
     referencedContexts,
+    instructionSources,
     generativeUIEnabled,
     assistantProjectInstructions,
     isAssistantProject,

@@ -114,4 +114,16 @@ describe('assembleContext', () => {
 
     assert.ok(result.systemPrompt?.includes('<<SESSION>>'));
   });
+
+  it('does not duplicate the OMC priority prefix inside assembled prompt', async () => {
+    const { assembleContext } = await import('../../lib/context-assembler');
+    const result = await assembleContext({
+      session: makeSession(),
+      entryPoint: 'desktop',
+      userPrompt: '检查 OMC 行为',
+      omcPluginEnabled: true,
+    });
+
+    assert.doesNotMatch(result.systemPrompt || '', /## IMPORTANT: Multi-Agent Orchestration Priority/);
+  });
 });

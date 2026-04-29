@@ -27,9 +27,9 @@ import {
   getDefaultProviderId,
 } from '../db';
 import { resolveProvider as resolveProviderUnified } from '../provider-resolver';
-import { loadCodePilotMcpServers, loadAllMcpServers } from '../mcp-loader';
+import { loadAllMcpServers } from '../mcp-loader';
 import { assembleContext } from '../context-assembler';
-import { predictNativeRuntime } from '../runtime';
+import { getEnabledPluginConfigs, hasEnabledOmcPlugin } from '../plugin-discovery';
 import crypto from 'crypto';
 
 export interface PermissionRequestInfo {
@@ -235,12 +235,13 @@ export async function processMessage(
       getSetting('bridge_default_work_dir'),
     );
 
-    // Load MCP servers using shared runtime prediction (same logic as chat route).
-    // Was lazy `require('../runtime')`; converted to static import — Turbopack's
-    // CJS↔ESM interop returns `{ default: ... }` shape that broke destructuring.
-    const mcpServers = predictNativeRuntime(effectiveProviderId)
-      ? loadAllMcpServers(effectiveCwd)
-      : loadCodePilotMcpServers(effectiveCwd);
+    // 中文注释：功能名称「Bridge Claude Code 全量 MCP 暴露」，用法是让 Bridge
+    // 与桌面聊天完全共享当前工作区/用户层的全部外部 MCP，可用能力不再因为入口不同
+    // 而被裁剪成按需子集。
+    const mcpServers = loadAllMcpServers(effectiveCwd);
+    // 中文注释：功能名称「Bridge OMC 检测」，用法是让 IM/Bridge 入口和桌面聊天一样
+    // 在组装上下文前识别当前工作区是否启用了 OMC，避免两条入口对技能目录和 steering 的处理不一致。
+    const omcPluginEnabled = hasEnabledOmcPlugin(getEnabledPluginConfigs(effectiveCwd));
 
     // Unified context assembly — adds CLI tools context (and workspace prompt if applicable)
     const assembled = await assembleContext({
@@ -248,6 +249,7 @@ export async function processMessage(
       entryPoint: 'bridge',
       userPrompt: text,
       conversationHistory: historyMsgs,
+      omcPluginEnabled,
     });
 
     // If the effective cwd differs from what the binding/session had, the

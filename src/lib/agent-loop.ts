@@ -691,6 +691,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                           name: agentType,
                           displayName: agentType,
                           prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
+                          source: 'native_agent_tool',
                         }),
                       }));
                     } catch { /* best effort */ }
@@ -813,6 +814,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                         data: JSON.stringify({
                           id: subAgentId,
                           report: resultContent.slice(0, 5000),
+                          source: 'native_agent_tool',
                         }),
                       }));
                     } catch { /* best effort */ }
@@ -884,6 +886,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                         data: JSON.stringify({
                           id: subAgentId,
                           error: String((event as any).error),
+                          source: 'native_agent_tool',
                         }),
                       }));
                     } catch { /* best effort */ }

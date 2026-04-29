@@ -2,7 +2,6 @@
 
 import { createContext, useContext, useMemo } from "react";
 import { usePanelStore } from "@/store/usePanelStore";
-import { useGitStatus } from "@/hooks/useGitStatus";
 
 export type PanelContent = "files" | "tasks";
 
@@ -86,20 +85,18 @@ export function defaultViewMode(filePath: string): PreviewViewMode {
 }
 
 export function usePanel(): PanelContextValue {
+  const context = useContext(PanelContext);
   const store = usePanelStore();
-  const { status: gitStatusFromHook } = useGitStatus(store.workingDirectory);
-  
-  const currentBranch = gitStatusFromHook?.branch ?? "";
-  const gitDirtyCount = gitStatusFromHook?.changedFiles.filter(f => f.status !== 'untracked').length ?? 0;
-
-  return useMemo(() => ({
+  const fallbackValue = useMemo(() => ({
     ...store,
-    currentBranch,
-    gitDirtyCount,
+    currentBranch: "",
+    gitDirtyCount: 0,
     openPreviewTab: (path: string) => store.openPreviewTab(path, defaultViewMode),
     openBrowserTab: store.openBrowserTab,
     openTerminalTab: store.openTerminalTab,
     updateWorkspaceTab: store.updateWorkspaceTab,
     setPreviewFile: (path: string | null) => store.setPreviewFile(path, defaultViewMode),
-  }), [store, currentBranch, gitDirtyCount]);
+  }), [store]);
+
+  return context ?? fallbackValue;
 }

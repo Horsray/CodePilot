@@ -1873,6 +1873,8 @@ const en = {
   'session.completed': 'Completed',
   'session.errors': 'Errors',
   'session.toolCalls': 'Tool Calls',
+  'session.injectedRules': 'Injected Rules',
+  'session.moreRules': 'more rule sources',
 } as const;
 
 export type TranslationKey = keyof typeof en;

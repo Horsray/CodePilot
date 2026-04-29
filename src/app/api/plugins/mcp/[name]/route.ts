@@ -1,35 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import type { MCPServerConfig, ErrorResponse, SuccessResponse } from '@/types';
 import { invalidateMcpCache } from '@/lib/mcp-loader';
-
-function getSettingsPath(): string {
-  return path.join(os.homedir(), '.claude', 'settings.json');
-}
-
-// ~/.claude.json — Claude CLI stores user-scoped MCP servers here
-function getUserConfigPath(): string {
-  return path.join(os.homedir(), '.claude.json');
-}
-
-function readJsonFile(filePath: string): Record<string, unknown> {
-  if (!fs.existsSync(filePath)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  } catch {
-    return {};
-  }
-}
-
-function writeJsonFile(filePath: string, data: Record<string, unknown>): void {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-}
+import {
+  readGlobalMcpServers,
+  readProjectMcpServers,
+  writeGlobalMcpServers,
+  writeProjectMcpServers,
+} from '@/lib/mcp-registry';
 
 export async function DELETE(
   _request: NextRequest,
@@ -38,26 +15,19 @@ export async function DELETE(
   try {
     const { name } = await params;
     const serverName = decodeURIComponent(name);
-
+    const cwd = _request.nextUrl.searchParams.get('cwd') || undefined;
+    const source = _request.nextUrl.searchParams.get('source') || undefined;
+    const userServers = readGlobalMcpServers() as Record<string, MCPServerConfig>;
+    const projectServers = cwd ? (readProjectMcpServers(cwd) as Record<string, MCPServerConfig>) : {};
     let deleted = false;
 
-    // Try deleting from ~/.claude/settings.json
-    const settings = readJsonFile(getSettingsPath());
-    const settingsServers = (settings.mcpServers || {}) as Record<string, MCPServerConfig>;
-    if (settingsServers[serverName]) {
-      delete settingsServers[serverName];
-      settings.mcpServers = settingsServers;
-      writeJsonFile(getSettingsPath(), settings);
+    if (source !== 'project-file' && userServers[serverName]) {
+      delete userServers[serverName];
       deleted = true;
     }
 
-    // Also try deleting from ~/.claude.json
-    const userConfig = readJsonFile(getUserConfigPath());
-    const userServers = (userConfig.mcpServers || {}) as Record<string, MCPServerConfig>;
-    if (userServers[serverName]) {
-      delete userServers[serverName];
-      userConfig.mcpServers = userServers;
-      writeJsonFile(getUserConfigPath(), userConfig);
+    if (source !== 'claude.json' && cwd && projectServers[serverName]) {
+      delete projectServers[serverName];
       deleted = true;
     }
 
@@ -68,6 +38,10 @@ export async function DELETE(
       );
     }
 
+    writeGlobalMcpServers(userServers);
+    if (cwd) {
+      writeProjectMcpServers(cwd, projectServers);
+    }
     invalidateMcpCache();
     return NextResponse.json({ success: true });
   } catch (error) {

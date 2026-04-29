@@ -4,16 +4,16 @@ import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTi
 import { resolveProvider as resolveProviderUnified } from '@/lib/provider-resolver';
 import { notifySessionStart, notifySessionComplete, notifySessionError } from '@/lib/telegram-bot';
 import { extractCompletion } from '@/lib/onboarding-completion';
-import { loadCodePilotMcpServers, loadAllMcpServers } from '@/lib/mcp-loader';
+import { loadAllMcpServers } from '@/lib/mcp-loader';
 import { assembleContext } from '@/lib/context-assembler';
 import { buildContextCompressedStatus } from '@/lib/context-compressor';
 import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, FileAttachment, MediaBlock, Message } from '@/types';
 import { saveMediaToLibrary } from '@/lib/media-saver';
 import { wrapController } from '@/lib/safe-stream';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
-import { predictNativeRuntime } from '@/lib/runtime';
 import { hasCodePilotProvider } from '@/lib/provider-presence';
 import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
+import { getEnabledPluginConfigs, hasEnabledOmcPlugin } from '@/lib/plugin-discovery';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
@@ -256,19 +256,6 @@ export async function POST(request: NextRequest) {
     // Determine model: request override > session model > default setting
     let effectiveModel = model || session.model || getSetting('default_model') || undefined;
 
-    // When Claude Code is disabled, sessions with env-provider models (sonnet/opus/haiku)
-    // can't use them anymore. Fall back to default model from first available provider.
-    const cliDisabled = getSetting('cli_enabled') === 'false';
-    const ENV_MODELS = new Set(['sonnet', 'opus', 'haiku']);
-    const effectiveProviderId_pre = provider_id || session.provider_id || '';
-    if (cliDisabled && effectiveModel && ENV_MODELS.has(effectiveModel) && (!effectiveProviderId_pre || effectiveProviderId_pre === 'env')) {
-      effectiveModel = getSetting('default_model') || undefined;
-      // If default model is also env-only, clear it
-      if (effectiveModel && ENV_MODELS.has(effectiveModel)) {
-        effectiveModel = undefined;
-      }
-    }
-
     // Persist model and provider to session so usage stats can group by model+provider.
     // This runs on every message but the DB writes are cheap (single UPDATE by PK).
     if (effectiveModel && effectiveModel !== session.model) {
@@ -373,31 +360,37 @@ export async function POST(request: NextRequest) {
     // OMC / Claude Code CLI owns orchestration now. Do not inject
     // CodePilot-specific Team or search-routing reminders here.
     const finalSystemPromptAppend = systemPromptAppend;
+    const pluginCwd = session.sdk_cwd || session.working_directory || process.cwd();
+    // 中文注释：功能名称「聊天上下文 OMC 检测」，用法是在组装系统提示前先判断当前
+    // 工作区是否启用了 OMC。后续会用这个标记减少 CodePilot 自己的技能目录摘要，
+    // 让终端版那套 hook/skill steering 更容易直接接管。
+    const omcPluginEnabled = hasEnabledOmcPlugin(getEnabledPluginConfigs(pluginCwd));
 
-    // Unified context assembly — extracts workspace, CLI tools, widget prompt
-    const assembled = await assembleContext({
-      session,
-      entryPoint: 'desktop',
-      userPrompt: content,
-      systemPromptAppend: finalSystemPromptAppend,
-      conversationHistory: historyMsgs,
-      imageAgentMode: isImageAgentMode,
-      autoTrigger: !!autoTrigger,
-    });
+    // Unified context assembly — extracts workspace, CLI tools, widget prompt.
+    // Run in parallel with MCP server loading (both are independent I/O operations).
+    // 中文注释：功能名称「上下文组装与 MCP 并行加载」，用法是将 assembleContext（含文件 I/O）
+    // 与 MCP 服务器配置加载并行执行，减少串行等待 ~5-10ms。
+    const projectCwd = session.sdk_cwd || session.working_directory || process.cwd();
+    const [assembled, mcpServers] = await Promise.all([
+      assembleContext({
+        session,
+        entryPoint: 'desktop',
+        userPrompt: content,
+        systemPromptAppend: finalSystemPromptAppend,
+        conversationHistory: historyMsgs,
+        imageAgentMode: isImageAgentMode,
+        autoTrigger: !!autoTrigger,
+        omcPluginEnabled,
+      }),
+      // 中文注释：功能名称「Claude Code 全量 MCP 暴露」，用法是桌面聊天在单一
+      // Claude Code CLI 主路径下直接传入当前有效的全部外部 MCP，避免再依赖
+      // 关键词补载导致联网/技能相关工具“本轮其实不可见”。
+      Promise.resolve(loadAllMcpServers(projectCwd)),
+    ]);
     const finalSystemPrompt = assembled.systemPrompt;
     const generativeUIEnabled = assembled.generativeUIEnabled;
     const referencedContexts = assembled.referencedContexts;
-
-    // Load MCP servers for the predicted runtime:
-    // - SDK Runtime: only needs servers with ${...} env placeholders (SDK loads the rest via settingSources)
-    // - Native Runtime: needs ALL servers (it manages MCP connections independently)
-    // Note: was a lazy `require()` previously; converted to static import after
-    // Turbopack's CJS↔ESM interop started returning `{ default: ... }` shape
-    // and broke "predictNativeRuntime is not a function" at runtime.
-    const projectCwd = session.sdk_cwd || session.working_directory || process.cwd();
-    const mcpServers = predictNativeRuntime(effectiveProviderId)
-      ? loadAllMcpServers(projectCwd)
-      : loadCodePilotMcpServers(projectCwd);
+    const instructionSources = assembled.instructionSources;
 
     // ── Context compression check ───────────────────────────────────
     // Estimate next-turn context size and compress if over threshold.
@@ -559,6 +552,7 @@ export async function POST(request: NextRequest) {
             model: resolved.upstreamModel || resolved.model || effectiveModel,
             systemPrompt: finalSystemPrompt,
             referencedContexts,
+            instructionSources,
             workingDirectory: session.sdk_cwd || session.working_directory || undefined,
             abortController,
             permissionMode,

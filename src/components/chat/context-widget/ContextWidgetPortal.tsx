@@ -18,8 +18,20 @@ export function ContextWidgetPortal(props: ContextWidgetPortalProps) {
   const [container, setContainer] = useState<Element | null>(null);
 
   useEffect(() => {
-    const el = document.getElementById("dashboard-context-slot");
-    setContainer(el);
+    const resolveContainer = () => {
+      const el = document.getElementById("dashboard-context-slot");
+      setContainer((prev) => (prev === el ? prev : el));
+    };
+
+    resolveContainer();
+    const observer = new MutationObserver(() => {
+      resolveContainer();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    return () => {
+      observer.disconnect();
+    };
   }, []);
 
   if (!container) return null;

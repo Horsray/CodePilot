@@ -41,7 +41,6 @@ import { FieldRow } from "@/components/patterns/FieldRow";
 import { ImportSessionDialog } from "@/components/layout/ImportSessionDialog";
 import { useClaudeStatus } from "@/hooks/useClaudeStatus";
 import { useTranslation } from "@/hooks/useTranslation";
-import { resolveLegacyRuntimeForDisplay, isConcreteRuntime } from "@/lib/runtime/legacy";
 import type { TranslationKey } from "@/i18n";
 import type { ProviderOptions } from "@/types";
 
@@ -65,15 +64,6 @@ export function CliSettingsSection() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [pendingSaveAction, setPendingSaveAction] = useState<"form" | "json" | null>(null);
-
-  // ── App settings (DB) ──
-  const [cliEnabled, setCliEnabled] = useState(true);
-  const [cliToggling, setCliToggling] = useState(false);
-  // Runtime selector: 'native' | 'claude-code-sdk'.
-  // The legacy 'auto' value still exists in old DB rows and will be migrated
-  // in-place on first load (see fetchSettings below) to whichever concrete
-  // runtime matches the user's current environment.
-  const [agentRuntime, setAgentRuntime] = useState<string>('claude-code-sdk');
 
   // ── CLI status ──
   const { status: claudeStatus, refresh: refreshStatus, invalidateAndRefresh } = useClaudeStatus();
@@ -104,9 +94,8 @@ export function CliSettingsSection() {
   // ── Fetch all data ──
   const fetchSettings = useCallback(async () => {
     try {
-      const [cliRes, appRes, optRes] = await Promise.all([
+      const [cliRes, optRes] = await Promise.all([
         fetch("/api/settings"),
-        fetch("/api/settings/app"),
         fetch("/api/providers/options?providerId=env"),
       ]);
 
@@ -116,52 +105,6 @@ export function CliSettingsSection() {
         setSettings(s);
         setOriginalSettings(s);
         setJsonText(JSON.stringify(s, null, 2));
-      }
-
-      if (appRes.ok) {
-        const appData = await appRes.json();
-        const appSettings = appData.settings || {};
-        // cli_enabled defaults to true (backward compat)
-        setCliEnabled(appSettings.cli_enabled !== "false");
-        // agent_runtime is now a two-value switch: 'claude-code-sdk' | 'native'.
-        // Pre-0.50.3 default was 'auto'; migrate legacy rows in-place to the
-        // runtime that matches the current environment. Saved back so the UI
-        // and backend stay aligned.
-        //
-        // We deliberately do NOT use the useClaudeStatus() hook value here —
-        // it's null on first render and only populates asynchronously. Using
-        // it would silently migrate CLI-installed users to 'native'. Instead
-        // we do a direct /api/claude-status fetch gated on the migration
-        // branch, and if that fetch itself fails we bail out of persistence
-        // entirely (keep the legacy 'auto' in the DB for a future retry,
-        // since the backend's resolveRuntime still tolerates it).
-        const saved = appSettings.agent_runtime;
-        if (!isConcreteRuntime(saved)) {
-          let cliConnected: boolean | null = null;
-          try {
-            const statusRes = await fetch('/api/claude-status');
-            if (statusRes.ok) {
-              const s = await statusRes.json();
-              cliConnected = !!s?.connected;
-            }
-          } catch { /* ignore — cliConnected stays null */ }
-
-          if (cliConnected !== null) {
-            const migrated = resolveLegacyRuntimeForDisplay(saved, cliConnected);
-            setAgentRuntime(migrated);
-            fetch('/api/settings/app', {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ settings: { agent_runtime: migrated } }),
-            }).catch(() => { /* ignore */ });
-          } else {
-            // CLI status indeterminate — show a neutral default in the UI but
-            // don't persist. Next fetchSettings() can migrate correctly.
-            setAgentRuntime('claude-code-sdk');
-          }
-        } else {
-          setAgentRuntime(saved);
-        }
       }
 
       if (optRes.ok) {
@@ -183,47 +126,6 @@ export function CliSettingsSection() {
   useEffect(() => {
     fetchSettings();
   }, [fetchSettings]);
-
-  // ── Handlers ──
-
-  const handleCliToggle = async (enabled: boolean) => {
-    if (enabled && claudeStatus && !claudeStatus.connected) {
-      setInstallWizardOpen(true);
-      return;
-    }
-
-    setCliToggling(true);
-    try {
-      const res = await fetch("/api/settings/app", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          settings: { cli_enabled: enabled ? "true" : "false" },
-        }),
-      });
-      if (res.ok) setCliEnabled(enabled);
-    } finally {
-      setCliToggling(false);
-    }
-  };
-
-  const handleRuntimeChange = async (value: string) => {
-    setAgentRuntime(value);
-    // Sync cli_enabled for backward compatibility:
-    // native → disable CLI; claude-code-sdk → enable CLI
-    const cliEnabledValue = value === 'native' ? 'false' : 'true';
-    setCliEnabled(cliEnabledValue === 'true');
-    try {
-      await fetch("/api/settings/app", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          settings: { agent_runtime: value, cli_enabled: cliEnabledValue },
-        }),
-      });
-      window.dispatchEvent(new Event('provider-changed'));
-    } catch { /* ignore */ }
-  };
 
   const handleUpgrade = async () => {
     if (!claudeStatus?.installType) return;
@@ -337,71 +239,74 @@ export function CliSettingsSection() {
       {/* ════════ Card 1: Agent 内核 选择 ════════ */}
       <SettingsCard
         title={isZh ? 'Agent 内核' : 'Agent Engine'}
-        description={isZh ? '选择 AI 交互使用的执行引擎' : 'Choose the execution engine for AI interactions'}
+        description={isZh ? '当前产品路径固定为 Claude Code CLI' : 'The product path is fixed to Claude Code CLI'}
       >
         <FieldRow
           label={isZh ? '执行引擎' : 'Engine'}
           description={isZh
-            ? '选择执行 AI 任务的引擎。Claude Code 需要先安装 CLI；AI SDK 直接调用服务商 API，无需 CLI。'
-            : 'Choose the engine that runs AI tasks. Claude Code requires the CLI; AI SDK calls provider APIs directly with no CLI.'}
+            ? '已移除 AI SDK / Native 回退分支，聊天与工具执行统一走 Claude Code CLI。'
+            : 'AI SDK / Native fallback is removed. Chat and tool execution now always run through Claude Code CLI.'}
         >
-          <Select value={agentRuntime} onValueChange={handleRuntimeChange}>
-            <SelectTrigger className="w-[180px] h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="claude-code-sdk">{isZh ? 'Claude Code' : 'Claude Code'}</SelectItem>
-              <SelectItem value="native">{isZh ? 'AI SDK' : 'AI SDK'}</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="inline-flex h-8 items-center rounded-md border border-border bg-muted/30 px-3 text-xs font-medium">
+            {isZh ? 'Claude Code CLI（唯一主路径）' : 'Claude Code CLI (Only Path)'}
+          </div>
         </FieldRow>
 
-        {/* Claude Code 状态 — 选了 Claude Code 或自动时显示 */}
-        {agentRuntime === 'claude-code-sdk' && (
-          <FieldRow label={isZh ? 'Claude Code 状态' : 'Claude Code Status'} separator>
-            <div className="flex items-center gap-2">
-              {connected ? (
-                <>
-                  <CheckCircle size={14} className="text-status-success-foreground" />
-                  <span className="text-xs text-muted-foreground">
-                    v{claudeStatus?.version}
-                    {claudeStatus?.installType ? ` (${claudeStatus.installType})` : ''}
-                  </span>
-                  {updateAvailable && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-6 text-xs gap-1"
-                      onClick={handleUpgrade}
-                      disabled={upgrading}
-                    >
-                      {upgrading ? <SpinnerGap size={12} className="animate-spin" /> : <ArrowsClockwise size={12} />}
-                      {t('cli.update')}
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <>
-                  <XCircle size={14} className="text-status-error-foreground" />
-                  <span className="text-xs text-muted-foreground">{isZh ? '未安装' : 'Not installed'}</span>
+        <FieldRow label={isZh ? 'Claude Code 状态' : 'Claude Code Status'} separator>
+          <div className="flex items-center gap-2">
+            {connected ? (
+              <>
+                <CheckCircle size={14} className="text-status-success-foreground" />
+                <span className="text-xs text-muted-foreground">
+                  v{claudeStatus?.version}
+                  {claudeStatus?.installType ? ` (${claudeStatus.installType})` : ''}
+                </span>
+                {updateAvailable && (
                   <Button
                     variant="outline"
                     size="sm"
                     className="h-6 text-xs gap-1"
-                    onClick={() => setInstallWizardOpen(true)}
+                    onClick={handleUpgrade}
+                    disabled={upgrading}
                   >
-                    {t('cli.install')}
+                    {upgrading ? <SpinnerGap size={12} className="animate-spin" /> : <ArrowsClockwise size={12} />}
+                    {t('cli.update')}
                   </Button>
-                </>
-              )}
-              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={refreshStatus}>
-                <ArrowClockwise size={12} />
-              </Button>
-            </div>
-          </FieldRow>
-        )}
+                )}
+              </>
+            ) : (
+              <>
+                <XCircle size={14} className="text-status-error-foreground" />
+                <span className="text-xs text-muted-foreground">{isZh ? '未安装' : 'Not installed'}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs gap-1"
+                  onClick={() => setInstallWizardOpen(true)}
+                >
+                  {t('cli.install')}
+                </Button>
+              </>
+            )}
+            <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={refreshStatus}>
+              <ArrowClockwise size={12} />
+            </Button>
+          </div>
+        </FieldRow>
 
-        {agentRuntime === 'claude-code-sdk' && claudeStatus?.warnings && claudeStatus.warnings.length > 0 && (
+        <FieldRow
+          label={isZh ? '能力模式' : 'Capability Mode'}
+          description={isZh
+            ? '固定启用完整能力：始终加载 user/project/local settings，保持 rules、skills、hooks、OMC 与 MCP 发现链路一致。'
+            : 'Full capabilities are always enabled: user/project/local settings are always loaded to preserve rules, skills, hooks, OMC, and MCP discovery.'}
+          separator
+        >
+          <div className="inline-flex h-8 items-center rounded-md border border-border bg-muted/30 px-3 text-xs font-medium">
+            {isZh ? '完整能力（固定开启）' : 'Full Capabilities (Always On)'}
+          </div>
+        </FieldRow>
+
+        {claudeStatus?.warnings && claudeStatus.warnings.length > 0 && (
           <div className="rounded-md border border-status-warning-muted bg-status-warning-muted/30 px-3 py-2">
             <div className="flex items-start gap-2">
               <Warning size={14} className="text-status-warning-foreground mt-0.5 flex-shrink-0" />
@@ -414,7 +319,7 @@ export function CliSettingsSection() {
       </SettingsCard>
 
       {/* ════════ Card 2: 模型选项（Claude Code 模式时显示）════════ */}
-      {agentRuntime === 'claude-code-sdk' && connected && (
+      {connected && (
         <SettingsCard title={t('cli.modelOptions')} description={t('cli.modelOptionsDesc')}>
           <FieldRow label={t('cli.thinkingMode')} description={t('cli.thinkingModeDesc')}>
             <Select value={thinkingMode} onValueChange={(v) => saveModelOption('thinking_mode', v)}>
@@ -616,12 +521,6 @@ export function CliSettingsSection() {
           }}
           onInstallComplete={async () => {
             await invalidateAndRefresh();
-            setCliEnabled(true);
-            await fetch("/api/settings/app", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ settings: { cli_enabled: "true" } }),
-            });
             setInstallWizardOpen(false);
           }}
         />

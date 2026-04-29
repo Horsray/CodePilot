@@ -149,6 +149,7 @@ interface SubAgentInfo {
   startedAt: number;
   completedAt?: number;
   progress?: string;
+  source?: 'omc_plugin' | 'sdk_agent_tool' | 'native_agent_tool' | 'native_team_runner' | 'unknown';
 }
 
 /** Rewind points contain SDK UUIDs (not local message IDs) */

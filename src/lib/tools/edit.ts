@@ -34,7 +34,11 @@ export function createEditTool(ctx: ToolContext) {
     execute: async ({ file_path, old_string, new_string }) => {
       const resolved = path.isAbsolute(file_path) ? file_path : path.resolve(ctx.workingDirectory, file_path);
 
-      if (!fs.existsSync(resolved)) {
+      try {
+        // 中文注释：功能名称「异步文件存在性检测」，用法是使用异步 access 避免阻塞 SSE flush，
+        // 让工具卡片能在编辑过程中及时显示
+        await fs.promises.access(resolved, fs.constants.F_OK);
+      } catch {
         return `Error: File not found: ${resolved}`;
       }
 
@@ -42,7 +46,7 @@ export function createEditTool(ctx: ToolContext) {
         return 'Error: old_string and new_string are identical. No change needed.';
       }
 
-      const content = fs.readFileSync(resolved, 'utf-8');
+      const content = await fs.promises.readFile(resolved, 'utf-8');
 
       // Try replacement strategies in order
       const result =
@@ -82,7 +86,8 @@ export function createEditTool(ctx: ToolContext) {
       // Record modification BEFORE writing so we capture the "before" state
       recordFileModification(ctx.sessionId || '', path.relative(ctx.workingDirectory, resolved), ctx.workingDirectory);
 
-      fs.writeFileSync(resolved, result.newContent, 'utf-8');
+      // 中文注释：功能名称「异步写文件」，用法是避免同步写入阻塞事件循环，导致 tool_use/tool_result 一起到达前端
+      await fs.promises.writeFile(resolved, result.newContent, 'utf-8');
       return `Successfully edited ${resolved}`;
     },
   });

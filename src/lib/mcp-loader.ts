@@ -8,11 +8,9 @@
  * This eliminates redundant config passing and reduces initialization overhead.
  */
 
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import type { MCPServerConfig } from '@/types';
 import { getSetting } from '@/lib/db';
+import { readEffectiveExternalMcpServers } from '@/lib/mcp-registry';
 
 // ── Cache ────────────────────────────────────────────────────────────
 
@@ -31,13 +29,6 @@ export function invalidateMcpCache(): void {
   _cache = null;
 }
 
-// ── Internal helpers ─────────────────────────────────────────────────
-
-function readJson(p: string): Record<string, unknown> {
-  if (!fs.existsSync(p)) return {};
-  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return {}; }
-}
-
 function loadAndMerge(projectCwd?: string): CachedMcpConfig {
   const cwd = projectCwd || process.cwd();
   
@@ -45,13 +36,6 @@ function loadAndMerge(projectCwd?: string): CachedMcpConfig {
   if (_cache && _cache.projectCwd === cwd && Date.now() - _cache.timestamp < CACHE_TTL_MS) {
     return _cache;
   }
-
-  const userConfig = readJson(path.join(os.homedir(), '.claude.json'));
-  const settings = readJson(path.join(os.homedir(), '.claude', 'settings.json'));
-  
-  // Use provided projectCwd, fallback to process.cwd()
-  const projectMcpJson = readJson(path.join(cwd, '.mcp.json'));
-  const projectClaudeJson = readJson(path.join(cwd, 'claude.json'));
 
   const merged: Record<string, MCPServerConfig> = {
     // Built-in official memory server fallback
@@ -62,27 +46,10 @@ function loadAndMerge(projectCwd?: string): CachedMcpConfig {
       env: { CODEPILOT_WORKSPACE: cwd },
       enabled: true
     },
-    ...((userConfig.mcpServers || {}) as Record<string, MCPServerConfig>),
-    ...((settings.mcpServers || {}) as Record<string, MCPServerConfig>),
-    ...((projectMcpJson.mcpServers || {}) as Record<string, MCPServerConfig>),
-    ...((projectClaudeJson.mcpServers || {}) as Record<string, MCPServerConfig>),
+    ...Object.fromEntries(
+      Object.entries(readEffectiveExternalMcpServers(cwd)).map(([name, entry]) => [name, entry.config]),
+    ),
   };
-
-  // Support Claude CLI's per-project mcpServers inside ~/.claude.json's "projects" block
-  if (userConfig.projects && typeof userConfig.projects === 'object') {
-    const projConfig = (userConfig.projects as Record<string, any>)[cwd];
-    if (projConfig && projConfig.mcpServers) {
-      Object.assign(merged, projConfig.mcpServers);
-    }
-  }
-
-  // Apply persistent enabled overrides for project-level servers
-  const settingsOverrides = (settings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
-  for (const [name, override] of Object.entries(settingsOverrides)) {
-    if (merged[name] && override.enabled !== undefined) {
-      merged[name] = { ...merged[name], enabled: override.enabled };
-    }
-  }
 
   // Resolve ${...} placeholders and track which servers needed resolution
   const codepilotServers: Record<string, MCPServerConfig> = {};
@@ -208,23 +175,14 @@ export function loadOnDemandMcpServers(
 }
 
 /**
- * Load MCP servers from a SPECIFIC project's `.mcp.json` file.
+ * Load project-scoped MCP servers from the unified registry.
  *
  * Used when CodePilot decides a request needs project MCP access. Because the
- * SDK fast-start path uses settingSources=[], project `.mcp.json` servers are
- * never discovered automatically; callers must explicitly pass the subset
- * they want to expose for that turn.
+ * SDK fast-start path may still bypass Claude's native discovery, callers must
+ * explicitly pass the subset they want to expose for that turn.
  *
- * Why this isn't covered by the cache-based `loadAndMerge` above:
- * `loadAndMerge` reads `<process.cwd()>/.mcp.json`, which on the desktop
- * app is the Next.js server's working directory (typically the standalone
- * bundle dir), NOT the user's project directory. We need the actual
- * resolved working directory of the request, which only the streaming
- * code path knows.
- *
- * Servers with `${...}` env placeholders are resolved against the
- * CodePilot DB the same way loadAndMerge does. Disabled servers are
- * filtered out.
+ * 这里返回的项目级集合会优先使用迁移后的 Claude 原生 `projects[cwd].mcpServers`，
+ * 并在首次读取时把遗留 `.mcp.json` / `claude.json` 复制进原生配置，确保 UI 与运行时看到同一份项目来源。
  *
  * @param projectCwd - The user's actual working directory (NOT process.cwd())
  * @returns Map of resolved server configs, or undefined when none found
@@ -232,35 +190,12 @@ export function loadOnDemandMcpServers(
 export function loadProjectMcpServers(projectCwd: string | undefined): Record<string, MCPServerConfig> | undefined {
   if (!projectCwd) return undefined;
   try {
-    const filePath = path.join(projectCwd, '.mcp.json');
-    if (!fs.existsSync(filePath)) return undefined;
-
-    const content = readJson(filePath);
-    const rawServers = (content.mcpServers || {}) as Record<string, MCPServerConfig>;
-    if (Object.keys(rawServers).length === 0) return undefined;
-
-    // Apply user-level `mcpServerOverrides` from ~/.claude/settings.json.
-    // The CodePilot MCP Manager UI persists per-server enable/disable state
-    // there (see mcp-loader.ts:57-62 — original loadAndMerge does the same
-    // for the cached path). Without this, a DB-provider session would
-    // silently re-enable a project MCP the user toggled off (or fail to
-    // enable one they overrode on), creating a state mismatch between the
-    // UI and what the SDK actually loads.
-    const userSettings = readJson(path.join(os.homedir(), '.claude', 'settings.json'));
-    const overrides = (userSettings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
-
+    const effective = readEffectiveExternalMcpServers(projectCwd);
     const resolved: Record<string, MCPServerConfig> = {};
-    for (const [name, server] of Object.entries(rawServers)) {
-      // UI override takes precedence over the file's own `enabled` field.
-      // Same precedence as loadAndMerge() so behavior stays consistent
-      // across the cached path and the per-cwd path.
-      const override = overrides[name];
-      const effectiveEnabled = override?.enabled !== undefined ? override.enabled : server.enabled;
-      if (effectiveEnabled === false) continue;
-
-      resolved[name] = resolveServerConfig(server);
+    for (const [name, entry] of Object.entries(effective)) {
+      if (entry.scope !== 'project') continue;
+      resolved[name] = resolveServerConfig(entry.config);
     }
-
     return Object.keys(resolved).length > 0 ? resolved : undefined;
   } catch {
     return undefined;

@@ -89,32 +89,25 @@ export async function GET() {
     const providers = getAllProviders();
     const groups: ProviderModelGroup[] = [];
 
-    // Show the built-in Claude Code provider group unless user explicitly chose AI SDK only.
-    // Auto and Claude Code modes both need Claude Code models visible.
-    const runtimeSetting = getSetting('agent_runtime') || 'auto';
-    const cliEnabled = runtimeSetting !== 'native';
-
-    if (cliEnabled) {
-      // Mark as sdkProxyOnly if no direct API credentials exist — in that case
-      // the env provider only works through the Claude Code SDK subprocess.
-      const envHasDirectCredentials = !!(
-        process.env.ANTHROPIC_API_KEY ||
-        process.env.ANTHROPIC_AUTH_TOKEN ||
-        getSetting('anthropic_auth_token')
-      );
-      groups.push({
-        provider_id: 'env',
-        provider_name: 'Claude Code',
-        provider_type: 'anthropic',
-        ...(!envHasDirectCredentials ? { sdkProxyOnly: true } : {}),
-        // Use upstreamModelId for context-window lookup so the bare `opus`
-        // alias doesn't get clamped to the 200K Bedrock/Vertex value.
-        models: DEFAULT_MODELS.map(m => {
-          const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
-          return cw != null ? { ...m, contextWindow: cw } : m;
-        }),
-      });
-    }
+    // 中文注释：功能名称「Claude Code 模型组固定展示」，用法是在单一路径产品里
+    // 始终返回内置 Claude Code 模型组，不再受历史 cli_enabled 设置或旧回退模式影响。
+    const envHasDirectCredentials = !!(
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.ANTHROPIC_AUTH_TOKEN ||
+      getSetting('anthropic_auth_token')
+    );
+    groups.push({
+      provider_id: 'env',
+      provider_name: 'Claude Code',
+      provider_type: 'anthropic',
+      ...(!envHasDirectCredentials ? { sdkProxyOnly: true } : {}),
+      // Use upstreamModelId for context-window lookup so the bare `opus`
+      // alias doesn't get clamped to the 200K Bedrock/Vertex value.
+      models: DEFAULT_MODELS.map(m => {
+        const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
+        return cw != null ? { ...m, contextWindow: cw } : m;
+      }),
+    });
 
     // If SDK has discovered models, use them for the env group
     const envGroup = groups.find(g => g.provider_id === 'env');

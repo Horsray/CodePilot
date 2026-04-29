@@ -553,6 +553,24 @@ export default function NewChatPage() {
     return () => window.removeEventListener('provider-changed', checkProvider);
   }, []);
 
+  useEffect(() => {
+    if (!modelReady || !hasProvider || !workingDir.trim() || !currentModel) return;
+
+    const controller = new AbortController();
+    fetch('/api/chat/warmup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        working_directory: workingDir.trim(),
+        model: currentModel,
+        provider_id: currentProviderId,
+      }),
+      signal: controller.signal,
+    }).catch(() => {});
+
+    return () => controller.abort();
+  }, [modelReady, hasProvider, workingDir, currentModel, currentProviderId]);
+
   const handleSelectFolder = useCallback(async () => {
     if (isElectron) {
       const path = await openNativePicker({ title: t('folderPicker.title') });

@@ -1,21 +1,11 @@
 /**
- * runtime/legacy.ts — Translate any persisted `agent_runtime` value to the
- * concrete two-state runtime (0.50.3+).
+ * runtime/legacy.ts — Absorb old persisted `agent_runtime` values into the
+ * single supported Claude Code CLI runtime.
  *
  * Why this exists:
- *   Before 0.50.3, `agent_runtime` had three values — 'auto' (default),
- *   'native', and 'claude-code-sdk'. 0.50.3 removed the user-visible Auto
- *   option from Settings and migrates stored 'auto' rows to a concrete value
- *   the first time the Settings page loads. But:
- *
- *     1. That migration can be skipped for users who never open Settings.
- *     2. The chat runtime badge must not surface "Agent: Auto" even if the
- *        DB still holds 'auto'.
- *
- *   Both call sites therefore need the same coercion rule. Centralising it
- *   here keeps Settings' one-shot migration and the badge's transient display
- *   in lockstep — no chance of the badge showing "Claude Code" while the
- *   migration writes "Native".
+ *   历史上 `agent_runtime` 可能存过 'auto' / 'native' / 'claude-code-sdk'。
+ *   现在产品只支持 Claude Code CLI，因此这里的职责只剩“兜底归一化”：
+ *   不论旧值和 CLI 状态如何，界面显示与迁移结果都统一收敛到 `claude-code-sdk`。
  */
 
 export type ConcreteRuntime = 'native' | 'claude-code-sdk';
@@ -40,8 +30,9 @@ export function isConcreteRuntime(v: unknown): v is ConcreteRuntime {
  */
 export function resolveLegacyRuntimeForDisplay(
   saved: string | undefined | null,
-  cliConnected: boolean,
+  _cliConnected: boolean,
+  _cliEnabled = true,
 ): ConcreteRuntime {
-  if (isConcreteRuntime(saved)) return saved;
-  return cliConnected ? 'claude-code-sdk' : 'native';
+  if (saved === 'claude-code-sdk') return 'claude-code-sdk';
+  return 'claude-code-sdk';
 }

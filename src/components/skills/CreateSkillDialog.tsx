@@ -60,7 +60,7 @@ export function CreateSkillDialog({
 }: CreateSkillDialogProps) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
-  const [scope, setScope] = useState<"global" | "project">("project");
+  const [scope, setScope] = useState<"global" | "project">("global");
   const [templateIdx, setTemplateIdx] = useState(0);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -82,7 +82,7 @@ export function CreateSkillDialog({
       await onCreate(trimmed, scope, TEMPLATES[templateIdx].content);
       // Reset on success
       setName("");
-      setScope("project");
+      setScope("global");
       setTemplateIdx(0);
       onOpenChange(false);
     } catch (err) {
@@ -127,19 +127,8 @@ export function CreateSkillDialog({
           <div className="space-y-2">
             <Label>{t('skills.scope')}</Label>
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setScope("project")}
-                className={cn(
-                  "flex-1 justify-start",
-                  scope === "project"
-                    ? "border-primary/50 bg-primary/10 text-primary"
-                    : "border-border hover:bg-accent"
-                )}
-              >
-                <FolderOpen size={16} />
-                {t('skills.project')}
-              </Button>
+              {/* 中文注释：功能名称「技能范围选择」，用法是默认把用户新建的技能写入
+                  Claude 全局目录；只有用户明确切到项目范围时，才落到当前项目。 */}
               <Button
                 variant="outline"
                 onClick={() => setScope("global")}
@@ -153,11 +142,24 @@ export function CreateSkillDialog({
                 <Globe size={16} />
                 {t('skills.global')}
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => setScope("project")}
+                className={cn(
+                  "flex-1 justify-start",
+                  scope === "project"
+                    ? "border-primary/50 bg-primary/10 text-primary"
+                    : "border-border hover:bg-accent"
+                )}
+              >
+                <FolderOpen size={16} />
+                {t('skills.project')}
+              </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              {scope === "project"
-                ? "Saved in .claude/commands/ (this project only)"
-                : "Saved in ~/.claude/commands/ (available everywhere)"}
+              {scope === "global"
+                ? "Saved in ~/.claude/commands/ (available everywhere)"
+                : "Saved in .claude/commands/ (this project only)"}
             </p>
           </div>
 

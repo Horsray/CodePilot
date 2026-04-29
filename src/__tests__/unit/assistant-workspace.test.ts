@@ -436,6 +436,44 @@ describe('incremental indexWorkspace', () => {
   });
 });
 
+describe('scheduleWorkspaceIndex', () => {
+  const { scheduleWorkspaceIndex, loadManifest } = require('../../lib/workspace-indexer') as typeof import('../../lib/workspace-indexer');
+  let wsDir: string;
+
+  beforeEach(() => {
+    wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'idx-bg-test-'));
+    fs.writeFileSync(path.join(wsDir, 'note1.md'), '# Note 1\nHello', 'utf-8');
+  });
+
+  afterEach(() => {
+    fs.rmSync(wsDir, { recursive: true, force: true });
+  });
+
+  it('should schedule indexing asynchronously without blocking the caller', async () => {
+    const originalSetTimeout = global.setTimeout;
+    let scheduledCallback: (() => void) | null = null;
+
+    global.setTimeout = ((fn: (...args: any[]) => void) => {
+      scheduledCallback = () => fn();
+      return { unref() {} } as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+
+    try {
+      // 中文注释：功能名称「后台索引调度测试」，用法是拦截 setTimeout，
+      // 验证 scheduleWorkspaceIndex 只登记异步任务，不在调用点同步执行索引。
+      scheduleWorkspaceIndex(wsDir);
+      assert.ok(scheduledCallback, 'should register a background indexing callback');
+      assert.equal(loadManifest(wsDir).length, 0);
+
+      const runScheduled = scheduledCallback as () => void;
+      runScheduled();
+      assert.equal(loadManifest(wsDir).length, 1);
+    } finally {
+      global.setTimeout = originalSetTimeout;
+    }
+  });
+});
+
 describe('memory.md promotion dedup', () => {
   const { promoteDailyToLongTerm } = require('../../lib/workspace-organizer') as typeof import('../../lib/workspace-organizer');
   let wsDir: string;

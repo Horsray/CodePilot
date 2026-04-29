@@ -12,94 +12,52 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 // ── Suite 1: predictNativeRuntime (inlined — registry.ts has side effects) ──
-// Mirrors registry.ts predictNativeRuntime() — update if source changes.
+// 单一路径后固定返回 false，表示永远不再预测到 Native runtime。
 
 function predictNativeRuntime(
-  providerId: string | undefined,
-  cliEnabled: boolean,
-  agentRuntime: string,
-  sdkAvailable: boolean,
-  hasAnyCreds: boolean,
+  _providerId: string | undefined,
+  _cliEnabled: boolean,
+  _agentRuntime: string,
+  _sdkAvailable: boolean,
 ): boolean {
-  if (providerId === 'openai-oauth') return true;
-  if (!cliEnabled) return true;
-  if (agentRuntime === 'native') return true;
-  if (agentRuntime === 'claude-code-sdk') return !sdkAvailable; // fallback if no CLI
-  // auto: SDK only if CLI + has credentials
-  if (sdkAvailable && hasAnyCreds) return false;
-  return true;
+  return false;
 }
 
 describe('predictNativeRuntime (mirrors registry.ts)', () => {
-  it('openai-oauth → always native', () => {
-    assert.equal(predictNativeRuntime('openai-oauth', true, 'auto', true, true), true);
+  it('legacy native setting no longer changes the prediction', () => {
+    assert.equal(predictNativeRuntime(undefined, true, 'native', true), false);
   });
-  it('cli disabled → always native', () => {
-    assert.equal(predictNativeRuntime(undefined, false, 'auto', true, true), true);
+  it('claude-code-sdk remains non-native when CLI exists', () => {
+    assert.equal(predictNativeRuntime(undefined, true, 'claude-code-sdk', true), false);
   });
-  it('setting=native → native', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'native', true, true), true);
+  it('missing CLI no longer predicts native fallback', () => {
+    assert.equal(predictNativeRuntime(undefined, true, 'claude-code-sdk', false), false);
   });
-  it('setting=claude-code-sdk + CLI → not native', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'claude-code-sdk', true, true), false);
-  });
-  it('setting=claude-code-sdk + no CLI → native (fallback)', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'claude-code-sdk', false, true), true);
-  });
-  it('auto + SDK + has creds → not native', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'auto', true, true), false);
-  });
-  it('auto + SDK + no creds → native (#456)', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'auto', true, false), true);
-  });
-  it('auto + no SDK → native', () => {
-    assert.equal(predictNativeRuntime(undefined, true, 'auto', false, true), true);
+  it('legacy auto is also treated as Claude Code only', () => {
+    assert.equal(predictNativeRuntime(undefined, true, 'auto', false), false);
+    assert.equal(predictNativeRuntime(undefined, true, 'auto', true), false);
   });
 });
 
 // ── Suite 2: resolveRuntime auto semantics (mirrors registry.ts) ──
 
-function resolveRuntime(
-  cliDisabled: boolean,
-  overrideId: string | undefined,
-  settingId: string | undefined,
-  sdkAvailable: boolean,
-  hasAnyCreds: boolean,
-): string {
-  if (cliDisabled) return 'native';
-  // Explicit override — respected directly (user chose it)
-  if (overrideId && overrideId !== 'auto') return overrideId;
-  // Explicit setting — respected if SDK is available
-  if (settingId && settingId !== 'auto') {
-    if (settingId === 'claude-code-sdk' && !sdkAvailable) return 'native'; // fallback
-    return settingId;
+function resolveRuntime(sdkAvailable: boolean): string {
+  if (!sdkAvailable) {
+    throw new Error('Claude Code CLI runtime is unavailable. Please install or reconnect Claude Code.');
   }
-  // Auto: SDK only if CLI exists AND user has any credentials
-  if (sdkAvailable && hasAnyCreds) return 'claude-code-sdk';
-  return 'native';
+  return 'claude-code-sdk';
 }
 
 describe('resolveRuntime (mirrors registry.ts)', () => {
-  it('cli disabled → native regardless', () => {
-    assert.equal(resolveRuntime(true, 'claude-code-sdk', 'claude-code-sdk', true, true), 'native');
+  it('CLI 可用时固定返回 claude-code-sdk', () => {
+    assert.equal(resolveRuntime(true), 'claude-code-sdk');
   });
-  it('explicit override takes precedence', () => {
-    assert.equal(resolveRuntime(false, 'native', 'claude-code-sdk', true, true), 'native');
-  });
-  it('explicit claude-code-sdk + no CLI → fallback native', () => {
-    assert.equal(resolveRuntime(false, undefined, 'claude-code-sdk', false, true), 'native');
-  });
-  it('setting takes precedence over auto', () => {
-    assert.equal(resolveRuntime(false, undefined, 'native', true, true), 'native');
-  });
-  it('auto + SDK + has creds → sdk', () => {
-    assert.equal(resolveRuntime(false, undefined, undefined, true, true), 'claude-code-sdk');
-  });
-  it('auto + SDK + no creds → native (#456)', () => {
-    assert.equal(resolveRuntime(false, undefined, undefined, true, false), 'native');
-  });
-  it('auto + no SDK → native', () => {
-    assert.equal(resolveRuntime(false, undefined, undefined, false, true), 'native');
+
+  it('CLI 不可用时直接报错，不再回退 native', () => {
+    assert.throws(
+      () => resolveRuntime(false),
+      /Claude Code CLI runtime is unavailable/,
+    );
   });
 });
 

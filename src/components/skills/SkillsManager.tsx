@@ -66,8 +66,8 @@ export function SkillsManager() {
 
   const buildSkillUrl = useCallback((skill: SkillItem) => {
     const params = new URLSearchParams();
-    if (skill.source === "installed" && skill.installedSource) {
-      params.set("source", skill.installedSource);
+    if (skill.source === "global" || skill.source === "project") {
+      params.set("scope", skill.source);
     }
     if (workingDirectory) {
       params.set("cwd", workingDirectory);
@@ -139,8 +139,7 @@ export function SkillsManager() {
   // Project skills (auto-extracted from workflows) — shown first as they're most relevant
   const projectSkills = filtered.filter((s) => s.source === "project");
   const globalSkills = filtered.filter((s) => s.source === "global");
-  const installedSkills = filtered.filter((s) => s.source === "installed");
-  const pluginSkills = filtered.filter((s) => s.source === "plugin");
+  const pluginSkills = filtered.filter((s) => s.source === "plugin" || s.source === "sdk");
 
   if (loading) {
     return (
@@ -246,32 +245,11 @@ export function SkillsManager() {
                   </span>
                   {globalSkills.map((skill) => (
                     <SkillListItem
-                      key={`${skill.source}:${skill.installedSource ?? "default"}:${skill.name}`}
+                      key={`${skill.source}:${skill.filePath || skill.name}`}
                       skill={skill}
                       selected={
                         selected?.name === skill.name &&
-                        selected?.source === skill.source &&
-                        selected?.installedSource === skill.installedSource
-                      }
-                      onSelect={() => setSelected(skill)}
-                      onDelete={handleDelete}
-                    />
-                  ))}
-                </div>
-              )}
-              {installedSkills.length > 0 && (
-                <div className="mb-1">
-                  <span className="px-3 py-1 text-[10px] font-medium uppercase text-muted-foreground">
-                    Installed
-                  </span>
-                  {installedSkills.map((skill) => (
-                    <SkillListItem
-                      key={`${skill.source}:${skill.installedSource ?? "default"}:${skill.name}`}
-                      skill={skill}
-                      selected={
-                        selected?.name === skill.name &&
-                        selected?.source === skill.source &&
-                        selected?.installedSource === skill.installedSource
+                        selected?.source === skill.source
                       }
                       onSelect={() => setSelected(skill)}
                       onDelete={handleDelete}
@@ -282,7 +260,7 @@ export function SkillsManager() {
               {pluginSkills.length > 0 && (
                 <div className="mb-1">
                   <span className="px-3 py-1 text-[10px] font-medium uppercase text-muted-foreground">
-                    Plugins
+                    Runtime
                   </span>
                   {pluginSkills.map((skill) => (
                     <SkillListItem

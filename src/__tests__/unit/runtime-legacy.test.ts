@@ -1,7 +1,7 @@
 /**
- * Pin the legacy-runtime coercion used by both SettingsCli migration and
- * RuntimeBadge display. If these rules drift between call sites the UI and
- * the persisted value disagree.
+ * runtime/legacy coercion now only exists to absorb old persisted values.
+ * The product path is fixed to Claude Code CLI, so every legacy value should
+ * converge to `claude-code-sdk`.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,34 +13,31 @@ describe('resolveLegacyRuntimeForDisplay', () => {
     assert.equal(resolveLegacyRuntimeForDisplay('claude-code-sdk', false), 'claude-code-sdk');
   });
 
-  it('preserves explicit native regardless of CLI state', () => {
-    assert.equal(resolveLegacyRuntimeForDisplay('native', true), 'native');
-    assert.equal(resolveLegacyRuntimeForDisplay('native', false), 'native');
+  it('treats stored native as deprecated and converges to Claude Code', () => {
+    assert.equal(resolveLegacyRuntimeForDisplay('native', true), 'claude-code-sdk');
+    assert.equal(resolveLegacyRuntimeForDisplay('native', false), 'claude-code-sdk');
   });
 
-  it('migrates legacy auto to claude-code-sdk when CLI is installed', () => {
+  it('migrates legacy auto to claude-code-sdk', () => {
     assert.equal(resolveLegacyRuntimeForDisplay('auto', true), 'claude-code-sdk');
-  });
-
-  it('migrates legacy auto to native when CLI is not installed', () => {
-    assert.equal(resolveLegacyRuntimeForDisplay('auto', false), 'native');
+    assert.equal(resolveLegacyRuntimeForDisplay('auto', false), 'claude-code-sdk');
   });
 
   it('treats null / undefined / empty as legacy and applies the same rule', () => {
     assert.equal(resolveLegacyRuntimeForDisplay(null, true), 'claude-code-sdk');
-    assert.equal(resolveLegacyRuntimeForDisplay(null, false), 'native');
+    assert.equal(resolveLegacyRuntimeForDisplay(null, false), 'claude-code-sdk');
     assert.equal(resolveLegacyRuntimeForDisplay(undefined, true), 'claude-code-sdk');
-    assert.equal(resolveLegacyRuntimeForDisplay('', false), 'native');
+    assert.equal(resolveLegacyRuntimeForDisplay('', false), 'claude-code-sdk');
   });
 
   it('treats unknown garbage values as legacy (defensive)', () => {
     assert.equal(resolveLegacyRuntimeForDisplay('whatever', true), 'claude-code-sdk');
-    assert.equal(resolveLegacyRuntimeForDisplay('whatever', false), 'native');
+    assert.equal(resolveLegacyRuntimeForDisplay('whatever', false), 'claude-code-sdk');
   });
 });
 
 describe('isConcreteRuntime', () => {
-  it('accepts the two concrete runtime ids', () => {
+  it('accepts the historical concrete runtime ids', () => {
     assert.equal(isConcreteRuntime('claude-code-sdk'), true);
     assert.equal(isConcreteRuntime('native'), true);
   });

@@ -42,6 +42,7 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const isDirty = content !== skill.content;
+  const isReadonly = skill.source === "plugin" || skill.source === "sdk";
 
   // Reset content when skill changes
   useEffect(() => {
@@ -51,6 +52,7 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
   }, [skill.name, skill.filePath, skill.content]);
 
   const handleSave = useCallback(async () => {
+    if (isReadonly) return;
     setSaving(true);
     try {
       await onSave(skill, content);
@@ -59,7 +61,7 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
     } finally {
       setSaving(false);
     }
-  }, [skill, content, onSave]);
+  }, [skill, content, onSave, isReadonly]);
 
   // Mod-s is now handled inside MarkdownEditor's keymap extension; this
   // wrapper forwards it to handleSave via the onSave prop. Tab indentation
@@ -71,6 +73,7 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
   }, [isDirty, handleSave]);
 
   const handleDelete = () => {
+    if (isReadonly) return;
     if (confirmDelete) {
       onDelete(skill);
       setConfirmDelete(false);
@@ -104,23 +107,17 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
               "text-[10px] px-1.5 py-0 shrink-0",
               skill.source === "global"
                 ? "border-status-success-border text-status-success-foreground"
-                : skill.source === "installed"
-                  ? "border-status-warning-border text-status-warning-foreground"
-                  : skill.source === "plugin"
+                : skill.source === "plugin" || skill.source === "sdk"
                     ? "border-primary/40 text-primary"
                     : "border-primary/40 text-primary"
             )}
           >
             {skill.source === "global" ? (
               <Globe size={10} className="mr-0.5" />
-            ) : skill.source === "installed" ? (
-              <FolderOpen size={10} className="mr-0.5" />
             ) : (
               <FolderOpen size={10} className="mr-0.5" />
             )}
-            {skill.source === "installed" && skill.installedSource
-              ? `installed:${skill.installedSource}`
-              : skill.source}
+            {skill.source === "sdk" ? "runtime" : skill.source}
           </Badge>
         </div>
 
@@ -169,7 +166,7 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
           <Button
             size="xs"
             onClick={handleSave}
-            disabled={!isDirty || saving}
+            disabled={!isDirty || saving || isReadonly}
             className="gap-1"
           >
             {saving ? (
@@ -185,6 +182,7 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
             variant={confirmDelete ? "destructive" : "ghost"}
             size="icon-xs"
             onClick={handleDelete}
+            disabled={isReadonly}
           >
             <Trash size={12} />
           </Button>
@@ -226,7 +224,7 @@ export function SkillEditor({ skill, onSave, onDelete }: SkillEditorProps) {
       {/* Footer */}
       <div className="flex items-center gap-2 border-t border-border px-4 py-1.5 shrink-0">
         <span className="text-xs text-muted-foreground truncate">
-          {skill.filePath}
+          {isReadonly ? "只读技能来源" : skill.filePath}
         </span>
       </div>
     </div>

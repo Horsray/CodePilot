@@ -771,18 +771,11 @@ function buildResolution(
     // Resolve upstream model from the alias table
     const catalogEntry = model ? envModels.find(m => m.modelId === model) : undefined;
 
-    // Enable full Claude Code capabilities (CLAUDE.md, skills, hooks, auto-memory,
-    // OMC) when the user has direct Anthropic credentials in their shell environment.
-    // These are real terminal Claude Code users who expect the same experience.
-    // cc-switch users (who get creds from ~/.claude/settings.json) keep [] for
-    // fast-start — CodePilot manages their auth and MCP injection.
-    const hasDirectAnthropicCreds = !!(
-      process.env.ANTHROPIC_API_KEY ||
-      process.env.ANTHROPIC_AUTH_TOKEN
-    );
-    const envSettingSources = hasDirectAnthropicCreds
-      ? ['user', 'project', 'local']
-      : [];
+    // 中文注释：功能名称「env 模式完整能力对齐」，用法是让 env/cc-switch 用户在
+    // 默认情况下也进入 Claude Code Full Capabilities 主路径，不再因为凭证来自
+    // ~/.claude/settings.json 就被强制打回 `settingSources=[]` / `--bare`。
+    // 这样桌面端的 rules、skills、hooks、OMC 与原生 WebSearch 发现链才能更接近终端版。
+    const envSettingSources = ['user', 'project', 'local'];
 
     return {
       provider: undefined,
@@ -997,25 +990,10 @@ function buildResolution(
   const hasCredentials = !!(provider.api_key) || authStyle === 'env_only' ||
     (!!provider.base_url && !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || hasClaudeSettingsCredentials()));
 
-  // Full capabilities mode: let the SDK subprocess load user/project/local
-  // settings so CLAUDE.md, skills, hooks, auto-memory, and OMC all work.
-  //
-  // Enabled by default for official Anthropic API endpoints.
-  // For third-party proxies (Kimi, GLM, OpenRouter), can be force-enabled
-  // via the 'sdk_full_capabilities' setting. The shadow HOME mechanism
-  // already strips ANTHROPIC_* keys from user settings.json to prevent
-  // credential leakage, but project-level ANTHROPIC_BASE_URL could still
-  // conflict — users enabling this for third-party providers should ensure
-  // their project .claude/settings.json doesn't set ANTHROPIC_BASE_URL.
-  const baseUrl = provider.base_url || '';
-  const isOfficialAnthropic = !baseUrl ||
-    baseUrl.includes('api.anthropic.com') ||
-    baseUrl.endsWith('.anthropic.com');
-  const forceFullCapabilities = getSetting('sdk_full_capabilities') === 'true';
-  const settingSources: string[] =
-    (isOfficialAnthropic || forceFullCapabilities)
-      ? ['user', 'project', 'local']
-      : [];
+  // 中文注释：功能名称「Claude Code 全能力固定开启」，用法是在单一 Claude Code CLI
+  // 产品路径下始终加载 user/project/local settings，避免再出现可选裁剪模式导致的
+  // skills、hooks、OMC 与联网能力表现不一致。
+  const settingSources: string[] = ['user', 'project', 'local'];
 
   return {
     provider,

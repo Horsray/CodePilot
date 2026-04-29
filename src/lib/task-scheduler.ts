@@ -822,6 +822,9 @@ async function handleMissedTasks(): Promise<void> {
 
     try {
       let targetSessionId = task.session_id;
+      if (task.session_binding?.session_id) {
+        targetSessionId = task.session_binding.session_id;
+      }
       if (!targetSessionId && workspacePath) {
         const session = getLatestSessionByWorkingDirectory(workspacePath);
         if (session) targetSessionId = session.id;

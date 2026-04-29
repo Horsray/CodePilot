@@ -23,14 +23,15 @@ export function createWriteTool(ctx: ToolContext) {
 
       // Create parent directories
       const dir = path.dirname(resolved);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
+      // 中文注释：功能名称「异步创建目录」，用法是使用异步 IO 避免阻塞 SSE flush，
+      // 让 tool_use 卡片能在写入过程中及时显示
+      await fs.promises.mkdir(dir, { recursive: true });
 
       // Record modification BEFORE writing so we capture the "before" state
       recordFileModification(ctx.sessionId || '', path.relative(ctx.workingDirectory, resolved), ctx.workingDirectory);
 
-      fs.writeFileSync(resolved, content, 'utf-8');
+      // 中文注释：功能名称「异步写文件」，用法是避免同步写入阻塞事件循环，导致 tool_use/tool_result 一起到达前端
+      await fs.promises.writeFile(resolved, content, 'utf-8');
       
       const lines = content.split('\n').length;
       return `Successfully wrote ${lines} lines to ${resolved}`;

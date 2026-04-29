@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Virtuoso } from "react-virtuoso";
-import { ArrowsClockwise, MagnifyingGlass, FileCode, Code, File } from "@/components/ui/icon";
+import { ArrowsClockwise, MagnifyingGlass, FileCode, Code, File, Image as ImageIcon, FileZip, Play } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { FileTreeNode } from "@/types";
+import { getCachedRootFileTree, setCachedRootFileTree } from "@/lib/file-tree-cache";
 import {
   FileTree as AIFileTree,
   FileTreeIcon,
@@ -32,41 +33,102 @@ interface FileTreeProps {
   highlightSeek?: string;
 }
 
+// 中文注释：功能名称「文件图标颜色映射」，用法是按文件扩展名返回与旧版增强文件树一致的彩色图标，避免轻量版回退后图标全部变成单色。
 function getFileIcon(extension?: string): ReactNode {
   switch (extension) {
     case "ts":
     case "tsx":
+      return <FileCode size={16} className="text-blue-500" />;
     case "js":
     case "jsx":
+      return <FileCode size={16} className="text-yellow-400" />;
+    case "vue":
+      return <FileCode size={16} className="text-green-500" />;
     case "py":
-    case "rb":
+      return <FileCode size={16} className="text-blue-600" />;
+    case "php":
+      return <FileCode size={16} className="text-purple-500" />;
+    case "html":
+    case "htm":
+      return <FileCode size={16} className="text-orange-500" />;
+    case "css":
+    case "scss":
+    case "sass":
+    case "less":
+      return <FileCode size={16} className="text-blue-400" />;
+    case "json":
+      return <Code size={16} className="text-yellow-500" />;
+    case "yaml":
+    case "yml":
+    case "toml":
+      return <Code size={16} className="text-amber-500" />;
+    case "csv":
+      return <File size={16} className="text-green-600" />;
+    case "sql":
+      return <FileCode size={16} className="text-gray-500" />;
+    case "md":
+    case "mdx":
+    case "txt":
+      return <File size={16} className="text-gray-400" />;
+    case "jpg":
+    case "jpeg":
+    case "png":
+    case "gif":
+    case "svg":
+    case "webp":
+      return <ImageIcon size={16} className="text-purple-400" />;
+    case "mp3":
+    case "wav":
+    case "ogg":
+    case "flac":
+      return <File size={16} className="text-pink-400" />;
+    case "mp4":
+    case "avi":
+    case "mov":
+    case "mkv":
+      return <Play size={16} className="text-red-400" />;
+    case "zip":
+    case "rar":
+    case "7z":
+    case "tar":
+    case "gz":
+      return <FileZip size={16} className="text-yellow-600" />;
+    case "pdf":
+      return <File size={16} className="text-red-500" />;
+    case "doc":
+    case "docx":
+      return <File size={16} className="text-blue-600" />;
+    case "xls":
+    case "xlsx":
+      return <File size={16} className="text-green-600" />;
+    case "ppt":
+    case "pptx":
+      return <File size={16} className="text-orange-500" />;
     case "rs":
+      return <FileCode size={16} className="text-orange-600" />;
     case "go":
+      return <FileCode size={16} className="text-cyan-500" />;
     case "java":
+      return <FileCode size={16} className="text-red-600" />;
+    case "rb":
+      return <FileCode size={16} className="text-red-500" />;
+    case "swift":
+      return <FileCode size={16} className="text-orange-500" />;
+    case "kt":
+      return <FileCode size={16} className="text-purple-500" />;
+    case "dart":
+      return <FileCode size={16} className="text-cyan-400" />;
+    case "lua":
+      return <FileCode size={16} className="text-blue-500" />;
     case "c":
     case "cpp":
     case "h":
     case "hpp":
     case "cs":
-    case "swift":
-    case "kt":
-    case "dart":
-    case "lua":
-    case "php":
     case "zig":
-      return <FileCode size={16} className="text-muted-foreground" />;
-    case "json":
-    case "yaml":
-    case "yml":
-    case "toml":
-      return <Code size={16} className="text-muted-foreground" />;
-    case "md":
-    case "mdx":
-    case "txt":
-    case "csv":
-      return <File size={16} className="text-muted-foreground" />;
+      return <FileCode size={16} className="text-yellow-500" />;
     default:
-      return <File size={16} className="text-muted-foreground" />;
+      return <File size={16} className="text-gray-400" />;
   }
 }
 
@@ -224,13 +286,23 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
+  const treeRef = useRef<FileTreeNode[]>([]);
+  const mountedRef = useRef(false);
   const { t } = useTranslation();
   const seekKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Clear stale tree data when switching projects to avoid cross-session seek races.
   useEffect(() => {
     setTree([]);
     setError(null);
+    treeRef.current = [];
     seekKeyRef.current = null;
   }, [workingDirectory]);
 
@@ -273,7 +345,13 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
     const controller = new AbortController();
     abortRef.current = controller;
 
-    setLoading(true);
+    const cachedRoot = getCachedRootFileTree(workingDirectory);
+    if (cachedRoot && treeRef.current.length === 0) {
+      treeRef.current = cachedRoot;
+      setTree(cachedRoot);
+    }
+
+    setLoading(!(cachedRoot && cachedRoot.length > 0));
     setError(null);
     try {
       const res = await fetch(
@@ -284,18 +362,29 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
       if (res.ok) {
         const data = await res.json();
         if (controller.signal.aborted) return;
-        setTree(data.tree || []);
+        const nextTree = (data.tree || []) as FileTreeNode[];
+        treeRef.current = nextTree;
+        setTree(nextTree);
+        setCachedRootFileTree(workingDirectory, nextTree);
       } else {
         const errData = await res.json().catch(() => ({ error: res.statusText }));
+        treeRef.current = [];
         setTree([]);
         setError(errData.error || `Failed to load (${res.status})`);
       }
     } catch (e) {
-      if ((e as Error).name === 'AbortError') return;
+      if ((e as Error).name === 'AbortError') {
+        if (mountedRef.current && abortRef.current === controller) {
+          setLoading(false);
+        }
+        return;
+      }
+      treeRef.current = [];
       setTree([]);
       setError('Failed to load file tree');
     } finally {
-      if (!controller.signal.aborted) {
+      if (mountedRef.current && abortRef.current === controller) {
+        abortRef.current = null;
         setLoading(false);
       }
     }
@@ -480,7 +569,7 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             onSelect={handleSelect as any}
             onAdd={onFileAdd}
-            className="border-0 rounded-none h-full"
+            className="h-full rounded-none border-0 [&>div]:h-full [&>div]:min-h-0 [&>div]:p-0"
           >
             <Virtuoso
               style={{ height: '100%', width: '100%' }}

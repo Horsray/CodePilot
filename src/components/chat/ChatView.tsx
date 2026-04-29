@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup, SubAgentInfo } from '@/types';
+import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup, PromptInstructionSourceMeta } from '@/types';
 import { MessageList } from './MessageList';
 import { TerminalReasonChip } from './TerminalReasonChip';
 import { RateLimitBanner } from './RateLimitBanner';
@@ -14,6 +14,7 @@ import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { RuntimeBadge } from './RuntimeBadge';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { Button } from '@/components/ui/button';
+import { SpinnerGap } from '@/components/ui/icon';
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
 import { showToast } from '@/hooks/useToast';
@@ -37,6 +38,12 @@ import { useChatCommands } from '@/hooks/useChatCommands';
 import { useAssistantTrigger } from '@/hooks/useAssistantTrigger';
 import { useStreamSubscription } from '@/hooks/useStreamSubscription';
 import { consumePendingSessionMessage, peekPendingSessionMessage } from '@/lib/pending-session-message';
+import type { PendingSessionMessage } from '@/lib/pending-session-message';
+import {
+  getPendingFirstTurnStatusText,
+  getPendingFirstTurnRemainingDelayMs,
+  shouldReleasePendingFirstTurn,
+} from '@/lib/first-turn-warmup';
 import {
   startStream,
   stopStream,
@@ -69,7 +76,7 @@ interface ChatViewProps {
 
 /** Maximum messages kept in React state. Older messages are trimmed and reloaded on scroll. */
 const MAX_MESSAGES_IN_MEMORY = 300;
-const FIRST_TURN_WARMUP_BUDGET_MS = 1200;
+const MESSAGE_RECONCILE_INTERVAL_MS = 10000;
 
 function stripLeadingFileComment(content: string): string {
   return content.replace(/^<!--files:.*?-->/, '');
@@ -88,6 +95,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const { t } = useTranslation();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingSessionMessage | null>(() => peekPendingSessionMessage(sessionId));
+  const [pendingInitialReleaseTick, setPendingInitialReleaseTick] = useState(0);
   const [permissionProfile, setPermissionProfile] = useState<'default' | 'full_access'>(initialPermissionProfile || 'default');
 
   // Whether this session's working directory matches the configured assistant workspace
@@ -264,6 +273,9 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const permissionResolved = streamSnapshot?.permissionResolved ?? null;
   const rewindPoints = getRewindPoints(sessionId);
   const subAgents = streamSnapshot?.subAgents ?? [];
+  const pendingInitialStatusText = !isStreaming
+    ? getPendingFirstTurnStatusText(pendingInitialMessage, warmupState)
+    : null;
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -293,7 +305,18 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // Pending image generation notices
   const pendingImageNoticesRef = useRef<string[]>([]);
   const sendMessageRef = useRef<(content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => Promise<void>>(undefined);
-  const initMetaRef = useRef<{ tools?: unknown; slash_commands?: unknown; skills?: unknown } | null>(null);
+  const [sdkInitMeta, setSdkInitMeta] = useState<{
+    tools?: unknown;
+    slash_commands?: unknown;
+    skills?: unknown;
+    instruction_sources?: PromptInstructionSourceMeta[];
+  } | null>(null);
+  const initMetaRef = useRef<{
+    tools?: unknown;
+    slash_commands?: unknown;
+    skills?: unknown;
+    instruction_sources?: PromptInstructionSourceMeta[];
+  } | null>(null);
 
   const handleModeChange = useCallback((newMode: string) => {
     if (newMode === 'ask') return; // Not supported in this view yet
@@ -756,6 +779,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         },
         onInitMeta: (meta) => {
           initMetaRef.current = meta;
+          setSdkInitMeta(meta);
           console.log('[ChatView] SDK init meta received:', meta);
         },
       });
@@ -839,23 +863,57 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     return () => window.removeEventListener('chat:user-message-acked', handler);
   }, [sessionId]);
 
-  const pendingInitialMessageRef = useRef(peekPendingSessionMessage(sessionId));
   useEffect(() => {
-    pendingInitialMessageRef.current = peekPendingSessionMessage(sessionId);
+    setPendingInitialMessage(peekPendingSessionMessage(sessionId));
+    setPendingInitialReleaseTick(0);
   }, [sessionId]);
 
   useEffect(() => {
-    const pending = pendingInitialMessageRef.current;
-    if (!pending || isStreaming) return;
-    const elapsed = Date.now() - pending.createdAt;
-    const shouldStart =
-      warmupState === 'ready' ||
-      warmupState === 'failed' ||
-      elapsed >= FIRST_TURN_WARMUP_BUDGET_MS;
-    if (!shouldStart) return;
+    if (!pendingInitialMessage) return;
+    setMessages((prev) => {
+      if (prev.some((message) => message.id === pendingInitialMessage.clientMessageId)) {
+        return prev;
+      }
+      const displayUserContent = pendingInitialMessage.displayOverride || pendingInitialMessage.content;
+      const displayContent = pendingInitialMessage.files && pendingInitialMessage.files.length > 0
+        ? `<!--files:${JSON.stringify(
+            pendingInitialMessage.files.map((file) => ({ id: file.id, name: file.name, type: file.type, size: file.size, data: file.data })),
+          )}-->${displayUserContent}`
+        : displayUserContent;
+      const optimisticUserMessage: Message = {
+        id: pendingInitialMessage.clientMessageId,
+        session_id: sessionId,
+        role: 'user',
+        content: displayContent,
+        created_at: new Date(pendingInitialMessage.createdAt).toISOString(),
+        token_usage: null,
+      };
+      return [...prev, optimisticUserMessage];
+    });
+  }, [pendingInitialMessage, sessionId]);
 
-    pendingInitialMessageRef.current = null;
-    consumePendingSessionMessage(sessionId);
+  useEffect(() => {
+    if (!pendingInitialMessage || isStreaming) return;
+    if (shouldReleasePendingFirstTurn(pendingInitialMessage, warmupState)) return;
+
+    const remainingDelayMs = getPendingFirstTurnRemainingDelayMs(
+      pendingInitialMessage,
+      warmupState,
+    );
+
+    const timeoutId = window.setTimeout(() => {
+      setPendingInitialReleaseTick((current) => current + 1);
+    }, Math.max(50, remainingDelayMs));
+
+    return () => window.clearTimeout(timeoutId);
+  }, [pendingInitialMessage, warmupState, isStreaming]);
+
+  useEffect(() => {
+    if (!pendingInitialMessage || isStreaming) return;
+    if (!shouldReleasePendingFirstTurn(pendingInitialMessage, warmupState)) return;
+
+    const pending = consumePendingSessionMessage(sessionId) || pendingInitialMessage;
+    setPendingInitialMessage(null);
     void sendMessageInternal(
       pending.content,
       pending.files,
@@ -864,7 +922,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       pending.mentions,
       pending.clientMessageId,
     );
-  }, [sessionId, warmupState, isStreaming, sendMessageInternal]);
+  }, [sessionId, pendingInitialMessage, pendingInitialReleaseTick, warmupState, isStreaming, sendMessageInternal]);
 
   // ── Dequeue: when streaming finishes and queue is non-empty, send next ──
   useEffect(() => {
@@ -1013,7 +1071,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     
     const interval = setInterval(() => {
       reconcileWithDb();
-    }, 3000);
+    }, MESSAGE_RECONCILE_INTERVAL_MS);
     
     return () => clearInterval(interval);
   }, [sessionId, isStreaming, reconcileWithDb]);
@@ -1171,6 +1229,14 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           onDismiss={() => setRateLimitDismissed(true)}
         />
       )}
+      {pendingInitialStatusText && (
+        <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+          <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <SpinnerGap size={14} className="animate-spin text-primary" />
+            <span>{pendingInitialStatusText}</span>
+          </div>
+        </div>
+      )}
       <MessageInput
         key={sessionId}
         onSend={sendMessage}
@@ -1189,7 +1255,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onEffortChange={setSelectedEffort}
         thinkingMode={resolvedThinkingMode}
         onThinkingModeChange={handleToggleThinking}
-        sdkInitMeta={initMetaRef.current}
+        sdkInitMeta={sdkInitMeta}
         isAssistantProject={isAssistantProject}
         hasMessages={messages.length > 0}
         toolUses={toolUses}
@@ -1215,6 +1281,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
               subAgents={subAgents}
               toolCount={toolUses.length}
               skillCount={toolUses.filter((t: any) => t.name === 'Skill').length}
+              instructionSources={sdkInitMeta?.instruction_sources}
             />
             <RuntimeBadge providerId={currentProviderId} />
             <ContextUsageIndicator

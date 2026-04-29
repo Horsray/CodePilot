@@ -50,6 +50,7 @@
 | active/context-storage-migration.md | 上下文共享与存储迁移 | Phase 0 部分完成，Phase 1-3 待开始 |
 | active/site-and-docs.md | 官网 + 文档站（apps/site） | Phase 0-1 进行中 |
 | active/weixin-bridge-channel.md | 微信 Bridge 通道一次性交付方案 | One Shot 待开始 |
+| active/claude-code-parity-fast-path.md | Claude Code 主路径回归原生能力体验：CLI Full Capabilities 默认开启 + FILEMAP 前置索引策略 + MCP/Skills 单一真相源收口 | Phase 0-9 完成，Phase 10 进行中 |
 | active/unified-context-layer.md | 统一上下文层 + 浮窗助理 + 产品架构演进 | Phase 1-3 已完成，Phase 4-5 待开始 |
 | active/omc-team-orchestration-refactor.md | OMC Team 多智能体动态编排重构（并行执行 + 动态路由 + 验证闭环） | ✅ Phase 0-5 已完成（V1 基础） |
 | active/multi-agent-orchestration-v2.md | 多Agent编排架构重构 V2 — 对齐 OMC 策略（去除 planner LLM、非嵌套约束、验证协议、熔断升级） | Phase 0 完成，Phase 1-5 待开始 |

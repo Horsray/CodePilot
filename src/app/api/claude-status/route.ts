@@ -1,6 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { findClaudeBinary, getClaudeVersion, findAllClaudeBinaries, classifyClaudePath, isWindows, findGitBash, isWingetInstall } from '@/lib/platform';
 import type { ClaudeInstallInfo, ClaudeInstallType } from '@/lib/platform';
+import { getCachedPlugins } from '@/lib/agent-sdk-capabilities';
+import { getEnabledPluginConfigs } from '@/lib/plugin-discovery';
 
 /** Latest version cache */
 let cachedLatestVersion: string | null = null;
@@ -65,9 +67,22 @@ function versionGte(a: string, b: string): boolean {
   return true;
 }
 
-export async function GET() {
+function hasOmcPlugin(plugins: Array<{ name?: string; path?: string }>): boolean {
+  return plugins.some((plugin) => {
+    const name = plugin.name || '';
+    const pluginPath = plugin.path || '';
+    return name.includes('oh-my-claudecode') || pluginPath.includes('oh-my-claudecode');
+  });
+}
+
+export async function GET(request: NextRequest) {
   try {
+    const providerId = request.nextUrl.searchParams.get('providerId') || 'env';
     const claudePath = findClaudeBinary();
+    const enabledPlugins = getEnabledPluginConfigs(process.cwd());
+    const cachedPlugins = getCachedPlugins(providerId);
+    const omcConfigured = hasOmcPlugin(enabledPlugins.map((plugin) => ({ path: plugin.path })));
+    const omcLoaded = hasOmcPlugin(cachedPlugins);
 
     // On Windows, check for Git Bash (bash.exe) using the same detection as the SDK runtime.
     // This avoids false negatives when Git is installed but git.exe isn't on PATH.
@@ -76,7 +91,7 @@ export async function GET() {
     if (!claudePath) {
       const w: string[] = [];
       if (missingGit) w.push('Git Bash not found — some features may not work');
-      return NextResponse.json({ connected: false, version: null, binaryPath: null, installType: null, otherInstalls: [], missingGit, warnings: w, features: {} });
+      return NextResponse.json({ connected: false, version: null, binaryPath: null, installType: null, otherInstalls: [], missingGit, warnings: w, features: {}, omcConfigured, omcLoaded });
     }
     const version = await getClaudeVersion(claudePath);
     let installType: ClaudeInstallType = classifyClaudePath(claudePath);
@@ -142,8 +157,10 @@ export async function GET() {
       missingGit,
       warnings,
       features,
+      omcConfigured,
+      omcLoaded,
     });
   } catch {
-    return NextResponse.json({ connected: false, version: null, binaryPath: null, installType: null, otherInstalls: [], missingGit: false, warnings: [], features: {} });
+    return NextResponse.json({ connected: false, version: null, binaryPath: null, installType: null, otherInstalls: [], missingGit: false, warnings: [], features: {}, omcConfigured: false, omcLoaded: false });
   }
 }

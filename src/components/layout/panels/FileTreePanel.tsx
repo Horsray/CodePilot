@@ -3,11 +3,11 @@
 import { useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePanel } from "@/hooks/usePanel";
-import { EnhancedFileTree } from "@/components/project/EnhancedFileTree";
+import { FileTree } from "@/components/project/FileTree";
 import { showToast } from "@/hooks/useToast";
 
 export function FileTreePanel() {
-  const { workingDirectory, sessionId, openPreviewTab } = usePanel();
+  const { workingDirectory, openPreviewTab } = usePanel();
   const searchParams = useSearchParams();
 
   const highlightPath = searchParams.get('file') || undefined;
@@ -26,7 +26,7 @@ export function FileTreePanel() {
   }, []);
 
   return (
-    <EnhancedFileTree
+    <FileTree
       workingDirectory={workingDirectory}
       onFileSelect={handleFileSelect}
       onFileAdd={handleFileAdd}

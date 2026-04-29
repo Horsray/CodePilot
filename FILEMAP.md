@@ -83,15 +83,16 @@
 
 | 功能 | 前端文件 | 后端 API | 核心逻辑 |
 |------|---------|----------|----------|
-| MCP 管理页 | `src/app/mcp/page.tsx` | `src/app/api/plugins/mcp/route.ts` | `src/lib/mcp-connection-manager.ts` |
-| MCP 加载 | — | — | `src/lib/mcp-loader.ts` |
+| MCP 管理页 | `src/app/mcp/page.tsx` | `src/app/api/plugins/mcp/route.ts` | `src/lib/mcp-registry.ts` |
+| MCP 加载 | — | — | `src/lib/mcp-loader.ts`, `src/lib/mcp-registry.ts` |
 | MCP 工具适配 | — | — | `src/lib/mcp-tool-adapter.ts` |
 
 ### Skills 功能
 
 | 功能 | 前端文件 | 后端 API | 核心逻辑 |
 |------|---------|----------|----------|
-| Skills 管理页 | `src/app/skills/page.tsx` | `src/app/api/skills/route.ts` | `src/lib/skill-discovery.ts` |
+| Skills 管理页 | `src/app/skills/page.tsx` | `src/app/api/skills/route.ts` | `src/lib/skills-registry.ts` |
+| Skill 发现 | — | — | `src/lib/skill-discovery.ts`, `src/lib/skills-registry.ts` |
 | Skill 解析 | — | — | `src/lib/skill-parser.ts` |
 | Skill 执行 | — | — | `src/lib/skill-executor.ts` |
 
@@ -446,13 +447,22 @@ src/components/layout/AppShell.tsx          # 根布局壳
 
 | 文件 | 职责 |
 |------|------|
-| `src/lib/mcp-loader.ts` | MCP 配置加载 |
+| `src/lib/mcp-registry.ts` | MCP 单一真相源、项目迁移、内置目录 |
+| `src/lib/mcp-loader.ts` | MCP 运行时加载（复用统一注册表） |
 | `src/lib/mcp-connection-manager.ts` | MCP 连接管理、工具调用 |
 | `src/lib/mcp-tool-adapter.ts` | MCP → AI SDK 工具适配 |
 | `src/lib/dashboard-mcp.ts` | Dashboard widget MCP 服务 |
 | `src/lib/cli-tools-mcp.ts` | CLI 工具 MCP 服务 |
 | `src/lib/notification-mcp.ts` | 通知 MCP 服务 |
 | `src/lib/memory-search-mcp.ts` | 记忆搜索 MCP 服务 |
+
+### Skills 相关
+
+| 文件 | 职责 |
+|------|------|
+| `src/lib/skills-registry.ts` | Skills 单一真相源扫描、去重、插件 loaded 标记 |
+| `src/lib/skill-discovery.ts` | 运行时 Skill 工具发现（复用统一注册表） |
+| `src/lib/skill-parser.ts` | SKILL.md / 命令 Markdown 解析 |
 
 ### Bridge 系统
 

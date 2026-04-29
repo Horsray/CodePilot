@@ -26,6 +26,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { useClientPlatform } from '@/hooks/useClientPlatform';
 import { showToast } from '@/hooks/useToast';
 import { preloadXtermModules } from '@/components/terminal/XtermTerminal';
+import { preloadFileTreePanel } from "@/components/layout/panels/fileTreePanelLoader";
 import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, type Species } from '@/lib/buddy';
 
 export function UnifiedTopBar() {
@@ -329,6 +330,7 @@ export function UnifiedTopBar() {
                     variant={fileTreeOpen ? "secondary" : "ghost"}
                     size="icon-sm"
                     className={fileTreeOpen ? "" : "text-muted-foreground hover:text-foreground"}
+                    onMouseEnter={() => { preloadFileTreePanel(); }}
                     onClick={() => {
                       // 中文注释：交替式交互，点击文件树时收起看板
                       if (!fileTreeOpen && dashboardPanelOpen) setDashboardPanelOpen(false);

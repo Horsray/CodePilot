@@ -3,11 +3,9 @@
  *
  * Pins two pieces of behavior so they don't silently regress:
  *
- * 1. settingSources defaults to [] for both DB-backed and env-mode SDK
- *    requests. This is the product fast-start contract: CodePilot injects
- *    auth/model env, project instructions, and keyword-gated MCP explicitly
- *    instead of letting Claude Code scan all user/project settings, MCP,
- *    plugins, hooks, and permissions before first response.
+ * 1. Claude Code parity mode now defaults to FULL capabilities for SDK
+ *    requests. That means DB-backed providers expose user/project/local
+ *    settingSources unless the user explicitly disables full capabilities.
  *
  * 2. Short-alias fallback (sonnet/opus/haiku → upstream model) only fires
  *    when the provider has EXACTLY ONE model in its catalog.
@@ -60,12 +58,12 @@ function writeUserSettingsJson(creds: Record<string, string>) {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Fix #1: settingSources stays empty by default so SDK startup is not blocked
-// by user/project MCP and plugin discovery.
+// Fix #1: settingSources 固定保持 FULL capabilities，使 Claude Code CLI
+// 主路径始终接近原生终端体验，不再暴露裁剪模式。
 // ────────────────────────────────────────────────────────────────
 
 describe('settingSources by provider group', () => {
-  it('DB-backed provider gets empty settingSources for fast startup', async () => {
+  it('DB-backed provider defaults to full settingSources for CLI parity', async () => {
     writeUserSettingsJson({
       ANTHROPIC_BASE_URL: 'https://leak-source.example.com',
       ANTHROPIC_AUTH_TOKEN: 'sk-cc-switch-present',
@@ -85,12 +83,12 @@ describe('settingSources by provider group', () => {
     assert.ok(resolved.provider, 'expected DB provider to resolve');
     assert.deepEqual(
       resolved.settingSources,
-      [],
-      'DB-backed provider must not auto-load user/project settings; CodePilot injects required auth/model/MCP explicitly.',
+      ['user', 'project', 'local'],
+      'DB-backed provider should default to Claude Code full capabilities so rules, skills, hooks, and OMC keep working.',
     );
   });
 
-  it('env-mode (no DB provider) also keeps settingSources empty while preserving cc-switch credentials', async () => {
+  it('env-mode (no DB provider) defaults to full settingSources for terminal parity', async () => {
     writeUserSettingsJson({ ANTHROPIC_AUTH_TOKEN: 'sk-cc-switch' });
 
     const { resolveProvider } = await import('../../lib/provider-resolver');
@@ -99,34 +97,30 @@ describe('settingSources by provider group', () => {
     assert.equal(resolved.provider, undefined, 'expected env mode (no DB provider)');
     assert.deepEqual(
       resolved.settingSources,
-      [],
-      'env mode fast-starts without scanning user/project settings; cc-switch env is injected separately.',
+      ['user', 'project', 'local'],
+      'env mode should keep Claude Code full capabilities so cc-switch users still get rules, skills, hooks, and OMC parity.',
     );
     assert.equal(resolved.hasCredentials, true);
   });
 
-  it('DB provider — project/local cwd settings can never be exposed to SDK (defense-in-depth)', async () => {
-    // Regression test for the P2 review finding: even if a user has
-    // <cwd>/.claude/settings.json with ANTHROPIC_BASE_URL, the SDK must
-    // never see it for a DB-provider request, because we drop 'project'
-    // from settingSources entirely. Asserting at the resolver layer means
-    // no caller (chat, generateText, doctor probe) can be tricked into
-    // exposing it.
-    const { createProvider } = await import('../../lib/db');
+  it('DB provider no longer exposes a trimmed fast-path opt-out', async () => {
+    const { createProvider, setSetting } = await import('../../lib/db');
     const provider = createProvider({
       name: 'Kimi',
       provider_type: 'anthropic',
       base_url: 'https://kimi.example.com',
       api_key: 'sk-kimi',
     });
+    setSetting('sdk_full_capabilities', 'false');
 
     const { resolveProvider } = await import('../../lib/provider-resolver');
     const resolved = resolveProvider({ providerId: provider.id });
 
-    assert.ok(!resolved.settingSources.includes('project'),
-      'DB provider settingSources must not include "project" — that would expose <cwd>/.claude/settings.json env to SDK qZq()');
-    assert.ok(!resolved.settingSources.includes('local'),
-      'DB provider settingSources must not include "local" — that would expose <cwd>/.claude/settings.local.json env to SDK qZq()');
+    assert.deepEqual(
+      resolved.settingSources,
+      ['user', 'project', 'local'],
+      'Single-path Claude Code mode should ignore legacy opt-out switches and keep full capabilities enabled.',
+    );
   });
 });
 

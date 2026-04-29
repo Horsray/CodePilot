@@ -787,6 +787,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
               displayName,
               prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
               model: input.model,
+              source: 'sdk_agent_tool',
               status: result ? (result.isError ? 'error' : 'completed') : 'running' as const,
               report,
               error,

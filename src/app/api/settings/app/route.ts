@@ -18,8 +18,6 @@ const ALLOWED_KEYS = [
   'theme_mode',
   'theme_family',
   'default_panel',
-  'agent_runtime',
-  'cli_enabled',
   'max_thinking_tokens',
   'assistant_workspace_path',
   'include_agents_md',

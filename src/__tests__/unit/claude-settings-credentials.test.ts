@@ -141,10 +141,8 @@ describe('claude-settings credential reader', () => {
 //
 // Walks the actual call chain (no mocks, no inlined logic):
 //   provider-resolver.resolveProvider() → hasCredentials becomes TRUE
-//   runtime/registry.predictNativeRuntime() → returns FALSE (i.e. picks SDK)
+//   runtime/registry.predictNativeRuntime() → 固定 FALSE（单一路径只走 Claude Code）
 //   ai-provider.createModel() → does NOT throw the legacy "No provider credentials" error
-//
-// Pre-fix this would all fail and route to native, which throws.
 describe('cc-switch end-to-end (no CodePilot provider, settings.json only)', () => {
   // Each test gets its own DB dir so the migration runs in a clean slate
   let originalDataDir: string | undefined;
@@ -187,9 +185,7 @@ describe('cc-switch end-to-end (no CodePilot provider, settings.json only)', () 
     // Post-fix: settings.json is recognized as a credential source.
     assert.equal(resolved.hasCredentials, true, 'hasCredentials must be true so ai-provider does not abort');
     assert.equal(resolved.provider, undefined, 'still env mode — settings.json does not create a DB provider');
-    // Fast-start mode keeps settingSources empty; the subprocess receives
-    // cc-switch auth through an explicit env allowlist instead.
-    assert.deepEqual(resolved.settingSources, []);
+    assert.deepEqual(resolved.settingSources, ['user', 'project', 'local']);
   });
 
   it('resolveProvider reports hasCredentials=false when settings.json has no auth keys', async () => {
@@ -200,29 +196,15 @@ describe('cc-switch end-to-end (no CodePilot provider, settings.json only)', () 
     assert.equal(resolved.hasCredentials, false);
   });
 
-  it('predictNativeRuntime returns false for cc-switch users in auto mode (i.e. picks SDK)', async () => {
+  it('predictNativeRuntime stays false for settings.json credentials too', async () => {
     writeSettings('settings.json', {
       env: { ANTHROPIC_AUTH_TOKEN: 'sk-ant-cc-switch' },
     });
 
     // Force a fresh module load so registry sees our env override on each run
     const { predictNativeRuntime } = await import('../../lib/runtime/registry');
-    // We cannot easily mock SDK availability without registering a runtime, so the
-    // assertion is conditional on what predictNativeRuntime returns when SDK is
-    // unavailable in the test env — but we CAN assert the credential branch:
-    // when SDK is available, hasCredentialsForRequest() must return true so
-    // predictNativeRuntime returns false.
-    //
-    // In the unit test environment SDK runtime is not registered, so SDK is
-    // "unavailable" and predict returns true regardless of credentials. We
-    // verify hasCredentialsForRequest indirectly by checking resolveProvider
-    // (above) — predictNativeRuntime here just guards against accidental
-    // regressions in the wiring.
     const result = predictNativeRuntime(undefined);
-    // Document what we expect to see: in dev/test (no SDK runtime registered),
-    // result is true. In production (SDK registered + CLI available), the
-    // resolveProvider().hasCredentials path will flip this to false.
-    assert.equal(typeof result, 'boolean');
+    assert.equal(result, false);
   });
 
   it('ai-provider.createModel does NOT throw "No provider credentials" with cc-switch settings', async () => {

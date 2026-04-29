@@ -13,7 +13,7 @@ import {
   PromptInputButton,
 } from '@/components/ai-elements/prompt-input';
 import type { ChatStatus } from 'ai';
-import type { FileAttachment, MentionRef } from '@/types';
+import type { FileAttachment, MentionRef, PromptInstructionSourceMeta } from '@/types';
 import { SlashCommandButton } from './SlashCommandButton';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { CliToolsPopover } from './CliToolsPopover';
@@ -64,7 +64,7 @@ interface MessageInputProps {
   thinkingMode?: 'enabled' | 'disabled';
   onThinkingModeChange?: (mode: 'enabled' | 'disabled') => void;
   /** SDK init metadata — when available, used to validate command/skill availability */
-  sdkInitMeta?: { tools?: unknown; slash_commands?: unknown; skills?: unknown } | null;
+  sdkInitMeta?: { tools?: unknown; slash_commands?: unknown; skills?: unknown; instruction_sources?: PromptInstructionSourceMeta[] } | null;
   /** Initial value to prefill in the input */
   initialValue?: string;
   /** Whether this session is an assistant workspace project */

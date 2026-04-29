@@ -1,5 +1,5 @@
 import { useRef, useCallback } from 'react';
-import type { SSEEvent, TokenUsage, PermissionRequestEvent, MediaBlock } from '@/types';
+import type { SSEEvent, TokenUsage, PermissionRequestEvent, MediaBlock, PromptInstructionSourceMeta, SubAgentSource } from '@/types';
 
 interface ToolUseInfo {
   id: string;
@@ -53,9 +53,9 @@ export interface SSECallbacks {
   onSkillNudge?: (data: SkillNudgeData) => void;
   onContextCompressed?: (data: { message: string; messagesCompressed: number; tokensSaved: number }) => void;
   /** 中文注释：功能名称「子Agent状态回调」，用法是在主Agent流中接收子Agent的生命周期事件。 */
-  onSubAgentStart?: (data: { id: string; name: string; displayName: string; prompt: string; model?: string }) => void;
+  onSubAgentStart?: (data: { id: string; name: string; displayName: string; prompt: string; model?: string; source?: SubAgentSource }) => void;
   onSubAgentProgress?: (data: { id: string; status: string; detail?: string }) => void;
-  onSubAgentComplete?: (data: { id: string; report: string; error?: string }) => void;
+  onSubAgentComplete?: (data: { id: string; report: string; error?: string; source?: SubAgentSource }) => void;
   onInitMeta?: (meta: {
     tools?: unknown;
     slash_commands?: unknown;
@@ -63,6 +63,7 @@ export interface SSECallbacks {
     plugins?: Array<{ name: string; path: string }>;
     mcp_servers?: unknown;
     output_style?: string;
+    instruction_sources?: PromptInstructionSourceMeta[];
   }) => void;
 }
 
@@ -198,6 +199,15 @@ function handleSSEEvent(
         const parsed = JSON.parse(event.data);
         if (parsed._progress) {
           callbacks.onToolProgress(parsed.tool_name, Math.round(parsed.elapsed_time_seconds));
+          // 中文注释：功能名称「工具进度触发占位卡片」，用法是在 SDK runtime 只推送 tool_progress
+          // 而 tool_use 可能延迟到 tool_result 的情况下，先合成 tool_use 让前端立刻出现卡片
+          if (typeof parsed.tool_use_id === 'string' && parsed.tool_use_id) {
+            callbacks.onToolUse({
+              id: parsed.tool_use_id,
+              name: parsed.tool_name,
+              input: { _synthetic: true },
+            });
+          }
           return accumulated;
         }
       } catch {
@@ -249,6 +259,11 @@ function handleSSEEvent(
             plugins: statusData.plugins,
             mcp_servers: statusData.mcp_servers,
             output_style: statusData.output_style,
+            instruction_sources: Array.isArray(statusData.instruction_sources)
+              ? statusData.instruction_sources.filter((item: unknown): item is PromptInstructionSourceMeta => (
+                !!item && typeof item === 'object' && typeof (item as { filename?: unknown }).filename === 'string'
+              ))
+              : undefined,
           });
         } else if (statusData.notification) {
           // Code-driven toasts (e.g. Opus 4.7 native-runtime

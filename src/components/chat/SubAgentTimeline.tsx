@@ -227,6 +227,31 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
     }
   };
 
+  // 中文注释：功能名称「子Agent来源标签」，用法是把不同执行来源映射成清晰的人类可读标签，
+  // 便于用户区分这次多 Agent 是来自 OMC/Claude Code，还是我们自己的 Native Agent 工具。
+  const getSourceMeta = (source?: SubAgentInfo['source']) => {
+    switch (source) {
+      case 'omc_plugin':
+        return { label: 'OMC / Claude Code', className: 'text-violet-500/90 bg-violet-500/10 border-violet-500/20' };
+      case 'sdk_agent_tool':
+        return { label: 'Claude Code Agent', className: 'text-sky-500/90 bg-sky-500/10 border-sky-500/20' };
+      case 'native_agent_tool':
+        return { label: 'CodePilot Agent', className: 'text-amber-500/90 bg-amber-500/10 border-amber-500/20' };
+      case 'native_team_runner':
+        return { label: 'CodePilot Team', className: 'text-orange-500/90 bg-orange-500/10 border-orange-500/20' };
+      default:
+        return { label: '来源未识别', className: 'text-muted-foreground/80 bg-muted/40 border-border/50' };
+    }
+  };
+
+  const summarySource = (() => {
+    const uniqueSources = Array.from(new Set(subAgents.map(agent => agent.source || 'unknown')));
+    if (uniqueSources.length === 1) {
+      return getSourceMeta(uniqueSources[0] as SubAgentInfo['source']).label;
+    }
+    return 'Mixed Sources';
+  })();
+
   return (
     <div className="mt-3 space-y-2 w-full max-w-full">
       {/* 子Agent卡片列表 - 树状布局，支持并行显示 */}
@@ -242,6 +267,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
           const terminalReport = agent.report || (agent.error ? `错误:\n${agent.error}` : '');
           const currentTool = agent.status === 'running' ? extractCurrentTool(agent.progress || '') : null;
           const recentLogs = agent.status === 'running' ? extractRecentLogs(agent.progress || '', 3) : [];
+          const sourceMeta = getSourceMeta(agent.source);
 
           // 树状连接点颜色
           const dotColor = agent.status === 'running' ? 'bg-blue-500' :
@@ -300,6 +326,10 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                     {agent.prompt}
                   </span>
                 )}
+
+                <span className={cn('text-[10px] px-1.5 py-0.5 rounded border shrink-0', sourceMeta.className)}>
+                  {sourceMeta.label}
+                </span>
 
                 {/* 状态标签 */}
                 <div className="flex items-center gap-1.5 ml-auto">
@@ -364,7 +394,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
         <div className="flex items-center gap-1.5">
           <Robot size={14} className="text-primary" />
           <span className="text-xs font-medium text-foreground">
-            Team Leader ｜ {runningCount > 0 ? <span className="font-mono text-[10px] bg-blue-500/10 text-blue-500/80 px-1.5 py-0.5 rounded border border-blue-500/20">{subAgents[0]?.model || 'Team'}</span> : '监控中'} ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个
+            Team Leader ｜ {runningCount > 0 ? <span className="font-mono text-[10px] bg-blue-500/10 text-blue-500/80 px-1.5 py-0.5 rounded border border-blue-500/20">{subAgents[0]?.model || 'Team'}</span> : '监控中'} ｜ 来源 {summarySource} ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个
           </span>
         </div>
         <div className="flex-1" />

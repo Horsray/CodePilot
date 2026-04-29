@@ -106,6 +106,7 @@ export function createAgentTool(ctx: {
             displayName: agentDef.displayName,
             prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
             model: finalModel,
+            source: 'native_agent_tool',
           }),
         });
         ctx.emitSSE({ type: 'tool_output', data: `[subagent:${agentDef.id}] ${prompt.length > 120 ? prompt.slice(0, 117) + '...' : prompt}` });
@@ -158,6 +159,7 @@ export function createAgentTool(ctx: {
             data: JSON.stringify({
               id: subAgentId,
               report: fastPathResult.report,
+              source: 'native_agent_tool',
             }),
           });
         }
@@ -428,6 +430,7 @@ export function createAgentTool(ctx: {
             id: subAgentId,
             report: finalReport,
             error: errorEvent || undefined,
+            source: 'native_agent_tool',
           }),
         });
       }

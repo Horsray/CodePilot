@@ -133,6 +133,7 @@ export function createAgentMcpServer(ctx: {
                 displayName: agentDef.displayName,
                 prompt: prompt.length > 200 ? prompt.slice(0, 197) + '...' : prompt,
                 model: finalModel,
+                source: 'native_agent_tool',
               }),
             });
             ctx.emitSSE({ type: 'tool_output', data: `[subagent:${agentDef.id}] ${prompt.length > 120 ? prompt.slice(0, 117) + '...' : prompt}` });
@@ -185,6 +186,7 @@ export function createAgentMcpServer(ctx: {
                 data: JSON.stringify({
                   id: subAgentId,
                   report: fastPathResult.report,
+                  source: 'native_agent_tool',
                 }),
               });
             }
@@ -307,6 +309,7 @@ export function createAgentMcpServer(ctx: {
                 id: subAgentId,
                 report: resultText,
                 error: errorEvent || undefined,
+                source: 'native_agent_tool',
               }),
             });
           }

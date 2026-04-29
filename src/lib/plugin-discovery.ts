@@ -13,8 +13,10 @@
  *     local layer (.claude/settings.local.json in cwd) which has highest priority and
  *     is gitignored. This requires a cwd parameter.
  *
- * Plugin loading into SDK sessions is handled by the SDK itself —
- * CodePilot does NOT explicitly inject plugins via queryOptions.plugins.
+ * Plugin loading in SDK sessions is primarily handled by Claude settings
+ * discovery. CodePilot additionally exposes an explicit "enabled plugin
+ * configs" view so SDK parity mode can inject the exact enabled plugin paths
+ * and avoid relying on implicit discovery alone.
  */
 
 import fs from 'fs';
@@ -53,6 +55,44 @@ interface DiscoveredPlugin {
   hasCommands: boolean;
   hasSkills: boolean;
   hasAgents: boolean;
+}
+
+function listMarketplacePluginDirs(pluginsRoot: string): Array<{ marketplace: string; pluginDir: string }> {
+  const discovered: Array<{ marketplace: string; pluginDir: string }> = [];
+  const marketplacesDir = path.join(pluginsRoot, 'marketplaces');
+  if (!fs.existsSync(marketplacesDir)) return discovered;
+
+  try {
+    const marketplaces = fs.readdirSync(marketplacesDir);
+    for (const marketplace of marketplaces) {
+      const marketplaceDir = path.join(marketplacesDir, marketplace);
+      const rootManifest = path.join(marketplaceDir, '.claude-plugin', 'plugin.json');
+      // 中文注释：功能名称「Marketplace 根目录插件兼容」，用法是兼容像 OMC 这样
+      // 直接安装在 `marketplaces/<name>/` 根目录，而不是 `marketplaces/<name>/plugins/*/`
+      // 的布局；否则插件会被错误判成“未安装/未启用”。
+      if (fs.existsSync(rootManifest)) {
+        discovered.push({ marketplace, pluginDir: marketplaceDir });
+      }
+
+      const pluginsDir = path.join(marketplaceDir, 'plugins');
+      if (!fs.existsSync(pluginsDir)) continue;
+
+      try {
+        const pluginNames = fs.readdirSync(pluginsDir);
+        for (const pluginName of pluginNames) {
+          const pluginDir = path.join(pluginsDir, pluginName);
+          if (!fs.statSync(pluginDir).isDirectory()) continue;
+          discovered.push({ marketplace, pluginDir });
+        }
+      } catch {
+        // ignore per-marketplace nested plugin errors
+      }
+    }
+  } catch {
+    // ignore marketplace scan errors
+  }
+
+  return discovered;
 }
 
 /**
@@ -265,44 +305,26 @@ export function discoverMarketplacePlugins(): DiscoveredPlugin[] {
   const plugins: DiscoveredPlugin[] = [];
   const claudeDir = path.join(os.homedir(), '.claude', 'plugins');
 
-  // Scan marketplaces: ~/.claude/plugins/marketplaces/{mkt}/plugins/*/
-  const marketplacesDir = path.join(claudeDir, 'marketplaces');
-  if (fs.existsSync(marketplacesDir)) {
-    try {
-      const marketplaces = fs.readdirSync(marketplacesDir);
-      for (const mkt of marketplaces) {
-        const pluginsDir = path.join(marketplacesDir, mkt, 'plugins');
-        if (!fs.existsSync(pluginsDir)) continue;
+  // Scan marketplaces: supports both:
+  // - ~/.claude/plugins/marketplaces/{mkt}/plugins/*/
+  // - ~/.claude/plugins/marketplaces/{mkt}/            (root plugin layout)
+  for (const { marketplace, pluginDir } of listMarketplacePluginDirs(claudeDir)) {
+    const manifest = readManifest(pluginDir);
+    const fallbackName = path.basename(pluginDir);
+    const name = manifest?.name || fallbackName;
+    const description = manifest?.description || `Plugin: ${name}`;
 
-        try {
-          const pluginNames = fs.readdirSync(pluginsDir);
-          for (const pluginName of pluginNames) {
-            const pluginDir = path.join(pluginsDir, pluginName);
-            if (!fs.statSync(pluginDir).isDirectory()) continue;
-
-            const manifest = readManifest(pluginDir);
-            const name = manifest?.name || pluginName;
-            const description = manifest?.description || `Plugin: ${name}`;
-
-            plugins.push({
-              name,
-              description,
-              author: manifest?.author,
-              path: path.resolve(pluginDir),
-              marketplace: mkt,
-              location: 'plugins',
-              hasCommands: fs.existsSync(path.join(pluginDir, 'commands')),
-              hasSkills: fs.existsSync(path.join(pluginDir, 'skills')),
-              hasAgents: fs.existsSync(path.join(pluginDir, 'agents')),
-            });
-          }
-        } catch {
-          // ignore per-marketplace errors
-        }
-      }
-    } catch {
-      // ignore
-    }
+    plugins.push({
+      name,
+      description,
+      author: manifest?.author,
+      path: path.resolve(pluginDir),
+      marketplace,
+      location: 'plugins',
+      hasCommands: fs.existsSync(path.join(pluginDir, 'commands')),
+      hasSkills: fs.existsSync(path.join(pluginDir, 'skills')),
+      hasAgents: fs.existsSync(path.join(pluginDir, 'agents')),
+    });
   }
 
   // Scan external_plugins: ~/.claude/plugins/external_plugins/*/
@@ -376,6 +398,32 @@ export function getPluginInfoList(cwd?: string): PluginInfo[] {
       enabled,
     };
   });
+}
+
+/**
+ * 中文注释：功能名称「已启用插件配置导出」，用法是把 settings 中已启用且未被
+ * blocklist 屏蔽的插件转换为 SDK `queryOptions.plugins` 可直接使用的配置。
+ */
+export function getEnabledPluginConfigs(cwd?: string): Array<{ type: 'local'; path: string }> {
+  return getPluginInfoList(cwd)
+    .filter((plugin) => plugin.enabled && !plugin.blocked)
+    .map((plugin) => ({
+      type: 'local' as const,
+      path: plugin.path,
+    }));
+}
+
+/**
+ * 中文注释：功能名称「OMC 插件检测」，用法是判断当前已启用插件列表里是否包含
+ * oh-my-claudecode / OMC。聊天主链路和 warmup 都复用这条判断，确保两边对
+ * “是否优先走原生终端式 query 路径”的决策一致。
+ */
+export function hasEnabledOmcPlugin(
+  plugins: Array<{ path: string }>,
+): boolean {
+  return plugins.some((plugin) =>
+    /(^|[\\/])(oh-my-claudecode|omc)([\\/]|$)/i.test(plugin.path),
+  );
 }
 
 /**

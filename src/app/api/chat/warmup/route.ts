@@ -9,6 +9,7 @@ import {
   buildPersistentClaudeSignature,
   isSessionWarmedUp,
   getWarmedUpInitData,
+  adoptPersistentClaudeSessionBySignature,
 } from '@/lib/persistent-claude-session';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import fs from 'fs';
@@ -42,29 +43,33 @@ function resolveScriptFromCmd(cmdPath: string): string | undefined {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { session_id } = body;
+    const {
+      session_id,
+      working_directory,
+      model: requestedModel,
+      provider_id: requestedProviderId,
+    } = body as {
+      session_id?: string;
+      working_directory?: string;
+      model?: string;
+      provider_id?: string;
+    };
 
-    if (!session_id) {
-      return Response.json({ error: 'session_id is required' }, { status: 400 });
+    if (!session_id && !working_directory) {
+      return Response.json({ error: 'session_id or working_directory is required' }, { status: 400 });
     }
 
-    // 中文注释：已预热则直接返回缓存数据，避免重复启动子进程
-    if (isSessionWarmedUp(session_id)) {
-      const cached = getWarmedUpInitData(session_id);
-      return Response.json({ warmed_up: true, from_cache: true, ...cached });
-    }
-
-    const session = getSession(session_id);
-    if (!session) {
+    const session = session_id ? getSession(session_id) : null;
+    if (session_id && !session) {
       return Response.json({ error: 'Session not found' }, { status: 404 });
     }
 
     // 中文注释：解析 provider，复用统一解析器确保和 chat route 一致
     const resolved = resolveForClaudeCode(undefined, {
-      providerId: session.provider_id || undefined,
-      sessionProviderId: session.provider_id || undefined,
-      model: session.model || undefined,
-      sessionModel: session.model || undefined,
+      providerId: requestedProviderId || session?.provider_id || undefined,
+      sessionProviderId: session?.provider_id || undefined,
+      model: requestedModel || session?.model || undefined,
+      sessionModel: session?.model || undefined,
     });
 
     // 中文注释：准备 SDK 子进程环境变量和 shadow home
@@ -81,19 +86,40 @@ export async function POST(request: NextRequest) {
 
     // 中文注释：解析工作目录，回退到 session.working_directory
     const resolvedCwd = resolveWorkingDirectory([
-      { path: session.sdk_cwd || session.working_directory, source: 'requested' },
+      { path: working_directory || session?.sdk_cwd || session?.working_directory, source: 'requested' },
     ]);
+    const warmupSessionId =
+      session_id
+      || `warmup:${resolved.provider?.id || requestedProviderId || 'env'}:${requestedModel || session?.model || resolved.model || 'default'}:${resolvedCwd.path}`;
+
+    // 中文注释：功能名称「OMC 预热跳过」，用法是在检测到已启用 OMC 插件时，
+    // 不再启动持久会话预热，避免首轮消息进入结构化消息队列路径，尽量保持与终端版
+    // Claude Code 更一致的原生 query / resume 行为。
+    let enabledPlugins: Array<{ type: 'local'; path: string }> = [];
+    let omcPluginEnabled = false;
+    try {
+      const { getEnabledPluginConfigs, hasEnabledOmcPlugin } = await import('@/lib/plugin-discovery');
+      enabledPlugins = getEnabledPluginConfigs(resolvedCwd.path);
+      omcPluginEnabled = hasEnabledOmcPlugin(enabledPlugins);
+      if (omcPluginEnabled) {
+        return Response.json({
+          warmed_up: false,
+          skipped: true,
+          reason: 'omc-native-query',
+          message: 'OMC 已启用，已跳过持久预热以保持原生终端式会话链路。',
+        });
+      }
+    } catch (error) {
+      console.warn('[warmup API] Failed to resolve enabled plugins for warmup decision:', error);
+    }
 
     // +++ 新增：获取基础的 System Prompt +++
     const basePromptResult = buildSystemPrompt({
-      sessionId: session_id,
+      ...(session_id ? { sessionId: session_id } : {}),
       workingDirectory: resolvedCwd.path,
-      modelId: session.model || resolved.model || undefined,
+      modelId: requestedModel || session?.model || resolved.model || undefined,
+      omcPluginEnabled,
     });
-    
-    // +++ 新增：像 claude-client.ts 一样注入 OMC 优先级前缀 +++
-    const omcPriorityPrefix = `## IMPORTANT: Multi-Agent Orchestration Priority
-If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.md), you MUST prioritize OMC's agent orchestration rules, skill triggers, and behavioral patterns over any conflicting instructions below. OMC handles: agent delegation, model routing, parallel execution, verification workflows, and skill invocation. The following CodePilot-specific instructions only supplement OMC for CodePilot-unique features (UI widgets, media, notifications).\n\n`;
 
     // 动态判断是否加载 Widget (因为是预热，假设没有特定 prompt 触发，按保守策略或全局策略处理)
     // 对于预热，我们只加载全局的 MCP 和基础的 MCP。由于缺乏当前 prompt，我们加载最常用的
@@ -108,19 +134,27 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
       allowDangerouslySkipPermissions: true,
       env: sanitizeEnv(setup.env),
       settingSources: resolved.settingSources as Options['settingSources'],
-      model: session.model || resolved.model || undefined,
+      model: requestedModel || session?.model || resolved.model || undefined,
       
       // +++ 新增：在 queryOptions 中追加 systemPrompt +++
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
-        append: omcPriorityPrefix + basePromptResult.prompt
+        append: basePromptResult.prompt
       },
 
-      ...(resolved.settingSources && resolved.settingSources.length > 0
-        ? {}
-        : { tools: ['default', 'Grep', 'Glob', 'Bash', 'Read', 'Write', 'Edit'] as Options['tools'], extraArgs: { bare: null } }),
     };
+
+    if (enabledPlugins.length > 0) {
+      queryOptions.plugins = enabledPlugins as Options['plugins'];
+    }
+
+    // 中文注释：功能名称「预热 Hook 事件保持一致」，用法是当聊天主链路会开启 Claude
+    // Full Capabilities 时，预热进程也同步打开 hook 生命周期事件，避免复用后丢失
+    // 插件/OMC 的 SessionStart、InstructionsLoaded 等事件。
+    // 中文注释：功能名称「预热 Hook 事件固定开启」，用法是在仅保留 Claude Code CLI
+    // 主路径后，让预热进程始终与正式聊天保持同一套 hook 生命周期观测能力。
+    queryOptions.includeHookEvents = true;
 
     // 加载全局必须的 MCP Servers 和对应系统提示词，与 claude-client.ts 保持一致
     queryOptions.mcpServers = {};
@@ -151,9 +185,17 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
       queryOptions.systemPrompt.append += '\n\n' + NOTIFICATION_MCP_SYSTEM_PROMPT + '\n\n' + TODO_MCP_SYSTEM_PROMPT + '\n\n' + BROWSER_SYSTEM_PROMPT + '\n\n' + ASK_USER_QUESTION_MCP_SYSTEM_PROMPT;
     }
 
+    // CLI tools MCP 是每轮常驻加载的（非 keyword-gated），必须在预热时也加载，
+    // 否则 claude-client.ts 中 hasOnDemandMcpServers 永远为 true，导致预热进程永远无法复用。
+    const { createCliToolsMcpServer, CLI_TOOLS_MCP_SYSTEM_PROMPT } = await import('@/lib/cli-tools-mcp');
+    queryOptions.mcpServers['codepilot-cli-tools'] = createCliToolsMcpServer();
+    if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+      queryOptions.systemPrompt.append += '\n\n' + CLI_TOOLS_MCP_SYSTEM_PROMPT;
+    }
+
     // 加载 keyword-gated 的 MCP Servers (预热时不加载，避免拖慢预热和首次回复)
     // 对于这类按需 MCP，如果用户的首条消息命中，系统会在 claude-client.ts 中检测到并开启全新的会话，不会强行复用预热进程
-    // 删除预热时对 widget, media, cli-tools, dashboard 的挂载
+    // widget, media, dashboard 仍按需加载
 
     // 加入所有内置 MCP 的 allowedTools 以防自动触发权限弹窗
     const allowedTools = [
@@ -233,13 +275,33 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
 
     // 中文注释：构建签名，使用与 chat route 一致的 providerKey 计算方式
     const signature = buildPersistentClaudeSignature({
-      providerKey: resolved.provider?.id || session.provider_id || 'env',
+      providerKey: resolved.provider?.id || requestedProviderId || session?.provider_id || 'env',
       options: queryOptions,
     });
 
+    // 中文注释：功能名称「预热会话接力复用」，用法是在空白聊天页已经按 cwd/model 预热过时，
+    // 会话页使用真实 session_id 继续接管同签名预热进程，避免再次冷启动一份新的 Claude 进程。
+    if (session_id) {
+      adoptPersistentClaudeSessionBySignature(signature, warmupSessionId);
+    }
+
+    // 中文注释：功能名称「缓存预热结果同步」，用法是在命中已完成的预热缓存时，
+    // 同步补写 sdkSessionId，确保后续流式请求和页面状态都能识别这次预热已就绪。
+    const cached = isSessionWarmedUp(warmupSessionId)
+      ? getWarmedUpInitData(warmupSessionId)
+      : null;
+    if (cached) {
+      if (session_id && cached.session_id) {
+        try {
+          updateSdkSessionId(session_id, cached.session_id);
+        } catch { /* best effort — 不影响缓存复用 */ }
+      }
+      return Response.json({ warmed_up: true, from_cache: true, warmup_session_id: warmupSessionId, ...cached });
+    }
+
     // 中文注释：执行预热，启动 SDK 子进程并读取 system/init
     const initData = await warmupPersistentClaudeSession({
-      codepilotSessionId: session_id,
+      codepilotSessionId: warmupSessionId,
       signature,
       options: queryOptions,
       shadowHandle: setup.shadow || undefined,
@@ -255,13 +317,13 @@ If oh-my-claudecode (OMC) instructions are present in your context (via CLAUDE.m
     // 中文注释：预热成功后保存 SDK session ID 到数据库，让后续消息的
     // shouldResume=true，跳过 streamClaudeSdk 第 1137 行的 stale session 检查，
     // 避免预热创建的 persistent session 被误销毁
-    if (initData.session_id) {
+    if (session_id && initData.session_id) {
       try {
         updateSdkSessionId(session_id, initData.session_id);
       } catch { /* best effort — 不影响预热结果 */ }
     }
 
-    return Response.json({ warmed_up: true, ...initData });
+    return Response.json({ warmed_up: true, warmup_session_id: warmupSessionId, ...initData });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error';
     console.error('[warmup API] Error:', message);

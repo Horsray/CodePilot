@@ -9,6 +9,8 @@ import { SpinnerGap } from "@/components/ui/icon";
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
 import { isStreamActive } from '@/lib/stream-session-manager';
+import { preloadFileTreePanel } from '@/components/layout/panels/fileTreePanelLoader';
+import { prefetchRootFileTree } from '@/lib/file-tree-cache';
 
 interface ChatSessionPageProps {
   params: Promise<{ id: string }>;
@@ -31,7 +33,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   // 中文注释：会话预热状态，'idle' | 'warming' | 'ready' | 'failed'
   const [warmupState, setWarmupState] = useState<'idle' | 'warming' | 'ready' | 'failed'>('idle');
   const [warmupModel, setWarmupModel] = useState<string>('');
-  const { setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
+  const { workingDirectory, setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
   const targetFilePath = searchParams.get('file') || undefined;
   const { t } = useTranslation();
   const defaultPanelAppliedRef = useRef(false);
@@ -87,6 +89,23 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
       controller.abort();
     };
   }, [id, setWorkingDirectory, setSessionId, setPanelSessionTitle, t]);
+
+  useEffect(() => {
+    if (!sessionInfoLoaded || !id) return;
+
+    preloadFileTreePanel();
+  }, [id, sessionInfoLoaded]);
+
+  useEffect(() => {
+    if (!workingDirectory) return;
+
+    const controller = new AbortController();
+    void prefetchRootFileTree(workingDirectory, controller.signal);
+
+    return () => {
+      controller.abort();
+    };
+  }, [workingDirectory]);
 
   useEffect(() => {
     // Reset state when switching sessions

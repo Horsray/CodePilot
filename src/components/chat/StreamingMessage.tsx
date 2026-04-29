@@ -16,6 +16,7 @@ import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview
 import { WidgetRenderer } from './WidgetRenderer';
 import { ReferencedContexts } from './ReferencedContexts';
 import { AgentTimeline } from './AgentTimeline';
+import { SubAgentTimeline } from './SubAgentTimeline';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
   appendTimelineReasoning,
@@ -352,6 +353,7 @@ export function StreamingMessage({
     lastStatusPayload: null,
   });
   const bufferedContent = useBufferedContent(content, isStreaming);
+  const hasStreamingSubAgents = Array.isArray(streamingSubAgents) && streamingSubAgents.length > 0;
   const mediaPreview = useMemo(() => {
     const allMedia = toolResults.flatMap((result) => result.media || []);
     return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
@@ -392,6 +394,11 @@ export function StreamingMessage({
     return finalChangedFiles.length > 0 || errCount > 0 ? { errCount, changedFiles: finalChangedFiles } : null;
   }, [isStreaming, toolUses, toolResults]);
 
+  // 中文注释：功能名称「时间线增量更新优化」，用法是追踪是否有实质变化（新工具、新思考、状态变化），
+  // 纯文本流式过程中跳过 cloneTimelineSteps 深拷贝和 setLiveTimelineSteps state 更新，
+  // 避免 60fps 的深拷贝导致 UI 卡顿。finalContentStart 单独更新。
+  const hasStructuralChangeRef = useRef(false);
+
   useEffect(() => {
     const prev = prevSnapshotRef.current;
     const now = Date.now();
@@ -402,6 +409,7 @@ export function StreamingMessage({
 
     // 新一轮流式：重置增量状态，避免沿用上一轮缓存。
     if (isStreaming && !prev.isStreaming) {
+      hasStructuralChangeRef.current = true;
       timelineStateRef.current = createTimelineAccumulator(now);
       // 中文注释：功能名称「重置流式时间线快照」，用法是在新一轮消息开始时同步清空状态与模型上下文。
       prevSnapshotRef.current = {
@@ -421,12 +429,14 @@ export function StreamingMessage({
 
     // status payload 增量：更新模型勋章和状态
     if (statusPayload && statusPayload !== currentPrev.lastStatusPayload && statusPayload.subtype !== 'step_complete') {
+      hasStructuralChangeRef.current = true;
       updateTimelineStatus(currentState, statusPayload as any, now);
     }
 
     // thinking 增量：不再整段重建，避免卡片位置固定只刷新旧内容。
     const currentThinking = thinkingContent || '';
     if (currentThinking && currentThinking !== currentPrev.thinking) {
+      hasStructuralChangeRef.current = true;
       if (currentThinking.startsWith(currentPrev.thinking)) {
         const delta = currentThinking.slice(currentPrev.thinking.length);
         if (delta.trim()) {
@@ -443,6 +453,9 @@ export function StreamingMessage({
     const completedToolIds = new Set(toolResults.map((result) => result.tool_use_id));
     const allToolsCompleted = toolUses.length > 0 && toolUses.every((tool) => completedToolIds.has(tool.id));
     const hasNewTool = toolUses.some((tool) => !currentPrev.toolUseIds.includes(tool.id));
+    if (hasNewTool || toolResults.some((r) => currentPrev.toolResults[r.tool_use_id] === undefined)) {
+      hasStructuralChangeRef.current = true;
+    }
     let activityContentLength = currentPrev.activityContentLength;
     const consumeActivityContent = (toLength: number, timestamp: number) => {
       if (toLength <= activityContentLength) return;
@@ -450,6 +463,12 @@ export function StreamingMessage({
       activityContentLength = toLength;
       if (delta.trim()) {
         appendTimelineOutput(currentState, delta, timestamp);
+        // 中文注释：功能名称「时间线输出实时刷新」，用法是在工具阶段或已有推理阶段时，
+        // 文本增量本身就属于可见时间线内容，不能被“纯正文优化”一起吞掉，否则步骤卡片会
+        // 一直等到下一个结构变化或流结束才刷新。
+        if (currentPrev.toolUseIds.length > 0 || currentPrev.thinking.length > 0) {
+          hasStructuralChangeRef.current = true;
+        }
       }
     };
 
@@ -485,9 +504,14 @@ export function StreamingMessage({
       }
     }
 
-    const nextSteps = toVisibleSteps(cloneTimelineSteps(currentState));
-    setLiveTimelineSteps(nextSteps);
+    // 中文注释：功能名称「时间线跳过深拷贝」，用法是在纯文本流式更新时（无新工具/思考/状态变化），
+    // 跳过 cloneTimelineSteps 深拷贝和 setLiveTimelineSteps state 更新，减少 60fps 下的 GC 压力和 re-render。
     setFinalContentStart(activityContentLength);
+    if (hasStructuralChangeRef.current || !isStreaming) {
+      hasStructuralChangeRef.current = false;
+      const nextSteps = toVisibleSteps(cloneTimelineSteps(currentState));
+      setLiveTimelineSteps(nextSteps);
+    }
 
     prevSnapshotRef.current = {
       isStreaming,
@@ -706,7 +730,7 @@ export function StreamingMessage({
         )}
 
         {/* Render the timeline (tools and thoughts interleaved) */}
-        {(timelineTools.length > 0 || liveTimelineSteps.length > 0) && (
+        {(timelineTools.length > 0 || liveTimelineSteps.length > 0 || hasStreamingSubAgents) && (
           <ToolActionsGroup
             tools={timelineTools.map((tool) => {
               const result = toolResults.find((r) => r.tool_use_id === tool.id);
@@ -726,14 +750,19 @@ export function StreamingMessage({
             sessionId={sessionId}
             rewindUserMessageId={rewindUserMessageId}
             flat={true}
-            hideSubAgents={false}
+            hideSubAgents={hasStreamingSubAgents}
           />
         )}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
         {mediaPreview}
 
-        {/* SubAgentTimeline 卡片渲染已移除，改由 ToolActionsGroup 内的 TeamAgentTimelines 时间线驱动 */}
+        {/* 中文注释：功能名称「流式子Agent可视化」，用法是在主消息还没产出 tool_result 前，
+            直接把 streamSnapshot 里的 subAgents 渲染出来，避免 thinking 后子Agent已在后台运行，
+            但界面完全无反馈，造成“挂住”的错觉。 */}
+        {hasStreamingSubAgents && (
+          <SubAgentTimeline subAgents={streamingSubAgents} />
+        )}
 
         {/* Streaming text content rendered via Streamdown */}
         {renderedContent}
@@ -749,7 +778,7 @@ export function StreamingMessage({
         )}
 
         {/* Loading indicator when no content yet and no thinking content — evolves over time */}
-        {isStreaming && liveTimelineSteps.length === 0 && !content && toolUses.length === 0 && !thinkingContent && (
+        {isStreaming && liveTimelineSteps.length === 0 && !content && toolUses.length === 0 && !thinkingContent && !hasStreamingSubAgents && (
           <div className="py-2">
             <ThinkingPhaseLabel />
           </div>

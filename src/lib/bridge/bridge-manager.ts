@@ -199,10 +199,22 @@ async function deliverResponse(
  * Used for server-initiated spontaneous messages (e.g. Scheduled Tasks).
  */
 export async function deliverToSession(sessionId: string, text: string): Promise<void> {
-  const state = getState();
-  if (!state.running) return;
+  let state = getState();
+  if (!state.running) {
+    // 中文注释：功能名称「桥接懒启动兜底」，用法是当定时任务等后台流程主动推送消息时，若远程桥接尚未运行，则先尝试按当前设置自动启动，避免消息被静默丢弃。
+    const startResult = await start();
+    state = getState();
+    if (!startResult.started || !state.running) {
+      console.warn('[bridge-manager] deliverToSession skipped because bridge is not running', {
+        sessionId,
+        reason: startResult.reason ?? 'bridge_not_running',
+      });
+      return;
+    }
+  }
 
   const bindings = router.listBindings();
+  let delivered = 0;
   for (const b of bindings) {
     if (b.codepilotSessionId === sessionId && b.active) {
       const adapter = state.adapters.get(b.channelType);
@@ -210,11 +222,16 @@ export async function deliverToSession(sessionId: string, text: string): Promise
         const address: ChannelAddress = { channelType: b.channelType as typeof b.channelType, chatId: b.chatId };
         try {
           await deliverResponse(adapter, address, text, sessionId);
+          delivered++;
         } catch (err) {
           console.error(`[bridge-manager] Failed to deliver spontaneous message to ${b.channelType}:${b.chatId}`, err);
         }
       }
     }
+  }
+
+  if (delivered === 0) {
+    console.warn('[bridge-manager] No active bridge bindings matched session for spontaneous delivery', { sessionId });
   }
 }
 

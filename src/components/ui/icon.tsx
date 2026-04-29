@@ -1,128 +1,127 @@
 // Unified icon re-exports + size constants for the project
-export {
-  ArrowClockwise,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  ArrowElbowDownLeft,
-  ArrowsClockwise,
-  ArrowsCounterClockwise,
-  ArrowSquareOut,
-  At,
-  Bell,
-  Book,
-  BookOpen,
-  Brain,
-  Broadcast,
-  CaretDown,
-  CaretUp,
-  CaretUpDown,
-  CaretRight,
-  ChartBar,
-  ChatCircle,
-  ChatCircleText,
-  ChatsCircle,
-  ChatTeardrop,
-  Check,
-  CheckCircle,
-  Circle,
-  Clock,
-  Code,
-  Coins,
-  Columns,
-  Copy,
-  Cube,
-  Desktop,
-  DotsThree,
-  DotOutline,
-  DownloadSimple,
-  Eye,
-  File,
-  FileArrowDown,
-  FileCode,
-  FloppyDisk,
-  FileZip,
-  Folder,
-  FolderMinus,
-  FolderOpen,
-  FolderPlus,
-  Funnel,
-  GameController,
-  Gear,
-  GitBranch,
-  Globe,
-  GlobeSimple,
-  HardDrives,
-  Heart,
-  Image,
-  Info,
-  Layout,
-  Lightning,
-  List,
-  ListBullets,
-  Lock,
-  LockOpen,
-  MagicWand,
-  MagnifyingGlass,
-  ListMagnifyingGlass,
-  Minus,
-  Moon,
-  NotePencil,
-  PaintBrush,
-  PencilLine,
-  PencilSimple,
-  Play,
-  Plug,
-  PlugsConnected,
-  Plus,
-  PuzzlePiece,
-  Question,
-  SidebarSimple,
-  Shapes,
-  ShareNetwork,
-  SlidersHorizontal,
-  SortDescending,
-  Sparkle,
-  SpinnerGap,
-  SquaresFour,
-  Star,
-  Stethoscope,
-  Stop,
-  Storefront,
-  Sun,
-  TelegramLogo,
-  Terminal,
-  TerminalWindow,
-  Toolbox,
-  Trash,
-  Timer,
-  TreeStructure,
-  UploadSimple,
-  UserCircle,
-  Users,
-  UsersThree,
-  Warning,
-  WarningCircle,
-  WifiHigh,
-  Wrench,
-  X,
-  XCircle,
-  GitCommit,
-  CloudArrowUp,
-  ArrowsInLineVertical,
-  PushPin,
-  ArrowDown,
-  ArrowLineDown,
-  Package,
-  // FileDiff not available in this version of phosphor-icons
-  Robot,
-  DeviceMobile,
-  Database,
-  ChartLineUp,
-  BellSimple,
-  Calendar,
-  Pause
-} from "@phosphor-icons/react";
+// 中文注释：功能名称「图标按需导出层」，用法是为项目提供统一图标入口，同时通过子路径导出避免一次性打包整套 phosphor 图标。
+
+export { ArrowClockwise } from "@phosphor-icons/react/ArrowClockwise";
+export { ArrowLeft } from "@phosphor-icons/react/ArrowLeft";
+export { ArrowRight } from "@phosphor-icons/react/ArrowRight";
+export { ArrowUp } from "@phosphor-icons/react/ArrowUp";
+export { ArrowElbowDownLeft } from "@phosphor-icons/react/ArrowElbowDownLeft";
+export { ArrowsClockwise } from "@phosphor-icons/react/ArrowsClockwise";
+export { ArrowsCounterClockwise } from "@phosphor-icons/react/ArrowsCounterClockwise";
+export { ArrowSquareOut } from "@phosphor-icons/react/ArrowSquareOut";
+export { At } from "@phosphor-icons/react/At";
+export { Bell } from "@phosphor-icons/react/Bell";
+export { Book } from "@phosphor-icons/react/Book";
+export { BookOpen } from "@phosphor-icons/react/BookOpen";
+export { Brain } from "@phosphor-icons/react/Brain";
+export { Broadcast } from "@phosphor-icons/react/Broadcast";
+export { CaretDown } from "@phosphor-icons/react/CaretDown";
+export { CaretUp } from "@phosphor-icons/react/CaretUp";
+export { CaretUpDown } from "@phosphor-icons/react/CaretUpDown";
+export { CaretRight } from "@phosphor-icons/react/CaretRight";
+export { ChartBar } from "@phosphor-icons/react/ChartBar";
+export { ChatCircle } from "@phosphor-icons/react/ChatCircle";
+export { ChatCircleText } from "@phosphor-icons/react/ChatCircleText";
+export { ChatsCircle } from "@phosphor-icons/react/ChatsCircle";
+export { ChatTeardrop } from "@phosphor-icons/react/ChatTeardrop";
+export { Check } from "@phosphor-icons/react/Check";
+export { CheckCircle } from "@phosphor-icons/react/CheckCircle";
+export { Circle } from "@phosphor-icons/react/Circle";
+export { Clock } from "@phosphor-icons/react/Clock";
+export { Code } from "@phosphor-icons/react/Code";
+export { Coins } from "@phosphor-icons/react/Coins";
+export { Columns } from "@phosphor-icons/react/Columns";
+export { Copy } from "@phosphor-icons/react/Copy";
+export { Cube } from "@phosphor-icons/react/Cube";
+export { Desktop } from "@phosphor-icons/react/Desktop";
+export { DotsThree } from "@phosphor-icons/react/DotsThree";
+export { DotOutline } from "@phosphor-icons/react/DotOutline";
+export { DownloadSimple } from "@phosphor-icons/react/DownloadSimple";
+export { Eye } from "@phosphor-icons/react/Eye";
+export { File } from "@phosphor-icons/react/File";
+export { FileArrowDown } from "@phosphor-icons/react/FileArrowDown";
+export { FileCode } from "@phosphor-icons/react/FileCode";
+export { FloppyDisk } from "@phosphor-icons/react/FloppyDisk";
+export { FileZip } from "@phosphor-icons/react/FileZip";
+export { Folder } from "@phosphor-icons/react/Folder";
+export { FolderMinus } from "@phosphor-icons/react/FolderMinus";
+export { FolderOpen } from "@phosphor-icons/react/FolderOpen";
+export { FolderPlus } from "@phosphor-icons/react/FolderPlus";
+export { Funnel } from "@phosphor-icons/react/Funnel";
+export { GameController } from "@phosphor-icons/react/GameController";
+export { Gear } from "@phosphor-icons/react/Gear";
+export { GitBranch } from "@phosphor-icons/react/GitBranch";
+export { Globe } from "@phosphor-icons/react/Globe";
+export { GlobeSimple } from "@phosphor-icons/react/GlobeSimple";
+export { HardDrives } from "@phosphor-icons/react/HardDrives";
+export { Heart } from "@phosphor-icons/react/Heart";
+export { Image } from "@phosphor-icons/react/Image";
+export { Info } from "@phosphor-icons/react/Info";
+export { Layout } from "@phosphor-icons/react/Layout";
+export { Lightning } from "@phosphor-icons/react/Lightning";
+export { List } from "@phosphor-icons/react/List";
+export { ListBullets } from "@phosphor-icons/react/ListBullets";
+export { Lock } from "@phosphor-icons/react/Lock";
+export { LockOpen } from "@phosphor-icons/react/LockOpen";
+export { MagicWand } from "@phosphor-icons/react/MagicWand";
+export { MagnifyingGlass } from "@phosphor-icons/react/MagnifyingGlass";
+export { ListMagnifyingGlass } from "@phosphor-icons/react/ListMagnifyingGlass";
+export { Minus } from "@phosphor-icons/react/Minus";
+export { Moon } from "@phosphor-icons/react/Moon";
+export { NotePencil } from "@phosphor-icons/react/NotePencil";
+export { PaintBrush } from "@phosphor-icons/react/PaintBrush";
+export { PencilLine } from "@phosphor-icons/react/PencilLine";
+export { PencilSimple } from "@phosphor-icons/react/PencilSimple";
+export { Play } from "@phosphor-icons/react/Play";
+export { Plug } from "@phosphor-icons/react/Plug";
+export { PlugsConnected } from "@phosphor-icons/react/PlugsConnected";
+export { Plus } from "@phosphor-icons/react/Plus";
+export { PuzzlePiece } from "@phosphor-icons/react/PuzzlePiece";
+export { Question } from "@phosphor-icons/react/Question";
+export { SidebarSimple } from "@phosphor-icons/react/SidebarSimple";
+export { Shapes } from "@phosphor-icons/react/Shapes";
+export { ShareNetwork } from "@phosphor-icons/react/ShareNetwork";
+export { SlidersHorizontal } from "@phosphor-icons/react/SlidersHorizontal";
+export { SortDescending } from "@phosphor-icons/react/SortDescending";
+export { Sparkle } from "@phosphor-icons/react/Sparkle";
+export { SpinnerGap } from "@phosphor-icons/react/SpinnerGap";
+export { SquaresFour } from "@phosphor-icons/react/SquaresFour";
+export { Star } from "@phosphor-icons/react/Star";
+export { Stethoscope } from "@phosphor-icons/react/Stethoscope";
+export { Stop } from "@phosphor-icons/react/Stop";
+export { Storefront } from "@phosphor-icons/react/Storefront";
+export { Sun } from "@phosphor-icons/react/Sun";
+export { TelegramLogo } from "@phosphor-icons/react/TelegramLogo";
+export { Terminal } from "@phosphor-icons/react/Terminal";
+export { TerminalWindow } from "@phosphor-icons/react/TerminalWindow";
+export { Toolbox } from "@phosphor-icons/react/Toolbox";
+export { Trash } from "@phosphor-icons/react/Trash";
+export { Timer } from "@phosphor-icons/react/Timer";
+export { TreeStructure } from "@phosphor-icons/react/TreeStructure";
+export { UploadSimple } from "@phosphor-icons/react/UploadSimple";
+export { UserCircle } from "@phosphor-icons/react/UserCircle";
+export { Users } from "@phosphor-icons/react/Users";
+export { UsersThree } from "@phosphor-icons/react/UsersThree";
+export { Warning } from "@phosphor-icons/react/Warning";
+export { WarningCircle } from "@phosphor-icons/react/WarningCircle";
+export { WifiHigh } from "@phosphor-icons/react/WifiHigh";
+export { Wrench } from "@phosphor-icons/react/Wrench";
+export { X } from "@phosphor-icons/react/X";
+export { XCircle } from "@phosphor-icons/react/XCircle";
+export { GitCommit } from "@phosphor-icons/react/GitCommit";
+export { CloudArrowUp } from "@phosphor-icons/react/CloudArrowUp";
+export { ArrowsInLineVertical } from "@phosphor-icons/react/ArrowsInLineVertical";
+export { PushPin } from "@phosphor-icons/react/PushPin";
+export { ArrowDown } from "@phosphor-icons/react/ArrowDown";
+export { ArrowLineDown } from "@phosphor-icons/react/ArrowLineDown";
+export { Package } from "@phosphor-icons/react/Package";
+export { Robot } from "@phosphor-icons/react/Robot";
+export { DeviceMobile } from "@phosphor-icons/react/DeviceMobile";
+export { Database } from "@phosphor-icons/react/Database";
+export { ChartLineUp } from "@phosphor-icons/react/ChartLineUp";
+export { BellSimple } from "@phosphor-icons/react/BellSimple";
+export { Calendar } from "@phosphor-icons/react/Calendar";
+export { Pause } from "@phosphor-icons/react/Pause";
 
 export type { Icon, IconProps } from "@phosphor-icons/react";
 

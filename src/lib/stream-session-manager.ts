@@ -24,6 +24,7 @@ import type {
   FileAttachment,
   MentionRef,
   SubAgentInfo,
+  PromptInstructionSourceMeta,
 } from '@/types';
 
 // ==========================================
@@ -33,6 +34,9 @@ import type {
 interface ActiveStream {
   sessionId: string;
   abortController: AbortController;
+  /** 中文注释：功能名称「中止原因标记」，用法是区分用户主动停止、会话切换/HMR 重挂载、
+   * 空闲超时等预期中止，避免把正常终止误判成请求故障。 */
+  abortReason: 'manual_stop' | 'stream_replaced' | null;
   snapshot: SessionStreamSnapshot;
   idleCheckTimer: ReturnType<typeof setInterval> | null;
   lastEventTime: number;
@@ -86,7 +90,7 @@ export interface StartStreamParams {
   /** Enable 1M context window (beta) */
   context1m?: boolean;
   /** Called when init status event provides metadata (tools, slash_commands, skills) */
-  onInitMeta?: (meta: { tools?: unknown; slash_commands?: unknown; skills?: unknown }) => void;
+  onInitMeta?: (meta: { tools?: unknown; slash_commands?: unknown; skills?: unknown; instruction_sources?: PromptInstructionSourceMeta[] }) => void;
   /** Display-only content for user message (e.g. /skillName instead of expanded prompt) */
   displayOverride?: string;
 }
@@ -207,6 +211,7 @@ export function startStream(params: StartStreamParams): void {
 
   // If already streaming this session, abort old stream first
   if (existing && existing.snapshot.phase === 'active') {
+    existing.abortReason = 'stream_replaced';
     existing.abortController.abort();
     cleanupTimers(existing);
   }
@@ -216,6 +221,7 @@ export function startStream(params: StartStreamParams): void {
   const stream: ActiveStream = {
     sessionId: params.sessionId,
     abortController,
+    abortReason: null,
     snapshot: {
       sessionId: params.sessionId,
       phase: 'active',
@@ -443,7 +449,22 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         flushTextThrottle(); // Ensure text is up-to-date before tool events
         stream.thinkingPhaseEnded = true;
         stream.toolOutputAccumulated = '';
-        if (!stream.toolUsesArray.some(t => t.id === tool.id)) {
+        const existingIdx = stream.toolUsesArray.findIndex(t => t.id === tool.id);
+        if (existingIdx >= 0) {
+          const existing = stream.toolUsesArray[existingIdx] as typeof tool;
+          const existingInput = existing?.input as Record<string, unknown> | undefined;
+          const incomingInput = tool?.input as Record<string, unknown> | undefined;
+          const shouldReplace =
+            !existingInput
+            || existingInput._synthetic === true
+            || (typeof existingInput === 'object' && Object.keys(existingInput).length === 0)
+            || (incomingInput && typeof incomingInput === 'object' && Object.keys(incomingInput).length > Object.keys(existingInput || {}).length);
+          if (shouldReplace) {
+            const next = [...stream.toolUsesArray];
+            next[existingIdx] = tool;
+            stream.toolUsesArray = next;
+          }
+        } else {
           stream.activityTextLength = stream.accumulatedText.length;
           stream.toolUsesArray = [...stream.toolUsesArray, tool];
         }
@@ -619,6 +640,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           status: 'running',
           startedAt: Date.now(),
           model: data.model,
+          source: data.source,
         };
         const updated = [...stream.subAgents, agent];
         stream.subAgents = updated;
@@ -919,6 +941,27 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
             );
           }, 500);
         }
+      } else if (stream.abortReason === 'stream_replaced') {
+        // 中文注释：功能名称「流替换静默结束」，用法是在会话切换、页面热更新或重新发起
+        // 同会话请求时静默终止旧流，不把它显示成“生成停止”或异常，避免制造假失败体感。
+        stream.snapshot = {
+          ...buildSnapshot(stream),
+          phase: 'completed',
+          completedAt: Date.now(),
+          statusText: undefined,
+          statusPayload: undefined,
+          pendingPermission: null,
+          permissionResolved: null,
+        };
+        stream.accumulatedText = '';
+        stream.activityTextLength = 0;
+        stream.accumulatedThinking = '';
+        stream.fullThinking = '';
+        stream.toolUsesArray = [];
+        stream.toolResultsArray = [];
+        stream.toolOutputAccumulated = '';
+        emit(stream, 'completed');
+        scheduleGC(stream);
       } else {
         // User manually stopped — add partial content with "(generation stopped)"
         const textPart = stream.accumulatedText.trim()
@@ -979,6 +1022,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
 export function stopStream(sessionId: string): void {
   const stream = getStreamsMap().get(sessionId);
   if (stream && stream.snapshot.phase === 'active') {
+    stream.abortReason = 'manual_stop';
     // Try graceful interrupt first, fallback to abort
     fetch('/api/chat/interrupt', {
       method: 'POST',
@@ -1171,6 +1215,7 @@ export function seedSnapshotPatch(
   const placeholder: ActiveStream = {
     sessionId,
     abortController: new AbortController(),
+    abortReason: null,
     idleCheckTimer: null,
     lastEventTime: Date.now(),
     gcTimer: null,

@@ -106,6 +106,30 @@ export interface PersistentClaudeInitData {
   mcp_servers?: unknown;
 }
 
+export function extractWarmupInitData(message: SDKSystemMessage): PersistentClaudeInitData | null {
+  if (!(message.type === 'system' && 'subtype' in message && message.subtype === 'init')) {
+    return null;
+  }
+
+  return {
+    model: (message as Record<string, unknown>).model as string || '',
+    session_id: (message as Record<string, unknown>).session_id as string || '',
+    tools: (message as Record<string, unknown>).tools,
+    slash_commands: (message as Record<string, unknown>).slash_commands,
+    skills: (message as Record<string, unknown>).skills,
+    plugins: (message as Record<string, unknown>).plugins as PersistentClaudeInitData['plugins'],
+    mcp_servers: (message as Record<string, unknown>).mcp_servers,
+  };
+}
+
+export function isWarmupSkippableSystemMessage(message: SDKSystemMessage): boolean {
+  if (!(message.type === 'system' && 'subtype' in message)) {
+    return false;
+  }
+
+  return message.subtype !== 'init';
+}
+
 function getStore(): Map<string, PersistentClaudeEntry> {
   const g = globalThis as Record<string, unknown>;
   if (!g[GLOBAL_KEY]) {
@@ -139,6 +163,16 @@ function mcpSignature(mcpServers: Options['mcpServers']): unknown {
   return out;
 }
 
+function pluginSignature(plugins: Options['plugins']): unknown {
+  if (!plugins || plugins.length === 0) return [];
+  return [...plugins]
+    .map((plugin) => ({
+      type: plugin.type,
+      path: plugin.path,
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path) || a.type.localeCompare(b.type));
+}
+
 export function buildPersistentClaudeSignature(params: {
   providerKey: string;
   options: Options;
@@ -148,6 +182,8 @@ export function buildPersistentClaudeSignature(params: {
   // 排除的字段及其原因：
   // - systemPrompt：每轮消息不同（包含用户消息和历史）
   // - mcpServers：关键字门控的 MCP 会因消息内容变化
+  // - plugins：需要保留，因为插件图会改变 hook、skills、rules 与 OMC 接管行为，
+  //   若不纳入签名，可能复用到“未挂插件”的预热进程，造成配置与实际运行不一致
   // - allowedTools / tools / disallowedTools：权限配置，不影响 session 身份
   // - agents / agent：per-message 配置，warmup 不设置
   // - thinking / effort / betas：per-message 配置，warmup 不设置
@@ -159,6 +195,7 @@ export function buildPersistentClaudeSignature(params: {
     cwd: params.options.cwd,
     model: params.options.model,
     settingSources: params.options.settingSources,
+    plugins: pluginSignature(params.options.plugins),
     permissionMode: params.options.permissionMode,
     extraArgs: params.options.extraArgs,
     pathToClaudeCodeExecutable: params.options.pathToClaudeCodeExecutable,
@@ -304,6 +341,9 @@ export function getPersistentClaudeTurn(params: {
   const conversation = (async function* (): AsyncGenerator<SDKMessage> {
     const release = await acquireTurn(entry!);
     try {
+      if (entry!.warmupPromise) {
+        await entry!.warmupPromise.catch(() => null);
+      }
       entry!.lastUsedAt = Date.now();
       for (const message of params.messages) {
         entry!.input.enqueue(message);
@@ -372,30 +412,27 @@ export async function warmupPersistentClaudeSession(params: {
     store.set(params.codepilotSessionId, entry);
     entry.warmupPromise = (async () => {
       try {
-        // 中文注释：带超时的 system/init 等待，15s 内未收到则放弃预热
-        const initPromise = entry.iterator.next();
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Warmup timeout')), WARMUP_TIMEOUT_MS),
-        );
+        // 中文注释：功能名称「预热 init 等待容错」，用法是在开启 hook 事件后，
+        // 允许 system/init 之前先收到 hook_started、hook_progress 等系统事件，
+        // 继续等待真正的 init，而不是把预热误判为失败。
+        const deadline = Date.now() + WARMUP_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          const remainingMs = deadline - Date.now();
+          const nextPromise = entry.iterator.next();
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Warmup timeout')), remainingMs),
+          );
 
-        const next = await Promise.race([initPromise, timeoutPromise]);
+          const next = await Promise.race([nextPromise, timeoutPromise]);
 
-        if (next.done) {
-          closePersistentClaudeSession(params.codepilotSessionId);
-          return null;
-        }
+          if (next.done) {
+            closePersistentClaudeSession(params.codepilotSessionId);
+            return null;
+          }
 
-        const msg = next.value as SDKSystemMessage;
-        if (msg.type === 'system' && 'subtype' in msg && msg.subtype === 'init') {
-          const initData: PersistentClaudeInitData = {
-            model: (msg as Record<string, unknown>).model as string || '',
-            session_id: (msg as Record<string, unknown>).session_id as string || '',
-            tools: (msg as Record<string, unknown>).tools,
-            slash_commands: (msg as Record<string, unknown>).slash_commands,
-            skills: (msg as Record<string, unknown>).skills,
-            plugins: (msg as Record<string, unknown>).plugins as PersistentClaudeInitData['plugins'],
-            mcp_servers: (msg as Record<string, unknown>).mcp_servers,
-          };
+          const msg = next.value as SDKSystemMessage;
+          const initData = extractWarmupInitData(msg);
+          if (initData) {
           entry.warmedUp = true;
           entry.initData = initData;
           entry.lastUsedAt = Date.now();
@@ -406,7 +443,15 @@ export async function warmupPersistentClaudeSession(params: {
           return initData;
         }
 
-        console.warn('[persistent-claude-session] Warmup: first message was not system/init, got:', msg.type);
+          if (isWarmupSkippableSystemMessage(msg)) {
+            continue;
+          }
+
+          console.warn('[persistent-claude-session] Warmup: received non-init message before init:', msg.type);
+          closePersistentClaudeSession(params.codepilotSessionId);
+          return null;
+        }
+
         closePersistentClaudeSession(params.codepilotSessionId);
         return null;
       } catch (error) {
@@ -469,6 +514,24 @@ export function hasPersistentClaudeSession(sessionId: string): boolean {
 
 export function canReusePersistentClaudeSession(sessionId: string, signature: string): boolean {
   return getStore().get(sessionId)?.signature === signature;
+}
+
+export function adoptPersistentClaudeSessionBySignature(signature: string, targetSessionId: string): boolean {
+  const store = getStore();
+  if (store.has(targetSessionId)) {
+    return store.get(targetSessionId)?.signature === signature;
+  }
+
+  for (const [sessionId, entry] of store.entries()) {
+    if (entry.signature !== signature) continue;
+    if (sessionId === targetSessionId) return true;
+    store.delete(sessionId);
+    entry.codepilotSessionId = targetSessionId;
+    store.set(targetSessionId, entry);
+    return true;
+  }
+
+  return false;
 }
 
 export function getPersistentClaudeSessionCount(): number {

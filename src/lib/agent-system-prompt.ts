@@ -12,7 +12,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
+import type { PromptInstructionCategory, PromptInstructionLevel, PromptInstructionSourceMeta } from '@/types';
 import { getDb, getAllCustomRules } from './db';
+import { discoverSkills } from './skill-discovery';
 
 // ── Section: Identity ──────────────────────────────────────────
 
@@ -94,9 +96,13 @@ When you encounter an obstacle, do not use destructive actions as a shortcut to 
 
 // ── Section: Using Your Tools ──────────────────────────────────
 
-function getToolsSection(): string {
+function getToolsSection(omcPluginEnabled = false): string {
+  const omcSkillInterop = omcPluginEnabled
+    ? '\n- **OMC Skill Interop**: When OMC hooks are active, prefer their workflow routing first. You may still receive lightweight local skill visibility hints below; use them to confirm what is available, and if no specific workflow has already been steered in, call the `Skill` tool without arguments once early to inspect matching workflows instead of manually re-deriving them.'
+    : '';
   return `# Using your tools
 
+- **Runtime Focus (IMPORTANT)**: Analyze behavior from the runtime that is actually serving the current conversation. Avoid broad comparisons against alternate runtimes or fallback paths unless the user explicitly asks for a comparison or the active path clearly fails.
 - **Agent Delegation**: If the runtime exposes an \`Agent\` tool or OMC-installed agents, delegate specialized sub-tasks when that materially improves the outcome. Prefer the runtime's own agent catalog and orchestration rules over any hardcoded CodePilot conventions.
 - **Skill Execution (IMPORTANT)**: You have access to the \`Skill\` tool which discovers and executes reusable prompt templates (skills). Skills are pre-defined workflows stored as SKILL.md files. You MUST proactively use this tool when:
   - The user's request matches a known skill's description or "whenToUse" criteria.
@@ -104,6 +110,7 @@ function getToolsSection(): string {
   - A complex task could benefit from a structured workflow that a skill provides.
   To use: call \`Skill\` with \`name\` or \`skill_name\` to execute a specific skill. Call without arguments to list all available skills and discover what's available. **Always check available skills before starting complex multi-step tasks** — a skill may already encode the exact workflow needed.
 - **Skill Creation**: You have access to the \`codepilot_skill_create\` tool which saves a reusable workflow as a new Skill (SKILL.md). When you complete a complex multi-step task that could be reused, consider saving it as a skill for future one-click replay.
+- **External Research (IMPORTANT)**: When the task depends on current documentation, recent product behavior, third-party APIs, package changes, version or compatibility details, upstream implementations, or any information not reliably present in the local repo, proactively use \`WebSearch\` first and then \`WebFetch\` for the most relevant sources before guessing, even if the user did not explicitly ask you to "search the web".
 - **Use Session Search Proactively**: When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`codepilot_session_search\` tool before guessing from memory.
 - Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.
   - To read files use Read instead of cat, head, tail, or sed
@@ -113,7 +120,7 @@ function getToolsSection(): string {
   - To search the content of files, use Grep instead of grep or rg
   - To search local chat history, use codepilot_session_search instead of guessing what happened in earlier sessions
 - Reserve using the Bash exclusively for system commands and terminal operations.
-- Maximize efficiency by calling independent tools in parallel. Use sequential calls only when there is a strict data dependency.`;
+- Maximize efficiency by calling independent tools in parallel. Use sequential calls only when there is a strict data dependency.${omcSkillInterop}`;
 }
 
 // ── Section: Tone and Style ────────────────────────────────────
@@ -153,6 +160,7 @@ export interface SystemPromptOptions {
   userPrompt?: string;
   contextSnippets?: string[];
   modelId?: string;
+  omcPluginEnabled?: boolean;
   includeAgentsMd?: boolean;
   includeClaudeMd?: boolean;
   enableAgentsSkills?: boolean;
@@ -163,6 +171,7 @@ export interface SystemPromptOptions {
 export interface SystemPromptResult {
   prompt: string;
   referencedFiles: string[];
+  instructionSources: PromptInstructionSourceMeta[];
 }
 
 /**
@@ -176,13 +185,14 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
     MANAGING_TASKS_SECTION,
     REASONING_SECTION,
     ACTIONS_SECTION,
-    getToolsSection(),
+    getToolsSection(options.omcPluginEnabled === true),
     TONE_SECTION,
     OUTPUT_SECTION,
     GLOBAL_PRINCIPLES_SECTION,
   ].filter(Boolean);
 
   const referencedFiles: string[] = [];
+  let injectedInstructionSources: PromptInstructionSourceMeta[] = [];
 
   // Environment section (platform, shell, working directory, git)
   const envSection = buildEnvironmentSection(options);
@@ -196,6 +206,7 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
     if (projectInstructions) {
       parts.push(`# Project Instructions\n\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\n${projectInstructions.content}`);
       referencedFiles.push(...projectInstructions.files);
+      injectedInstructionSources = projectInstructions.instructionSources;
     }
   }
 
@@ -225,6 +236,7 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
   return {
     prompt: parts.join('\n\n'),
     referencedFiles,
+    instructionSources: injectedInstructionSources,
   };
 }
 
@@ -281,10 +293,9 @@ function buildEnvironmentSection(options: SystemPromptOptions): string | null {
 // Modeled after Claude Code's claudemd.ts priority system.
 // Priority (lower = higher precedence): user > project > workspace > parent
 
-type InstructionLevel = 'global' | 'personal' | 'user' | 'project' | 'workspace' | 'parent';
-
 interface InstructionSource {
-  level: InstructionLevel;
+  level: PromptInstructionLevel;
+  category: PromptInstructionCategory;
   filename: string;
   content: string;
   filePath?: string;
@@ -292,6 +303,296 @@ interface InstructionSource {
 
 const PROJECT_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/settings.md', '.claude/CLAUDE.md', '.trae/rules/rules.md'];
 const MAX_FILE_SIZE = 50 * 1024; // 50KB per file
+const GLOBAL_RULE_FILE_LIMIT = 24;
+
+function shouldPrioritizeFilemap(userPrompt?: string): boolean {
+  if (!userPrompt) return false;
+  return /代码|文件|组件|页面|路由|api|在哪|哪里|定位|查找|搜索|检索|修改|改动|实现|结构|架构|filemap|grep|glob|search/i.test(userPrompt);
+}
+
+// 中文注释：功能名称「规则路径规范化匹配」，用法是把 session/worktree/子目录/软链接
+// 路径统一成可比较的绝对路径，避免项目规则只因路径字符串不同而失效。
+export function normalizeInstructionPathForMatch(inputPath: string): string {
+  const resolved = path.resolve(inputPath);
+  try {
+    return fs.realpathSync.native ? fs.realpathSync.native(resolved) : fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function isSameOrDescendantPath(currentPath: string, targetPath: string): boolean {
+  if (currentPath === targetPath) return true;
+  return currentPath.startsWith(targetPath.endsWith(path.sep) ? targetPath : `${targetPath}${path.sep}`);
+}
+
+// 中文注释：功能名称「项目规则命中判断」，用法是当当前工作目录与目标项目根相同
+// 或位于其子目录时都视为命中，使 FILEMAP/项目规则在子目录与 worktree 场景下更稳定。
+export function matchesProjectRulePaths(currentPath: string, ruleTargets: string[]): boolean {
+  if (!currentPath || !Array.isArray(ruleTargets) || ruleTargets.length === 0) return false;
+  const normalizedCurrent = normalizeInstructionPathForMatch(currentPath);
+  return ruleTargets.some((targetPath) => {
+    if (typeof targetPath !== 'string' || !targetPath.trim()) return false;
+    const normalizedTarget = normalizeInstructionPathForMatch(targetPath);
+    return isSameOrDescendantPath(normalizedCurrent, normalizedTarget);
+  });
+}
+
+// 中文注释：功能名称「规则搜索根目录发现」，用法是统一为任意项目生成一组候选规则根目录，
+// 让 CLAUDE.md、AGENTS.md、.trae/rules/rules.md、FILEMAP.md 不依赖当前恰好停在项目根目录。
+export function getInstructionSearchRoots(cwd: string): string[] {
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  const addRoot = (candidate?: string) => {
+    if (!candidate) return;
+    const normalized = normalizeInstructionPathForMatch(candidate);
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    roots.push(normalized);
+  };
+
+  addRoot(cwd);
+
+  try {
+    const gitRoot = execSync('git rev-parse --show-toplevel 2>/dev/null', {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 1500,
+      stdio: 'pipe',
+    }).trim();
+    addRoot(gitRoot);
+  } catch {
+    // 非 git 仓库时忽略
+  }
+
+  const parent = path.dirname(cwd);
+  if (parent !== cwd) addRoot(parent);
+
+  return roots;
+}
+
+interface ExternalInstructionCandidate {
+  filePath: string;
+  label: string;
+  level: PromptInstructionLevel;
+  category: PromptInstructionCategory;
+}
+
+function walkMarkdownFiles(rootDir: string, maxFiles: number): string[] {
+  const results: string[] = [];
+
+  const visit = (currentDir: string) => {
+    if (results.length >= maxFiles) return;
+
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (results.length >= maxFiles) return;
+      if (entry.name.startsWith('.')) continue;
+
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath);
+        continue;
+      }
+
+      if (entry.isFile() && /\.md$/i.test(entry.name)) {
+        results.push(fullPath);
+      }
+    }
+  };
+
+  visit(rootDir);
+  return results;
+}
+
+// 中文注释：功能名称「项目外规则候选发现」，用法是统一发现用户级与全局级规则来源，
+// 让 ~/.claude、~/.trae 以及 ~/.codepilot/rules 下的规则文件都能参与系统提示注入。
+export function getExternalInstructionCandidates(homeDir = os.homedir()): ExternalInstructionCandidate[] {
+  const candidates: ExternalInstructionCandidate[] = [];
+  const pushIfExists = (
+    filePath: string,
+    label: string,
+    level: PromptInstructionLevel,
+    category: PromptInstructionCategory,
+  ) => {
+    if (!fs.existsSync(filePath)) return;
+    candidates.push({ filePath, label, level, category });
+  };
+
+  pushIfExists(path.join(homeDir, '.claude', 'CLAUDE.md'), 'CLAUDE.md (user)', 'user', 'repo_instruction');
+  pushIfExists(path.join(homeDir, '.claude', 'CLAUDE.local.md'), 'CLAUDE.local.md (user)', 'user', 'hard_rule');
+  pushIfExists(path.join(homeDir, '.trae', 'rules', 'rules.md'), 'Trae Rules (user)', 'global', 'hard_rule');
+
+  const codepilotRulesDir = path.join(homeDir, '.codepilot', 'rules');
+  if (fs.existsSync(codepilotRulesDir)) {
+    for (const filePath of walkMarkdownFiles(codepilotRulesDir, GLOBAL_RULE_FILE_LIMIT)) {
+      const relative = path.relative(codepilotRulesDir, filePath) || path.basename(filePath);
+      candidates.push({
+        filePath,
+        label: `CodePilot Rule (${relative})`,
+        level: 'global',
+        category: 'hard_rule',
+      });
+    }
+  }
+
+  return candidates;
+}
+
+function truncateInstructionLine(value: string | undefined, maxLength: number): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+}
+
+function extractSkillMatchTokens(userPrompt?: string): string[] {
+  if (!userPrompt) return [];
+  const rawTokens = userPrompt.match(/[\u4e00-\u9fff]{2,}|[a-z0-9][a-z0-9_-]{2,}/gi) || [];
+  const stopWords = new Set([
+    '这个', '那个', '现在', '然后', '继续', '需要', '不要', '直接', '帮我', '请帮我', '我们', '你们',
+    'because', 'about', 'with', 'from', 'that', 'this', 'into', 'then', 'please', 'help',
+  ]);
+  return Array.from(
+    new Set(
+      rawTokens
+        .map((token) => token.toLowerCase())
+        .filter((token) => token.length >= 2 && !stopWords.has(token)),
+    ),
+  ).slice(0, 24);
+}
+
+function expandSkillMatchTokens(tokens: string[]): string[] {
+  const aliasMap: Record<string, string[]> = {
+    '代码审查': ['code review', 'review', 'regression'],
+    '审查': ['review'],
+    '性能瓶颈': ['performance', 'bottleneck'],
+    '性能': ['performance'],
+    '瓶颈': ['bottleneck'],
+    '排查': ['debug', 'investigate', 'diagnosis'],
+    '定位': ['locate', 'diagnose', 'investigate'],
+    '文档': ['docs', 'documentation'],
+    '官方文档': ['official docs', 'documentation'],
+    '架构': ['architecture', 'design'],
+    '兼容性': ['compatibility'],
+    '上游实现': ['upstream', 'implementation'],
+    review: ['审查', '代码审查'],
+    performance: ['性能', '性能瓶颈'],
+    bottleneck: ['瓶颈', '性能瓶颈'],
+    debug: ['排查', '定位'],
+    docs: ['文档', '官方文档'],
+    documentation: ['文档', '官方文档'],
+    architecture: ['架构'],
+    compatibility: ['兼容性'],
+  };
+
+  const expanded = new Set(tokens);
+  for (const token of tokens) {
+    for (const alias of aliasMap[token] || []) {
+      expanded.add(alias.toLowerCase());
+    }
+  }
+  return Array.from(expanded);
+}
+
+function scoreSkillForPrompt(skill: ReturnType<typeof discoverSkills>[number], userPrompt?: string): number {
+  const tokens = expandSkillMatchTokens(extractSkillMatchTokens(userPrompt));
+  if (tokens.length === 0) return 0;
+  const haystack = [
+    skill.name,
+    skill.description,
+    skill.whenToUse,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  let score = 0;
+  for (const token of tokens) {
+    if (!haystack.includes(token)) continue;
+    score += 1;
+    if (skill.name.toLowerCase().includes(token)) score += 3;
+    if ((skill.whenToUse || '').toLowerCase().includes(token)) score += 2;
+    if ((skill.description || '').toLowerCase().includes(token)) score += 1;
+  }
+
+  return score;
+}
+
+// 中文注释：功能名称「相关技能提示」，用法是根据当前用户请求内容，从已发现技能里
+// 挑出最相关的前几个候选，先给模型一个短列表，帮助它在复杂任务开头更自然地命中 Skill，
+// 而不是只看到一整份按文件顺序排列的目录。
+function buildRelevantSkillHints(cwd: string, userPrompt?: string, maxSkills = 3): string | null {
+  if (!userPrompt) return null;
+  const scored = discoverSkills(cwd)
+    .map((skill) => ({ skill, score: scoreSkillForPrompt(skill, userPrompt) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name))
+    .slice(0, maxSkills);
+
+  if (scored.length === 0) return null;
+
+  const lines = [
+    '## Relevant Skill Hints',
+    'The following skills look relevant to the current request. Prefer checking them early with the `Skill` tool before re-deriving the workflow manually.',
+  ];
+
+  for (const { skill } of scored) {
+    const description = truncateInstructionLine(skill.description, 120) || 'No description provided';
+    const whenToUse = truncateInstructionLine(skill.whenToUse, 160);
+    const kind = skill.userInvocable ? 'slash+skill' : 'skill';
+    lines.push(`- ${skill.name} [${kind}, ${skill.context}] — ${description}`);
+    if (whenToUse) lines.push(`  when: ${whenToUse}`);
+  }
+
+  return lines.join('\n');
+}
+
+// 中文注释：功能名称「技能目录摘要」，用法是向系统提示注入可用技能的轻量目录，
+// 让模型先知道有哪些技能，再通过 Skill 工具按需展开执行，避免每轮塞入整篇 SKILL.md。
+export function buildDiscoveredSkillsCatalog(
+  cwd: string,
+  maxSkills = 24,
+  options: { lightweight?: boolean } = {},
+): string | null {
+  const skills = discoverSkills(cwd);
+  if (skills.length === 0) return null;
+
+  const lightweight = options.lightweight === true;
+  const lines = [
+    lightweight ? '## Lightweight Skills Visibility' : '## Auto-Discovered Skills Catalog',
+    lightweight
+      ? 'The following reusable skills are available via the `Skill` tool. This is a lightweight visibility index for local skills; keep OMC routing in charge when it already steers a workflow.'
+      : 'The following reusable skills are available via the `Skill` tool. Prefer invoking `Skill` for matching workflows instead of re-deriving the workflow manually.',
+  ];
+
+  for (const skill of skills.slice(0, maxSkills)) {
+    const description = truncateInstructionLine(skill.description, 120) || 'No description provided';
+    const whenToUse = truncateInstructionLine(skill.whenToUse, 160);
+    const kind = skill.userInvocable ? 'slash+skill' : 'skill';
+    lines.push(`- ${skill.name} [${kind}, ${skill.context}] — ${description}`);
+    if (whenToUse) lines.push(`  when: ${whenToUse}`);
+    // 中文注释：功能名称「轻量技能可见性提示」，用法是在 OMC 开启时只保留
+    // 技能名、描述和使用时机，不再附带 source 等额外细节，避免完全失明，
+    // 同时减少与 OMC hook routing 的重复 steering。
+    if (!lightweight) {
+      const source = truncateInstructionLine(path.relative(cwd, skill.filePath) || skill.filePath, 120);
+      if (source) lines.push(`  source: ${source}`);
+    }
+  }
+
+  if (skills.length > maxSkills) {
+    lines.push(`- ... ${skills.length - maxSkills} more skills available via the Skill tool`);
+  }
+
+  return lines.join('\n');
+}
 
 /**
  * Discover Knowledge Base instructions (graphify-out/graph.json).
@@ -325,9 +626,10 @@ function discoverKnowledgeBaseInstructions(cwd: string): { content: string, file
  * Discover project instructions with formal priority hierarchy.
  * Each source is tagged with its level for transparency.
  */
-function discoverProjectInstructions(cwd: string, options: SystemPromptOptions = {}): { content: string, files: string[] } | null {
+function discoverProjectInstructions(cwd: string, options: SystemPromptOptions = {}): { content: string, files: string[], instructionSources: PromptInstructionSourceMeta[] } | null {
   const sources: InstructionSource[] = [];
   const seen = new Set<string>(); // dedup by resolved path
+  const instructionRoots = getInstructionSearchRoots(cwd);
 
   // 1. Custom Database Rules (Personal & Project)
   try {
@@ -339,59 +641,84 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
       sources.push({
         filename: `Rule: ${rule.name} (Global)`,
         content: rule.content,
-        level: 'global'
+        level: 'global',
+        category: 'hard_rule',
       });
     }
 
     // Project rules (apply if matched)
-    if (options.sessionId) {
-      // Find the project name/path for this session to match against project_ids
-      const db = getDb();
-      const session = db.prepare('SELECT working_directory FROM chat_sessions WHERE id = ?').get(options.sessionId) as any;
-      if (session) {
-        const currentPath = session.working_directory;
-        const projectRules = customRules.filter(r => {
-          if (r.type !== 'project') return false;
-          try {
-            const targetPaths = JSON.parse(r.project_ids);
-            return Array.isArray(targetPaths) && targetPaths.includes(currentPath);
-          } catch { return false; }
-        });
+    const db = getDb();
+    const session = options.sessionId
+      ? db.prepare('SELECT working_directory FROM chat_sessions WHERE id = ?').get(options.sessionId) as any
+      : null;
+    const currentPath = options.workingDirectory || session?.working_directory;
+    if (currentPath) {
+      const projectRules = customRules.filter(r => {
+        if (r.type !== 'project') return false;
+        try {
+          const targetPaths = JSON.parse(r.project_ids);
+          return matchesProjectRulePaths(currentPath, targetPaths);
+        } catch { return false; }
+      });
 
-        for (const rule of projectRules) {
-          sources.push({
-            filename: `Rule: ${rule.name} (Project)`,
-            content: rule.content,
-            level: 'project'
-          });
-        }
+      for (const rule of projectRules) {
+        sources.push({
+          filename: `Rule: ${rule.name} (Project)`,
+          content: rule.content,
+          level: 'project',
+          category: 'hard_rule',
+        });
       }
     }
   } catch (err) {
     console.error('[agent-system-prompt] Failed to load custom rules from DB:', err);
   }
 
-  // 2. User-level (~/.claude/CLAUDE.md)
-  // Always load CLAUDE.md — OMC instructions are critical for multi-agent
-  // orchestration in both SDK and native runtime paths. The SDK runtime may
-  // also load CLAUDE.md natively via settingSources, but duplication of
-  // OMC instructions is harmless (it only reinforces the priority).
-  if (options.includeClaudeMd !== false) {
-    const userFile = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-    addSource(sources, seen, userFile, 'user', 'CLAUDE.md (user)');
+  // 2. User/global-level external instructions
+  // 中文注释：功能名称「项目外规则源注入」，用法是统一把用户级 CLAUDE、Trae 规则、
+  // 以及 ~/.codepilot/rules 下的全局规则纳入发现链路，避免只有项目内规则能生效。
+  for (const candidate of getExternalInstructionCandidates()) {
+    const isClaudeCandidate = candidate.label.includes('CLAUDE.md');
+    if (isClaudeCandidate && options.includeClaudeMd === false) continue;
+    addSource(sources, seen, candidate.filePath, candidate.level, candidate.category, candidate.label);
+  }
+
+  // 2.5. 项目索引文件优先注入：当任务像代码定位/检索/改动时，优先把 FILEMAP.md
+  // 放进系统上下文，让模型先利用项目索引，再决定是否继续 Grep/Glob。
+  if (shouldPrioritizeFilemap(options.userPrompt)) {
+    for (const root of instructionRoots) {
+      const filemapPath = path.join(root, 'FILEMAP.md');
+      if (fs.existsSync(filemapPath)) {
+        const label = root === normalizeInstructionPathForMatch(cwd) ? 'FILEMAP.md' : `FILEMAP.md (${path.relative(cwd, root) || '.'})`;
+        addSource(sources, seen, filemapPath, root === normalizeInstructionPathForMatch(cwd) ? 'project' : 'workspace', 'index_doc', label);
+        break;
+      }
+    }
   }
 
   // 3. Project-level (working directory)
-  for (const filename of PROJECT_FILES) {
-    const isClaude = filename.includes('CLAUDE.md') || filename === 'CLAUDE.local.md';
-    const isAgents = filename.includes('AGENTS.md');
-    const isTraeRules = filename === '.trae/rules/rules.md';
+  for (const root of instructionRoots) {
+    const rootLevel: PromptInstructionLevel = root === normalizeInstructionPathForMatch(cwd)
+      ? 'project'
+      : root === instructionRoots[instructionRoots.length - 1]
+        ? 'parent'
+        : 'workspace';
 
-    if (isClaude && options.includeClaudeMd === false) continue;
-    if (isAgents && options.includeAgentsMd === false) continue;
-    if (isTraeRules && options.syncProjectRules === false) continue;
+    for (const filename of PROJECT_FILES) {
+      const isClaude = filename.includes('CLAUDE.md') || filename === 'CLAUDE.local.md';
+      const isAgents = filename.includes('AGENTS.md');
+      const isTraeRules = filename === '.trae/rules/rules.md';
 
-    addSource(sources, seen, path.join(cwd, filename), 'project', filename);
+      if (isClaude && options.includeClaudeMd === false) continue;
+      if (isAgents && options.includeAgentsMd === false) continue;
+      if (isTraeRules && options.syncProjectRules === false) continue;
+
+      const label = root === normalizeInstructionPathForMatch(cwd)
+        ? filename
+        : `${filename} (${path.relative(cwd, root) || '.'})`;
+
+      addSource(sources, seen, path.join(root, filename), rootLevel, 'repo_instruction', label);
+    }
   }
 
   // 3.5. Progressive Subdirectory Hints (Hermes P1)
@@ -407,6 +734,7 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
         if (hints) {
           sources.push({
             level: 'workspace',
+            category: 'workspace_hint',
             filename: 'Subdirectory Hints (Auto-discovered)',
             content: hints,
           });
@@ -417,40 +745,55 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
     }
   }
 
-  // 4. Parent directory (monorepo root)
-  const parent = path.dirname(cwd);
-  if (parent !== cwd) {
-  if (options.includeClaudeMd !== false) {
-      addSource(sources, seen, path.join(parent, 'CLAUDE.md'), 'parent', 'CLAUDE.md (parent)');
-    }
-    if (options.includeAgentsMd !== false) {
-      addSource(sources, seen, path.join(parent, 'AGENTS.md'), 'parent', 'AGENTS.md (parent)');
-    }
-  }
-
-  // 5. Custom Skills (.agents/skills/*.md)
+  // 4. Discovered Skills Catalog (project/user/global)
   if (options.enableAgentsSkills !== false) {
-    const skillsDir = path.join(cwd, '.agents', 'skills');
     try {
-      if (fs.existsSync(skillsDir) && fs.statSync(skillsDir).isDirectory()) {
-        const files = fs.readdirSync(skillsDir);
-        for (const file of files) {
-          if (file.endsWith('.md')) {
-            addSource(sources, seen, path.join(skillsDir, file), 'project', `.agents/skills/${file}`);
-          }
-        }
+      const relevantSkillHints = buildRelevantSkillHints(cwd, options.userPrompt);
+      if (relevantSkillHints) {
+        sources.push({
+          level: 'project',
+          category: 'skill_catalog',
+          filename: 'Relevant Skill Hints',
+          content: relevantSkillHints,
+        });
       }
-    } catch { /* ignore readdir/stat errors */ }
+      // 中文注释：功能名称「OMC 技能提示降阶」，用法是在 OMC 启用时不再整包移除
+      // 本地技能目录，而是切换成更轻量的可见性索引，让模型至少知道“本地有哪些技能”，
+      // 但把具体 workflow routing 继续优先交给 OMC。
+      const catalog = buildDiscoveredSkillsCatalog(
+        cwd,
+        options.omcPluginEnabled === true ? 8 : 24,
+        { lightweight: options.omcPluginEnabled === true },
+      );
+      if (catalog) {
+        sources.push({
+          level: 'project',
+          category: 'skill_catalog',
+          filename: options.omcPluginEnabled === true ? 'Lightweight Skills Visibility' : 'Discovered Skills Catalog',
+          content: catalog,
+        });
+      }
+    } catch { /* ignore skill discovery errors */ }
   }
 
   if (sources.length === 0) return null;
 
-  // Format with level tags
+  const categoryOrder: PromptInstructionCategory[] = ['hard_rule', 'repo_instruction', 'index_doc', 'skill_catalog', 'workspace_hint'];
+
+  const orderedSources = sources
+    .sort((a, b) => categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category));
+
   return {
-    content: sources
+    content: orderedSources
       .map(s => `## ${s.filename} [${s.level}]\n\n${s.content}`)
       .join('\n\n'),
-    files: sources.map(s => s.filePath || s.filename),
+    files: orderedSources.map(s => s.filePath || s.filename),
+    instructionSources: orderedSources.map((source) => ({
+      filename: source.filename,
+      level: source.level,
+      category: source.category,
+      ...(source.filePath ? { filePath: source.filePath } : {}),
+    })),
   };
 }
 
@@ -458,7 +801,8 @@ function addSource(
   sources: InstructionSource[],
   seen: Set<string>,
   filePath: string,
-  level: InstructionLevel,
+  level: PromptInstructionLevel,
+  category: PromptInstructionCategory,
   label: string,
 ): void {
   const resolved = path.resolve(filePath);
@@ -466,7 +810,7 @@ function addSource(
   seen.add(resolved);
   const content = tryReadFile(filePath);
   if (content) {
-    sources.push({ level, filename: label, content, filePath: resolved });
+    sources.push({ level, category, filename: label, content, filePath: resolved });
   }
 }
 
