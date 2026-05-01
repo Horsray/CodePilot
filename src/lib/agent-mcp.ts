@@ -1,6 +1,6 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { getAgent, getSubAgents } from './agent-registry';
+import { getAgent, getSubAgents, discoverPluginAgents } from './agent-registry';
 import { runAgentLoop } from './agent-loop';
 import { assembleTools } from './agent-tools';
 import type { ToolSet } from 'ai';
@@ -10,7 +10,7 @@ import { createSubAgentProgressTracker } from './subagent-progress';
 import { tryExecuteSubAgentFastPath } from './subagent-fast-path';
 
 export const AGENT_MCP_SYSTEM_PROMPT = `
-- **Agent Delegation (CRITICAL)**: You have access to the \`mcp__codepilot-agent__Agent\` (or \`Agent\`) tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent, you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
+- **Agent Delegation (CRITICAL)**: You have access to the \`mcp__codepilot-agent__Agent\` tool which allows you to spawn specialized sub-agents. If the user's request matches the capabilities of an available sub-agent, you are **STRICTLY PROHIBITED** from performing the task manually. You MUST delegate it to the specialized agent using this tool.
 `;
 
 function filterTools(
@@ -68,6 +68,10 @@ export function createAgentMcpServer(ctx: {
   emitSSE?: (event: { type: string; data: string }) => void;
   abortSignal?: AbortSignal;
 }) {
+  // Discover and register OMC/plugin agents before building the agent list.
+  // This ensures the model sees all available agents (built-in + plugin).
+  discoverPluginAgents(ctx.workingDirectory);
+
   const subAgentIds = getSubAgents().map(a => a.id);
 
   return createSdkMcpServer({

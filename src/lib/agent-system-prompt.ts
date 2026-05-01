@@ -14,9 +14,9 @@ import type { PromptInstructionSourceMeta } from '@/types';
 import { getDb, getAllCustomRules } from './db';
 import { discoverSkills } from './skill-discovery';
 
-// ── Section: Host Supplement ───────────────────────────────────
+// ── Section: Identity ──────────────────────────────────────────
 
-function getHostSupplementSection(model?: string): string {
+function getIdentitySection(model?: string): string {
   return `# CodePilot Host Supplement
 
 - You are HueyingAgent (绘影智能体), a powerful multifunctional AI agent.
@@ -36,9 +36,10 @@ function getHostSupplementSection(model?: string): string {
 - **Image Generation**: Creates images, diagrams, and visual content based on descriptions.`;
 }
 
-// ── Section: Output Hygiene ────────────────────────────────────
+// ── Section: Doing Tasks ───────────────────────────────────────
 
-const OUTPUT_HYGIENE_SECTION = `# Output Hygiene
+function getDoingTasksSection() {
+  return `# Doing tasks
 
 - The user may request you to perform various tasks, including software engineering, customer service, desktop automation, content creation, image generation, information research, and more. Adapt your approach to the specific type of task at hand.
 - You are an expert orchestrator. You don't just "do" tasks; you engineer solutions. This means you must understand the "why" before the "how".
@@ -226,6 +227,7 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
   ].filter(Boolean);
 
   const referencedFiles: string[] = [];
+  let injectedInstructionSources: PromptInstructionSourceMeta[] = [];
 
   // 中文注释：功能名称「环境上下文注入」，用法是恢复历史版本里有效的工作目录、
   // 平台、Shell、Git 信息，帮助模型更稳定地判断当前任务场景。

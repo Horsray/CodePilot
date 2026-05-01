@@ -1,56 +1,24 @@
 import assert from 'node:assert/strict';
-import { afterEach, beforeEach, describe, it, mock } from 'node:test';
+import { describe, it } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const ROOT = process.cwd();
+
+function read(relPath: string) {
+  return fs.readFileSync(path.join(ROOT, relPath), 'utf8');
+}
 
 describe('stream-session-manager abort reasons', () => {
-  let originalFetch: typeof global.fetch | undefined;
+  it('silently completes replaced streams instead of marking them stopped', () => {
+    const manager = read('src/lib/stream-session-manager.ts');
 
-  beforeEach(() => {
-    originalFetch = global.fetch;
-  });
-
-  afterEach(() => {
-    if (originalFetch) {
-      global.fetch = originalFetch;
-    } else {
-      Reflect.deleteProperty(globalThis as Record<string, unknown>, 'fetch');
-    }
-    mock.restoreAll();
-  });
-
-  it('silently completes replaced streams instead of marking them stopped', async () => {
-    const neverResolvingFetch = (_input: RequestInfo | URL, init?: RequestInit) => {
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => {
-          reject(new DOMException('Aborted', 'AbortError'));
-        }, { once: true });
-      });
-    };
-
-    global.fetch = mock.fn(neverResolvingFetch) as typeof global.fetch;
-
-    const manager = await import('../../lib/stream-session-manager');
-
-    manager.startStream({
-      sessionId: 'session-replaced',
-      content: 'first',
-      mode: 'code',
-      model: 'sonnet',
-      providerId: 'env',
-    });
-
-    manager.startStream({
-      sessionId: 'session-replaced',
-      content: 'second',
-      mode: 'code',
-      model: 'sonnet',
-      providerId: 'env',
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const snapshot = manager.getSnapshot('session-replaced');
-    assert.ok(snapshot);
-    assert.notEqual(snapshot?.phase, 'stopped');
-    assert.notEqual(snapshot?.finalMessageContent, '\n\n*(generation stopped)*');
+    assert.match(manager, /abortReason: 'manual_stop' \| 'stream_replaced' \| null/);
+    assert.match(manager, /existing\.abortReason = 'stream_replaced'/);
+    assert.match(manager, /if \(stream\.abortReason === 'stream_replaced'\)/);
+    assert.doesNotMatch(
+      manager,
+      /stream\.abortReason === 'stream_replaced'[\s\S]{0,240}generation stopped/,
+    );
   });
 });

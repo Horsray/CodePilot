@@ -1065,14 +1065,21 @@ export function stopStream(sessionId: string): void {
   const stream = getStreamsMap().get(sessionId);
   if (stream && stream.snapshot.phase === 'active') {
     stream.abortReason = 'manual_stop';
-    // 立即中止客户端流 — 用户点击停止后无延迟响应
-    stream.abortController.abort();
-    // 并行通知服务器做清理（fire-and-forget）
+    // Try graceful interrupt first, fallback to abort
     fetch('/api/chat/interrupt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId }),
-    }).catch(() => {});
+    }).catch(() => {
+      // Interrupt failed, force abort
+    }).finally(() => {
+      // Always abort after a short delay to ensure cleanup
+      streamTimeout(stream, () => {
+        if (stream.snapshot.phase === 'active') {
+          stream.abortController.abort();
+        }
+      }, 2000);
+    });
   }
 }
 

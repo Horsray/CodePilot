@@ -96,7 +96,7 @@ describe('persistent-claude-session', () => {
     );
   });
 
-  it('changes signatures when baked systemPrompt type/preset or mcpServers change', () => {
+  it('keeps signatures stable across MCP set changes but changes for baked systemPrompt identity', () => {
     const options: Options = {
       cwd: '/tmp/project-a',
       model: 'sonnet',
@@ -129,15 +129,13 @@ describe('persistent-claude-session', () => {
     };
     const presetChanged: Options = {
       ...options,
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-        append: 'base prompt',
-      },
+      systemPrompt: 'custom prompt identity',
     };
 
     const original = buildPersistentClaudeSignature({ providerKey: 'provider-a', options });
-    assert.notEqual(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: mcpChanged }));
+    // Warmup intentionally loads a superset of MCP servers while chat may load a subset.
+    // MCP object differences must not invalidate the warmed persistent session.
+    assert.equal(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: mcpChanged }));
     // append changes should NOT change signature (volatile content)
     assert.equal(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: appendChanged }));
     // preset changes SHOULD change signature

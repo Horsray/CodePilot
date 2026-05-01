@@ -5,12 +5,10 @@ import { prepareSdkSubprocessEnv } from '@/lib/sdk-subprocess-env';
 import { resolveWorkingDirectory } from '@/lib/working-directory';
 import { findClaudeBinary } from '@/lib/platform';
 import {
-  warmupNativeClaudeQuery,
   buildPersistentClaudeSignature,
   adoptPersistentClaudeSessionBySignature,
-  adoptWarmedNativeClaudeQueryBySignature,
-  hasWarmedNativeClaudeQueryBySessionId,
-  ensurePersistentClaudeSession,
+  warmupPersistentClaudeSession,
+  isSessionWarmedUp,
 } from '@/lib/persistent-claude-session';
 import { loadAllMcpServers } from '@/lib/mcp-loader';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
@@ -383,27 +381,20 @@ export async function POST(request: NextRequest) {
     });
 
     // 中文注释：功能名称「预热会话接力复用」，用法是在空白聊天页已经按 cwd/model 预热过时，
-    // 会话页使用真实 session_id 继续接管同签名预热进程，避免再次冷启动一份新的 Claude 进程。
+    // 会话页使用真实 session_id 继续接管同签名 persistent 进程，避免再次冷启动一份新的 Claude 进程。
     if (session_id) {
       adoptPersistentClaudeSessionBySignature(signature, warmupSessionId);
-      adoptWarmedNativeClaudeQueryBySignature(signature, warmupSessionId);
     }
 
-    // 中文注释：功能名称「预热 PersistentSession 预创建」，用法是在 warmup 阶段
-    // 同时创建 PersistentClaudeEntry，确保首轮之后的后续轮次也有复用的 persistent session，
-    // 避免 WarmQuery one-shot 消费后第二轮出现 "Reconnecting to previous conversation..." 冷启动。
-    ensurePersistentClaudeSession(warmupSessionId, signature, queryOptions, setup.shadow || undefined);
-
-    // 中文注释：功能名称「WarmQuery 命中检查」，用法是检查当前 warmupSessionId
-    // 是否已有预热句柄。改为按 sessionId 查找，不再检查签名匹配。
-    if (hasWarmedNativeClaudeQueryBySessionId(warmupSessionId)) {
-      console.log('[warmup API] WarmQuery already exists for', warmupSessionId, ', skipping startup()');
+    if (isSessionWarmedUp(warmupSessionId)) {
+      console.log('[warmup API] Persistent session already warmed for', warmupSessionId);
       return Response.json({ warmed_up: true, from_cache: true, warmup_session_id: warmupSessionId });
     }
 
-    // 中文注释：执行官方 startup() 预热。该阶段只保证 CLI 子进程和 hooks 已完成初始化，
-    // 不主动发送 prompt，因此 session_id 会在首轮真实 query() 时再由 SDK 返回。
-    await warmupNativeClaudeQuery({
+    // 中文注释：预热 persistent Claude session，而不是额外启动 one-shot WarmQuery。
+    // 一个 CodePilot 会话应该对应一个后台 Claude Code 进程；WarmQuery 无法接力给
+    // 后续轮次，消费它会导致第二轮退回 resume 冷启动。
+    const initData = await warmupPersistentClaudeSession({
       codepilotSessionId: warmupSessionId,
       signature,
       options: queryOptions,
@@ -411,9 +402,10 @@ export async function POST(request: NextRequest) {
     });
     // 中文注释：返回诊断信息给前端，方便用户在浏览器 console 中查看预热状态
     return Response.json({
-      warmed_up: true,
+      warmed_up: !!initData,
       warmup_session_id: warmupSessionId,
-      model: queryOptions.model,
+      model: initData?.model || queryOptions.model,
+      sdk_session_id: initData?.session_id || '',
       provider_key: providerKey,
       mcp_count: queryOptions.mcpServers ? Object.keys(queryOptions.mcpServers).length : 0,
       mcp_names: queryOptions.mcpServers ? Object.keys(queryOptions.mcpServers) : [],

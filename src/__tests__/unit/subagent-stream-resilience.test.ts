@@ -55,4 +55,15 @@ describe('subagent stream resilience', () => {
     assert.match(messageItem, /input\.subagent_type \|\| input\.task_type/);
     assert.match(messageItem, /input\.displayName \|\| input\.display_name \|\| input\.name \|\| agentId/);
   });
+
+  it('keeps persistent Claude sessions alive across stream cancellation and WarmQuery checks', () => {
+    const claudeClient = read('src/lib/claude-client.ts');
+
+    assert.doesNotMatch(
+      claudeClient,
+      /Closing stale persistent session \$\{sessionId\} before consuming WarmQuery/,
+    );
+    assert.match(claudeClient, /const willConsumeWarmQuery = canReuseWarmup && sessionId && !willReusePersistentSession/);
+    assert.match(claudeClient, /Stream cancelled for session[\s\S]*keeping persistent session alive for reuse/);
+  });
 });

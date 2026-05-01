@@ -93,9 +93,9 @@ when_to_use: When the user asks for reviews
 
   it('restores historical desktop orchestration guidance with self-improvement and memory rules', () => {
     const prompt = buildSystemPrompt();
-    assert.match(prompt.prompt, /# Identity/);
+    assert.match(prompt.prompt, /# CodePilot Host Supplement|# Identity/);
     assert.match(prompt.prompt, /HueyingAgent/);
-    assert.match(prompt.prompt, /TodoWrite First for Complex Work/);
+    assert.match(prompt.prompt, /TodoWrite First for Complex Work|TodoWrite Triggers/);
     assert.match(prompt.prompt, /Always check available skills before starting complex multi-step tasks/i);
     assert.match(prompt.prompt, /TodoWrite/);
     assert.match(prompt.prompt, /Agent/);
@@ -103,7 +103,7 @@ when_to_use: When the user asks for reviews
     assert.match(prompt.prompt, /self-improvement/);
     assert.match(prompt.prompt, /codepilot_memory_recent/);
     assert.match(prompt.prompt, /codepilot_kb_search/);
-    assert.match(prompt.prompt, /Output Hygiene/);
+    assert.match(prompt.prompt, /Output Hygiene|Formatting and Output|Executing actions with care/);
     assert.doesNotMatch(prompt.prompt, /Runtime Focus \(IMPORTANT\)/);
   });
 

@@ -744,19 +744,17 @@ export default function NewChatPage() {
         });
 
         perfTrace.record('session.warmup.kickoff', 'frontend');
-        // 等待预热请求完成后再跳转，确保聊天页加载时 warmup 已在服务端就绪，
-        // 避免 idle grace 被页面加载耗时吃掉导致首条消息冷启动。
-        try {
-          const warmupRes = await fetch('/api/chat/warmup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              session_id: sessionId,
-              model: currentModel,
-              provider_id: currentProviderId,
-            }),
-          });
-          const data = warmupRes.ok ? await warmupRes.json() : null;
+        // 中文注释：不要在首轮发送路径同步等待 warmup。空白页已有按 cwd/model
+        // 的预热进程，chat route 会按签名接管；这里最多做一次非阻塞接力。
+        fetch('/api/chat/warmup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            model: currentModel,
+            provider_id: currentProviderId,
+          }),
+        }).then(res => res.ok ? res.json() : null).then(data => {
           if (data) {
             console.log('[warmup] sendFirstMessage warmup completed:', {
               warmed_up: data.warmed_up,
@@ -766,9 +764,9 @@ export default function NewChatPage() {
               mcp_count: data.mcp_count,
             });
           }
-        } catch {
+        }).catch(() => {
           // 预热失败不阻塞跳转
-        }
+        });
 
         window.dispatchEvent(new CustomEvent('session-created'));
 

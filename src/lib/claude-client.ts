@@ -774,6 +774,16 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           allowDangerouslySkipPermissions: true,
           env: sanitizeEnv(sdkEnv),
           settingSources: resolved.settingSources as Options['settingSources'],
+          // Exclude the SDK's built-in 'Agent' tool — CodePilot's Agent MCP server
+          // (codepilot-agent) provides the Agent tool instead. The built-in Agent
+          // validates subagent_type against capitalized names (Explore, General-purpose)
+          // which conflicts with CodePilot's lowercase IDs and OMC agent names.
+          tools: [
+            'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
+            'Skill', 'Task', 'TodoWrite', 'WebSearch', 'WebFetch',
+            'AskUserQuestion', 'NotebookEdit', 'ReadMcpResource',
+            'EnterWorktree', 'ExitWorktree', 'Config',
+          ],
           // 中文注释：功能名称「Claude Full Capabilities 固定开启」，用法是在单一
           // Claude Code CLI 主路径下始终保持 FULL capabilities，不再保留 FAST/--bare
           // 降级分支，避免 hooks、skills、OMC、联网工具被请求侧裁掉。
@@ -807,6 +817,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'codepilot_cli_tools_install',
             'codepilot_mcp_activate',
             'mcp__codepilot-todo__codepilot_mcp_activate',
+            // Agent MCP tool (CodePilot's agent system, replaces SDK built-in Agent)
+            'mcp__codepilot-agent__Agent',
             // Builtin tools
             'Read',
             'Write',
@@ -815,7 +827,10 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'Glob',
             'Grep',
             'Skill',
-            'Agent',
+            // 'Agent' — REMOVED: CodePilot's Agent MCP server (codepilot-agent)
+            // provides the Agent tool instead. The SDK's built-in Agent validates
+            // subagent_type against capitalized names (Explore, General-purpose),
+            // which conflicts with CodePilot's lowercase agent IDs.
             'Task',
             'TodoWrite',
             'mcp__codepilot-todo__TodoWrite',
@@ -968,15 +983,29 @@ if (claudePath) {
         // Session history search: REMOVED — OMC provides session_search via
         // mcp__plugin_oh-my-claudecode_t__session_search which covers this.
 
-        // Agent MCP: DISABLED — OMC's native agent system (via Claude Code's
-        // Agent tool + ~/.claude/agents/) handles multi-agent orchestration now.
-        // CodePilot's custom agent-mcp.ts and team-mcp.ts are no longer needed.
-        //
-        // const { createAgentMcpServer, AGENT_MCP_SYSTEM_PROMPT } = await import('@/lib/agent-mcp');
-        // queryOptions.mcpServers = {
-        //   ...(queryOptions.mcpServers || {}),
-        //   'codepilot-agent': createAgentMcpServer({ ... }),
-        // };
+        // Agent MCP: Re-enabled — CodePilot's Agent MCP server provides the Agent
+        // tool with correct handling of lowercase agent IDs and OMC agent names.
+        // The SDK's built-in Agent tool has been removed from allowedTools to
+        // avoid conflicts (it validates subagent_type against capitalized names
+        // like "Explore" which don't match CodePilot's lowercase registry).
+        {
+          const { createAgentMcpServer, AGENT_MCP_SYSTEM_PROMPT } = await import('@/lib/agent-mcp');
+          queryOptions.mcpServers = {
+            ...(queryOptions.mcpServers || {}),
+            'codepilot-agent': createAgentMcpServer({
+              workingDirectory: resolvedWorkingDirectory.path,
+              providerId: options.providerId,
+              sessionProviderId: options.sessionProviderId,
+              parentModel: model,
+              permissionMode,
+              parentSessionId: sessionId,
+              abortSignal: abortController?.signal,
+            }),
+          };
+          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + AGENT_MCP_SYSTEM_PROMPT;
+          }
+        }
 
         // Team MCP: DISABLED — OMC's team orchestration handles this now.
         //
@@ -1248,6 +1277,9 @@ if (claudePath) {
         // 中文注释：功能名称「OMC 会话复用保活」，用法是在 OMC 启用时也继续允许
         // CodePilot 的持久会话池与预热结果复用，解决每轮对话都重新连接 Claude Code
         // 进程、首轮和后续轮次都明显变慢的问题。
+        // 中文注释：功能名称「OMC 会话复用保活」，用法是在 OMC 启用时也继续允许
+        // CodePilot 的持久会话池与预热结果复用，解决每轮对话都重新连接 Claude Code
+        // 进程、首轮和后续轮次都明显变慢的问题。
         const shouldBypassPersistentSession = false;
 
         if (!shouldBypassPersistentSession && sessionId && !sdkSessionId && !canReusePersistentClaudeSession(sessionId, persistentSignature)) {
@@ -1258,15 +1290,16 @@ if (claudePath) {
         // 当前 sessionId 的预热句柄。之前用签名匹配（hasWarmedNativeClaudeQuery），
         // 但签名几乎不可能在 warmup route 和 chat route 之间完全一致，
         // 导致 WarmQuery 永远无法被消费。改为按 sessionId 直接查找。
-        const canReuseWarmup = !shouldBypassPersistentSession && sessionId
+        const canReuseWarmup = sessionId
           ? hasWarmedNativeClaudeQueryBySessionId(sessionId)
           : false;
 
-        if (!shouldBypassPersistentSession && sessionId) {
+        if (sessionId) {
           const { getWarmQueryDiagnostics } = await import('./persistent-claude-session');
           const diag = getWarmQueryDiagnostics();
           console.log('[claude-client] WarmQuery reuse check:', {
             canReuseWarmup,
+            shouldBypassPersistentSession,
             sessionId,
             chatSignature: persistentSignature?.slice(0, 12) + '...',
             storeSize: diag.storeSize,
@@ -1274,26 +1307,11 @@ if (claudePath) {
           });
         }
 
-        if (!shouldBypassPersistentSession && !shouldResume && canReuseWarmup && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
-          console.log(`[claude-client] Found warmed up persistent session ${sessionId}, allowing reuse despite missing sdkSessionId`);
-          shouldResume = true;
-        }
-
         const willReusePersistentSession = !shouldBypassPersistentSession && canReusePersistentClaudeSession(sessionId, persistentSignature);
-        // 中文注释：判断是否将消费 WarmQuery，用于后续控制 resume 和关闭旧 session
-        const willConsumeWarmQuery = canReuseWarmup && sessionId && (!shouldResume || !willReusePersistentSession);
-
-        // 中文注释：如果将消费 WarmQuery 启动新对话，但旧的 PersistentSession 仍存在，
-        // 必须关闭它，否则会导致历史膨胀（将完整历史作为 prompt 发送给已有历史的 session）。
-        if (!shouldBypassPersistentSession && willConsumeWarmQuery && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
-          console.log(`[claude-client] Closing stale persistent session ${sessionId} before consuming WarmQuery`);
-          closePersistentClaudeSession(sessionId);
-        }
-        // 中文注释：非 resume 且非 WarmQuery 消费时，PersistentSession 存在也需要关闭
-        if (!shouldBypassPersistentSession && !shouldResume && !willConsumeWarmQuery && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
-          console.log(`[claude-client] Closing stale persistent session ${sessionId} before starting fresh`);
-          closePersistentClaudeSession(sessionId);
-        }
+        // 中文注释：WarmQuery 是 one-shot 预热句柄，不能接力成后续轮次的后台会话。
+        // 如果 persistent session 可复用，必须优先使用 persistent，避免首轮消费
+        // WarmQuery 后第二轮退回 resume 冷启动。
+        const willConsumeWarmQuery = canReuseWarmup && sessionId && !willReusePersistentSession;
 
         // 中文注释：如果 WarmQuery 存在且将被消费，就不走 resume 路径，
         // 因为 WarmQuery 提供了更快的初始化路径（CLI 子进程已预热），
@@ -1348,6 +1366,7 @@ if (claudePath) {
             'Grep',
             'Skill',
             'Agent',
+            'mcp__codepilot-agent__Agent',
             'Task',
             'mcp__filesystem__read_file',
             'mcp__filesystem__read_multiple_files',
@@ -1608,11 +1627,11 @@ if (claudePath) {
         // 5. 不在 resume 且 PersistentSession 可复用（旧逻辑）
         //    或者：在 resume 但 PersistentSession 不可用（签名不匹配/已过期），
         //    此时 WarmQuery 比失败的 resume 更快更可靠
-        const warmedNativeQuery = !shouldBypassPersistentSession
-          && canReuseWarmup
+        const warmedNativeQuery = canReuseWarmup
           && sessionId
           && typeof finalPrompt === 'string'
           && (!shouldResume || !willReusePersistentSession)
+          && !willReusePersistentSession
           ? takeWarmedNativeClaudeQueryBySessionId(sessionId)
           : null;
 
@@ -1814,8 +1833,8 @@ if (claudePath) {
         const pendingBashCommands = new Map<string, string>();
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
-            // 中文注释：中断时不关闭 persistent session，保留预热成果供下一轮复用。
-            // persistent session 的生命周期由 idle timeout 自动管理。
+            // 中文注释：客户端断开或页面切换不等于会话失效。保留 persistent
+            // session，避免下一轮消息退回 Claude Code resume 冷启动。
             console.log('[claude-client] Stream aborted for session', sessionId, '— keeping persistent session alive for reuse');
             break;
           }
@@ -1885,7 +1904,7 @@ if (claudePath) {
                         pendingAgentToolUse.set(block.id, agentInfo);
                         // 中文注释：压入agent栈，标记当前进入子Agent上下文，
                         // 后续子Agent发出的工具调用会被标记parentAgentId
-                        agentStack.push(block.id);
+                        agentStack.push(agentInfo.id);
                         controller.enqueue(formatSSE({
                           type: 'subagent_start',
                           data: JSON.stringify(agentInfo),
@@ -2136,7 +2155,7 @@ if (claudePath) {
                         : resultContent;
                       pendingAgentToolUse.delete(block.tool_use_id);
                       // 中文注释：弹出agent栈，标记当前离开子Agent上下文
-                      const stackIdx = agentStack.indexOf(block.tool_use_id);
+                      const stackIdx = agentStack.indexOf(agentInfo.id);
                       if (stackIdx >= 0) agentStack.splice(stackIdx, 1);
                       controller.enqueue(formatSSE({
                         type: 'subagent_complete',
@@ -2956,10 +2975,8 @@ if (claudePath) {
     },
 
     cancel() {
-      // 中文注释：功能名称「取消不销毁会话」，用法是用户点击停止按钮时只中断当前操作，
-      // 不关闭 persistent session。之前 cancel() 会调用 closePersistentClaudeSession，
-      // 导致预热成果被销毁，下一轮消息必须重新冷启动。
-      // persistent session 的生命周期由 idle timeout 自动管理。
+      // 中文注释：ReadableStream cancel 经常来自前端重连、路由切换或 SSE 订阅变化。
+      // 不在这里销毁 persistent session；真正的清理由 idle timeout 或显式会话清理负责。
       console.log('[claude-client] Stream cancelled for session', sessionId, '— keeping persistent session alive for reuse');
       abortController?.abort();
     },

@@ -281,8 +281,11 @@ export function buildPersistentClaudeSignature(params: {
   // - agents / agent：per-message 配置，warmup 不设置
   // - thinking / effort / betas：per-message 配置，warmup 不设置
   // - enableFileCheckpointing / outputFormat：per-message 配置
-  // 注意：warmup 和 chat 的 append 内容可能不同，导致签名不匹配，预热 session 被销毁。
-  // 这是预期行为，确保模型能看到最新的 volatile 上下文。
+  // - mcpServers：warmup 加载全量 MCP，chat 路由可能条件加载子集。
+  //   全量预热 → 子集对话是安全的（多余 MCP 仅空闲），反之才需重建。
+  //   排除此字段避免 warmup 和 chat 之间签名总是不匹配导致预热 session 被反复销毁。
+  // - 注意：warmup 和 chat 的 append 内容可能不同，导致签名不匹配，预热 session 被销毁。
+  //   这是预期行为，确保模型能看到最新的 volatile 上下文。
   return stableStringify({
     providerKey: params.providerKey,
     cwd: params.options.cwd,
@@ -290,7 +293,6 @@ export function buildPersistentClaudeSignature(params: {
     settingSources: params.options.settingSources,
     plugins: pluginSignature(params.options.plugins),
     systemPrompt: systemPromptSignature(params.options.systemPrompt),
-    mcpServers: mcpSignature(params.options.mcpServers),
     permissionMode: params.options.permissionMode,
     extraArgs: params.options.extraArgs,
     pathToClaudeCodeExecutable: params.options.pathToClaudeCodeExecutable,

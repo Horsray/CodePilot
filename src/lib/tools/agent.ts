@@ -7,7 +7,7 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { getAgent, getSubAgents } from '../agent-registry';
+import { getAgent, getSubAgents, discoverPluginAgents } from '../agent-registry';
 import { runAgentLoop } from '../agent-loop';
 import { assembleTools } from '../agent-tools';
 import type { ToolSet } from 'ai';
@@ -32,6 +32,9 @@ export function createAgentTool(ctx: {
   /** Abort signal from parent */
   abortSignal?: AbortSignal;
 }) {
+  // Discover and register OMC/plugin agents before building the agent list.
+  discoverPluginAgents(ctx.workingDirectory);
+
   const subAgentIds = getSubAgents().map(a => a.id);
 
   return tool({

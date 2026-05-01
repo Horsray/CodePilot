@@ -8,6 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 export interface AgentDefinition {
   /** Agent identifier */
@@ -293,6 +294,146 @@ export function normalizeAgentId(id: string): string {
 // Register built-ins
 for (const agent of BUILTIN_AGENTS) {
   agents.set(agent.id, agent);
+}
+
+// ── Dynamic Plugin/OMC Agent Discovery ─────────────────────────
+// Scans filesystem for agent definitions from OMC and other plugins.
+// This bridges the gap between CodePilot's closed agent registry and
+// the terminal Claude Code's open agent discovery system.
+
+/**
+ * Parse an agent markdown file into an AgentDefinition.
+ * Supports both frontmatter format and <Agent_Prompt> format.
+ */
+function parseAgentMdFile(filePath: string, pluginPrefix?: string): AgentDefinition | null {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const baseName = path.basename(filePath, '.md');
+
+    // Try <Agent_Prompt> format first (OMC style)
+    const promptMatch = content.match(/<Agent_Prompt>([\s\S]*?)<\/Agent_Prompt>/);
+    if (promptMatch) {
+      const agentId = pluginPrefix ? `${pluginPrefix}:${baseName}` : baseName;
+      return {
+        id: normalizeAgentId(agentId),
+        displayName: baseName.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        description: `Plugin agent: ${baseName}`,
+        mode: 'subagent',
+        maxSteps: 30,
+        prompt: promptMatch[1].trim(),
+      };
+    }
+
+    // Try frontmatter format
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+    if (fmMatch) {
+      const meta: Record<string, string> = {};
+      for (const line of fmMatch[1].split('\n')) {
+        const kv = line.match(/^(\w+):\s*(.+)$/);
+        if (kv) meta[kv[1].trim()] = kv[2].trim();
+      }
+      const agentId = pluginPrefix ? `${pluginPrefix}:${baseName}` : baseName;
+      return {
+        id: normalizeAgentId(agentId),
+        displayName: meta.name || baseName.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        description: meta.description || `Plugin agent: ${baseName}`,
+        mode: 'subagent',
+        maxSteps: parseInt(meta.maxSteps || '30', 10) || 30,
+        prompt: fmMatch[2].trim(),
+      };
+    }
+
+    // Plain markdown — use entire content as prompt
+    if (content.trim().length > 20) {
+      const agentId = pluginPrefix ? `${pluginPrefix}:${baseName}` : baseName;
+      return {
+        id: normalizeAgentId(agentId),
+        displayName: baseName.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        description: `Plugin agent: ${baseName}`,
+        mode: 'subagent',
+        maxSteps: 30,
+        prompt: content.trim(),
+      };
+    }
+  } catch {
+    // ignore read errors
+  }
+  return null;
+}
+
+/**
+ * Discover and register agents from plugin directories and ~/.claude/agents/.
+ * Called once at startup. Merges discovered agents with built-in ones.
+ */
+export function discoverPluginAgents(workingDirectory?: string): void {
+  const searchDirs: Array<{ dir: string; prefix?: string }> = [];
+
+  // 1. ~/.claude/agents/ — user-level agent definitions (same as terminal Claude Code)
+  const homeAgentsDir = path.join(os.homedir(), '.claude', 'agents');
+  if (fs.existsSync(homeAgentsDir)) {
+    searchDirs.push({ dir: homeAgentsDir });
+  }
+
+  // 2. Project-level .agents/ directory
+  if (workingDirectory) {
+    const projectAgentsDir = path.join(workingDirectory, '.agents');
+    if (fs.existsSync(projectAgentsDir)) {
+      searchDirs.push({ dir: projectAgentsDir });
+    }
+  }
+
+  // 3. Enabled plugin agents/ directories
+  try {
+    const pluginsDir = path.join(os.homedir(), '.claude', 'plugins');
+    if (fs.existsSync(pluginsDir)) {
+      // Scan marketplaces
+      const marketplacesDir = path.join(pluginsDir, 'marketplaces');
+      if (fs.existsSync(marketplacesDir)) {
+        for (const marketplace of fs.readdirSync(marketplacesDir)) {
+          const mktDir = path.join(marketplacesDir, marketplace);
+          // Root plugin layout (e.g., oh-my-claudecode)
+          const agentsDir = path.join(mktDir, 'agents');
+          if (fs.existsSync(agentsDir)) {
+            searchDirs.push({ dir: agentsDir, prefix: marketplace });
+          }
+          // Nested plugins layout
+          const pluginsSubdir = path.join(mktDir, 'plugins');
+          if (fs.existsSync(pluginsSubdir)) {
+            for (const plugin of fs.readdirSync(pluginsSubdir)) {
+              const pluginAgentsDir = path.join(pluginsSubdir, plugin, 'agents');
+              if (fs.existsSync(pluginAgentsDir)) {
+                searchDirs.push({ dir: pluginAgentsDir, prefix: `${marketplace}:${plugin}` });
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore plugin scan errors
+  }
+
+  // Scan all directories and register discovered agents
+  let discovered = 0;
+  for (const { dir, prefix } of searchDirs) {
+    try {
+      const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+      for (const file of files) {
+        const agentDef = parseAgentMdFile(path.join(dir, file), prefix);
+        if (agentDef && !agents.has(agentDef.id)) {
+          agents.set(agentDef.id, agentDef);
+          discovered++;
+          console.log(`[agent-registry] Discovered plugin agent: ${agentDef.id} (${agentDef.description})`);
+        }
+      }
+    } catch {
+      // ignore per-directory errors
+    }
+  }
+
+  if (discovered > 0) {
+    console.log(`[agent-registry] Registered ${discovered} plugin agents (total: ${agents.size})`);
+  }
 }
 
 const CODEPILOT_COMPATIBILITY_INSTRUCTIONS = `
