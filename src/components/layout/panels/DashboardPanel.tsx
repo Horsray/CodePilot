@@ -271,7 +271,8 @@ export function DashboardPanel() {
           {sessionId && <div className="border-b border-border/40 mx-4"><TaskList sessionId={sessionId} /></div>}
           <div className="mx-4" id="dashboard-context-slot" />
           <div className="mx-4" id="dashboard-memory-slot" />
-          <div className="h-[1px] w-[calc(100%-2rem)] mx-auto bg-border/40 shrink-0" />
+          <div className="mx-4" id="dashboard-omc-slot" />
+          <div className="border-b border-border/40 mx-4 shrink-0" />
           
           {loading ? (
             <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
@@ -552,7 +553,7 @@ function AssistantStatusCard({ summary, t }: {
 
       {/* Evolution progress (when buddy exists and can potentially evolve) */}
       {buddy && buddy.rarity !== 'legendary' && (
-        <div className="border-t border-border/30 pt-2 mt-2">
+        <div className="border-t border-border/40 pt-2 mt-2">
           <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
             <span>{t('buddy.evolutionProgress' as TranslationKey)}</span>
             <span>{t('buddy.nextRarity' as TranslationKey)}: {RARITY_DISPLAY[getNextRarity(buddy.rarity) as keyof typeof RARITY_DISPLAY]?.label.zh}</span>
