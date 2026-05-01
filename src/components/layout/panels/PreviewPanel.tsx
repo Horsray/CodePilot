@@ -58,7 +58,7 @@ function loadStreamdown(): Promise<void> {
 type ViewMode = "source" | "rendered";
 
 /** Extensions that support a rendered preview */
-const RENDERABLE_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm", ".jsx", ".tsx", ".vue"]);
+const RENDERABLE_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
 
 /** Media file extensions that get direct preview (no API fetch needed) */
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".avif", ".ico"]);
@@ -155,7 +155,7 @@ export function PreviewPanel({ standalone = false, filePath: filePathOverride, o
       setError(null);
       try {
         const res = await fetch(
-          `/api/files/preview?path=${encodeURIComponent(filePath)}&maxLines=500${workingDirectory ? `&baseDir=${encodeURIComponent(workingDirectory)}` : ''}`
+          `/api/files/preview?path=${encodeURIComponent(filePath)}${workingDirectory ? `&baseDir=${encodeURIComponent(workingDirectory)}` : ''}`
         );
         if (!res.ok) {
           const data = await res.json();

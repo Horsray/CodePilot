@@ -50,7 +50,7 @@ export interface DiffSummaryProps {
  * Kept in sync with PreviewPanel's RENDERABLE_EXTENSIONS (Phase 2.2 will
  * extend both to .jsx/.tsx once Sandpack lands).
  */
-const PREVIEWABLE = new Set(['.md', '.mdx', '.html', '.htm', '.jsx', '.tsx', '.csv', '.tsv']);
+const PREVIEWABLE = new Set(['.md', '.mdx', '.html', '.htm', '.csv', '.tsv']);
 
 /**
  * Extensions where "Export long shot" is a meaningful action *today*.

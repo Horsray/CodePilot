@@ -32,7 +32,7 @@ import {
 import { cn } from '@/lib/utils';
 import { defaultViewMode, usePanel } from '@/hooks/usePanel';
 
-const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.tsx', '.jsx', '.csv', '.tsv']);
+const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.csv', '.tsv']);
 
 function canPreview(filename: string): boolean {
   const ext = '.' + filename.split('.').pop()?.toLowerCase();

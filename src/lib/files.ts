@@ -179,6 +179,11 @@ const EXTENSION_LINE_CAPS: Record<string, number> = {
   log: 10000,
   csv: 10000,
   tsv: 10000,
+  tsx: 50000,
+  jsx: 50000,
+  vue: 50000,
+  html: 50000,
+  htm: 50000,
 };
 
 const DEFAULT_LINE_CAP = 1000;

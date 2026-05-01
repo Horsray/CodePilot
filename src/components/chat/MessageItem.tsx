@@ -771,6 +771,15 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     minute: '2-digit',
   });
 
+  const fullTimestamp = parseDBDate(message.created_at).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).replace(/\//g, '.').replace(/,/g, '｜');
+
   const subAgents = useMemo(() => {
     if (isUser) return null;
     try {
@@ -1001,6 +1010,12 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       <div className={`flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${isUser ? 'justify-end' : ''}`}>
         {!isUser && <span className="text-xs text-muted-foreground/50">{timestamp}</span>}
         {!isUser && tokenUsage && <TokenUsageDisplay usage={tokenUsage} />}
+        {isUser && (
+          <span className="group text-xs text-muted-foreground/50 cursor-default">
+            <span className="group-hover:hidden">{timestamp}</span>
+            <span className="hidden group-hover:inline">{fullTimestamp}</span>
+          </span>
+        )}
         {displayText && <CopyButton text={displayText} />}
       </div>
     </AIMessage>

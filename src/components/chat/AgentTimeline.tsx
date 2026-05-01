@@ -25,7 +25,7 @@ import type { TimelineFileChange, TimelineStep } from '@/types';
 import { usePanel } from '@/hooks/usePanel';
 import { usePanelStore } from '@/store/usePanelStore';
 
-const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.tsx', '.jsx', '.csv', '.tsv']);
+const RENDERABLE_EXTENSIONS = new Set(['.md', '.mdx', '.html', '.htm', '.csv', '.tsv']);
 
 const URL_REGEX = /(https?:\/\/[^\s"'<>]+)/gi;
 
