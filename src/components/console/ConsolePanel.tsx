@@ -1,544 +1,538 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { Trash, ArrowDown, Copy, Check, MagnifyingGlass, X, ListMagnifyingGlass, Sparkle } from "@/components/ui/icon";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { useTranslation } from "@/hooks/useTranslation";
-import { showToast } from "@/hooks/useToast";
+import { useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from "react";
 import {
-  copyTextToClipboard,
-  formatConsoleEntryForCopy,
-  formatConsoleTimestamp,
-  getHighlightRanges,
-  isConsoleEntryMatched,
-  parseSearchKeywords,
-  type LogLevel,
+  Trash, ArrowDown, Copy, Check, MagnifyingGlass, X,
+  Sparkle, CaretDown, CaretRight, WarningCircle,
+} from "@/components/ui/icon";
+import { useTranslation } from "@/hooks/useTranslation";
+import {
+  copyTextToClipboard, formatConsoleEntryForCopy, formatConsoleTimestamp,
+  getHighlightRanges, isConsoleEntryMatched, parseSearchKeywords, type LogLevel,
 } from "@/lib/console-utils";
 
-export interface ConsoleEntry {
-  id: number;
-  level: LogLevel;
-  message: string;
-  timestamp: number;
-  source?: string;
+// ── Types ─────────────────────────────────────────────────────
+export interface ConsoleEntry { id: number; level: LogLevel; message: string; timestamp: number; source?: string }
+interface GroupedEntry { key: string; level: LogLevel; message: string; firstTimestamp: number; lastTimestamp: number; count: number; source?: string }
+
+// ── Light theme ───────────────────────────────────────────────
+const BG = "#ffffff";
+const SURFACE = "#f7f7f8";
+const BORDER = "#e5e5e5";
+const TEXT = "#1a1a1a";
+const TEXT_DIM = "#666666";
+const TEXT_MUTED = "#999999";
+const PRIMARY = "#2563eb";
+const PRIMARY_BG = "rgba(37,99,235,0.08)";
+const SUCCESS = "#16a34a";
+const ERROR_TEXT = "#dc2626";
+const ERROR_BG = "rgba(220,38,38,0.05)";
+const ERROR_BORDER = "rgba(220,38,38,0.35)";
+const WARN_TEXT = "#64748b";
+const WARN_BG = "rgba(100,116,139,0.06)";
+const WARN_BORDER = "rgba(100,116,139,0.3)";
+const TAG_COLORS: Record<string, { bg: string; text: string }> = {
+  "title-generator": { bg: "rgba(139,92,246,0.10)", text: "#7c3aed" },
+  "chat API": { bg: "rgba(37,99,235,0.08)", text: "#2563eb" },
+  "warmup API": { bg: "rgba(6,182,212,0.10)", text: "#0891b2" },
+  "claude-client": { bg: "rgba(22,163,74,0.08)", text: "#16a34a" },
+  "persistent-claude-session": { bg: "rgba(217,119,6,0.10)", text: "#b45309" },
+  "provider-resolver": { bg: "rgba(234,88,12,0.10)", text: "#c2410c" },
+  "instrumentation": { bg: "rgba(100,116,139,0.10)", text: "#475569" },
+  "stream-session": { bg: "rgba(13,148,136,0.10)", text: "#0f766e" },
+  "mcp-loader": { bg: "rgba(219,39,119,0.10)", text: "#be185d" },
+};
+function tagColor(tag: string): { bg: string; text: string } {
+  if (TAG_COLORS[tag]) return TAG_COLORS[tag];
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = ((h << 5) - h + tag.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return { bg: `hsla(${hue},50%,40%,0.08)`, text: `hsl(${hue},60%,35%)` };
+}
+const LEVEL_LABELS: Record<string, string> = { error: "错误", warn: "警告", log: "日志", info: "信息", debug: "调试" };
+const PAGE_SIZE = 200;
+
+// ── Styles ────────────────────────────────────────────────────
+const s = {
+  root: { display: "flex", flexDirection: "column" as const, height: "100%", width: "100%", background: BG, color: TEXT, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontSize: 12, textAlign: "left" as const },
+  toolbar: { display: "flex", alignItems: "center" as const, gap: 6, padding: "0 10px", height: 34, borderBottom: `1px solid ${BORDER}`, flexShrink: 0, background: SURFACE },
+  mono: { fontFamily: '"SF Mono", Menlo, Consolas, monospace' },
+};
+
+// ── Message parsing ───────────────────────────────────────────
+interface ParsedLog { tag: string; body: string; kvPairs: Array<{ key: string; value: string }> }
+function parseLogMessage(message: string): ParsedLog {
+  const m = message.match(/^\[([^\]]+)\]\s*/);
+  let tag = "", body = message;
+  if (m) { tag = m[1]; body = message.slice(m[0].length); }
+  const kv: Array<{ key: string; value: string }> = [];
+  const jm = body.match(/^(.*?)(\{[\s\S]*\})\s*$/);
+  if (jm) {
+    const prefix = jm[1].trim();
+    try {
+      const obj = JSON.parse(jm[2]);
+      if (typeof obj === "object" && obj !== null && !Array.isArray(obj)) {
+        body = prefix || tag || body;
+        for (const [k, v] of Object.entries(obj)) {
+          const val = typeof v === "string" ? v : JSON.stringify(v);
+          if (val.length < 200) kv.push({ key: k, value: val });
+        }
+        if (kv.length === 0) body = prefix || body;
+      }
+    } catch {}
+  }
+  return { tag, body, kvPairs: kv };
 }
 
-const LEVEL_COLORS: Record<LogLevel, string> = {
-  log: "text-foreground",
-  info: "text-blue-400",
-  warn: "text-yellow-400",
-  error: "text-red-400",
-  debug: "text-muted-foreground",
-};
+const BRIDGE_KEY = "__codepilot_console_bridge_installed__" as const;
+let idCounter = 0;
 
-const LEVEL_BG: Record<LogLevel, string> = {
-  log: "",
-  info: "",
-  warn: "bg-yellow-500/5",
-  error: "bg-red-500/5",
-  debug: "",
-};
+// ── Highlighted text ──────────────────────────────────────────
+function HL({ text, ranges }: { text: string; ranges: Array<[number, number]> }) {
+  if (ranges.length === 0) return <>{text}</>;
+  const out: React.ReactNode[] = [];
+  let c = 0;
+  for (const [a, b] of ranges) {
+    if (a > c) out.push(text.slice(c, a));
+    out.push(<mark key={a} style={{ background: "rgba(37,99,235,0.15)", color: PRIMARY, borderRadius: 2 }}>{text.slice(a, b)}</mark>);
+    c = b;
+  }
+  if (c < text.length) out.push(text.slice(c));
+  return <>{out}</>;
+}
 
-let entryIdCounter = 0;
-const CONSOLE_BRIDGE_KEY = "__codepilot_console_bridge_installed__" as const;
+// ── Deduplicate entries: same level + same message → one row with count ──
+function dedupEntries(entries: ConsoleEntry[]): GroupedEntry[] {
+  const map = new Map<string, GroupedEntry>();
+  for (const e of entries) {
+    const key = `${e.level}::${e.message}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.count++;
+      existing.lastTimestamp = Math.max(existing.lastTimestamp, e.timestamp);
+    } else {
+      map.set(key, { key, level: e.level, message: e.message, firstTimestamp: e.timestamp, lastTimestamp: e.timestamp, count: 1, source: e.source });
+    }
+  }
+  return Array.from(map.values());
+}
 
+// ── Main Component ────────────────────────────────────────────
 export function ConsolePanel() {
   const { t } = useTranslation();
   const [runtimeEntries, setRuntimeEntries] = useState<ConsoleEntry[]>([]);
   const [eventEntries, setEventEntries] = useState<ConsoleEntry[]>([]);
-  const [filter, setFilter] = useState<LogLevel | "all">("all");
+  const [levelFilter, setLevelFilter] = useState<LogLevel | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [showMatchesOnly, setShowMatchesOnly] = useState(true);
-  const [selectedEntryIds, setSelectedEntryIds] = useState<Set<number>>(new Set());
-  const [copiedEntryId, setCopiedEntryId] = useState<number | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<VirtuosoHandle>(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // ── REPL 调试控制台 ────────────────────────────────────────
+  const [replInput, setReplInput] = useState("");
+  const [replHistory, setReplHistory] = useState<string[]>([]);
+  const [replHistoryIdx, setReplHistoryIdx] = useState(-1);
+  const replRef = useRef<HTMLInputElement>(null);
 
   const addEntry = useCallback((level: LogLevel, message: string, source?: string) => {
-    setEventEntries((prev) => {
-      const next = [
-        ...prev,
-        {
-          id: ++entryIdCounter,
-          level,
-          message,
-          timestamp: Date.now(),
-          source,
-        },
-      ];
-      return next.length > 10000 ? next.slice(-10000) : next;
-    });
+    setEventEntries(p => { const n = [...p, { id: ++idCounter, level, message, timestamp: Date.now(), source }]; return n.length > 500 ? n.slice(-500) : n; });
   }, []);
 
+  // Browser console bridge — 已禁用，Next.js HMR 日志会导致 CPU 100%
+  // 如需恢复可取消下方注释
+  // useEffect(() => {
+  //   const g = window as Window & { [BRIDGE_KEY]?: boolean };
+  //   if (g[BRIDGE_KEY]) return;
+  //   const inst = <T extends keyof Console>(lv: T, ev: LogLevel) => {
+  //     const orig = console[lv] as (...a: unknown[]) => void;
+  //     console[lv] = ((...a: unknown[]) => {
+  //       const msg = a.map(x => typeof x === "string" ? x : (() => { try { return JSON.stringify(x); } catch { return String(x); } })()).join(" ");
+  //       window.dispatchEvent(new CustomEvent("console-log", { detail: { level: ev, message: msg, source: "browser" } }));
+  //       orig.apply(console, a);
+  //     }) as Console[T];
+  //   };
+  //   inst("log", "log"); inst("info", "info"); inst("warn", "warn"); inst("error", "error"); inst("debug", "debug");
+  //   g[BRIDGE_KEY] = true;
+  // }, []);
+
+  // Runtime logs polling — append only
   useEffect(() => {
-    const globalScope = window as Window & { [CONSOLE_BRIDGE_KEY]?: boolean };
-    if (globalScope[CONSOLE_BRIDGE_KEY]) return;
-
-    const installBridge = <T extends keyof Console>(level: T, eventLevel: LogLevel) => {
-      const original = console[level] as (...args: unknown[]) => void;
-      console[level] = ((...args: unknown[]) => {
-        const message = args
-          .map((arg) => {
-            if (typeof arg === "string") return arg;
-            try {
-              return JSON.stringify(arg);
-            } catch {
-              return String(arg);
-            }
-          })
-          .join(" ");
-        window.dispatchEvent(new CustomEvent("console-log", {
-          detail: { level: eventLevel, message, source: "browser" },
-        }));
-        original.apply(console, args);
-      }) as Console[T];
-    };
-
-    installBridge("log", "log");
-    installBridge("info", "info");
-    installBridge("warn", "warn");
-    installBridge("error", "error");
-    installBridge("debug", "debug");
-    globalScope[CONSOLE_BRIDGE_KEY] = true;
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadRuntimeLogs = async () => {
+    let stop = false;
+    const load = async () => {
       try {
-        const res = await fetch('/api/runtime-logs', { cache: 'no-store' });
-        if (!res.ok || cancelled) return;
-        const data: { logs?: Array<{ level: LogLevel; message: string; timestamp: string }> } = await res.json();
-        if (cancelled) return;
-        const next = (data.logs || []).map((entry, index) => ({
-          id: -(new Date(entry.timestamp).getTime() + index + 1),
-          level: entry.level,
-          message: entry.message,
-          timestamp: new Date(entry.timestamp).getTime(),
-          source: 'runtime',
+        const r = await fetch("/api/runtime-logs", { cache: "no-store" });
+        if (!r.ok || stop) return;
+        const d = await r.json();
+        if (stop) return;
+        const mapped: ConsoleEntry[] = (d.logs || []).map((e: { level: LogLevel; message: string; timestamp: string }, i: number) => ({
+          id: -(new Date(e.timestamp).getTime() + i + 1), level: e.level, message: e.message, timestamp: new Date(e.timestamp).getTime(), source: "runtime",
         }));
-        setRuntimeEntries(next);
-      } catch {
-        // ignore polling failures
-      }
+        if (mapped.length === 0) return;
+        setRuntimeEntries(prev => {
+          const seen = new Set(prev.map(e => e.id));
+          const fresh = mapped.filter(e => !seen.has(e.id));
+          if (fresh.length === 0) return prev;
+          const merged = [...prev, ...fresh];
+          return merged.length > 500 ? merged.slice(-500) : merged;
+        });
+      } catch {}
     };
-
-    void loadRuntimeLogs();
-    const timer = window.setInterval(loadRuntimeLogs, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
+    void load();
+    const t = window.setInterval(load, 5000);
+    return () => { stop = true; window.clearInterval(t); };
   }, []);
 
-  // 中文注释：监听浏览器控制台事件，使用 queueMicrotask 延迟 setState，
-  // 避免在其他组件渲染期间同步更新 ConsolePanel 状态导致 React 警告
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail) {
-        const level = detail.level || "log";
-        const message = detail.message || "";
-        const source = detail.source;
-        queueMicrotask(() => addEntry(level, message, source));
-      }
-    };
-    window.addEventListener("console-log", handler);
-    return () => window.removeEventListener("console-log", handler);
+    const h = (e: Event) => { const d = (e as CustomEvent).detail; if (d) queueMicrotask(() => addEntry(d.level || "log", d.message || "", d.source)); };
+    window.addEventListener("console-log", h);
+    return () => window.removeEventListener("console-log", h);
   }, [addEntry]);
 
-  // 中文注释：监听构建输出事件，同样使用 queueMicrotask 延迟 setState
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.message) {
-        const level = detail.level || "info";
-        const message = detail.message;
-        queueMicrotask(() => addEntry(level, message, "build"));
-      }
-    };
-    window.addEventListener("build-output", handler);
-    return () => window.removeEventListener("build-output", handler);
+    const h = (e: Event) => { const d = (e as CustomEvent).detail; if (d?.message) queueMicrotask(() => addEntry(d.level || "info", d.message, "build")); };
+    window.addEventListener("build-output", h);
+    return () => window.removeEventListener("build-output", h);
   }, [addEntry]);
 
-  const clearEntries = useCallback(() => {
-    setEventEntries([]);
-    setRuntimeEntries([]);
-    setSelectedEntryIds(new Set());
-    fetch('/api/runtime-logs', { method: 'DELETE' }).catch(() => {});
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    const total = visibleEntriesRef.current.length;
-    if (total > 0 && listRef.current) {
-      listRef.current.scrollToIndex({ index: total - 1, align: "end", behavior: "smooth" });
-      setAutoScroll(true);
-    }
-  }, []);
-
-  const entries = useMemo(
-    () => [...runtimeEntries, ...eventEntries].sort((a, b) => a.timestamp - b.timestamp),
-    [runtimeEntries, eventEntries]
-  );
-  const levelFilteredEntries = useMemo(
-    () => (filter === "all" ? entries : entries.filter((entry) => entry.level === filter)),
-    [entries, filter]
-  );
+  // Derived — dedup, filter, limit
+  const allEntries = useMemo(() => [...runtimeEntries, ...eventEntries].sort((a, b) => a.timestamp - b.timestamp), [runtimeEntries, eventEntries]);
+  const counts = useMemo(() => {
+    const c = { log: 0, info: 0, warn: 0, error: 0, debug: 0, total: 0 };
+    for (const e of allEntries) { c[e.level]++; c.total++; }
+    return c;
+  }, [allEntries]);
   const keywords = useMemo(() => parseSearchKeywords(searchQuery), [searchQuery]);
 
-  const searchedEntries = useMemo(
-    () =>
-      levelFilteredEntries.map((entry) => {
-        const isMatch = isConsoleEntryMatched(entry, keywords);
-        return {
-          entry,
-          isMatch,
-          highlightRanges: isMatch ? getHighlightRanges(entry.message, keywords) : [],
-        };
-      }),
-    [levelFilteredEntries, keywords]
-  );
+  const grouped = useMemo(() => dedupEntries(allEntries), [allEntries]);
 
-  const visibleEntries = useMemo(
-    () =>
-      keywords.length > 0 && showMatchesOnly
-        ? searchedEntries.filter((item) => item.isMatch)
-        : searchedEntries,
-    [searchedEntries, keywords.length, showMatchesOnly]
-  );
-
-  const visibleEntriesRef = useRef(visibleEntries);
-  useEffect(() => {
-    visibleEntriesRef.current = visibleEntries;
-  }, [visibleEntries]);
-
-  const firstMatchVisibleIndex = useMemo(
-    () => visibleEntries.findIndex((item) => item.isMatch),
-    [visibleEntries]
-  );
-
-  useEffect(() => {
-    if (autoScroll && visibleEntries.length > 0 && listRef.current) {
-      listRef.current.scrollToIndex({ index: visibleEntries.length - 1, align: "end", behavior: "auto" });
+  const filtered = useMemo(() => {
+    let list = grouped;
+    if (levelFilter !== "all") list = list.filter(e => e.level === levelFilter);
+    if (keywords.length > 0) {
+      list = list.filter(e => {
+        const fake: ConsoleEntry = { id: 0, level: e.level, message: e.message, timestamp: 0, source: e.source };
+        return isConsoleEntryMatched(fake, keywords);
+      });
     }
-  }, [visibleEntries, autoScroll]);
+    return list;
+  }, [grouped, levelFilter, keywords]);
 
-  useEffect(() => {
-    if (keywords.length > 0 && firstMatchVisibleIndex >= 0 && listRef.current) {
-      listRef.current.scrollToIndex({ index: firstMatchVisibleIndex, align: "center", behavior: "auto" });
-    }
-  }, [keywords, firstMatchVisibleIndex]);
+  // Show latest N
+  const totalFiltered = filtered.length;
+  const visible = useMemo(() => filtered.slice(-visibleCount), [filtered, visibleCount]);
+  const hasMore = totalFiltered > visibleCount;
 
-  const toggleSelectEntry = useCallback((entryId: number) => {
-    setSelectedEntryIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(entryId)) {
-        next.delete(entryId);
-      } else {
-        next.add(entryId);
-      }
-      return next;
+  // Actions
+  const clear = useCallback(() => {
+    setEventEntries([]); setRuntimeEntries([]); setVisibleCount(PAGE_SIZE);
+    fetch("/api/runtime-logs", { method: "DELETE" }).catch(() => {});
+  }, []);
+  const goBottom = useCallback(() => { if (scrollRef.current) { scrollRef.current.scrollTop = scrollRef.current.scrollHeight; setAutoScroll(true); } }, []);
+  const showMore = useCallback(() => { setVisibleCount(p => Math.min(p + PAGE_SIZE, totalFiltered)); }, [totalFiltered]);
+  const copyEntry = useCallback(async (entry: GroupedEntry) => {
+    const fake: ConsoleEntry = { id: 0, level: entry.level, message: entry.message, timestamp: entry.lastTimestamp, source: entry.source };
+    if (await copyTextToClipboard(formatConsoleEntryForCopy(fake))) { setCopiedKey(entry.key); setTimeout(() => setCopiedKey(null), 1200); }
+  }, []);
+  const appendErrors = useCallback(() => {
+    const errs = grouped.filter(e => e.level === "error");
+    if (errs.length === 0) return;
+    const lines = errs.map(e => {
+      const ts = formatConsoleTimestamp(e.lastTimestamp);
+      const cnt = e.count > 1 ? ` (×${e.count})` : '';
+      return `${ts} [${e.level}] ${e.message}${cnt}`;
     });
-  }, []);
+    window.dispatchEvent(new CustomEvent("append-chat-text", { detail: { text: `我遇到了以下报错：\n\`\`\`log\n${lines.join("\n")}\n\`\`\`\n请帮我分析原因并修复。` } }));
+  }, [grouped]);
 
-  const copyEntries = useCallback(
-    async (entriesToCopy: ConsoleEntry[]) => {
-      if (entriesToCopy.length === 0) {
-        return;
-      }
-      const text = entriesToCopy.map((entry) => formatConsoleEntryForCopy(entry)).join("\n");
-      const copied = await copyTextToClipboard(text);
-      if (copied) {
-        showToast({
-          type: "success",
-          message:
-            entriesToCopy.length === 1
-              ? t("console.copySingleSuccess")
-              : t("console.copyBatchSuccess").replace("{count}", String(entriesToCopy.length)),
-        });
-      } else {
-        showToast({ type: "error", message: t("console.copyFailed") });
-      }
-    },
-    [t]
-  );
-
-  const copySelectedEntries = useCallback(async () => {
-    const selectedEntries = entries.filter((entry) => selectedEntryIds.has(entry.id));
-    await copyEntries(selectedEntries);
-  }, [copyEntries, entries, selectedEntryIds]);
-
-  const copySingleEntry = useCallback(
-    async (entry: ConsoleEntry) => {
-      await copyEntries([entry]);
-      setCopiedEntryId(entry.id);
-      window.setTimeout(() => {
-        setCopiedEntryId((prev) => (prev === entry.id ? null : prev));
-      }, 1200);
-    },
-    [copyEntries]
-  );
-
+  // Auto-scroll
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-        return;
-      }
+    if (autoScroll && scrollRef.current) requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; });
+  }, [visible, autoScroll]);
 
-      if (event.key === "Escape" && searchQuery) {
-        event.preventDefault();
-        setSearchQuery("");
-        return;
+  // ── REPL 执行 ──────────────────────────────────────────────
+  const formatReplResult = useCallback((value: unknown): { text: string; level: LogLevel } => {
+    if (value === undefined) return { text: "undefined", level: "log" };
+    if (value === null) return { text: "null", level: "log" };
+    if (typeof value === "string") return { text: `"${value}"`, level: "log" };
+    if (typeof value === "function") return { text: `[Function: ${value.name || "anonymous"}]`, level: "log" };
+    if (value instanceof Error) return { text: `${value.name}: ${value.message}`, level: "error" };
+    if (typeof value === "object") {
+      try {
+        return { text: JSON.stringify(value, null, 2), level: "log" };
+      } catch {
+        return { text: String(value), level: "log" };
       }
-
-      if (event.altKey && event.key.toLowerCase() === "m") {
-        event.preventDefault();
-        setShowMatchesOnly((prev) => !prev);
-        return;
-      }
-
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c" && selectedEntryIds.size > 0) {
-        const active = document.activeElement as HTMLElement | null;
-        const isEditable =
-          active?.isContentEditable ||
-          active?.tagName === "INPUT" ||
-          active?.tagName === "TEXTAREA";
-        if (isEditable) {
-          return;
-        }
-        event.preventDefault();
-        void copySelectedEntries();
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [copySelectedEntries, searchQuery, selectedEntryIds.size]);
-
-  const renderHighlightedMessage = useCallback(
-    (message: string, ranges: Array<[number, number]>) => {
-      if (ranges.length === 0) {
-        return message;
-      }
-
-      const fragments: React.ReactNode[] = [];
-      let cursor = 0;
-      for (const [start, end] of ranges) {
-        if (start > cursor) {
-          fragments.push(message.slice(cursor, start));
-        }
-        fragments.push(
-          <mark key={`${start}-${end}`} className="bg-yellow-500/25 text-inherit rounded px-0.5">
-            {message.slice(start, end)}
-          </mark>
-        );
-        cursor = end;
-      }
-      if (cursor < message.length) {
-        fragments.push(message.slice(cursor));
-      }
-      return fragments;
-    },
-    []
-  );
-
-  const appendToChat = useCallback((text: string) => {
-    window.dispatchEvent(new CustomEvent('append-chat-text', { detail: { text } }));
+    }
+    return { text: String(value), level: "log" };
   }, []);
 
-  const handleAppendSelectedToChat = useCallback(() => {
-    if (selectedEntryIds.size === 0) return;
-    const selectedEntries = [...runtimeEntries, ...eventEntries]
-      .filter((e) => selectedEntryIds.has(e.id))
-      .sort((a, b) => a.timestamp - b.timestamp);
-    const text = selectedEntries.map(formatConsoleEntryForCopy).join('\n');
-    appendToChat(`\`\`\`log\n${text}\n\`\`\``);
-  }, [selectedEntryIds, runtimeEntries, eventEntries, appendToChat]);
+  const executeRepl = useCallback((expr: string) => {
+    const trimmed = expr.trim();
+    if (!trimmed) return;
 
-  const handleAppendErrorsToChat = useCallback(() => {
-    const errorEntries = [...runtimeEntries, ...eventEntries]
-      .filter((e) => e.level === 'error')
-      .sort((a, b) => a.timestamp - b.timestamp);
-    if (errorEntries.length === 0) return;
-    const text = errorEntries.map(formatConsoleEntryForCopy).join('\n');
-    appendToChat(`我遇到了以下报错：\n\`\`\`log\n${text}\n\`\`\`\n请帮我分析原因并修复。`);
-  }, [runtimeEntries, eventEntries, appendToChat]);
+    // 记录历史
+    setReplHistory(prev => {
+      const filtered = prev.filter(h => h !== trimmed);
+      return [...filtered, trimmed];
+    });
+    setReplHistoryIdx(-1);
 
-  const errorCount = useMemo(() => {
-    return [...runtimeEntries, ...eventEntries].filter(e => e.level === 'error').length;
-  }, [runtimeEntries, eventEntries]);
+    // 添加输入行
+    addEntry("log", `> ${trimmed}`, "console");
 
-  const selectedCount = selectedEntryIds.size;
+    try {
+      // eslint-disable-next-line no-eval
+      const result = eval(trimmed);
+      // 处理 Promise
+      if (result instanceof Promise) {
+        result
+          .then(resolved => {
+            const { text, level } = formatReplResult(resolved);
+            addEntry(level, `< ${text}`, "console");
+          })
+          .catch(err => {
+            addEntry("error", `< ${err instanceof Error ? err.message : String(err)}`, "console");
+          });
+      } else {
+        const { text, level } = formatReplResult(result);
+        addEntry(level, `< ${text}`, "console");
+      }
+    } catch (err) {
+      addEntry("error", `< ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`, "console");
+    }
 
+    setReplInput("");
+    setAutoScroll(true);
+  }, [addEntry, formatReplResult]);
+
+  const handleReplKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      executeRepl(replInput);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (replHistory.length === 0) return;
+      const newIdx = replHistoryIdx < 0 ? replHistory.length - 1 : Math.max(0, replHistoryIdx - 1);
+      setReplHistoryIdx(newIdx);
+      setReplInput(replHistory[newIdx]);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (replHistoryIdx < 0) return;
+      const newIdx = replHistoryIdx + 1;
+      if (newIdx >= replHistory.length) {
+        setReplHistoryIdx(-1);
+        setReplInput("");
+      } else {
+        setReplHistoryIdx(newIdx);
+        setReplInput(replHistory[newIdx]);
+      }
+    } else if (e.key === "l" && e.ctrlKey) {
+      e.preventDefault();
+      clear();
+    }
+  }, [replInput, replHistory, replHistoryIdx, executeRepl, clear]);
+  const onScroll = useCallback(() => {
+    if (!scrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    setAutoScroll(scrollHeight - scrollTop - clientHeight < 50);
+  }, []);
+
+  // Keyboard
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === "`") { e.preventDefault(); replRef.current?.focus(); replRef.current?.select(); }
+      if (e.key === "Escape" && searchQuery) { e.preventDefault(); setSearchQuery(""); }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [searchQuery]);
+
+  // ── Render single grouped entry ─────────────────────────────
+  const renderEntry = (entry: GroupedEntry) => {
+    const p = parseLogMessage(entry.message);
+    const tc = p.tag ? tagColor(p.tag) : null;
+    const hl = keywords.length > 0 ? getHighlightRanges(entry.message, keywords) : [];
+    const isErr = entry.level === "error";
+    const isWrn = entry.level === "warn";
+    const isDup = entry.count > 1;
+
+    return (
+      <div key={entry.key} style={{
+        display: "flex", alignItems: "flex-start", gap: 6, padding: "4px 12px", textAlign: "left" as const,
+        borderLeft: `2px solid ${isErr ? ERROR_BORDER : isWrn ? WARN_BORDER : "transparent"}`,
+        background: isErr ? ERROR_BG : isWrn ? WARN_BG : "transparent",
+      }}>
+        {/* Left: [icon] [count] [tag] [body] */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 6, flex: 1, minWidth: 0 }}>
+          {(isErr || isWrn) && (
+            <span style={{ flexShrink: 0, display: "flex", paddingTop: 2 }}>
+              <WarningCircle size={12} weight="fill" style={{ color: isErr ? ERROR_TEXT : WARN_TEXT }} />
+            </span>
+          )}
+          {isDup && (
+            <span style={{
+              flexShrink: 0, padding: "0 5px", borderRadius: 8, fontSize: 9, fontWeight: 600, lineHeight: "16px",
+              background: isErr ? "rgba(220,38,38,0.12)" : isWrn ? "rgba(100,116,139,0.12)" : "rgba(37,99,235,0.08)",
+              color: isErr ? ERROR_TEXT : isWrn ? WARN_TEXT : PRIMARY,
+            }}>
+              ×{entry.count}
+            </span>
+          )}
+          {p.tag && tc && (
+            <span style={{ flexShrink: 0, padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 600, lineHeight: "16px", background: tc.bg, color: tc.text, whiteSpace: "nowrap" }}>
+              {p.tag}
+            </span>
+          )}
+          <span style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: "18px", whiteSpace: "pre-wrap", overflowWrap: "break-word", color: isErr ? ERROR_TEXT : isWrn ? WARN_TEXT : TEXT }}>
+            {hl.length > 0 ? <HL text={p.body} ranges={hl} /> : p.body}
+          </span>
+        </div>
+
+        {/* Right: [copy] [timestamp] */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+          <button
+            onClick={() => void copyEntry(entry)}
+            style={{ color: copiedKey === entry.key ? SUCCESS : TEXT_MUTED, background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", opacity: copiedKey === entry.key ? 1 : 0, transition: "opacity 0.15s" }}
+            onMouseEnter={e => { if (copiedKey !== entry.key) e.currentTarget.style.opacity = "1"; }}
+            onMouseLeave={e => { if (copiedKey !== entry.key) e.currentTarget.style.opacity = "0"; }}
+          >
+            {copiedKey === entry.key ? <Check size={11} /> : <Copy size={11} />}
+          </button>
+          <span style={{ color: TEXT_MUTED, fontSize: 10, lineHeight: "18px", fontVariantNumeric: "tabular-nums", userSelect: "none", whiteSpace: "nowrap", ...s.mono }}>
+            {formatConsoleTimestamp(entry.lastTimestamp)}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Filter chip ─────────────────────────────────────────────
+  const Chip = ({ level, label }: { level: LogLevel | "all"; label: string }) => {
+    const count = level === "all" ? counts.total : counts[level] || 0;
+    if (level !== "all" && count === 0) return null;
+    const active = levelFilter === level;
+    return (
+      <button onClick={() => setLevelFilter(level)} style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        padding: "2px 8px", borderRadius: 4, fontSize: 10, border: "none", cursor: "pointer",
+        background: active ? PRIMARY_BG : "transparent", color: active ? PRIMARY : TEXT_DIM,
+        fontWeight: active ? 600 : 400, transition: "background 0.15s, color 0.15s",
+      }}
+      onMouseEnter={e => { if (!active) e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }}
+      onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
+      >
+        <span>{label}</span>
+        <span style={{ opacity: 0.5, fontVariantNumeric: "tabular-nums" }}>{count}</span>
+      </button>
+    );
+  };
+
+  // ── Main ────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-background">
-      <div className="flex items-center gap-1 px-2 h-8 border-b border-border/40 shrink-0">
-        <div className="flex items-center gap-0.5 text-[10px]">
-          {(["all", "log", "info", "warn", "error", "debug"] as const).map((level) => (
-            <button
-              key={level}
-              onClick={() => setFilter(level)}
-              className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-                filter === level
-                  ? "bg-primary/10 text-primary font-medium"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {level === "all" ? t('console.all') : level}
-              {level !== "all" && (
-                <span className="ml-0.5 opacity-60">
-                  {entries.filter((entry) => entry.level === level).length}
-                </span>
-              )}
+    <div style={s.root}>
+      <div style={s.toolbar}>
+        <Chip level="all" label="全部" />
+        <Chip level="error" label={LEVEL_LABELS.error} />
+        <Chip level="warn" label={LEVEL_LABELS.warn} />
+        <Chip level="log" label={LEVEL_LABELS.log} />
+        <Chip level="info" label={LEVEL_LABELS.info} />
+        <Chip level="debug" label={LEVEL_LABELS.debug} />
+        <div style={{ width: 1, height: 14, background: BORDER, margin: "0 4px", flexShrink: 0 }} />
+
+        <div style={{ flex: 1, minWidth: 80, maxWidth: 200, position: "relative" }}>
+          <MagnifyingGlass size={11} style={{ position: "absolute", left: 8, top: 7, color: TEXT_MUTED, pointerEvents: "none" }} />
+          <input ref={searchRef} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="搜索..."
+            style={{ width: "100%", height: 26, padding: "0 24px", borderRadius: 6, border: `1px solid ${BORDER}`, background: "#fff", color: TEXT, fontSize: 11, outline: "none", ...s.mono }}
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery("")} style={{ position: "absolute", right: 6, top: 5, color: TEXT_MUTED, background: "none", border: "none", cursor: "pointer" }}>
+              <X size={11} />
             </button>
-          ))}
+          )}
         </div>
 
-        <div className="flex-1 min-w-[180px] max-w-[360px] mx-2">
-          <div className="relative">
-            <MagnifyingGlass size={12} className="absolute left-2 top-1.5 text-muted-foreground/60" />
-            <Input
-              ref={searchInputRef}
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              className="h-6 pl-6 pr-14 text-[11px]"
-              placeholder={t("console.searchPlaceholder")}
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                className="absolute right-1.5 top-1 text-muted-foreground/60 hover:text-foreground"
-                title={t("console.searchClear")}
-              >
-                <X size={12} />
-              </button>
-            )}
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto", flexShrink: 0 }}>
+          {counts.error > 0 && (
+            <button onClick={appendErrors} title="将报错添加到对话" style={{
+              display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 8px", borderRadius: 6,
+              border: "none", background: "transparent", cursor: "pointer", color: SUCCESS, fontSize: 11, lineHeight: "20px",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(22,163,74,0.08)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <Sparkle size={10} weight="fill" />
+              <span>添加到对话</span>
+            </button>
+          )}
+          {!autoScroll && (
+            <button onClick={goBottom} title="滚动到底部" style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24,
+              borderRadius: 6, border: "none", background: "transparent", cursor: "pointer", color: TEXT_MUTED,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.06)"; e.currentTarget.style.color = TEXT; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = TEXT_MUTED; }}
+            ><ArrowDown size={12} /></button>
+          )}
+          <button onClick={clear} title="清除日志" style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24,
+            borderRadius: 6, border: "none", background: "transparent", cursor: "pointer", color: TEXT_MUTED,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.06)"; e.currentTarget.style.color = TEXT; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = TEXT_MUTED; }}
+          ><Trash size={12} /></button>
         </div>
-
-        {keywords.length > 0 && (
-          <Button
-            variant={showMatchesOnly ? "secondary" : "ghost"}
-            size="sm"
-            className="h-6 px-2 text-[10px] gap-1"
-            onClick={() => setShowMatchesOnly((prev) => !prev)}
-            title={t("console.toggleMatchesShortcut")}
-          >
-            <ListMagnifyingGlass size={11} />
-            {showMatchesOnly ? t("console.matchOnly") : t("console.showAll")}
-          </Button>
-        )}
-
-        {errorCount > 0 && selectedCount === 0 && (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-6 px-2 text-[10px] gap-1 text-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-600 dark:hover:text-emerald-400 border-none shadow-none font-medium"
-            onClick={handleAppendErrorsToChat}
-            title="将控制台报错添加到对话中"
-          >
-            <Sparkle size={12} weight="fill" />
-            添加到对话 · {errorCount}
-          </Button>
-        )}
-
-        {selectedCount > 0 && (
-          <div className="flex items-center gap-1">
-            <Button
-              variant="secondary"
-              size="sm"
-              className="h-6 px-2 text-[10px] gap-1 text-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-600 dark:hover:text-emerald-400 border-none shadow-none font-medium"
-              onClick={handleAppendSelectedToChat}
-              title="将选中的日志添加到对话中"
-            >
-              <Sparkle size={12} weight="fill" />
-              添加到对话 · {selectedCount}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-[10px] gap-1"
-              onClick={() => void copySelectedEntries()}
-              title={t("console.copySelectedShortcut")}
-            >
-              <Copy size={11} />
-              {t("console.copySelected").replace("{count}", String(selectedCount))}
-            </Button>
-          </div>
-        )}
-
-        {!autoScroll && (
-          <Button variant="ghost" size="icon-sm" onClick={scrollToBottom}>
-            <ArrowDown size={12} />
-          </Button>
-        )}
-        <Button variant="ghost" size="icon-sm" onClick={clearEntries}>
-          <Trash size={12} />
-          <span className="sr-only">{t('console.clear')}</span>
-        </Button>
       </div>
 
-      <div className="flex-1 min-h-0 font-mono text-[11px] leading-5">
-        {visibleEntries.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-muted-foreground/40 text-xs">
-            {keywords.length > 0 ? t("console.noMatch") : t("console.empty")}
+      {/* Content */}
+      <div ref={scrollRef} onScroll={onScroll} style={{ flex: 1, minHeight: 0, overflow: "auto", textAlign: "left" as const, width: "100%", ...s.mono }}>
+        {filtered.length === 0 ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: TEXT_MUTED }}>
+            {keywords.length > 0 ? t("console.noMatch") : "暂无日志"}
           </div>
         ) : (
-          <Virtuoso
-            ref={listRef}
-            style={{ height: "100%" }}
-            className="overflow-auto"
-            totalCount={visibleEntries.length}
-            overscan={220}
-            atBottomStateChange={setAutoScroll}
-            itemContent={(index: number) => {
-              const item = visibleEntries[index];
-              const { entry, isMatch, highlightRanges } = item;
-              const selected = selectedEntryIds.has(entry.id);
-              return (
-                <div
-                  key={entry.id}
-                  className={`group flex items-start gap-2 px-3 py-0.5 border-b border-border/10 hover:bg-muted/30 ${LEVEL_BG[entry.level]} ${!showMatchesOnly && keywords.length > 0 && !isMatch ? "opacity-40" : ""}`}
+          <>
+            {hasMore && (
+              <div style={{ textAlign: "center", padding: "8px 0" }}>
+                <button onClick={showMore} style={{
+                  padding: "3px 16px", borderRadius: 6, fontSize: 11, border: `1px solid ${BORDER}`,
+                  background: "#fff", cursor: "pointer", color: PRIMARY,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = PRIMARY_BG; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "#fff"; }}
                 >
-                  <button
-                    className={`mt-1 h-3.5 w-3.5 rounded border shrink-0 flex items-center justify-center ${selected ? "border-primary bg-primary/20 text-primary" : "border-border/50 text-transparent hover:text-muted-foreground"}`}
-                    onClick={() => toggleSelectEntry(entry.id)}
-                    title={t("console.select")}
-                  >
-                    <Check size={10} />
-                  </button>
-                  <span className="text-muted-foreground/40 shrink-0 select-none w-[72px]">
-                    {formatConsoleTimestamp(entry.timestamp)}
-                  </span>
-                  <span className={`shrink-0 w-10 ${LEVEL_COLORS[entry.level]}`}>
-                    [{entry.level}]
-                  </span>
-                  <span className={`flex-1 break-all whitespace-pre-wrap ${LEVEL_COLORS[entry.level]}`}>
-                    {renderHighlightedMessage(entry.message, highlightRanges)}
-                  </span>
-                  {entry.source && (
-                    <span className="text-muted-foreground/30 shrink-0 text-[10px]">
-                      {entry.source}
-                    </span>
-                  )}
-                  <button
-                    onClick={() => void copySingleEntry(entry)}
-                    className={`mt-1 h-4 w-4 shrink-0 text-muted-foreground/40 hover:text-foreground transition-colors ${copiedEntryId === entry.id ? "text-status-success-foreground" : "opacity-0 group-hover:opacity-100"}`}
-                    title={t("console.copy")}
-                  >
-                    {copiedEntryId === entry.id ? <Check size={11} /> : <Copy size={11} />}
-                  </button>
-                </div>
-              );
-            }}
-          />
+                  显示更多 ({totalFiltered - visibleCount} 条)
+                </button>
+              </div>
+            )}
+            {visible.map(entry => renderEntry(entry))}
+          </>
+        )}
+      </div>
+
+      {/* ── REPL 调试输入栏 ──────────────────────────────── */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6, padding: "0 10px", height: 32,
+        borderTop: `1px solid ${BORDER}`, flexShrink: 0, background: SURFACE,
+      }}>
+        <span style={{ color: PRIMARY, fontSize: 12, fontWeight: 600, flexShrink: 0, userSelect: "none", ...s.mono }}>{">"}</span>
+        <input
+          ref={replRef}
+          value={replInput}
+          onChange={e => setReplInput(e.target.value)}
+          onKeyDown={handleReplKeyDown}
+          placeholder="输入 JavaScript 表达式，按 Enter 执行..."
+          style={{
+            flex: 1, height: 24, padding: "0 4px", border: "none", background: "transparent",
+            color: TEXT, fontSize: 12, outline: "none", ...s.mono,
+          }}
+        />
+        {replHistory.length > 0 && (
+          <span style={{ color: TEXT_MUTED, fontSize: 9, flexShrink: 0, userSelect: "none" }}>
+            {replHistory.length} 条历史
+          </span>
         )}
       </div>
     </div>

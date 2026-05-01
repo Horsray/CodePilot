@@ -535,6 +535,14 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           }));
         }
       },
+      onContextCompressing: (data) => {
+        markActive();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('context-compressing', {
+            detail: { sessionId: params.sessionId, ...data },
+          }));
+        }
+      },
       onContextCompressed: (data) => {
         markActive();
         // Dispatch the 'context-compressed' window event that ChatView

@@ -14,6 +14,11 @@ import { appendTerminalOutput } from './terminal-output-store';
 let pty: typeof import('node-pty') | null = null;
 let ptyLoadError: Error | null = null;
 
+// 中文注释：多个模块注册 process exit 监听器，提升上限避免 MaxListenersExceededWarning
+if (typeof process !== 'undefined' && process.setMaxListeners) {
+  process.setMaxListeners(20);
+}
+
 function getPty() {
   if (ptyLoadError) return null;
   if (!pty) {

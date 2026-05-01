@@ -521,6 +521,8 @@ export async function generateTextViaSdk(params: {
   abortSignal?: AbortSignal;
   mcpServers?: Record<string, McpServerConfig>;
   sessionId?: string;
+  /** Working directory for the SDK subprocess. Defaults to process.cwd(). */
+  cwd?: string;
 }): Promise<string> {
   const resolved = resolveForClaudeCode(undefined, {
     providerId: params.providerId,
@@ -542,7 +544,7 @@ export async function generateTextViaSdk(params: {
   const timeoutId = setTimeout(() => abortController.abort(), 60_000);
 
   const queryOptions: Options = {
-    cwd: os.homedir(),
+    cwd: params.cwd || process.cwd(),
     abortController,
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
@@ -572,6 +574,7 @@ export async function generateTextViaSdk(params: {
   }
 
   let resultText = '';
+  let errorMsg = '';
   try {
     const conversation = query({
       prompt: params.prompt,
@@ -580,8 +583,15 @@ export async function generateTextViaSdk(params: {
 
     // Iterate through all messages; the last one with type 'result' has the answer
     for await (const msg of conversation) {
-      if (msg.type === 'result' && 'result' in msg) {
-        resultText = (msg as SDKResultSuccess).result || '';
+      if (msg.type === 'result') {
+        if ('result' in msg && !('is_error' in msg && msg.is_error)) {
+          resultText = (msg as SDKResultSuccess).result || '';
+        } else if ('is_error' in msg && msg.is_error) {
+          // Capture error details from SDKResultError
+          const err = msg as { subtype?: string; errors?: string[]; is_error?: boolean };
+          const details = err.errors?.length ? err.errors.join('; ') : err.subtype || 'unknown error';
+          errorMsg = `SDK query failed (${details})`;
+        }
       }
     }
   } catch (err) {
@@ -596,8 +606,12 @@ export async function generateTextViaSdk(params: {
   clearTimeout(timeoutId);
   setup.shadow.cleanup();
 
+  if (errorMsg) {
+    throw new Error(errorMsg);
+  }
+
   if (!resultText) {
-    throw new Error('SDK query returned no result');
+    throw new Error('SDK query returned no result — model may not be available for this provider');
   }
 
   return resultText;

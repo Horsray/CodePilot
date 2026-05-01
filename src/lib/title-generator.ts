@@ -4,7 +4,7 @@ import { updateSessionTitle, getSession, getSetting } from './db';
 
 const TITLE_SYSTEM_PROMPT =
   'You are a title generator. Given a user message, generate a concise title (5-15 characters, no quotes, no punctuation at the end). Reply with ONLY the title text, nothing else. Write in the same language as the user message.';
-const TITLE_CALL_TIMEOUT_MS = 15_000;
+const TITLE_CALL_TIMEOUT_MS = 30_000;
 
 /**
  * Try to generate text using a specific provider/model pair.
@@ -16,9 +16,12 @@ async function tryGenerate(
   prompt: string,
   source: string,
 ): Promise<{ text: string; source: string } | null> {
-  if (!model) return null;
+  if (!model) {
+    console.warn(`[title-generator] ${source}: model is empty, skipping`);
+    return null;
+  }
   try {
-    console.log(`[title-generator] Trying ${source}:`, { providerId: providerId || 'env', model });
+    console.log(`[title-generator] Trying ${source}:`, { providerId: providerId || 'env', model, timeoutMs: TITLE_CALL_TIMEOUT_MS });
     const result = await generateTextFromProvider({
       providerId,
       model,
@@ -27,6 +30,7 @@ async function tryGenerate(
       maxTokens: 30,
       abortSignal: AbortSignal.timeout(TITLE_CALL_TIMEOUT_MS),
     });
+    console.log(`[title-generator] ${source} raw result:`, JSON.stringify(result?.slice(0, 100)));
     if (result.trim()) {
       return { text: result, source: `${source}(${providerId || 'env'}:${model})` };
     }

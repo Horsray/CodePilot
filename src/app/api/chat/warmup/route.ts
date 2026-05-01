@@ -8,6 +8,7 @@ import {
   buildPersistentClaudeSignature,
   adoptPersistentClaudeSessionBySignature,
   warmupPersistentClaudeSession,
+  isSessionWarmedUp,
 } from '@/lib/persistent-claude-session';
 import { loadAllMcpServers } from '@/lib/mcp-loader';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
@@ -15,7 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { buildSystemPrompt } from '@/lib/agent-system-prompt';
 import { assembleContext } from '@/lib/context-assembler';
-import { toSdkMcpConfig, sanitizeEnv } from '@/lib/claude-client';
+import { toSdkMcpConfig } from '@/lib/claude-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -85,6 +86,15 @@ export async function POST(request: NextRequest) {
     // 中文注释：准备 SDK 子进程环境变量和 shadow home
     const setup = prepareSdkSubprocessEnv(resolved);
 
+    // 清理可能导致崩溃的环境变量（如换行符）
+    const sanitizeEnv = (envObj: Record<string, string | undefined>) => {
+      const result: Record<string, string | undefined> = {};
+      for (const [k, v] of Object.entries(envObj)) {
+        if (v) result[k] = v.replace(/[\r\n]+/g, '');
+      }
+      return result;
+    };
+
     // 中文注释：解析工作目录，回退到 session.working_directory
     const resolvedCwd = resolveWorkingDirectory([
       { path: working_directory || session?.sdk_cwd || session?.working_directory, source: 'requested' },
@@ -139,14 +149,10 @@ export async function POST(request: NextRequest) {
       includePartialMessages: true,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
-      env: sanitizeEnv(setup.env as Record<string, string>),
+      env: sanitizeEnv(setup.env),
       settingSources: resolved.settingSources as Options['settingSources'],
-      // 中文注释：必须使用 upstreamModel（catalog 解析后的模型 ID），而不是原始 requestedModel。
-      // chat route 使用 resolved.upstreamModel || resolved.model，如果这里用 requestedModel
-      // （如 'claude-sonnet-4-5'），而 chat route 用 'claude-sonnet-4-5-20250929'，
-      // 签名中的 model 字段不匹配 → isSignatureCompatible 返回 false → warmup 永远无法被消费。
-      model: unifiedResolved.upstreamModel || resolved.model || requestedModel || session?.model || undefined,
-
+      model: requestedModel || session?.model || resolved.model || undefined,
+      
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
@@ -364,11 +370,10 @@ export async function POST(request: NextRequest) {
       adoptPersistentClaudeSessionBySignature(signature, warmupSessionId);
     }
 
-    // 中文注释：不再用 isSessionWarmedUp 提前返回。
-    // isSessionWarmedUp 只检查 entry 存在且 warmedUp=true，不检查 model，
-    // 导致切换模型后旧 entry 还在就直接返回成功，warmupPersistentClaudeSession
-    // 根本没被调用，新 model 没有被预热。
-    // 让 warmupPersistentClaudeSession 自己处理 model 变化的检测和重建。
+    if (isSessionWarmedUp(warmupSessionId)) {
+      console.log('[warmup API] Persistent session already warmed for', warmupSessionId);
+      return Response.json({ warmed_up: true, from_cache: true, warmup_session_id: warmupSessionId });
+    }
 
     // 中文注释：预热 persistent Claude session，而不是额外启动 one-shot WarmQuery。
     // 一个 CodePilot 会话应该对应一个后台 Claude Code 进程；WarmQuery 无法接力给

@@ -346,6 +346,11 @@
   background-size: 200% 100%;
 }
 
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /*
  * Override Streamdown's bash/shell code block inline Shiki token colors.
  * Placed outside @layer to ensure highest CSS specificity.

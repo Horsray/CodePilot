@@ -15,7 +15,6 @@ import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { RuntimeBadge } from './RuntimeBadge';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 import { SpinnerGap } from '@/components/ui/icon';
 import { usePanel } from '@/hooks/usePanel';
 import { usePanelStore } from '@/store/usePanelStore';
@@ -77,6 +76,7 @@ interface ChatViewProps {
   initialMode?: 'code' | 'plan';
   initialHasSummary?: boolean;
   initialSummaryBoundaryRowid?: number;
+  isLoading?: boolean;
 }
 
 /** Maximum messages kept in React state. Older messages are trimmed and reloaded on scroll. */
@@ -95,7 +95,7 @@ function normalizedUserContent(content: string): string {
   return stripLeadingFileComment(content).trim();
 }
 
-export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, warmupState = 'idle', initialPermissionProfile, initialMode, initialHasSummary, initialSummaryBoundaryRowid }: ChatViewProps) {
+export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, warmupState = 'idle', initialPermissionProfile, initialMode, initialHasSummary, initialSummaryBoundaryRowid, isLoading }: ChatViewProps) {
   const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setIsAssistantWorkspace } = usePanel();
   const { t } = useTranslation();
   const router = useRouter();
@@ -209,6 +209,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const [context1m, setContext1m] = useState(false);
   const [hasSummary, setHasSummary] = useState(initialHasSummary || false);
   const [summaryBoundaryRowid, setSummaryBoundaryRowid] = useState(initialSummaryBoundaryRowid || 0);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressionProgress, setCompressionProgress] = useState<{ percentage: number; charsGenerated: number } | null>(null);
 
   // Sync model/provider when session data loads
   useEffect(() => { if (modelName) setCurrentModel(modelName); }, [modelName]);
@@ -329,13 +331,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, currentModel, currentProviderId]);
 
-  // 中文注释：预热状态自动隐藏——ready/failed 状态 3 秒后自动消失
-  useEffect(() => {
-    if (runtimeWarmupState !== 'ready' && runtimeWarmupState !== 'failed') return;
-    const timer = setTimeout(() => setRuntimeWarmupState('idle'), 3000);
-    return () => clearTimeout(timer);
-  }, [runtimeWarmupState]);
-
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -411,6 +406,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // ── Extracted hooks ──
 
   const handleStreamCompleted = useCallback((phase: string) => {
+    // Clear compressing state when any stream completes (success or error)
+    setIsCompressing(false);
     // Only reconcile on normal completion — both messages are persisted.
     // Error/stopped/idle-timeout paths emit 'completed' before the server
     // has persisted partial output, so reconciliation would race.
@@ -419,9 +416,10 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       reconcileWithDb();
     }
 
-    // Refresh session title — server generates it pre-stream now, so it's
-    // already persisted by the time the stream completes. Short delay just
-    // covers any last-write latency.
+    // Refresh session title — server generates it during stream completion,
+    // so we need to wait for the AI title generation to finish before fetching.
+    // The title generation runs concurrently with the stream and is awaited in
+    // the completion handler, but the DB write may take a few seconds.
     if (phase === 'completed' && sessionId) {
       setTimeout(() => {
         fetch(`/api/chat/sessions/${sessionId}`)
@@ -435,7 +433,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
             }
           })
           .catch(() => {});
-      }, 500);
+      }, 3000);
     }
   }, [reconcileWithDb, sessionId]);
 
@@ -464,6 +462,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   useEffect(() => {
     if (!hasSummary && messages.some(m => m.role === 'assistant' && m.content.includes('上下文已压缩'))) {
       setHasSummary(true);
+      setIsCompressing(false);
     }
   }, [messages, hasSummary]);
 
@@ -472,6 +471,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
         setHasSummary(true);
+        setIsCompressing(false);
         fetch(`/api/chat/sessions/${sessionId}`)
           .then((res) => res.ok ? res.json() : null)
           .then((data) => {
@@ -513,11 +513,37 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     return () => window.removeEventListener('context-compressed', handler);
   }, [sessionId]);
 
+  // Listen for real-time compression progress from SSE
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId) {
+        setCompressionProgress({ percentage: detail.percentage ?? 0, charsGenerated: detail.charsGenerated ?? 0 });
+      }
+    };
+    window.addEventListener('context-compressing', handler);
+    return () => window.removeEventListener('context-compressing', handler);
+  }, [sessionId]);
+
+  // Clear compression progress and remove temp message when compression finishes
+  useEffect(() => {
+    if (!isCompressing) {
+      setCompressionProgress(null);
+      // Remove the temporary compression message card
+      if (tempCompactMsgIdRef.current) {
+        const tempId = tempCompactMsgIdRef.current;
+        tempCompactMsgIdRef.current = null;
+        cappedSetMessages(prev => prev.filter(m => m.id !== tempId));
+      }
+    }
+  }, [isCompressing]);
+
   const isContextCompressing = statusText === 'Compressing context...';
 
   // Phase 1b — TerminalReason action state
   // Refs (not state) so the context-compressed handler above can read the
   // latest value without re-subscribing.
+  const tempCompactMsgIdRef = useRef<string | null>(null);
   const pendingRetryAfterCompactRef = useRef(false);
   const pendingRetryMessageRef = useRef<string | null>(null);
   /** Timeout handle so we don't leak a pending retry if /compact never
@@ -1171,36 +1197,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           </Button>
         </div>
       )}
-      {/* 模型切换预热状态提示 — 顶部居中，加载完成前不消失 */}
-      {runtimeWarmupState !== 'idle' && (
-        <div className="flex justify-center py-2">
-          <div className={cn(
-            'inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm shadow-sm border',
-            runtimeWarmupState === 'warming' && 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300',
-            runtimeWarmupState === 'ready' && 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
-            runtimeWarmupState === 'failed' && 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300',
-          )}>
-            {runtimeWarmupState === 'warming' && (
-              <>
-                <SpinnerGap size={14} className="animate-spin" />
-                <span className="font-medium">加载中...</span>
-              </>
-            )}
-            {runtimeWarmupState === 'ready' && (
-              <>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11.5 3.5L5.5 10.5L2.5 7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                <span className="font-medium">加载完成</span>
-              </>
-            )}
-            {runtimeWarmupState === 'failed' && (
-              <>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 3.5L10.5 10.5M10.5 3.5L3.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                <span className="font-medium">加载失败</span>
-              </>
-            )}
-          </div>
-        </div>
-      )}
       <MessageList
         messages={messages}
         streamingContent={streamingContent}
@@ -1224,6 +1220,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         hasSummary={hasSummary}
         summaryBoundaryRowid={summaryBoundaryRowid}
         isContextCompressing={isContextCompressing}
+        compressionProgress={compressionProgress}
         subAgents={subAgents}
       />
       {/* End-of-turn terminal reason chip (only shown when stream is not active) */}
@@ -1285,10 +1282,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         upstreamModelId={currentModelMeta.upstreamModelId}
         toolFiles={toolFiles}
         onCompress={() => {
+          setIsCompressing(true);
           sendMessage('/compact', undefined, undefined, '压缩上下文');
           // Add a temporary streaming assistant message to show the indicator immediately
+          const tempId = 'temp-compact-' + Date.now();
+          tempCompactMsgIdRef.current = tempId;
           const compressionMsg: Message = {
-            id: 'temp-compact-' + Date.now(),
+            id: tempId,
             session_id: sessionId,
             role: 'assistant',
             content: '上下文压缩中...',
@@ -1297,6 +1297,9 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           };
           cappedSetMessages(prev => [...prev, compressionMsg]);
         }}
+        isCompressing={isCompressing}
+        compressionProgress={compressionProgress}
+        isLoading={isLoading}
       />
       {workingDirectory && <MemoryPanelPortal workingDirectory={workingDirectory} />}
 

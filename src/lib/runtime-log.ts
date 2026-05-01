@@ -5,7 +5,7 @@
  */
 
 export interface LogEntry {
-  level: 'error' | 'warn';
+  level: 'error' | 'warn' | 'log' | 'info';
   message: string;
   timestamp: string;
 }
@@ -18,6 +18,8 @@ interface RuntimeLogState {
   installed: boolean;
   originalError: typeof console.error;
   originalWarn: typeof console.warn;
+  originalLog: typeof console.log;
+  originalInfo: typeof console.info;
 }
 
 function getState(): RuntimeLogState {
@@ -28,6 +30,8 @@ function getState(): RuntimeLogState {
       installed: false,
       originalError: console.error,
       originalWarn: console.warn,
+      originalLog: console.log,
+      originalInfo: console.info,
     };
   }
   return g[GLOBAL_KEY] as RuntimeLogState;
@@ -55,7 +59,7 @@ const homeDirPattern = (typeof process !== 'undefined' && process.env?.HOME)
   ? process.env.HOME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   : '/Users/[^/\\s]+';
 
-function pushEntry(level: 'error' | 'warn', args: unknown[]): void {
+function pushEntry(level: LogEntry['level'], args: unknown[]): void {
   const state = getState();
   const raw = args
     .map(a => {
@@ -94,6 +98,16 @@ export function initRuntimeLog(): void {
   console.warn = (...args: unknown[]) => {
     pushEntry('warn', args);
     state.originalWarn.apply(console, args);
+  };
+
+  console.log = (...args: unknown[]) => {
+    pushEntry('log', args);
+    state.originalLog.apply(console, args);
+  };
+
+  console.info = (...args: unknown[]) => {
+    pushEntry('info', args);
+    state.originalInfo.apply(console, args);
   };
 
   state.installed = true;

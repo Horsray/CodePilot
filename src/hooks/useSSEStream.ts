@@ -56,6 +56,7 @@ export interface SSECallbacks {
   onToolFiles?: (files: string[]) => void;
   onSkillNudge?: (data: SkillNudgeData) => void;
   onContextCompressed?: (data: { message: string; messagesCompressed: number; tokensSaved: number }) => void;
+  onContextCompressing?: (data: { percentage: number; charsGenerated: number }) => void;
   /** 中文注释：功能名称「子Agent状态回调」，用法是在主Agent流中接收子Agent的生命周期事件。 */
   onSubAgentStart?: (data: { id: string; name: string; displayName: string; prompt: string; model?: string; source?: SubAgentSource }) => void;
   onSubAgentProgress?: (data: { id: string; status: string; detail?: string }) => void;
@@ -251,6 +252,13 @@ function handleSSEEvent(
             message: statusData.message || '',
             messagesCompressed: statusData.stats?.messagesCompressed || 0,
             tokensSaved: statusData.stats?.tokensSaved || 0,
+          });
+          return accumulated;
+        }
+        if (statusData.subtype === 'context_compressing') {
+          callbacks.onContextCompressing?.({
+            percentage: statusData.percentage ?? 0,
+            charsGenerated: statusData.charsGenerated ?? 0,
           });
           return accumulated;
         }
@@ -584,6 +592,7 @@ export function useSSEStream() {
         onSkillNudge: (d) => callbacksRef.current?.onSkillNudge?.(d),
         onToolFiles: (f) => callbacksRef.current?.onToolFiles?.(f),
         onContextCompressed: (d) => callbacksRef.current?.onContextCompressed?.(d),
+        onContextCompressing: (d) => callbacksRef.current?.onContextCompressing?.(d),
         onInitMeta: (m) => callbacksRef.current?.onInitMeta?.(m),
         onRateLimit: (info) => callbacksRef.current?.onRateLimit?.(info),
         onContextUsage: (snap) => callbacksRef.current?.onContextUsage?.(snap),

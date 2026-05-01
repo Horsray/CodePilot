@@ -8,6 +8,8 @@ import {
   X,
   ArrowsInLineVertical,
   CaretUp,
+  Plus,
+  Wrench,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { usePanel, type BottomPanelTab } from "@/hooks/usePanel";
@@ -55,7 +57,14 @@ export function BottomPanelContainer() {
     [height, collapsed]
   );
 
-  if (!bottomPanelOpen) return null;
+  // 中文注释：终端按钮——+ 新建会话，扳手 快捷命令
+  const handleNewSession = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("terminal:new-session"));
+  }, []);
+
+  const handleToggleQuickCmds = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("terminal:toggle-quick-cmds"));
+  }, []);
 
   const tabs: { id: BottomPanelTab; label: string; icon: React.ReactNode }[] = [
     {
@@ -70,10 +79,11 @@ export function BottomPanelContainer() {
     },
   ];
 
+  // Always render to preserve PTY session & console state; hide with display:none when closed
   return (
     <div
       className="shrink-0 border-t border-border/40 bg-background/95 backdrop-blur-md flex flex-col relative z-20 shadow-[0_-4px_24px_rgba(0,0,0,0.08)]"
-      style={{ height: collapsed ? 36 : height }}
+      style={{ height: collapsed ? 36 : height, display: bottomPanelOpen ? undefined : "none" }}
     >
       {!collapsed && (
         <div
@@ -92,7 +102,6 @@ export function BottomPanelContainer() {
               setBottomPanelTab(tab.id);
               if (collapsed) setCollapsed(false);
               if (tab.id === "terminal") {
-                // Focus terminal after it unhides
                 setTimeout(() => window.dispatchEvent(new CustomEvent('action:focus-terminal')), 50);
               }
             }}
@@ -110,9 +119,35 @@ export function BottomPanelContainer() {
 
         <div className="flex-1" />
 
+        {/* 终端专用按钮：+ 新建会话、扳手 快捷命令，仅终端标签时显示 */}
+        {bottomPanelTab === "terminal" && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="快捷命令"
+              className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              onClick={handleToggleQuickCmds}
+            >
+              <Wrench size={14} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="新建终端"
+              className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              onClick={handleNewSession}
+            >
+              <Plus size={14} />
+            </Button>
+            <div className="w-px h-4 bg-border/40 mx-0.5" />
+          </>
+        )}
+
         <Button
           variant="ghost"
           size="icon-sm"
+          title={collapsed ? "展开面板" : "收起面板"}
           onClick={() => setCollapsed(!collapsed)}
           className="text-muted-foreground"
         >
@@ -122,6 +157,7 @@ export function BottomPanelContainer() {
         <Button
           variant="ghost"
           size="icon-sm"
+          title="关闭面板"
           onClick={() => setBottomPanelOpen(false)}
           className="text-muted-foreground"
         >

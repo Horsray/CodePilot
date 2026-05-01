@@ -138,78 +138,92 @@ export async function POST(request: NextRequest) {
         }
 
         const msgData = rowsToCompactCandidate.map(m => ({ role: m.role, content: m.content }));
-        const result = await compressConversation({
+        const compactCwd = session.sdk_cwd || session.working_directory || process.cwd();
+
+        // Use TransformStream to emit progress events during compression
+        const { readable, writable } = new TransformStream();
+        const writer = writable.getWriter();
+        const encoder = new TextEncoder();
+
+        const writeSse = (data: string) => {
+          writer.write(encoder.encode(data));
+        };
+
+        // Fire compression in background, emit progress via SSE stream
+        compressConversation({
           sessionId: session_id,
           messages: msgData,
           existingSummary: existingSummaryData.summary || undefined,
           providerId: provider_id || session.provider_id || undefined,
           sessionModel: model || session.model || undefined,
+          cwd: compactCwd,
+          onProgress: (progress) => {
+            writeSse(`data: ${JSON.stringify({
+              type: 'status',
+              data: JSON.stringify({ subtype: 'context_compressing', ...progress }),
+            })}\n\n`);
+          },
+        }).then(result => {
+          const compactBoundaryRowid =
+            rowsToCompactCandidate[rowsToCompactCandidate.length - 1]._rowid
+            ?? existingSummaryData.boundaryRowid
+            ?? 0;
+          const msg = `上下文已压缩。压缩了 ${result.messagesCompressed} 条消息，预计节省 ~${Math.round(result.estimatedTokensSaved / 1000)}K tokens。`;
+          updateDbSummary(session_id, result.summary, compactBoundaryRowid);
+          updateSdkSessionId(session_id, '');
+          releaseSessionLock(session_id, lockId);
+          setSessionRuntimeStatus(session_id, 'idle');
+
+          let contextUsageFrame = '';
+          try {
+            const { getContextWindow } = require('@/lib/model-context') as typeof import('@/lib/model-context');
+            const { roughTokenEstimate } = require('@/lib/context-estimator') as typeof import('@/lib/context-estimator');
+            const modelForWindow = model || session.model || 'sonnet';
+            const maxTokens = (getContextWindow(modelForWindow, { context1m: context_1m }) || 200000);
+            const totalTokens = roughTokenEstimate(result.summary || '');
+            contextUsageFrame = `data: ${JSON.stringify({
+              type: 'context_usage',
+              data: JSON.stringify({
+                totalTokens,
+                maxTokens,
+                rawMaxTokens: maxTokens,
+                percentage: maxTokens ? totalTokens / maxTokens : 0,
+                model: modelForWindow,
+                capturedAt: Date.now(),
+              }),
+            })}\n\n`;
+          } catch { /* best effort */ }
+
+          writeSse(contextUsageFrame);
+          writeSse(`data: ${JSON.stringify({
+            type: 'status',
+            data: JSON.stringify(buildContextCompressedStatus({
+              messagesCompressed: result.messagesCompressed,
+              tokensSaved: result.estimatedTokensSaved,
+            })),
+          })}\n\n`);
+          writeSse(`data: ${JSON.stringify({ type: 'text', data: msg })}\n\n`);
+          writeSse(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+          writer.close();
+        }).catch(compactErr => {
+          console.error('[chat API] /compact failed:', compactErr);
+          releaseSessionLock(session_id, lockId);
+          setSessionRuntimeStatus(session_id, 'idle');
+          const errMsg = compactErr instanceof Error ? compactErr.message : String(compactErr);
+          writeSse(`data: ${JSON.stringify({ type: 'text', data: `压缩失败: ${errMsg}` })}\n\n`);
+          writeSse(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+          writer.close();
         });
 
-        // Coverage boundary = rowid of the last message actually compressed
-        // in THIS pass (the last of rowsToCompactCandidate). If the filter
-        // returned nothing (shouldn't happen — short path above covers it)
-        // fall back to the existing boundary rather than resetting to 0.
-        const compactBoundaryRowid =
-          rowsToCompactCandidate[rowsToCompactCandidate.length - 1]._rowid
-          ?? existingSummaryData.boundaryRowid
-          ?? 0;
-        // Do NOT persist the confirmation message to DB. It's a UI artifact
-        // — the summary + SSE frame already convey the outcome. Persisting it
-        // as an assistant message would leak "上下文已压缩..." into the
-        // transcript the model sees on subsequent turns (rowid > boundary
-        // → kept by filter). Claude Code's own /compact handler behaves the
-        // same way: slash-command feedback stays out of the model's context.
-        const msg = `上下文已压缩。压缩了 ${result.messagesCompressed} 条消息，预计节省 ~${Math.round(result.estimatedTokensSaved / 1000)}K tokens。`;
-        updateDbSummary(session_id, result.summary, compactBoundaryRowid);
-        // Invalidate the SDK session so the next user message does NOT resume
-        // the old (pre-compaction) transcript. Without this, the Claude Code
-        // SDK keeps using its own full history on resume and our fresh summary
-        // would never reach the model — reactive compact would re-trigger on
-        // the very next turn. See feedback_db_migration_safety note: we only
-        // clear the session-id link, never the underlying messages.
-        updateSdkSessionId(session_id, '');
-        releaseSessionLock(session_id, lockId);
-        setSessionRuntimeStatus(session_id, 'idle');
-        // Emit context_compressed BEFORE the text event so the SSE consumer
-        // (useSSEStream) updates hasSummary via the dedicated dispatch path
-        // before the text arrives and the stream terminates.
-        let contextUsageFrame = '';
-        try {
-          const { getContextWindow } = await import('@/lib/model-context');
-          const { roughTokenEstimate } = await import('@/lib/context-estimator');
-          const modelForWindow = model || session.model || 'sonnet';
-          const maxTokens = (getContextWindow(modelForWindow, { context1m: context_1m }) || 200000);
-          const totalTokens = roughTokenEstimate(result.summary || '');
-          contextUsageFrame = `data: ${JSON.stringify({
-            type: 'context_usage',
-            data: JSON.stringify({
-              totalTokens,
-              maxTokens,
-              rawMaxTokens: maxTokens,
-              percentage: maxTokens ? totalTokens / maxTokens : 0,
-              model: modelForWindow,
-              capturedAt: Date.now(),
-            }),
-          })}\n\n`;
-        } catch { /* best effort */ }
-        const compressedStatusFrame = `data: ${JSON.stringify({
-          type: 'status',
-          data: JSON.stringify(buildContextCompressedStatus({
-            messagesCompressed: result.messagesCompressed,
-            tokensSaved: result.estimatedTokensSaved,
-          })),
-        })}\n\n`;
-        const sseData = contextUsageFrame
-          + compressedStatusFrame
-          + `data: ${JSON.stringify({ type: 'text', data: msg })}\n\n`
-          + `data: ${JSON.stringify({ type: 'done' })}\n\n`;
-        return new Response(sseData, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+        return new Response(readable, {
+          headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        });
       } catch (compactErr) {
         console.error('[chat API] /compact failed:', compactErr);
         releaseSessionLock(session_id, lockId);
         setSessionRuntimeStatus(session_id, 'idle');
-        return new Response(JSON.stringify({ error: 'Compression failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        const errMsg = compactErr instanceof Error ? compactErr.message : String(compactErr);
+        return new Response(JSON.stringify({ error: `压缩失败: ${errMsg}` }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
 
@@ -474,12 +488,14 @@ export async function POST(request: NextRequest) {
               })}\n\n`);
 
               try {
+                const autoCompactCwd = session.sdk_cwd || session.working_directory || process.cwd();
                 const result = await compressConversation({
                   sessionId: session_id,
                   messages: messagesToCompress,
                   existingSummary: activeSessionSummary,
                   providerId: effectiveProviderId || undefined,
                   sessionModel: effectiveModel || undefined,
+                  cwd: autoCompactCwd,
                 });
                 activeSessionSummary = result.summary;
                 const autoCompactBoundaryRowid = rowsToCompress[rowsToCompress.length - 1]._rowid ?? 0;
@@ -527,13 +543,16 @@ export async function POST(request: NextRequest) {
           })}\n\n`);
         }
 
-        // Start title generation early (fire-and-forget) so the lightweight
-        // model call finishes long before the client fetches post-stream.
+        // Start title generation early so the lightweight model call can run
+        // concurrently with the main stream. Store the promise so we can await
+        // it before falling back to response-extraction (avoiding race condition).
         // Only on first turn (no prior history) — subsequent messages must not
         // overwrite the AI-generated title with truncated user text.
+        let titleGenerationPromise: Promise<boolean> | null = null;
         if (!autoTrigger && historyMsgs.length === 0) {
-          generateConversationTitle(session_id, content).catch(err => {
+          titleGenerationPromise = generateConversationTitle(session_id, content).catch(err => {
             console.warn('[chat API] Title generation failed:', err);
+            return false;
           });
         }
 
@@ -593,7 +612,7 @@ export async function POST(request: NextRequest) {
             clearInterval(lockRenewalInterval);
             releaseSessionLock(session_id, lockId);
             setSessionRuntimeStatus(session_id, 'idle');
-          }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts, persistProviderId, firstUserMessage: content });
+          }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts, persistProviderId, firstUserMessage: content, titleGenerationPromise });
 
           const reader = streamForClient.getReader();
           while (true) {
@@ -641,7 +660,7 @@ async function collectStreamResponse(
   sessionId: string,
   telegramOpts: { sessionId?: string; sessionTitle?: string; workingDirectory?: string },
   onComplete?: () => void,
-  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean; referencedContexts?: string[]; persistProviderId?: string; firstUserMessage?: string },
+  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean; referencedContexts?: string[]; persistProviderId?: string; firstUserMessage?: string; titleGenerationPromise?: Promise<boolean> | null },
 ) {
   const reader = stream.getReader();
   const contentBlocks: MessageContentBlock[] = [];
@@ -1047,21 +1066,27 @@ async function collectStreamResponse(
 
       // 0. Title fallback — if the model-based title generation failed,
       //    extract a title from the assistant's response text.
-      //    This guarantees the title is always meaningful, not just truncated user text.
-      //    Check DB directly: if title still looks like a fallback, replace it.
+      //    CRITICAL: Await the AI title generation first to avoid race condition.
+      //    Previously, the fire-and-forget generation would still be running when
+      //    this fallback executed, causing the fallback title to overwrite the AI result.
       if (fullText.trim().length > 0) {
         try {
+          // Wait for AI title generation to complete (if it was started)
+          let aiTitleSucceeded = false;
+          if (opts?.titleGenerationPromise) {
+            try {
+              aiTitleSucceeded = await opts.titleGenerationPromise;
+            } catch { /* generation already caught its own errors */ }
+          }
+
           const session = getSession(sessionId);
           if (session) {
-            // Only replace if the title is still the initial fallback:
-            // - 'New Chat' (default)
-            // - empty/missing
-            // - the exact truncated text from session creation (content.slice(0, 50))
-            const firstMsg = opts?.firstUserMessage || '';
-            const initialTitle = firstMsg.slice(0, 50);
-            const needsReplacement = !session.title
+            // Only replace if the AI title generation didn't produce a title
+            // AND the title is still in its default state (not set by generator fallback either)
+            const needsReplacement = !aiTitleSucceeded && (
+              !session.title
               || session.title === 'New Chat'
-              || session.title === initialTitle;
+            );
             if (needsReplacement) {
               const extracted = extractTitleFromResponse(fullText);
               if (extracted && extracted !== session.title) {

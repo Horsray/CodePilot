@@ -184,6 +184,7 @@ interface MessageListProps {
   hasSummary?: boolean;
   summaryBoundaryRowid?: number;
   isContextCompressing?: boolean;
+  compressionProgress?: { percentage: number; charsGenerated: number } | null;
   // 中文注释：功能名称「子Agent快照数据」，用法是从streamSnapshot传入子Agent数据，
   // 使StreamingMessage在切换会话后能恢复卡片渲染
   subAgents?: any[];
@@ -258,6 +259,7 @@ export function MessageList({
   hasSummary,
   summaryBoundaryRowid,
   isContextCompressing,
+  compressionProgress,
   subAgents,
 }: MessageListProps) {
   const { t } = useTranslation();
@@ -365,7 +367,7 @@ export function MessageList({
                 return (
                   <Fragment key={message.id}>
                     {idx === dividerIndex && (
-                      <DividerRow label={t((isContextCompressing ? 'context.compressing' : 'context.compressed') as TranslationKey)} spinning={!!isContextCompressing} />
+                      <DividerRow label={t((isContextCompressing ? 'context.compressing' : 'context.compressed') as TranslationKey)} spinning={!!isContextCompressing} progress={compressionProgress} />
                     )}
                     <div id={`msg-${message.id}`} className="group">
                       <MessageItem
@@ -413,15 +415,35 @@ export function MessageList({
   );
 }
 
-function DividerRow({ label, spinning }: { label: string; spinning: boolean }) {
+function DividerRow({ label, spinning, progress }: { label: string; spinning: boolean; progress?: { percentage: number; charsGenerated: number } | null }) {
   return (
-    <div className="flex items-center gap-3 py-2">
-      <div className="h-px flex-1 bg-border/50" />
-      <div className="flex items-center gap-2 text-[12px] text-muted-foreground/70">
-        {spinning && <SpinnerGap size={14} className="animate-spin" />}
-        <span>{label}</span>
+    <div className="py-2">
+      <div className="flex items-center gap-3">
+        <div className="h-px flex-1 bg-border/50" />
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground/70">
+          {spinning && <SpinnerGap size={14} className="animate-spin" />}
+          <span>{label}</span>
+          {spinning && progress && (
+            <span className="text-[11px] tabular-nums">{progress.percentage}%</span>
+          )}
+        </div>
+        <div className="h-px flex-1 bg-border/50" />
       </div>
-      <div className="h-px flex-1 bg-border/50" />
+      {spinning && (
+        <div className="mt-1.5 mx-auto max-w-md">
+          <div className="h-[3px] w-full rounded-full overflow-hidden bg-muted/40">
+            <div
+              className="h-full rounded-full transition-all duration-500 ease-out"
+              style={{
+                width: `${progress?.percentage ?? 0}%`,
+                background: 'linear-gradient(90deg, #8b5cf6, #06b6d4, #8b5cf6)',
+                backgroundSize: '200% 100%',
+                animation: 'shimmer 1.5s ease-in-out infinite',
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

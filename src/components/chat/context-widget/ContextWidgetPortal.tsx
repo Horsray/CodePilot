@@ -12,6 +12,9 @@ interface ContextWidgetPortalProps {
   upstreamModelId?: string;
   toolFiles?: string[];
   onCompress?: () => void;
+  isCompressing?: boolean;
+  compressionProgress?: { percentage: number; charsGenerated: number } | null;
+  isLoading?: boolean;
 }
 
 export function ContextWidgetPortal(props: ContextWidgetPortalProps) {
@@ -34,7 +37,7 @@ export function ContextWidgetPortal(props: ContextWidgetPortalProps) {
     };
   }, []);
 
-  if (!container) return null;
+  if (!container || props.isLoading) return null;
 
-  return createPortal(<ContextCompressionWidget {...props} />, container);
+  return createPortal(<ContextCompressionWidget {...props} compressionProgress={props.compressionProgress} />, container);
 }

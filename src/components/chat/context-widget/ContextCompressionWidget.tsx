@@ -20,6 +20,8 @@ interface ContextCompressionWidgetProps {
   upstreamModelId?: string;
   toolFiles?: string[];
   onCompress?: () => void;
+  isCompressing?: boolean;
+  compressionProgress?: { percentage: number; charsGenerated: number } | null;
 }
 
 export function ContextCompressionWidget({
@@ -31,6 +33,8 @@ export function ContextCompressionWidget({
   upstreamModelId,
   toolFiles,
   onCompress,
+  isCompressing,
+  compressionProgress,
 }: ContextCompressionWidgetProps) {
   const usage = useContextUsage(messages, modelName, {
     context1m,
@@ -324,8 +328,9 @@ export function ContextCompressionWidget({
             size="sm"
             className="h-6 px-2.5 text-[11px] bg-muted/60 hover:bg-muted text-foreground/70 rounded-[4px]"
             onClick={onCompress}
+            disabled={isCompressing}
           >
-            压缩
+            {isCompressing ? '压缩中...' : '压缩'}
           </Button>
         </div>
 

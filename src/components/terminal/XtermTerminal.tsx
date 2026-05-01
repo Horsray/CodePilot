@@ -122,6 +122,14 @@ export function XtermTerminal({
       if (containerRef.current && !disposed) {
         term.open(containerRef.current);
 
+        // 中文注释：消除黑边——viewport 默认背景是黑色，FitAddon 余量像素会露出黑边，
+        // 用 JS 直接设置 viewport 背景与终端主题一致。
+        const bgColor = getThemeConfig(resolvedTheme === "dark").background;
+        try {
+          const vp = containerRef.current.querySelector('.xterm-viewport') as HTMLElement;
+          if (vp) vp.style.background = bgColor;
+        } catch { /* ignore */ }
+
         // 中文注释：聚焦容器时自动聚焦终端
         const handleContainerFocus = () => { term.focus(); };
         const containerEl = containerRef.current;
@@ -184,7 +192,13 @@ export function XtermTerminal({
 
   useEffect(() => {
     if (termRef.current) {
-      termRef.current.options.theme = getThemeConfig(resolvedTheme === "dark");
+      const colors = getThemeConfig(resolvedTheme === "dark");
+      termRef.current.options.theme = colors;
+      // 同步更新 viewport 背景消除黑边
+      try {
+        const vp = containerRef.current?.querySelector('.xterm-viewport') as HTMLElement;
+        if (vp) vp.style.background = colors.background;
+      } catch { /* ignore */ }
     }
   }, [resolvedTheme, getThemeConfig]);
 

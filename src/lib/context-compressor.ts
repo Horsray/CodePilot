@@ -208,6 +208,10 @@ export interface CompressParams {
   providerId?: string;
   /** Session model to use as fallback if small/haiku is unavailable */
   sessionModel?: string;
+  /** Working directory for the SDK subprocess (project root) */
+  cwd?: string;
+  /** Progress callback: called with estimated percentage (0-100) and character count */
+  onProgress?: (progress: { percentage: number; charsGenerated: number }) => void;
 }
 
 // ── Circuit breaker ─────────────────────────────────────────────────
@@ -258,50 +262,48 @@ export function needsCompression(
  * them. If an existing summary exists, incorporates it as prior context.
  */
 export async function compressConversation(params: CompressParams): Promise<CompressionResult> {
-  const { sessionId, messages, existingSummary, providerId, sessionModel } = params;
+  const { sessionId, messages, existingSummary, providerId, sessionModel, onProgress } = params;
 
   if (messages.length === 0) {
     return { summary: existingSummary || '', messagesCompressed: 0, estimatedTokensSaved: 0 };
   }
 
   try {
-    const { generateTextViaSdk } = await import('./claude-client');
+    const { streamTextFromProvider } = await import('./text-generator');
     const { resolveAuxiliaryModel } = await import('./provider-resolver');
     const { normalizeMessageContent } = await import('./message-normalizer');
 
-    // Resolve auxiliary model via the 5-tier chain introduced in task 3.2.
-    // Produces { providerId, modelId, source } — never null.
-    // When `source === 'main_floor'`, the chain found no small/haiku slot
-    // anywhere, so compression will run on the main model (at main-model
-    // cost). This is an intentional floor so compression never silently
-    // fails just because no cheap model is configured.
-    //
-    // **Session context is critical**: pass providerId + sessionModel so
-    // that "main" resolves to THIS session's active provider, not the
-    // global default. Without this, a session that overrides the default
-    // provider would get auxiliary models from the wrong credentials.
-    const auxiliary = resolveAuxiliaryModel('compact', {
-      providerId,
-      sessionProviderId: providerId,
-      sessionModel,
-    });
+    // When the caller explicitly provides both providerId and sessionModel,
+    // use them directly — don't let auxiliary model resolution pick a different
+    // provider that may not support compression. Only fall through to the
+    // auxiliary chain when the caller doesn't specify a model.
+    let effectiveModel: string;
+    let effectiveProviderId: string | undefined;
 
-    // Prefer the task-level override's provider/model when it gave us one
-    // that matches neither null nor the main. Otherwise we keep the
-    // caller-supplied providerId so SDK subprocess routing stays stable.
-    const effectiveModel = auxiliary.modelId || sessionModel || 'haiku';
-    const effectiveProviderId = auxiliary.providerId !== 'env' ? auxiliary.providerId : providerId;
+    if (providerId && sessionModel) {
+      effectiveModel = sessionModel;
+      effectiveProviderId = providerId;
+      console.log(`[context-compressor] Using caller-specified model: ${effectiveProviderId}/${effectiveModel}`);
+    } else {
+      // Resolve auxiliary model via the 5-tier chain.
+      const auxiliary = resolveAuxiliaryModel('compact', {
+        providerId,
+        sessionProviderId: providerId,
+        sessionModel,
+      });
 
-    if (auxiliary.source === 'main_floor') {
-      console.warn(
-        `[context-compressor] No cheap auxiliary model configured — ` +
-        `falling back to main provider/model (${effectiveProviderId}/${effectiveModel}). ` +
-        `Set AUXILIARY_COMPACT_PROVIDER + AUXILIARY_COMPACT_MODEL or configure ` +
-        `roleModels.small on a non-sdkProxyOnly provider to save cost.`,
-      );
+      effectiveModel = auxiliary.modelId || sessionModel || 'haiku';
+      effectiveProviderId = auxiliary.providerId !== 'env' ? auxiliary.providerId : providerId;
+
+      if (auxiliary.source === 'main_floor') {
+        console.warn(
+          `[context-compressor] No cheap auxiliary model configured — ` +
+          `falling back to main provider/model (${effectiveProviderId}/${effectiveModel}).`,
+        );
+      }
     }
 
-    // Clean messages before summarizing: strip file metadata, extract tool summaries
+    // Clean messages before summarizing
     const formatted = messages.map(m => {
       const role = m.role === 'user' ? 'User' : 'Assistant';
       const cleaned = normalizeMessageContent(m.role, m.content);
@@ -327,18 +329,58 @@ ${formatted}
 
 Summary:`;
 
-    // SDK subprocess for transport (compatible with third-party proxies),
-    // model + provider selected via resolveAuxiliaryModel's 5-tier chain.
-    const result = await generateTextViaSdk({
-      providerId: effectiveProviderId || undefined,
-      model: effectiveModel,
-      system,
-      prompt,
-    });
+    // Estimate expected summary length for progress (rough: ~5% of input chars)
+    const inputChars = formatted.length;
+    const expectedSummaryChars = Math.max(200, Math.floor(inputChars * 0.05));
+
+    // Use streaming text generation — direct HTTP, no subprocess
+    // Retry once if the model returns empty output (some models fail on first attempt)
+    let chunks: string[] = [];
+    let charsGenerated = 0;
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      chunks = [];
+      charsGenerated = 0;
+      try {
+        for await (const chunk of streamTextFromProvider({
+          providerId: effectiveProviderId || '',
+          model: effectiveModel,
+          system,
+          prompt,
+        })) {
+          chunks.push(chunk);
+          charsGenerated += chunk.length;
+          const percentage = Math.min(95, Math.round((charsGenerated / expectedSummaryChars) * 100));
+          onProgress?.({ percentage, charsGenerated });
+        }
+        // If we got content, break out of retry loop
+        if (chunks.join('').trim().length >= 10) break;
+      } catch (streamErr: any) {
+        lastError = streamErr;
+        if (attempt === 0) {
+          console.warn(`[context-compressor] Attempt ${attempt + 1} failed, retrying:`, streamErr.message);
+          continue;
+        }
+        throw streamErr;
+      }
+    }
+
+    const result = chunks.join('');
 
     if (!result || result.trim().length < 10) {
-      console.warn('[context-compressor] Summary too short:', result?.trim().length, 'chars');
-      throw new Error('Compression produced empty or too-short summary');
+      const trimmedLen = result?.trim().length ?? 0;
+      console.warn(
+        `[context-compressor] Summary too short (${trimmedLen} chars). ` +
+        `Provider: ${effectiveProviderId}, Model: ${effectiveModel}, ` +
+        `Input messages: ${messages.length}, Input chars: ${formatted.length}. ` +
+        `Raw result: ${JSON.stringify(result?.slice(0, 200))}`,
+      );
+      throw new Error(
+        `当前模型 (${effectiveModel}) 不支持压缩摘要任务，返回了空内容。` +
+        `请在设置中配置一个支持文本生成的模型作为辅助模型（auxiliary compact model），` +
+        `或切换到支持该功能的模型。`
+      );
     }
 
     const summary = result.trim();
