@@ -1,5 +1,9 @@
 /**
  * tools/skill.ts — SkillTool: lets the model discover and invoke skills.
+ *
+ * Design: the tool description is written as a natural-language guide,
+ * not a rigid rulebook. The model discovers skills organically through
+ * the "suggest" mode, which matches task descriptions to skill triggers.
  */
 
 import { tool } from 'ai';
@@ -9,36 +13,99 @@ import { prepareSkillExecution } from '../skill-executor';
 
 /**
  * Create the Skill tool. The model can use this to:
- * 1. List available skills (no arguments)
- * 2. Execute a specific skill by name
+ * 1. List all available skills (no arguments)
+ * 2. Get skill suggestions for a task (suggest mode)
+ * 3. Execute a specific skill by name
  */
 export function createSkillTool(workingDirectory: string) {
   return tool({
     description:
-      'Execute reusable workflow templates (skills) from the project and global skill directories. ' +
-      'Skills encode proven multi-step workflows for common tasks: building, testing, debugging, ' +
-      'code exploration, deployment, reverse-engineering, troubleshooting, code review, and more. ' +
-      'Call WITHOUT arguments to list all available skills with their descriptions and "use when" criteria. ' +
-      'Scan the listing for skills whose description or "use when" criteria matches the current task. ' +
-      'Call WITH `name` (the exact name from the listing) to execute a matching skill. ' +
-      'Before starting any complex multi-step task, check available skills first — ' +
-      'a skill may already encode the exact workflow you need, saving time and avoiding mistakes.',
+      'Access reusable workflow templates (skills) that encode proven solutions for recurring tasks. ' +
+      'Skills are distilled from past successful workflows — building, debugging, deployment, ' +
+      'code exploration, platform integration, and more. ' +
+      'Use this tool when you sense the current task might have been solved before, ' +
+      'or when a multi-step workflow feels like it should be reusable. ' +
+      'Call with no arguments to browse all skills. ' +
+      'Call with `suggest` and a task description to find the best matching skill. ' +
+      'Call with `name` to execute a specific skill.',
     inputSchema: z.object({
-      name: z.string().optional().describe('Name of the skill to execute. Omit to list all skills.'),
+      name: z.string().optional().describe('Name of the skill to execute. Omit to list or suggest.'),
+      suggest: z.string().optional().describe('Describe what you are trying to do. The tool will return skills whose trigger conditions match your task.'),
       skill_name: z.string().optional().describe('Name of the skill to execute (legacy). Omit to list all skills.'),
       arguments: z.record(z.string(), z.string()).optional().describe('Arguments to pass to the skill (key-value pairs)'),
     }),
-    execute: async ({ name, skill_name, arguments: args }) => {
+    execute: async ({ name, skill_name, suggest, arguments: args }) => {
       const targetName = name || skill_name;
-      // List mode
+
+      // ── Suggest mode ──────────────────────────────────────────
+      if (suggest && !targetName) {
+        const skills = discoverSkills(workingDirectory);
+        if (skills.length === 0) {
+          return 'No skills available yet. Skills are automatically crystallized from recurring workflows.';
+        }
+
+        const query = suggest.toLowerCase();
+        const scored = skills
+          .map(s => {
+            let score = 0;
+            const nameLC = s.name.toLowerCase();
+            const descLC = (s.description || '').toLowerCase();
+            const triggerLC = (s.whenToUse || '').toLowerCase();
+            const bodyLC = (s.body || '').toLowerCase().slice(0, 500);
+
+            // Exact keyword matches
+            const queryWords = query.split(/\s+/).filter(w => w.length > 2);
+            for (const word of queryWords) {
+              if (nameLC.includes(word)) score += 3;
+              if (triggerLC.includes(word)) score += 4;
+              if (descLC.includes(word)) score += 2;
+              if (bodyLC.includes(word)) score += 1;
+            }
+
+            // Category bonus: if the task domain matches the skill domain
+            const domains: [RegExp, string][] = [
+              [/\b(build|compile|package|deploy|electron|打包|构建|部署)\b/i, 'build'],
+              [/\b(debug|fix|error|bug|troubleshoot|修复|调试|排查)\b/i, 'debug'],
+              [/\b(test|verify|check|validate|测试|验证)\b/i, 'test'],
+              [/\b(search|find|explore|locate|查找|搜索|探索)\b/i, 'explore'],
+              [/\b(git|merge|rebase|branch|commit|分支|合并)\b/i, 'git'],
+              [/\b(ui|style|css|layout|component|样式|界面|组件)\b/i, 'ui'],
+              [/\b(database|sql|query|migration|数据库)\b/i, 'db'],
+            ];
+            for (const [pattern, domain] of domains) {
+              if (pattern.test(query) && (nameLC.includes(domain) || triggerLC.includes(domain) || descLC.includes(domain))) {
+                score += 5;
+              }
+            }
+
+            return { skill: s, score };
+          })
+          .filter(x => x.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5);
+
+        if (scored.length === 0) {
+          return `No skills match "${suggest}". Try listing all skills (no arguments) to browse available ones.`;
+        }
+
+        const lines = [`Skills matching "${suggest}":\n`];
+        for (const { skill: s, score } of scored) {
+          const parts = [`- **${s.name}** (match: ${score})`];
+          if (s.description) parts.push(`: ${s.description.slice(0, 120)}`);
+          if (s.whenToUse) parts.push(`\n  When: ${s.whenToUse.slice(0, 150)}`);
+          lines.push(parts.join(''));
+        }
+        lines.push('\nCall with `name` to execute a matching skill.');
+        return lines.join('\n');
+      }
+
+      // ── List mode ─────────────────────────────────────────────
       if (!targetName) {
         const skills = discoverSkills(workingDirectory);
         if (skills.length === 0) {
-          return 'No skills available. Skills can be added as SKILL.md files in .claude/skills/ or ~/.claude/skills/.';
+          return 'No skills available yet. Skills are automatically crystallized from recurring workflows as you work.';
         }
 
-        // 中文注释：功能名称「技能分类输出」，用法是按类别组织技能列表，
-        // 让模型能快速定位相关技能而不是在 100+ 平铺列表中逐个扫描。
         const categories: { name: string; skills: typeof skills }[] = [
           { name: 'Build & Deploy', skills: [] },
           { name: 'Code Exploration & Search', skills: [] },
@@ -63,14 +130,16 @@ export function createSkillTool(workingDirectory: string) {
 
         for (const s of skills) categories[classify(s)].skills.push(s);
 
-        const lines: string[] = [];
+        const lines: string[] = [
+          `Found ${skills.length} skills. Use \`suggest\` with a task description to find the best match.\n`,
+        ];
         for (const cat of categories) {
           if (cat.skills.length === 0) continue;
           lines.push(`## ${cat.name} (${cat.skills.length})`);
           for (const s of cat.skills) {
             const parts = [`- **${s.name}**`];
             if (s.description) parts.push(`: ${s.description.slice(0, 100)}`);
-            if (s.whenToUse) parts.push(` [Triggers: ${s.whenToUse.slice(0, 120)}]`);
+            if (s.whenToUse) parts.push(` [When: ${s.whenToUse.slice(0, 120)}]`);
             if (s.context === 'fork') parts.push(' [fork]');
             lines.push(parts.join(''));
           }
@@ -79,22 +148,19 @@ export function createSkillTool(workingDirectory: string) {
         return lines.join('\n');
       }
 
-      // Execute mode
+      // ── Execute mode ──────────────────────────────────────────
       const skill = getSkill(targetName, workingDirectory);
       if (!skill) {
         const available = discoverSkills(workingDirectory).map(s => s.name).join(', ');
-        return `Skill "${targetName}" not found. Available skills: ${available || 'none'}`;
+        return `Skill "${targetName}" not found. Available: ${available || 'none'}\nTip: use \`suggest\` with a task description to find matching skills.`;
       }
 
       const result = prepareSkillExecution(skill, args);
 
       if (result.fork) {
-        // Fork mode — return the prompt for the agent loop to spawn a sub-agent
-        // The agent-loop should detect this and route to the AgentTool
         return `[SKILL_FORK]\nPrompt: ${result.prompt}\nAllowed tools: ${result.allowedTools?.join(', ') || 'all'}`;
       }
 
-      // Inline mode — return the prompt for injection into the conversation
       return result.prompt;
     },
   });

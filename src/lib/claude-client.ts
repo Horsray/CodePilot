@@ -33,7 +33,7 @@ import { resolveWorkingDirectory } from './working-directory';
 import { wrapController } from './safe-stream';
 import { type ShadowHome } from './claude-home-shadow';
 import { prepareSdkSubprocessEnv } from './sdk-subprocess-env';
-import { buildSkillNudgeStatusEvent, shouldSuggestSkill } from './skill-nudge';
+import { decideNudge, buildSkillNudgeStatusEvent, buildLearningExtractionPrompt, buildCrystallizationPrompt } from './skill-nudge';
 import {
   adoptPersistentClaudeSessionBySignature,
   buildPersistentClaudeSignature,
@@ -1761,6 +1761,8 @@ if (claudePath) {
         // tool_use 次数与去重后的工具集合，为 self-improvement / 自动技能提炼提供依据。
         let sdkToolUseCount = 0;
         const sdkDistinctTools = new Set<string>();
+        const sdkAllToolNames: string[] = [];
+        let sdkToolErrors = 0;
         // Track pending TodoWrite tool_use_ids so we can sync after successful execution
         const pendingTodoWrites = new Map<string, Array<{ content: string; status: string; activeForm?: string }>>();
         // Track pending file modifications so we can record checkpoints
@@ -1818,6 +1820,7 @@ if (claudePath) {
                 if (block.type === 'tool_use') {
                   sdkToolUseCount += 1;
                   sdkDistinctTools.add(block.name);
+                  sdkAllToolNames.push(block.name);
                   console.log('[claude-client] tool_use:', { id: block.id, name: block.name, input: block.input });
                   // 中文注释：如果当前处于子Agent上下文（agentStack非空），标记parentAgentId，
                   // 使客户端能将此工具调用归属到正确的子Agent时间线而非主时间线
@@ -2005,6 +2008,7 @@ if (claudePath) {
                 for (const block of content) {
                   if (block.type === 'tool_result') {
                     console.log('[claude-client] tool_result:', { id: block.tool_use_id, contentType: typeof block.content, isError: block.is_error });
+                    if (block.is_error) sdkToolErrors++;
                     let resultContent = typeof block.content === 'string'
                       ? block.content
                       : Array.isArray(block.content)
@@ -2508,65 +2512,110 @@ if (claudePath) {
         // 中文注释：功能名称「SDK 自动技能提炼」，用法是让 Claude Code SDK 主路径在
         // 复杂多步工具工作流后，也像 native runtime 一样触发 skill_nudge 与自动保存技能，
         // 避免 self-improvement 仅在 native 链路生效。
-        if (shouldSuggestSkill({ step: sdkToolUseCount, distinctTools: sdkDistinctTools })) {
-          controller.enqueue(formatSSE({
-            type: 'status',
-            data: JSON.stringify(buildSkillNudgeStatusEvent({
+        // Three-layer knowledge evolution for SDK path (mirrors agent-loop.ts)
+        if (resolvedWorkingDirectory.path) {
+          try {
+            const runStats = {
               step: sdkToolUseCount,
               distinctTools: sdkDistinctTools,
-            })),
-          }));
+              hasErrors: sdkToolErrors > 0,
+              toolNames: sdkAllToolNames,
+            };
 
-          if (resolvedWorkingDirectory.path) {
-            try {
+            const decision = decideNudge(runStats);
+
+            if (decision.recordLearning) {
+              console.log(`[knowledge/SDK] Layer 1 triggered: ${decision.reason}`);
+
               const { generateTextFromProvider } = await import('./text-generator');
               const { resolveProvider } = await import('./provider-resolver');
               const activeResolved = resolveProvider({ sessionProviderId: options.providerId || options.sessionProviderId, sessionModel: model });
 
               if (activeResolved.hasCredentials) {
-                console.log(`[claude-client] Auto-creating skill for SDK workflow (${sdkToolUseCount} tool uses, ${sdkDistinctTools.size} distinct tools)...`);
                 const recentHistory = (conversationHistory || [])
                   .slice(-20)
                   .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content}`)
                   .join('\n\n');
 
-                const result = await generateTextFromProvider({
-                  providerId: activeResolved.provider?.id || '',
-                  model: activeResolved.upstreamModel || activeResolved.model || 'haiku',
-                  system: `你是一个 AI 技能提取助手。分析提供的聊天记录，提取可复用的技能定义。
-所有输出必须使用中文（name 字段除外，name 必须为英文小写加连字符格式）。
-严格按以下 JSON 格式输出，不要包裹在 \`\`\`json 代码块中：
-{
-  "name": "英文小写连字符名称",
-  "description": "一句话中文描述",
-  "whenToUse": "当用户需要...时使用",
-  "content": "Markdown 格式的详细步骤、命令或代码片段（中文）"
-}`,
-                  prompt: `用户请求：\n${prompt}\n\n最近聊天记录：\n${recentHistory}`,
-                  maxTokens: 2000,
-                });
+                try {
+                  const extractionPrompt = buildLearningExtractionPrompt(runStats);
+                  const result = await generateTextFromProvider({
+                    providerId: activeResolved.provider?.id || '',
+                    model: activeResolved.upstreamModel || activeResolved.model || 'haiku',
+                    system: extractionPrompt,
+                    prompt: `用户请求：\n${prompt}\n\n最近聊天记录：\n${recentHistory}`,
+                    maxTokens: 1500,
+                  });
 
-                const rawJson = result.replace(/^```json/i, '').replace(/```$/i, '').trim();
-                const skillDef = JSON.parse(rawJson);
+                  const rawJson = result.replace(/^```json/i, '').replace(/```$/i, '').trim();
+                  const learningDef = JSON.parse(rawJson);
 
-                if (skillDef.name && skillDef.content) {
-                  const { createSkillCreateTool } = await import('./builtin-tools/skill-create');
-                  const tool = createSkillCreateTool(resolvedWorkingDirectory.path);
-                  await tool.execute!(skillDef, { toolCallId: 'sdk-auto-skill', messages: [] });
-                  console.log(`[claude-client] Auto-created SDK skill: ${skillDef.name}`);
-                  controller.enqueue(formatSSE({
-                    type: 'status',
-                    data: JSON.stringify({
-                      notification: true,
-                      message: `已自动将此工作流提炼并保存为技能：${skillDef.name}`,
-                      subtype: 'skill_nudge',
-                    }),
-                  }));
+                  if (learningDef.category && learningDef.patternKey && learningDef.summary) {
+                    const { recordLearning } = await import('./learning-store');
+                    const learning = recordLearning(resolvedWorkingDirectory.path, {
+                      category: learningDef.category,
+                      priority: learningDef.priority || 'medium',
+                      area: learningDef.area || 'general',
+                      patternKey: learningDef.patternKey,
+                      summary: learningDef.summary,
+                      details: learningDef.details || '',
+                      suggestedAction: learningDef.suggestedAction || '',
+                    });
+                    console.log(`[knowledge/SDK] Layer 1 recorded: ${learning.id} (${learning.patternKey}, count=${learning.recurrenceCount})`);
+
+                    if (decision.evaluatePatterns) {
+                      const { evaluatePromotions } = await import('./pattern-tracker');
+                      const promotions = evaluatePromotions(resolvedWorkingDirectory.path);
+
+                      for (const promo of promotions) {
+                        if (promo.shouldPromote) {
+                          console.log(`[knowledge/SDK] Layer 2 promotion ready: ${promo.pattern.patternKey}`);
+
+                          const crystallizePrompt = buildCrystallizationPrompt(promo.pattern, recentHistory);
+                          try {
+                            const skillResult = await generateTextFromProvider({
+                              providerId: activeResolved.provider?.id || '',
+                              model: activeResolved.upstreamModel || activeResolved.model || 'haiku',
+                              system: crystallizePrompt,
+                              prompt: `基于上述模式，生成完整的 Skill 定义。`,
+                              maxTokens: 2000,
+                            });
+
+                            const skillJson = skillResult.replace(/^```json/i, '').replace(/```$/i, '').trim();
+                            const skillDef = JSON.parse(skillJson);
+
+                            if (skillDef.name && skillDef.content) {
+                              const { createSkillCreateTool } = await import('./builtin-tools/skill-create');
+                              const tool = createSkillCreateTool(resolvedWorkingDirectory.path);
+                              await tool.execute!(
+                                { ...skillDef, patternKey: promo.pattern.patternKey },
+                                { toolCallId: 'sdk-auto-skill', messages: [] }
+                              );
+                              console.log(`[knowledge/SDK] Layer 3 crystallized: ${skillDef.name}`);
+
+                              controller.enqueue(formatSSE({
+                                type: 'status',
+                                data: JSON.stringify({
+                                  notification: true,
+                                  message: `模式 "${promo.pattern.patternKey}" 经过 ${promo.pattern.recurrenceCount} 次复现已提炼为技能：${skillDef.name}`,
+                                  subtype: 'skill_nudge',
+                                }),
+                              }));
+                            }
+                          } catch (crystErr) {
+                            console.error('[knowledge/SDK] Layer 3 crystallization failed:', crystErr);
+                          }
+                        }
+                      }
+                    }
+                  }
+                } catch (extractErr) {
+                  console.error('[knowledge/SDK] Layer 1 extraction failed:', extractErr);
                 }
               }
-            } catch (err) {
-              console.error('[claude-client] SDK auto-skill creation failed:', err);
             }
+          } catch (err) {
+            console.error('[knowledge/SDK] Evolution pipeline failed:', err);
           }
         }
 

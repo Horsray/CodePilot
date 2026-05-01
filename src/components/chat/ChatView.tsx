@@ -806,7 +806,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     }
   }, [sessionId, messages, hasMore]);
 
-  const stopStreaming = useCallback(() => { stopStream(sessionId); }, [sessionId]);
+  const stopStreaming = useCallback(() => { stopStream(sessionId, currentModel, currentProviderId); }, [sessionId, currentModel, currentProviderId]);
 
   const handlePermissionResponse = useCallback(
     async (decision: 'allow' | 'allow_session' | 'deny', updatedInput?: Record<string, unknown>, denyMessage?: string) => {

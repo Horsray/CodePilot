@@ -806,11 +806,13 @@ export async function warmupPersistentClaudeSession(params: {
   }
 
   // 中文注释：关键配置不兼容（provider/model/cwd/env 变化），销毁旧 session 重新预热
+  const hadExistingEntry = !!entry;
   if (entry && !isSignatureCompatible(entry.signature, params.signature)) {
     closeEntry(entry);
     store.delete(params.codepilotSessionId);
     entry = undefined;
   }
+  const wasSwitched = hadExistingEntry && !entry;
 
   if (!entry) {
     entry = createEntry(
@@ -820,6 +822,20 @@ export async function warmupPersistentClaudeSession(params: {
       params.shadowHandle,
     );
     store.set(params.codepilotSessionId, entry);
+
+    // 中文注释：功能名称「模型切换快速预热」，用法是检测到签名不兼容（模型/provider/cwd 变更）
+    // 时只创建 entry 启动 CLI 进程，立即返回不设 warmupPromise。
+    // 不启动后台 init 消费——避免与 chat turn 的 iterator.next() 并发调用同一 AsyncIterator。
+    // init 消息由 getPersistentClaudeTurn 的首次 iterator.next() 自然接收并 yield 为 SSE status。
+    if (wasSwitched) {
+      console.log('[warmupPersistentClaudeSession] Fast warmup for model switch — entry created, process starting in background');
+      return {
+        model: typeof params.options.model === 'string' ? params.options.model : '',
+        session_id: '',
+      };
+    }
+
+    // 中文注释：空白页预热→完整等待 init，确认进程可用后再返回
     entry.warmupPromise = (async () => {
       try {
         // 中文注释：功能名称「预热 init 等待容错」，用法是在开启 hook 事件后，

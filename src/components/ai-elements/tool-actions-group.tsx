@@ -399,7 +399,7 @@ function TeamAgentTimelines({ outputText, isRunning }: { outputText: string, isR
     // If it's just raw text output from the agent, render it directly as text
     return (
       <div className="mt-2 ml-3 border-l-2 border-primary/20 pl-3 py-1 bg-background/30 rounded-r-md">
-        <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[300px] overflow-auto">
+        <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[400px] overflow-y-auto">
           <Linkify>{outputText}</Linkify>
         </pre>
       </div>
@@ -586,16 +586,16 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
           const lines = outputText.split('\n');
           return lines.slice(-5).join('\n');
         }
-        // Completed: show full output, truncated to 20 lines with indicator
+        // Completed: show full output, truncated to 100 lines with indicator
         const lines = outputText.split('\n');
-        if (lines.length > 20) {
-          return lines.slice(0, 20).join('\n') + `\n… +${lines.length - 20} lines`;
+        if (lines.length > 100) {
+          return lines.slice(0, 100).join('\n') + `\n… +${lines.length - 100} lines`;
         }
         return outputText;
       })();
 
       return (
-        <div className="mt-1 rounded bg-muted/40 px-2 py-1.5 font-mono text-[11px] text-muted-foreground/80 max-h-[140px] overflow-auto whitespace-pre-wrap break-all">
+        <div className="mt-1 rounded bg-muted/40 px-2 py-1.5 font-mono text-[11px] text-muted-foreground/80 max-h-[400px] overflow-y-auto whitespace-pre-wrap break-all">
           {cmd && <div className="text-foreground/70">$ {cmd}</div>}
           {displayLines && (
             <div className={cn("mt-1", isRunning ? "text-muted-foreground/50" : "text-muted-foreground/60")}>
@@ -684,7 +684,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
       
       return (
         <div className="mt-2 ml-3 border-l-2 border-blue-500/30 pl-3 py-2 bg-background/30 rounded-r-md">
-          <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[300px] overflow-auto">
+          <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/80 max-h-[400px] overflow-y-auto">
             {cleanText.length > 5000 ? cleanText.slice(0, 5000) + `\n… (已截断，共 ${cleanText.length} 字符)` : cleanText}
           </pre>
         </div>
@@ -879,7 +879,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
             {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
               <div className="mb-3">
                 <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">任务详情 (Input)</h5>
-                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[200px] overflow-auto">
+                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[400px] overflow-y-auto">
                   {typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}
                 </pre>
               </div>
@@ -890,7 +890,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
                   {tool.isError ? '执行失败 (Error)' : '执行结果 (Result)'}
                 </h5>
                 <pre className={cn(
-                  "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
+                  "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[400px] overflow-y-auto",
                   tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
                 )}>
                   {tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}
@@ -1019,7 +1019,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
           )}
           
           {outputText && (
-            <div className="mt-2 text-[10px] text-muted-foreground/60 font-mono whitespace-pre-wrap break-all max-h-[150px] overflow-auto bg-muted/20 p-2 rounded">
+            <div className="mt-2 text-[10px] text-muted-foreground/60 font-mono whitespace-pre-wrap break-all max-h-[400px] overflow-y-auto bg-muted/20 p-2 rounded">
               {typeof outputText === 'string' && outputText.startsWith('{') 
                 ? (() => {
                     try {
@@ -1811,7 +1811,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
                 {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
                   <div className="mb-3">
                     <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">Input</h5>
-                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[200px] overflow-auto">
+                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[400px] overflow-y-auto">
                       <Linkify>{typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}</Linkify>
                     </pre>
                   </div>
@@ -1822,7 +1822,7 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
                       {tool.isError ? 'Error' : 'Result'}
                     </h5>
                     <pre className={cn(
-                      "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[300px] overflow-auto",
+                      "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[400px] overflow-y-auto",
                       tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
                     )}>
                       <Linkify>{tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}</Linkify>
@@ -1987,7 +1987,7 @@ function ActionToolCard({ tool, streamingToolOutput, sessionId, rewindId }: { to
                     $ {cmd}
                   </div>
                 )}
-                <pre className="whitespace-pre-wrap break-all font-mono text-[12px] text-muted-foreground/80 max-h-[300px] overflow-auto">
+                <pre className="whitespace-pre-wrap break-all font-mono text-[12px] text-muted-foreground/80 max-h-[400px] overflow-y-auto">
                   {status === 'running' ? streamingToolOutput : tool.result}
                 </pre>
               </div>

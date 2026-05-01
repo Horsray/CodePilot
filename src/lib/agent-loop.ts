@@ -16,7 +16,7 @@ import { createModel } from './ai-provider';
 import { assembleTools, READ_ONLY_TOOLS } from './agent-tools';
 import { reportNativeError } from './error-classifier';
 import { pruneOldToolResults } from './context-pruner';
-import { shouldSuggestSkill, buildSkillNudgeStatusEvent } from './skill-nudge';
+import { decideNudge, buildSkillNudgeStatusEvent, buildLearningExtractionPrompt, buildCrystallizationPrompt } from './skill-nudge';
 import { emit as emitEvent } from './runtime/event-bus';
 import { createCheckpoint } from './file-checkpoint';
 import type { PermissionMode } from './permission-checker';
@@ -233,6 +233,8 @@ export function runAgentLoop(options: AgentLoopOptions): ReadableStream<string> 
         let lastToolNames: string[] = []; // for doom loop detection
         let doomLoopCounter = 0; // tracks consecutive identical tool calls
         const distinctTools = new Set<string>(); // for skill-nudge heuristic
+        const allToolNames: string[] = []; // track all tool names for learning extraction
+        let totalToolErrors = 0; // track total errors across all steps
         const toolFilesAccumulator = new Set<string>(); // collects file paths from tool calls
         let messages = historyMessages;
         // Track pending TodoWrite tool calls for deferred task_update emission (per-step to avoid carryover)
@@ -648,6 +650,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 // Use tool name + serialized input for more accurate doom loop detection
                 stepToolCalls.push(`${event.toolName}:${JSON.stringify(event.input)}`);
                 distinctTools.add(event.toolName);
+                allToolNames.push(event.toolName);
                 controller.enqueue(formatSSE({
                   type: 'tool_use',
                   data: JSON.stringify({
@@ -856,6 +859,7 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
 
               case 'tool-error':
                 stepToolErrors++;
+                totalToolErrors++;
                 // Clear pending TodoWrite on error
                 if (stepPendingTodoWrites.has((event as any).toolCallId)) {
                   stepPendingTodoWrites.delete((event as any).toolCallId);
@@ -1098,25 +1102,30 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
           messages = [...messages, ...safeResponseMessages] as ModelMessage[];
         }
 
-        // 6a. Emit skill-nudge if the run was complex enough to warrant saving as a Skill.
-        // Heuristic: >= 5 agent steps AND >= 2 distinct tools used. See skill-nudge.ts.
-        if (shouldSuggestSkill({ step, distinctTools })) {
-          controller.enqueue(formatSSE({
-            type: 'status',
-            data: JSON.stringify(buildSkillNudgeStatusEvent({ step, distinctTools })),
-          }));
+        // 6a. Three-layer knowledge evolution: Learning → Pattern → Skill
+        // See skill-nudge.ts for the decision engine.
+        if (workingDirectory) {
+          try {
+            const runStats = {
+              step,
+              distinctTools,
+              hasErrors: totalToolErrors > 0,
+              toolNames: allToolNames,
+              touchedFiles: toolFilesAccumulator,
+            };
 
-          // Trigger automatic skill creation via background agent instead of just a nudge
-          if (workingDirectory) {
-            try {
+            const decision = decideNudge(runStats);
+
+            if (decision.recordLearning) {
+              console.log(`[knowledge] Layer 1 triggered: ${decision.reason}`);
+
+              // Layer 1: Extract learning via AI
               const { generateTextFromProvider } = await import('./text-generator');
               const { resolveProvider } = await import('./provider-resolver');
               const resolved = resolveProvider({ sessionProviderId: providerId, sessionModel: modelId });
-              
+
               if (resolved.hasCredentials) {
-                console.log(`[agent-loop] Auto-creating skill for successful workflow (${step} steps, ${distinctTools.size} tools)...`);
-                
-                // Extract last N messages to summarize the workflow
+                // Extract recent conversation for context
                 const recentHistory = messages.slice(-20).map(m => {
                   if (m.role === 'user') return `User: ${m.content}`;
                   if (m.role === 'assistant') {
@@ -1126,44 +1135,92 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                   return '';
                 }).filter(Boolean).join('\n\n');
 
-                const result = await generateTextFromProvider({
-                  providerId: resolved.provider?.id || '',
-                  model: resolved.upstreamModel || resolved.model || 'haiku',
-                  system: `你是一个 AI 技能提取助手。分析提供的聊天记录，提取可复用的技能定义。
-所有输出必须使用中文（name 字段除外，name 必须为英文小写加连字符格式）。
-严格按以下 JSON 格式输出，不要包裹在 \`\`\`json 代码块中：
-{
-  "name": "英文小写连字符名称",
-  "description": "一句话中文描述",
-  "whenToUse": "当用户需要...时使用",
-  "content": "Markdown 格式的详细步骤、命令或代码片段（中文）"
-}`,
-                  prompt: `聊天记录：\n\n${recentHistory}`,
-                  maxTokens: 2000,
-                });
+                try {
+                  const extractionPrompt = buildLearningExtractionPrompt(runStats);
+                  const result = await generateTextFromProvider({
+                    providerId: resolved.provider?.id || '',
+                    model: resolved.upstreamModel || resolved.model || 'haiku',
+                    system: extractionPrompt,
+                    prompt: `聊天记录：\n\n${recentHistory}`,
+                    maxTokens: 1500,
+                  });
 
-                const rawJson = result.replace(/^```json/i, '').replace(/```$/i, '').trim();
-                const skillDef = JSON.parse(rawJson);
-                
-                if (skillDef.name && skillDef.content) {
-                  const { createSkillCreateTool } = await import('./builtin-tools/skill-create');
-                  const tool = createSkillCreateTool(workingDirectory);
-                  await tool.execute!(skillDef, { toolCallId: 'auto-skill', messages: [] });
-                  console.log(`[agent-loop] Auto-created skill: ${skillDef.name}`);
-                  
-                  controller.enqueue(formatSSE({
-                    type: 'status',
-                    data: JSON.stringify({
-                      notification: true,
-                      message: `已自动将此工作流提炼并保存为技能：${skillDef.name}`,
-                      subtype: 'skill_nudge'
-                    }),
-                  }));
+                  const rawJson = result.replace(/^```json/i, '').replace(/```$/i, '').trim();
+                  const learningDef = JSON.parse(rawJson);
+
+                  if (learningDef.category && learningDef.patternKey && learningDef.summary) {
+                    // Layer 1: Record the learning
+                    const { recordLearning } = await import('./learning-store');
+                    const learning = recordLearning(workingDirectory, {
+                      category: learningDef.category,
+                      priority: learningDef.priority || 'medium',
+                      area: learningDef.area || 'general',
+                      patternKey: learningDef.patternKey,
+                      summary: learningDef.summary,
+                      details: learningDef.details || '',
+                      suggestedAction: learningDef.suggestedAction || '',
+                    });
+                    console.log(`[knowledge] Layer 1 recorded: ${learning.id} (${learning.patternKey}, count=${learning.recurrenceCount})`);
+
+                    // Layer 2: Evaluate promotion candidates
+                    if (decision.evaluatePatterns) {
+                      const { evaluatePromotions } = await import('./pattern-tracker');
+                      const promotions = evaluatePromotions(workingDirectory);
+
+                      for (const promo of promotions) {
+                        if (promo.shouldPromote) {
+                          console.log(`[knowledge] Layer 2 promotion ready: ${promo.pattern.patternKey}`);
+
+                          // Layer 3: Crystallize into skill
+                          const crystallizePrompt = buildCrystallizationPrompt(
+                            promo.pattern,
+                            recentHistory
+                          );
+
+                          try {
+                            const skillResult = await generateTextFromProvider({
+                              providerId: resolved.provider?.id || '',
+                              model: resolved.upstreamModel || resolved.model || 'haiku',
+                              system: crystallizePrompt,
+                              prompt: `基于上述模式，生成完整的 Skill 定义。`,
+                              maxTokens: 2000,
+                            });
+
+                            const skillJson = skillResult.replace(/^```json/i, '').replace(/```$/i, '').trim();
+                            const skillDef = JSON.parse(skillJson);
+
+                            if (skillDef.name && skillDef.content) {
+                              const { createSkillCreateTool } = await import('./builtin-tools/skill-create');
+                              const tool = createSkillCreateTool(workingDirectory);
+                              const createResult = await tool.execute!(
+                                { ...skillDef, patternKey: promo.pattern.patternKey },
+                                { toolCallId: 'auto-skill', messages: [] }
+                              );
+                              console.log(`[knowledge] Layer 3 crystallized: ${skillDef.name}`);
+
+                              controller.enqueue(formatSSE({
+                                type: 'status',
+                                data: JSON.stringify({
+                                  notification: true,
+                                  message: `模式 "${promo.pattern.patternKey}" 经过 ${promo.pattern.recurrenceCount} 次复现已提炼为技能：${skillDef.name}`,
+                                  subtype: 'skill_nudge',
+                                }),
+                              }));
+                            }
+                          } catch (crystErr) {
+                            console.error('[knowledge] Layer 3 crystallization failed:', crystErr);
+                          }
+                        }
+                      }
+                    }
+                  }
+                } catch (extractErr) {
+                  console.error('[knowledge] Layer 1 extraction failed:', extractErr);
                 }
               }
-            } catch (err) {
-              console.error('[agent-loop] Auto-skill creation failed:', err);
             }
+          } catch (err) {
+            console.error('[knowledge] Evolution pipeline failed:', err);
           }
         }
 

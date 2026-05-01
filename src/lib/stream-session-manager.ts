@@ -1061,25 +1061,32 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
 // Stop
 // ==========================================
 
-export function stopStream(sessionId: string): void {
+export function stopStream(sessionId: string, warmupModel?: string, warmupProviderId?: string): void {
   const stream = getStreamsMap().get(sessionId);
   if (stream && stream.snapshot.phase === 'active') {
     stream.abortReason = 'manual_stop';
-    // Try graceful interrupt first, fallback to abort
+    // Abort the stream immediately so the UI stops showing output
+    stream.abortController.abort();
+    // Clean up the server-side process in the background
     fetch('/api/chat/interrupt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId }),
     }).catch(() => {
-      // Interrupt failed, force abort
-    }).finally(() => {
-      // Always abort after a short delay to ensure cleanup
-      streamTimeout(stream, () => {
-        if (stream.snapshot.phase === 'active') {
-          stream.abortController.abort();
-        }
-      }, 2000);
+      // Interrupt failed, best effort
     });
+    // 中文注释：中断后触发预热，避免下一条消息走冷启动。
+    // 使用 1.5 秒延迟确保障服务端 interrupt 已完成清理、旧 persistent session 已销毁，
+    // 然后再创建新的预热进程。
+    if (warmupModel) {
+      setTimeout(() => {
+        fetch('/api/chat/warmup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, model: warmupModel, provider_id: warmupProviderId || '' }),
+        }).catch(() => {});
+      }, 1500);
+    }
   }
 }
 

@@ -371,7 +371,11 @@ export function StreamingMessage({
   if (fallbackSubAgents.length > 0 && lastSubAgentsRef.current.length === 0) {
     lastSubAgentsRef.current = fallbackSubAgents;
   }
-  const hasStreamingSubAgents = lastSubAgentsRef.current.length > 0;
+  // 中文注释：只在有子Agent正在运行时才为 true。
+  // 之前的逻辑是 lastSubAgentsRef.current.length > 0，导致子Agent全部完成后
+  // hasStreamingSubAgents 仍然为 true，主时间线的工具调用和思考内容持续被过滤/隐藏，
+  // 直到整个流式结束才一次性全部出现。
+  const hasStreamingSubAgents = lastSubAgentsRef.current.some(a => a.status === 'running');
 
   // 中文注释：将子Agent的工具调用和结果按parentAgentId分组，合并到streamingSubAgents中，
   // 使SubAgentStatusBar能渲染子Agent的独立状态。
