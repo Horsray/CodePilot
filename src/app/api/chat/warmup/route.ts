@@ -16,7 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { buildSystemPrompt } from '@/lib/agent-system-prompt';
 import { assembleContext } from '@/lib/context-assembler';
-import { toSdkMcpConfig } from '@/lib/claude-client';
+import { toSdkMcpConfig, sanitizeEnv } from '@/lib/claude-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -86,15 +86,6 @@ export async function POST(request: NextRequest) {
     // 中文注释：准备 SDK 子进程环境变量和 shadow home
     const setup = prepareSdkSubprocessEnv(resolved);
 
-    // 清理可能导致崩溃的环境变量（如换行符）
-    const sanitizeEnv = (envObj: Record<string, string | undefined>) => {
-      const result: Record<string, string | undefined> = {};
-      for (const [k, v] of Object.entries(envObj)) {
-        if (v) result[k] = v.replace(/[\r\n]+/g, '');
-      }
-      return result;
-    };
-
     // 中文注释：解析工作目录，回退到 session.working_directory
     const resolvedCwd = resolveWorkingDirectory([
       { path: working_directory || session?.sdk_cwd || session?.working_directory, source: 'requested' },
@@ -149,10 +140,14 @@ export async function POST(request: NextRequest) {
       includePartialMessages: true,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
-      env: sanitizeEnv(setup.env),
+      env: sanitizeEnv(setup.env as Record<string, string>),
       settingSources: resolved.settingSources as Options['settingSources'],
-      model: requestedModel || session?.model || resolved.model || undefined,
-      
+      // 中文注释：必须使用 upstreamModel（catalog 解析后的模型 ID），而不是原始 requestedModel。
+      // chat route 使用 resolved.upstreamModel || resolved.model，如果这里用 requestedModel
+      // （如 'claude-sonnet-4-5'），而 chat route 用 'claude-sonnet-4-5-20250929'，
+      // 签名中的 model 字段不匹配 → isSignatureCompatible 返回 false → warmup 永远无法被消费。
+      model: unifiedResolved.upstreamModel || resolved.model || requestedModel || session?.model || undefined,
+
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',

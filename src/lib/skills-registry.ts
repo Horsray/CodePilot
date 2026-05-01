@@ -124,10 +124,35 @@ function scanDirectory(
       const baseName = entry.name.replace(/\.md$/, '');
       const name = prefix ? `${prefix}:${baseName}` : baseName;
       const content = fs.readFileSync(fullPath, 'utf-8');
-      const firstLine = content.split('\n')[0]?.trim() || '';
-      const description = firstLine.startsWith('#')
-        ? firstLine.replace(/^#+\s*/, '')
-        : firstLine || `Skill: /${name}`;
+
+      // Try frontmatter first (for .md files with YAML header), fall back to first line
+      const meta = parseSkillFrontMatter(content);
+      let description: string;
+      if (meta.description) {
+        description = meta.description;
+      } else {
+        // For non-standard frontmatter (plain text between --- markers),
+        // extract the text content between the first two --- lines
+        const fmMatch = content.match(/^---\r?\n([\s\S]+?)\r?\n---/);
+        if (fmMatch) {
+          const fmContent = fmMatch[1].trim();
+          // If it's not YAML (no key: value pairs), use it as description
+          if (fmContent && !/^\w+:\s/m.test(fmContent)) {
+            description = fmContent.split('\n')[0]?.trim() || `Skill: /${name}`;
+          } else {
+            const firstLine = content.split('\n')[0]?.trim() || '';
+            description = firstLine.startsWith('#')
+              ? firstLine.replace(/^#+\s*/, '')
+              : firstLine || `Skill: /${name}`;
+          }
+        } else {
+          const firstLine = content.split('\n')[0]?.trim() || '';
+          description = firstLine.startsWith('#')
+            ? firstLine.replace(/^#+\s*/, '')
+            : firstLine || `Skill: /${name}`;
+        }
+      }
+
       skills.push({
         name,
         description,
@@ -135,6 +160,7 @@ function scanDirectory(
         source,
         kind: 'slash_command',
         filePath: fullPath,
+        autoExtracted: meta.autoExtracted,
       });
     }
   } catch {

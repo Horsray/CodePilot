@@ -227,18 +227,23 @@ export function SubAgentStatusBar({ subAgents, defaultExpanded = false }: SubAge
                     )}
                   </div>
                   {agent.prompt && (
-                    <div className="text-muted-foreground/50 truncate mt-0.5" title={agent.prompt}>
+                    <div className="text-muted-foreground/50 mt-0.5 whitespace-pre-wrap break-words line-clamp-2" title={agent.prompt}>
                       {agent.prompt}
                     </div>
                   )}
                   {agent.report && (
-                    <div className="text-muted-foreground/60 mt-0.5 whitespace-pre-wrap break-words line-clamp-3">
+                    <div className="text-muted-foreground/60 mt-0.5 whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto">
                       {agent.report}
                     </div>
                   )}
                   {agent.error && (
                     <div className="text-red-400/70 mt-0.5 truncate" title={agent.error}>
                       {agent.error}
+                    </div>
+                  )}
+                  {agent.status === 'running' && agent.progress && (
+                    <div className="text-blue-400/50 mt-0.5 whitespace-pre-wrap break-words text-[10px] max-h-[200px] overflow-y-auto font-mono">
+                      {agent.progress.slice(-2000)}
                     </div>
                   )}
                 </div>

@@ -15,6 +15,7 @@ import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { RuntimeBadge } from './RuntimeBadge';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { SpinnerGap } from '@/components/ui/icon';
 import { usePanel } from '@/hooks/usePanel';
 import { usePanelStore } from '@/store/usePanelStore';
@@ -327,6 +328,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, currentModel, currentProviderId]);
+
+  // 中文注释：预热状态自动隐藏——ready/failed 状态 3 秒后自动消失
+  useEffect(() => {
+    if (runtimeWarmupState !== 'ready' && runtimeWarmupState !== 'failed') return;
+    const timer = setTimeout(() => setRuntimeWarmupState('idle'), 3000);
+    return () => clearTimeout(timer);
+  }, [runtimeWarmupState]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -1161,6 +1169,36 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           >
             {t('assistant.openNewAssistant')}
           </Button>
+        </div>
+      )}
+      {/* 模型切换预热状态提示 — 顶部居中，加载完成前不消失 */}
+      {runtimeWarmupState !== 'idle' && (
+        <div className="flex justify-center py-2">
+          <div className={cn(
+            'inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm shadow-sm border',
+            runtimeWarmupState === 'warming' && 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300',
+            runtimeWarmupState === 'ready' && 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
+            runtimeWarmupState === 'failed' && 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300',
+          )}>
+            {runtimeWarmupState === 'warming' && (
+              <>
+                <SpinnerGap size={14} className="animate-spin" />
+                <span className="font-medium">加载中...</span>
+              </>
+            )}
+            {runtimeWarmupState === 'ready' && (
+              <>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11.5 3.5L5.5 10.5L2.5 7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <span className="font-medium">加载完成</span>
+              </>
+            )}
+            {runtimeWarmupState === 'failed' && (
+              <>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 3.5L10.5 10.5M10.5 3.5L3.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <span className="font-medium">加载失败</span>
+              </>
+            )}
+          </div>
         </div>
       )}
       <MessageList

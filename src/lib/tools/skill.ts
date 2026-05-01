@@ -1,9 +1,9 @@
 /**
  * tools/skill.ts — SkillTool: lets the model discover and invoke skills.
  *
- * Design: the tool description is written as a natural-language guide,
- * not a rigid rulebook. The model discovers skills organically through
- * the "suggest" mode, which matches task descriptions to skill triggers.
+ * Design: the LLM itself is the best matcher. The system prompt provides
+ * a compact skills index; the model scans it and calls Skill(name) when
+ * a skill matches. No programmatic keyword matching needed.
  */
 
 import { tool } from 'ai';
@@ -14,90 +14,24 @@ import { prepareSkillExecution } from '../skill-executor';
 /**
  * Create the Skill tool. The model can use this to:
  * 1. List all available skills (no arguments)
- * 2. Get skill suggestions for a task (suggest mode)
- * 3. Execute a specific skill by name
+ * 2. Execute a specific skill by name
  */
 export function createSkillTool(workingDirectory: string) {
   return tool({
     description:
-      'Access reusable workflow templates (skills) that encode proven solutions for recurring tasks. ' +
-      'Skills are distilled from past successful workflows — building, debugging, deployment, ' +
-      'code exploration, platform integration, and more. ' +
-      'Use this tool when you sense the current task might have been solved before, ' +
-      'or when a multi-step workflow feels like it should be reusable. ' +
-      'Call with no arguments to browse all skills. ' +
-      'Call with `suggest` and a task description to find the best matching skill. ' +
-      'Call with `name` to execute a specific skill.',
+      'Discover and execute reusable workflow skills.\n' +
+      'Modes:\n' +
+      '- No arguments: list all available skills by category\n' +
+      '- With `name`: execute the named skill\n\n' +
+      'Before calling, check the skills index in the system prompt first. ' +
+      'If a skill matches your task, call with its name directly.',
     inputSchema: z.object({
-      name: z.string().optional().describe('Name of the skill to execute. Omit to list or suggest.'),
-      suggest: z.string().optional().describe('Describe what you are trying to do. The tool will return skills whose trigger conditions match your task.'),
+      name: z.string().optional().describe('Name of the skill to execute. Omit to list all skills.'),
       skill_name: z.string().optional().describe('Name of the skill to execute (legacy). Omit to list all skills.'),
       arguments: z.record(z.string(), z.string()).optional().describe('Arguments to pass to the skill (key-value pairs)'),
     }),
-    execute: async ({ name, skill_name, suggest, arguments: args }) => {
+    execute: async ({ name, skill_name, arguments: args }) => {
       const targetName = name || skill_name;
-
-      // ── Suggest mode ──────────────────────────────────────────
-      if (suggest && !targetName) {
-        const skills = discoverSkills(workingDirectory);
-        if (skills.length === 0) {
-          return 'No skills available yet. Skills are automatically crystallized from recurring workflows.';
-        }
-
-        const query = suggest.toLowerCase();
-        const scored = skills
-          .map(s => {
-            let score = 0;
-            const nameLC = s.name.toLowerCase();
-            const descLC = (s.description || '').toLowerCase();
-            const triggerLC = (s.whenToUse || '').toLowerCase();
-            const bodyLC = (s.body || '').toLowerCase().slice(0, 500);
-
-            // Exact keyword matches
-            const queryWords = query.split(/\s+/).filter(w => w.length > 2);
-            for (const word of queryWords) {
-              if (nameLC.includes(word)) score += 3;
-              if (triggerLC.includes(word)) score += 4;
-              if (descLC.includes(word)) score += 2;
-              if (bodyLC.includes(word)) score += 1;
-            }
-
-            // Category bonus: if the task domain matches the skill domain
-            const domains: [RegExp, string][] = [
-              [/\b(build|compile|package|deploy|electron|打包|构建|部署)\b/i, 'build'],
-              [/\b(debug|fix|error|bug|troubleshoot|修复|调试|排查)\b/i, 'debug'],
-              [/\b(test|verify|check|validate|测试|验证)\b/i, 'test'],
-              [/\b(search|find|explore|locate|查找|搜索|探索)\b/i, 'explore'],
-              [/\b(git|merge|rebase|branch|commit|分支|合并)\b/i, 'git'],
-              [/\b(ui|style|css|layout|component|样式|界面|组件)\b/i, 'ui'],
-              [/\b(database|sql|query|migration|数据库)\b/i, 'db'],
-            ];
-            for (const [pattern, domain] of domains) {
-              if (pattern.test(query) && (nameLC.includes(domain) || triggerLC.includes(domain) || descLC.includes(domain))) {
-                score += 5;
-              }
-            }
-
-            return { skill: s, score };
-          })
-          .filter(x => x.score > 0)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 5);
-
-        if (scored.length === 0) {
-          return `No skills match "${suggest}". Try listing all skills (no arguments) to browse available ones.`;
-        }
-
-        const lines = [`Skills matching "${suggest}":\n`];
-        for (const { skill: s, score } of scored) {
-          const parts = [`- **${s.name}** (match: ${score})`];
-          if (s.description) parts.push(`: ${s.description.slice(0, 120)}`);
-          if (s.whenToUse) parts.push(`\n  When: ${s.whenToUse.slice(0, 150)}`);
-          lines.push(parts.join(''));
-        }
-        lines.push('\nCall with `name` to execute a matching skill.');
-        return lines.join('\n');
-      }
 
       // ── List mode ─────────────────────────────────────────────
       if (!targetName) {
@@ -111,7 +45,7 @@ export function createSkillTool(workingDirectory: string) {
           { name: 'Code Exploration & Search', skills: [] },
           { name: 'Debugging & Troubleshooting', skills: [] },
           { name: 'Testing & Verification', skills: [] },
-          { name: 'Integrations (Feishu/Telegram/etc.)', skills: [] },
+          { name: 'Integrations', skills: [] },
           { name: 'Knowledge & Research', skills: [] },
           { name: 'Other Workflows', skills: [] },
         ];
@@ -130,16 +64,14 @@ export function createSkillTool(workingDirectory: string) {
 
         for (const s of skills) categories[classify(s)].skills.push(s);
 
-        const lines: string[] = [
-          `Found ${skills.length} skills. Use \`suggest\` with a task description to find the best match.\n`,
-        ];
+        const lines: string[] = [`Found ${skills.length} skills:\n`];
         for (const cat of categories) {
           if (cat.skills.length === 0) continue;
           lines.push(`## ${cat.name} (${cat.skills.length})`);
           for (const s of cat.skills) {
             const parts = [`- **${s.name}**`];
-            if (s.description) parts.push(`: ${s.description.slice(0, 100)}`);
-            if (s.whenToUse) parts.push(` [When: ${s.whenToUse.slice(0, 120)}]`);
+            if (s.description) parts.push(`: ${s.description.slice(0, 80)}`);
+            if (s.whenToUse) parts.push(` [When: ${s.whenToUse.slice(0, 100)}]`);
             if (s.context === 'fork') parts.push(' [fork]');
             lines.push(parts.join(''));
           }
@@ -152,7 +84,7 @@ export function createSkillTool(workingDirectory: string) {
       const skill = getSkill(targetName, workingDirectory);
       if (!skill) {
         const available = discoverSkills(workingDirectory).map(s => s.name).join(', ');
-        return `Skill "${targetName}" not found. Available: ${available || 'none'}\nTip: use \`suggest\` with a task description to find matching skills.`;
+        return `Skill "${targetName}" not found. Available: ${available || 'none'}\nTip: call with no arguments to browse all skills.`;
       }
 
       const result = prepareSkillExecution(skill, args);

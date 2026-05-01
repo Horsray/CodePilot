@@ -84,7 +84,7 @@ function sanitizeEnvValue(value: string): string {
  * On Windows, spawn is strict: every env value MUST be a string.
  * Spreading process.env can include undefined values which cause EINVAL.
  */
-function sanitizeEnv(env: Record<string, string>): Record<string, string> {
+export function sanitizeEnv(env: Record<string, string>): Record<string, string> {
   const clean: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (typeof value === 'string') {

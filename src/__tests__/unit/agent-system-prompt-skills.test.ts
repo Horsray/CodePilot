@@ -59,7 +59,7 @@ Use multiple passes and end with findings first.
     assert.ok(catalog, 'expected a catalog to be generated');
     assert.match(catalog!, /smart-review/);
     assert.match(catalog!, /Review risky code paths quickly/);
-    assert.match(catalog!, /When the user asks for code review or regression analysis/);
+    assert.match(catalog!, /smart-review/);
     assert.doesNotMatch(catalog!, /This is a long body that should not be injected directly/);
   });
 
@@ -86,7 +86,7 @@ when_to_use: When the user asks for reviews
     // 中文注释：技能目录现在会以轻量索引形式注入系统提示，
     // 让模型在复杂任务开始前能主动发现可用的 Skill。
     const prompt = buildSystemPrompt({ workingDirectory: tmpDir });
-    assert.match(prompt.prompt, /Lightweight Skills Visibility/);
+    assert.match(prompt.prompt, /## Skills/);
     assert.match(prompt.prompt, /auto-review/);
     assert.doesNotMatch(prompt.prompt, /This is a long body/);
   });
@@ -147,7 +147,7 @@ when_to_use: When the user asks for release notes or changelog drafting
 
     // 中文注释：轻量级技能目录索引现在会注入系统提示，
     // 但 "Relevant Skill Hints"（请求级别的技能提示）不会注入。
-    assert.match(prompt.prompt, /Lightweight Skills Visibility/);
+    assert.match(prompt.prompt, /## Skills/);
     assert.match(prompt.prompt, /code-review-helper/);
     assert.match(prompt.prompt, /release-notes/);
     assert.doesNotMatch(prompt.prompt, /Relevant Skill Hints/);

@@ -175,7 +175,7 @@ export async function PUT(
   try {
     const { name } = await params;
     const body = await request.json();
-    const { content } = body as { content: string };
+    let { content, newName } = body as { content: string; newName?: string };
 
     const url = new URL(request.url);
     const scopeParam = url.searchParams.get("scope");
@@ -196,23 +196,81 @@ export async function PUT(
       return NextResponse.json({ error: "Skill not found" }, { status: 404 });
     }
 
-    fs.writeFileSync(found.filePath, content ?? "", "utf-8");
+    // Handle rename if newName is provided
+    let finalName = name;
+    let finalFilePath = found.filePath;
+    if (newName && newName !== name) {
+      const safeNewName = newName.replace(/[^一-鿿㐀-䶿a-zA-Z0-9_-]/g, "-");
+      if (!safeNewName) {
+        return NextResponse.json({ error: "Invalid new name" }, { status: 400 });
+      }
+
+      // Check if new name already exists
+      const existingDir = scope === "project"
+        ? path.join(getProjectSkillsDir(cwdParam), safeNewName)
+        : path.join(getGlobalSkillsDir(), safeNewName);
+      const existingCmd = scope === "project"
+        ? path.join(getProjectCommandsDir(cwdParam), `${safeNewName}.md`)
+        : path.join(getGlobalCommandsDir(), `${safeNewName}.md`);
+
+      if (found.filePath.endsWith("SKILL.md")) {
+        // Agent skill: rename directory
+        const parentDir = path.dirname(found.filePath);
+        const newDir = path.join(path.dirname(parentDir), safeNewName);
+        if (fs.existsSync(newDir) && newDir !== parentDir) {
+          return NextResponse.json({ error: "A skill with this name already exists" }, { status: 409 });
+        }
+        if (newDir !== parentDir) {
+          fs.renameSync(parentDir, newDir);
+        }
+        finalName = safeNewName;
+        finalFilePath = path.join(newDir, "SKILL.md");
+
+        // Update frontmatter name in content to match new directory name
+        if (content) {
+          content = content.replace(
+            /^(---\r?\n[\s\S]*?^name:\s*).+/m,
+            `$1${safeNewName}`,
+          );
+        }
+      } else {
+        // Slash command: rename file
+        const newFilePath = path.join(path.dirname(found.filePath), `${safeNewName}.md`);
+        if (fs.existsSync(newFilePath) && newFilePath !== found.filePath) {
+          return NextResponse.json({ error: "A skill with this name already exists" }, { status: 409 });
+        }
+        if (newFilePath !== found.filePath) {
+          fs.renameSync(found.filePath, newFilePath);
+        }
+        finalName = safeNewName;
+        finalFilePath = newFilePath;
+      }
+    }
+
+    fs.writeFileSync(finalFilePath, content ?? "", "utf-8");
     invalidateSkillCache();
 
-    const firstLine = (content ?? "").split("\n")[0]?.trim() || "";
-    const description = firstLine.startsWith("#")
-      ? firstLine.replace(/^#+\s*/, "")
-      : firstLine || `Skill: /${name}`;
+    const kind: SkillKind = finalFilePath.endsWith("SKILL.md") ? "agent_skill" : "slash_command";
 
-    const kind: SkillKind = found.filePath.endsWith("SKILL.md") ? "agent_skill" : "slash_command";
+    let description: string;
+    if (finalFilePath.endsWith("SKILL.md")) {
+      const meta = parseSkillFrontMatter(content ?? "");
+      const firstLine = (content ?? "").split("\n")[0]?.trim() || "";
+      description = meta.description || (firstLine.startsWith("#") ? firstLine.replace(/^#+\s*/, "") : firstLine || `Skill: /${finalName}`);
+    } else {
+      const firstLine = (content ?? "").split("\n")[0]?.trim() || "";
+      description = firstLine.startsWith("#")
+        ? firstLine.replace(/^#+\s*/, "")
+        : firstLine || `Skill: /${finalName}`;
+    }
 
     return NextResponse.json({
       skill: {
-        name,
+        name: finalName,
         description,
         content: content ?? "",
         source: found.source,
-        filePath: found.filePath,
+        filePath: finalFilePath,
         kind,
       },
     });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { usePanel } from "@/hooks/usePanel";
@@ -15,6 +15,10 @@ import type { TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { SkillItem } from "./SkillListItem";
 
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_DEFAULT_WIDTH = 300;
+
 type ViewTab = "local" | "marketplace";
 
 export function SkillsManager() {
@@ -26,6 +30,37 @@ export function SkillsManager() {
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [viewTab, setViewTab] = useState<ViewTab>("local");
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const isResizing = useRef(false);
+  const startX = useRef(0);
+  const startWidth = useRef(0);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizing.current = true;
+    startX.current = e.clientX;
+    startWidth.current = sidebarWidth;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing.current) return;
+      const delta = e.clientX - startX.current;
+      const newWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, startWidth.current + delta));
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      isResizing.current = false;
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, [sidebarWidth]);
 
   const fetchSkills = useCallback(async () => {
     try {
@@ -99,6 +134,33 @@ export function SkillsManager() {
         )
       );
       // Update selected
+      setSelected(data.skill);
+    },
+    [buildSkillUrl]
+  );
+
+  const handleRename = useCallback(
+    async (skill: SkillItem, newName: string) => {
+      const res = await fetch(buildSkillUrl(skill), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: skill.content, newName }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to rename skill");
+      }
+      const data = await res.json();
+      // Replace old entry with renamed one
+      setSkills((prev) =>
+        prev.map((s) =>
+          s.name === skill.name &&
+          s.source === skill.source &&
+          s.installedSource === skill.installedSource
+            ? data.skill
+            : s
+        )
+      );
       setSelected(data.skill);
     },
     [buildSkillUrl]
@@ -228,7 +290,7 @@ export function SkillsManager() {
       ) : (
       <div className="flex flex-1 min-h-0">
         {/* Left: skill list */}
-        <div className="w-64 shrink-0 flex flex-col overflow-hidden pl-4">
+        <div style={{ width: sidebarWidth }} className="shrink-0 flex flex-col overflow-hidden pl-4">
           <div className="px-2 pt-4 pb-2">
             <div className="relative">
               <MagnifyingGlass size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -258,6 +320,7 @@ export function SkillsManager() {
                       onSelect={() => setSelected(skill)}
                       onDelete={handleDelete}
                       onToggle={handleToggle}
+                      onRename={handleRename}
                     />
                   ))}
                 </div>
@@ -278,6 +341,7 @@ export function SkillsManager() {
                       onSelect={() => setSelected(skill)}
                       onDelete={handleDelete}
                       onToggle={handleToggle}
+                      onRename={handleRename}
                     />
                   ))}
                 </div>
@@ -299,6 +363,7 @@ export function SkillsManager() {
                       onSelect={() => setSelected(skill)}
                       onDelete={handleDelete}
                       onToggle={handleToggle}
+                      onRename={handleRename}
                     />
                   ))}
                 </div>
@@ -326,8 +391,11 @@ export function SkillsManager() {
           </div>
         </div>
 
-        {/* Divider */}
-        <div className="shrink-0 w-px bg-border/50" />
+        {/* Resize handle */}
+        <div
+          className="shrink-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors rounded-full mx-0.5"
+          onMouseDown={handleResizeStart}
+        />
 
         {/* Right: editor */}
         <div className="flex-1 min-w-0 overflow-hidden">

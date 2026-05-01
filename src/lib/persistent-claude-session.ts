@@ -340,10 +340,13 @@ export function isSignatureCompatible(sig1: string, sig2: string): boolean {
     const a = JSON.parse(sig1);
     const b = JSON.parse(sig2);
 
+    // 中文注释：model 不再作为兼容性判断条件。
+    // SDK subprocess 可以在同一个 session 中处理不同的 model 请求（model 是 per-request 参数），
+    // 之前检查 model 导致切换模型后 warmup session 被判定不兼容而销毁，预热永远无法生效。
+    // 只检查真正影响 session 兼容性的字段：provider（API 端点）、cwd（工作目录）、auth（认证方式）。
     const result = (
       a.providerKey === b.providerKey &&
       a.cwd === b.cwd &&
-      a.model === b.model &&
       a.env?.ANTHROPIC_BASE_URL === b.env?.ANTHROPIC_BASE_URL &&
       a.env?.authKind === b.env?.authKind
     );
@@ -352,7 +355,6 @@ export function isSignatureCompatible(sig1: string, sig2: string): boolean {
       console.log('[isSignatureCompatible] MISMATCH:', {
         providerKey: [a.providerKey, b.providerKey, a.providerKey === b.providerKey],
         cwd: [a.cwd?.slice(-30), b.cwd?.slice(-30), a.cwd === b.cwd],
-        model: [a.model, b.model, a.model === b.model],
         baseUrl: [a.env?.ANTHROPIC_BASE_URL, b.env?.ANTHROPIC_BASE_URL, a.env?.ANTHROPIC_BASE_URL === b.env?.ANTHROPIC_BASE_URL],
         authKind: [a.env?.authKind, b.env?.authKind, a.env?.authKind === b.env?.authKind],
       });
@@ -806,13 +808,11 @@ export async function warmupPersistentClaudeSession(params: {
   }
 
   // 中文注释：关键配置不兼容（provider/model/cwd/env 变化），销毁旧 session 重新预热
-  const hadExistingEntry = !!entry;
   if (entry && !isSignatureCompatible(entry.signature, params.signature)) {
     closeEntry(entry);
     store.delete(params.codepilotSessionId);
     entry = undefined;
   }
-  const wasSwitched = hadExistingEntry && !entry;
 
   if (!entry) {
     entry = createEntry(
@@ -823,19 +823,10 @@ export async function warmupPersistentClaudeSession(params: {
     );
     store.set(params.codepilotSessionId, entry);
 
-    // 中文注释：功能名称「模型切换快速预热」，用法是检测到签名不兼容（模型/provider/cwd 变更）
-    // 时只创建 entry 启动 CLI 进程，立即返回不设 warmupPromise。
-    // 不启动后台 init 消费——避免与 chat turn 的 iterator.next() 并发调用同一 AsyncIterator。
-    // init 消息由 getPersistentClaudeTurn 的首次 iterator.next() 自然接收并 yield 为 SSE status。
-    if (wasSwitched) {
-      console.log('[warmupPersistentClaudeSession] Fast warmup for model switch — entry created, process starting in background');
-      return {
-        model: typeof params.options.model === 'string' ? params.options.model : '',
-        session_id: '',
-      };
-    }
-
-    // 中文注释：空白页预热→完整等待 init，确认进程可用后再返回
+    // 中文注释：预热统一等待 system/init，确认进程可用后再返回。
+    // 不管是否模型切换，都完整等待 init 消息，避免向调用方返回虚假的"预热完成"。
+    // entry.warmupPromise 确保后续 getPersistentClaudeTurn 会等待预热完毕再消费 iterator，
+    // 不会出现并发调用 iterator.next() 的问题。
     entry.warmupPromise = (async () => {
       try {
         // 中文注释：功能名称「预热 init 等待容错」，用法是在开启 hook 事件后，
@@ -859,15 +850,15 @@ export async function warmupPersistentClaudeSession(params: {
           const msg = next.value as SDKSystemMessage;
           const initData = extractWarmupInitData(msg);
           if (initData) {
-          entry.warmedUp = true;
-          entry.initData = initData;
-          entry.lastUsedAt = Date.now();
+            entry.warmedUp = true;
+            entry.initData = initData;
+            entry.lastUsedAt = Date.now();
 
-          // 中文注释：预热完成后启动空闲超时，30 分钟内无消息则关闭 session
-          scheduleWarmupIdleClose(params.codepilotSessionId, entry);
+            // 中文注释：预热完成后启动空闲超时，30 分钟内无消息则关闭 session
+            scheduleWarmupIdleClose(params.codepilotSessionId, entry);
 
-          return initData;
-        }
+            return initData;
+          }
 
           if (isWarmupSkippableSystemMessage(msg)) {
             continue;

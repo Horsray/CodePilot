@@ -103,7 +103,7 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
   // Skills catalog (lightweight visibility index)
   if (options.workingDirectory) {
     try {
-      const skillsCatalog = buildDiscoveredSkillsCatalog(options.workingDirectory, 24, { lightweight: true });
+      const skillsCatalog = buildDiscoveredSkillsCatalog(options.workingDirectory, 24);
       if (skillsCatalog) {
         parts.push(skillsCatalog);
         referencedFiles.push('Skills Catalog (Auto-discovered)');
@@ -308,16 +308,16 @@ export function getExternalInstructionCandidates(homeDir = os.homedir()): Extern
 export function buildDiscoveredSkillsCatalog(
   cwd: string,
   maxSkills = 40,
-  options: { lightweight?: boolean } = {},
 ): string | null {
   const skills = discoverSkills(cwd);
   if (skills.length === 0) return null;
-  const lightweight = options.lightweight === true;
   const lines = [
-    lightweight ? '## Lightweight Skills Visibility' : '## Auto-Discovered Skills Catalog',
-    lightweight
-      ? 'The following reusable skills are available via the `Skill` tool. This is a lightweight visibility index for local skills.'
-      : 'The following reusable skills are available via the `Skill` tool. Prefer invoking `Skill` for matching workflows instead of re-deriving the workflow manually.',
+    '## Skills',
+    'Before replying, scan the skills below. If one clearly matches',
+    'your task, load it with Skill(name) and follow its instructions.',
+    '',
+    'Do NOT re-derive a workflow that already exists as a skill.',
+    'When uncertain, call Skill with no arguments to browse all skills.',
   ];
 
   // 中文注释：将技能按类别分组显示，让模型快速定位而非逐条扫描
@@ -354,11 +354,8 @@ export function buildDiscoveredSkillsCatalog(
     if (cat.skills.length === 0) continue;
     lines.push(`\n### ${cat.name} (${cat.skills.length})`);
     for (const skill of cat.skills) {
-      const description = (skill.description || 'No description provided').slice(0, 100);
-      const whenToUse = (skill.whenToUse || '').slice(0, 140);
-      const kind = skill.userInvocable ? 'slash+skill' : 'skill';
-      lines.push(`- ${skill.name} [${kind}, ${skill.context}] — ${description}`);
-      if (whenToUse) lines.push(`  triggers: ${whenToUse}`);
+      const description = (skill.description || 'No description provided').slice(0, 80);
+      lines.push(`- ${skill.name} — ${description}`);
     }
   }
   if (skills.length > maxSkills) {
