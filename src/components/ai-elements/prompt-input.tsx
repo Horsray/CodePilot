@@ -58,8 +58,10 @@ import { cn } from "@/lib/utils";
 import {
   ArrowElbowDownLeft,
   Image,
+  PaperPlaneTilt,
   Plus,
   Square,
+  StopCircle,
   X,
 } from "@phosphor-icons/react";
 import { nanoid } from "nanoid";
@@ -1053,11 +1055,14 @@ export const PromptInputButton = ({
   ...props
 }: PromptInputButtonProps) => {
   const newSize =
-    size ?? (Children.count(props.children) > 1 ? "sm" : "icon-sm");
+    size ?? (Children.count(props.children) > 1 ? "sm" : "sm");
 
   const button = (
     <InputGroupButton
-      className={cn(className)}
+      className={cn(
+        "hover:bg-accent/50 hover:text-accent-foreground transition-all duration-150 font-medium text-foreground/70",
+        className
+      )}
       size={newSize}
       type="button"
       variant={variant}
@@ -1137,7 +1142,7 @@ export type PromptInputSubmitProps = ComponentProps<typeof InputGroupButton> & {
 export const PromptInputSubmit = ({
   className,
   variant = "default",
-  size = "icon-sm",
+  size = "sm",
   status,
   onStop,
   onClick,
@@ -1146,12 +1151,12 @@ export const PromptInputSubmit = ({
 }: PromptInputSubmitProps) => {
   const isGenerating = status === "submitted" || status === "streaming";
 
-  let Icon = <ArrowElbowDownLeft className="size-4" />;
+  let Icon = <PaperPlaneTilt className="size-4" weight="fill" />;
 
   if (status === "submitted") {
-    Icon = <Spinner />;
+    Icon = <Spinner className="size-4" />;
   } else if (status === "streaming") {
-    Icon = <Square className="size-4" />;
+    Icon = <StopCircle className="size-4" />;
   } else if (status === "error") {
     Icon = <X className="size-4" />;
   }
@@ -1171,7 +1176,10 @@ export const PromptInputSubmit = ({
   return (
     <InputGroupButton
       aria-label={isGenerating ? "Stop" : "Submit"}
-      className={cn(className)}
+      className={cn(
+        "bg-primary/90 text-primary-foreground shadow-sm hover:bg-primary active:scale-[0.96] transition-all duration-150 font-medium rounded-full aspect-square w-9 h-9 flex items-center justify-center",
+        className
+      )}
       onClick={handleClick}
       size={size}
       type={isGenerating && onStop ? "button" : "submit"}

@@ -15,6 +15,7 @@ import { ensureSchedulerRunning } from '@/lib/task-scheduler';
 import { hasCodePilotProvider } from '@/lib/provider-presence';
 import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
 import { getEnabledPluginConfigs, hasEnabledOmcPlugin } from '@/lib/plugin-discovery';
+import { generateConversationTitle, extractTitleFromResponse } from '@/lib/title-generator';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
@@ -246,12 +247,6 @@ export async function POST(request: NextRequest) {
         savedContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayOverride || content}`;
       }
       savedUserMessage = addMessage(session_id, 'user', savedContent);
-
-      // Auto-generate title from first message if still default
-      if (session.title === 'New Chat') {
-        const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
-        updateSessionTitle(session_id, title);
-      }
     }
 
     // Determine model: request override > session model > default setting
@@ -532,6 +527,16 @@ export async function POST(request: NextRequest) {
           })}\n\n`);
         }
 
+        // Start title generation early (fire-and-forget) so the lightweight
+        // model call finishes long before the client fetches post-stream.
+        // Only on first turn (no prior history) — subsequent messages must not
+        // overwrite the AI-generated title with truncated user text.
+        if (!autoTrigger && historyMsgs.length === 0) {
+          generateConversationTitle(session_id, content).catch(err => {
+            console.warn('[chat API] Title generation failed:', err);
+          });
+        }
+
         console.log('[chat API] streamClaude params:', {
           promptLength: content.length,
           promptFirst200: content.slice(0, 200),
@@ -588,7 +593,7 @@ export async function POST(request: NextRequest) {
             clearInterval(lockRenewalInterval);
             releaseSessionLock(session_id, lockId);
             setSessionRuntimeStatus(session_id, 'idle');
-          }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts, persistProviderId });
+          }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts, persistProviderId, firstUserMessage: content });
 
           const reader = streamForClient.getReader();
           while (true) {
@@ -636,7 +641,7 @@ async function collectStreamResponse(
   sessionId: string,
   telegramOpts: { sessionId?: string; sessionTitle?: string; workingDirectory?: string },
   onComplete?: () => void,
-  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean; referencedContexts?: string[]; persistProviderId?: string },
+  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean; referencedContexts?: string[]; persistProviderId?: string; firstUserMessage?: string },
 ) {
   const reader = stream.getReader();
   const contentBlocks: MessageContentBlock[] = [];
@@ -1040,6 +1045,36 @@ async function collectStreamResponse(
         .map((b) => b.text)
         .join('');
 
+      // 0. Title fallback — if the model-based title generation failed,
+      //    extract a title from the assistant's response text.
+      //    This guarantees the title is always meaningful, not just truncated user text.
+      //    Check DB directly: if title still looks like a fallback, replace it.
+      if (fullText.trim().length > 0) {
+        try {
+          const session = getSession(sessionId);
+          if (session) {
+            // Only replace if the title is still the initial fallback:
+            // - 'New Chat' (default)
+            // - empty/missing
+            // - the exact truncated text from session creation (content.slice(0, 50))
+            const firstMsg = opts?.firstUserMessage || '';
+            const initialTitle = firstMsg.slice(0, 50);
+            const needsReplacement = !session.title
+              || session.title === 'New Chat'
+              || session.title === initialTitle;
+            if (needsReplacement) {
+              const extracted = extractTitleFromResponse(fullText);
+              if (extracted && extracted !== session.title) {
+                updateSessionTitle(sessionId, extracted);
+                console.log('[chat API] Title extracted from response:', { from: session.title, to: extracted });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[chat API] Title extraction from response failed:', err);
+        }
+      }
+
       // 1. Check for onboarding-complete fence
       const completion = extractCompletion(fullText);
       if (completion) {
@@ -1148,6 +1183,10 @@ async function collectStreamResponse(
         }
       } catch { /* best effort */ }
     }
+
+    // Title generation moved to pre-stream (see caller) to eliminate the
+    // race condition between collectStreamResponse (background) and
+    // the client's post-stream session fetch.
 
     // Telegram notifications: completion or error (fire-and-forget)
     // Suppressed for auto-trigger turns (onboarding/heartbeat) — invisible system flows

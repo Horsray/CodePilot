@@ -18,7 +18,7 @@
 | Phase 8 | 建立通用规则发现/分类/注入机制 | 🔄 进行中 | 对齐 Trae 式多来源规则编排，面向多项目复用 |
 | Phase 9 | 规则瘦身与可视化验收 | ✅ 已完成 | 已区分“已发现”和“本轮实际注入” |
 | Phase 10 | 统一 MCP / Skills 注册表与迁移 | 🔄 进行中 | 前端展示、运行时加载、Claude 原生发现统一到单一真相源 |
-| Phase 11 | 终端版行为回归：删除宿主额外编排 | 🔄 进行中 | 回退 system prompt 组装、宿主自动 MCP 注入、历史压缩与再编码 |
+| Phase 11 | 终端版行为回归：删除宿主额外编排 | ✅ 已完成 | 去重原生规则注入，收紧 warmup/session 签名，并恢复显式 Team MCP 入口 |
 
 ## 决策日志
 
@@ -33,6 +33,7 @@
 - 2026-04-28：规则系统不做当前项目特判，改为通用规则发现器 + 分类器 + 注入编译器。兼容 DB 全局规则、DB 项目规则、`CLAUDE.md`、`CLAUDE.local.md`、`AGENTS.md`、`.trae/rules/rules.md`、`FILEMAP.md` 等来源。
 - 2026-04-29：MCP 与 Skills 进入第三阶段收口，不再允许“前端显示一套、Claude SDK 读取一套、宿主动态注入一套”。统一为单一有效注册表，并把遗留 `.mcp.json` / `claude.json` 项目配置迁入 Claude 原生配置链。
 - 2026-04-29：终端版对齐目标调整为“宿主最小化”。停止继续添加 CodePilot 自己的策略引导，优先回退桌面聊天里额外的 system prompt 拼装、宿主自动 MCP 注入、历史压缩与再编码，让 Claude Code 自己决定 skills / agent / 联网工具的使用。
+- 2026-04-29：本轮终端版行为回归聚焦三点：停止把 `CLAUDE.md` / `AGENTS.md` / `.trae/rules/rules.md` 全文重新塞进 appendSystemPrompt；把 `systemPrompt` 与 `mcpServers` 纳入复用签名；将 `/team` 的确定性编排入口恢复为显式 Team MCP，而不是继续依赖宿主提示词硬推。
 
 ## 详细设计
 

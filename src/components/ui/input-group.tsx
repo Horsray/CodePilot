@@ -14,17 +14,17 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="input-group"
       role="group"
       className={cn(
-        "group/input-group border-input dark:bg-input/30 relative flex w-full items-center rounded-xl border shadow-sm transition-[color,box-shadow,border-color] outline-none bg-white dark:bg-[#1a1b1e]",
-        "h-9 min-w-0 has-[>textarea]:h-auto",
+        "group/input-group border-input relative flex w-full items-center rounded-2xl border bg-white shadow-md transition-all duration-200 outline-none",
+        "h-12 min-w-0 has-[>textarea]:h-auto has-[>textarea]:min-h-[100px]",
 
         // Variants based on alignment.
-        "has-[>[data-align=inline-start]]:[&>input]:pl-2",
-        "has-[>[data-align=inline-end]]:[&>input]:pr-2",
+        "has-[>[data-align=inline-start]]:[&>input]:pl-3",
+        "has-[>[data-align=inline-end]]:[&>input]:pr-3",
         "has-[>[data-align=block-start]]:h-auto has-[>[data-align=block-start]]:flex-col has-[>[data-align=block-start]]:[&>input]:pb-3",
         "has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-end]]:flex-col has-[>[data-align=block-end]]:[&>input]:pt-3",
 
-        // Focus state.
-        "has-[[data-slot=input-group-control]:focus-visible]:border-primary has-[[data-slot=input-group-control]:focus-visible]:ring-[3px] has-[[data-slot=input-group-control]:focus-visible]:ring-primary/10",
+        // Focus state - premium glow effect.
+        "has-[:focus-visible]:border-primary has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-primary/10 has-[:focus-visible]:shadow-[0_0_20px_rgba(59,130,246,0.3)]",
 
         // Error state.
         "has-[[data-slot][aria-invalid=true]]:ring-destructive/20 has-[[data-slot][aria-invalid=true]]:border-destructive dark:has-[[data-slot][aria-invalid=true]]:ring-destructive/40",
@@ -67,12 +67,13 @@ function InputGroupAddon({
       role="group"
       data-slot="input-group-addon"
       data-align={align}
-      className={cn(inputGroupAddonVariants({ align }), className)}
+      className={cn(inputGroupAddonVariants({ align }), className, "hover:bg-accent/30 rounded-lg mx-1 transition-colors duration-150")}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("button")) {
           return
         }
-        e.currentTarget.parentElement?.querySelector("input")?.focus()
+        const input = e.currentTarget.parentElement?.querySelector("input, textarea") as HTMLInputElement | HTMLTextAreaElement | null
+        input?.focus()
       }}
       {...props}
     />
@@ -80,15 +81,15 @@ function InputGroupAddon({
 }
 
 const inputGroupButtonVariants = cva(
-  "text-sm shadow-none flex gap-2 items-center",
+  "text-sm shadow-none flex gap-2 items-center transition-all duration-150 rounded-lg",
   {
     variants: {
       size: {
-        xs: "h-6 gap-1 px-2 rounded-[calc(var(--radius)-5px)] [&>svg:not([class*='size-'])]:size-3.5 has-[>svg]:px-2",
-        sm: "h-8 px-2.5 gap-1.5 rounded-md has-[>svg]:px-2.5",
+        xs: "h-8 px-3 gap-1.5 [&>svg:not([class*='size-'])]:size-4",
+        sm: "h-9 px-4 gap-2 [&>svg:not([class*='size-'])]:size-4",
         "icon-xs":
-          "size-6 rounded-[calc(var(--radius)-5px)] p-0 has-[>svg]:p-0",
-        "icon-sm": "size-8 p-0 has-[>svg]:p-0",
+          "size-7 rounded-lg p-0 has-[>svg]:p-0",
+        "icon-sm": "size-9 rounded-lg p-0 has-[>svg]:p-0",
       },
     },
     defaultVariants: {
@@ -152,7 +153,7 @@ function InputGroupTextarea({
     <Textarea
       data-slot="input-group-control"
       className={cn(
-        "flex-1 resize-none rounded-none border-0 bg-transparent py-3 shadow-none focus-visible:ring-0 dark:bg-transparent",
+        "flex-1 resize-none rounded-none border-0 bg-transparent py-3 px-3 shadow-none focus-visible:ring-0 dark:bg-transparent min-h-[60px]",
         className
       )}
       {...props}

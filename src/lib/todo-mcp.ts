@@ -46,6 +46,9 @@ export function createTodoMcpServer(workspacePath: string) {
           // This MCP handler just needs to return a success message to satisfy the LLM.
           return { content: [{ type: 'text' as const, text: `Task list updated with ${todos.length} items. UI has been synced.` }] };
         },
+        // 中文注释：功能名称「TodoWrite 首轮直出」，用法是让任务工具在首轮就直接可见，
+        // 避免模型先走 ToolSearch 才能拿到 TodoWrite 的 schema。
+        { alwaysLoad: true },
       ),
       tool(
         'codepilot_todo_write',
@@ -62,6 +65,9 @@ export function createTodoMcpServer(workspacePath: string) {
         async ({ todos }) => {
           return { content: [{ type: 'text' as const, text: `Task list updated with ${todos.length} items. UI has been synced.` }] };
         },
+        // 中文注释：功能名称「TodoWrite 兼容别名首轮直出」，用法是旧别名路径也直接暴露，
+        // 避免别名调用时再次退回 ToolSearch 补载。
+        { alwaysLoad: true },
       ),
       tool(
         'codepilot_skill_create',

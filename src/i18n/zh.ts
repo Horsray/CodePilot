@@ -398,6 +398,9 @@ const zh: Record<TranslationKey, string> = {
   'skills.marketplaceHint': '浏览技能市场',
   'skills.marketplaceHintDesc': '搜索并安装来自 Skills.sh 的社区技能',
   'skills.noReadme': '暂无技能描述',
+  'skills.disableSkill': '关闭 — 对 AI 隐藏',
+  'skills.enableSkill': '开启 — AI 可见',
+  'skills.disabledHint': '关闭的技能对 AI 全局不可见',
 
   // ── MCP ─────────────────────────────────────────────────────
   'mcp.addServer': '添加服务器',

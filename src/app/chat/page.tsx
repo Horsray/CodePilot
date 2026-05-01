@@ -23,12 +23,14 @@ interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  parentAgentId?: string;
 }
 
 interface ToolResultInfo {
   tool_use_id: string;
   content: string;
   is_error?: boolean;
+  parentAgentId?: string;
 }
 
 interface ChatPerfEntry {
@@ -566,6 +568,16 @@ export default function NewChatPage() {
         provider_id: currentProviderId,
       }),
       signal: controller.signal,
+    }).then(res => res.ok ? res.json() : null).then(data => {
+      if (data) {
+        console.log('[warmup] Blank page warmup completed:', {
+          warmed_up: data.warmed_up,
+          from_cache: data.from_cache,
+          session_id: data.warmup_session_id,
+          model: data.model,
+          mcp_count: data.mcp_count,
+        });
+      }
     }).catch(() => {});
 
     return () => controller.abort();
@@ -732,11 +744,31 @@ export default function NewChatPage() {
         });
 
         perfTrace.record('session.warmup.kickoff', 'frontend');
-        fetch('/api/chat/warmup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sessionId }),
-        }).catch(() => {});
+        // 等待预热请求完成后再跳转，确保聊天页加载时 warmup 已在服务端就绪，
+        // 避免 idle grace 被页面加载耗时吃掉导致首条消息冷启动。
+        try {
+          const warmupRes = await fetch('/api/chat/warmup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: sessionId,
+              model: currentModel,
+              provider_id: currentProviderId,
+            }),
+          });
+          const data = warmupRes.ok ? await warmupRes.json() : null;
+          if (data) {
+            console.log('[warmup] sendFirstMessage warmup completed:', {
+              warmed_up: data.warmed_up,
+              from_cache: data.from_cache,
+              session_id: data.warmup_session_id,
+              model: data.model,
+              mcp_count: data.mcp_count,
+            });
+          }
+        } catch {
+          // 预热失败不阻塞跳转
+        }
 
         window.dispatchEvent(new CustomEvent('session-created'));
 

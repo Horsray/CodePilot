@@ -1,8 +1,9 @@
 /**
- * agent-system-prompt.ts — Host supplement prompt builder.
+ * agent-system-prompt.ts — Desktop orchestration system prompt builder.
  *
- * 中文注释：功能名称「宿主补充提示词」，用法是在 Claude Code CLI 主链路里只补充
- * CodePilot 宿主环境的事实信息，不再承担 agent、skill、联网、规划等行为编排职责。
+ * 中文注释：功能名称「桌面端系统提示词编排器」，用法是在 CodePilot 桌面端恢复稳定的
+ * 任务编排能力，明确要求模型在复杂任务中使用 Todo、Agent、联网、自我学习，以及
+ * memory MCP / 原子知识库协同检索，而不是单线程闷头执行到死。
  */
 
 import fs from 'fs';
@@ -18,27 +19,178 @@ import { discoverSkills } from './skill-discovery';
 function getHostSupplementSection(model?: string): string {
   return `# CodePilot Host Supplement
 
-- You are running inside the CodePilot desktop host on top of Claude Code.
-- Model: ${model || 'current Claude Code model'}.
-- Treat Claude Code native behavior, project/user \`CLAUDE.md\`, plugins, hooks, skills, and built-in agent orchestration as the primary decision layer.
-- Use this host supplement only for CodePilot-specific capabilities such as UI widgets, dashboard integration, media helpers, notifications, and host-provided MCP servers.
-- Do not restate raw tool traces, transport frames, or internal control payloads in user-facing answers.`;
+- You are HueyingAgent (绘影智能体), a powerful multifunctional AI agent.
+- You are powered by ${model || 'a powerful large language model'}.
+- You are running in a specialized desktop environment with full access to local files and tools.
+- **LANGUAGE (MANDATORY — applies to ALL output AND internal thinking)**: 用户用中文提问 → 你的思考过程和所有输出必须用中文。User writes in English → think and respond in English.
+
+# Core Capabilities
+
+- **Code Engineering**: Expert in writing, debugging, refactoring, and explaining code across multiple programming languages and frameworks.
+- **Intelligent Customer Service**: Provides professional, accurate, and empathetic responses to user inquiries.
+- **Desktop Automation**: Takes over desktop tasks to save human time and effort.
+- **Automated Task Execution**: Performs repetitive or complex tasks efficiently and reliably.
+- **Scheduled Tasks**: Manages and executes time-based operations and reminders.
+- **Information Research**: Searches, collects, analyzes, and summarizes information from various sources.
+- **Content Creation**: Writes articles, documents, reports, and other forms of content.
+- **Image Generation**: Creates images, diagrams, and visual content based on descriptions.`;
 }
 
 // ── Section: Output Hygiene ────────────────────────────────────
 
 const OUTPUT_HYGIENE_SECTION = `# Output Hygiene
 
-- Keep user-facing answers concise and action-oriented.
-- Prefer factual conclusions over verbose execution logs.
-- When referencing code, use clickable file links when available.`;
+- The user may request you to perform various tasks, including software engineering, customer service, desktop automation, content creation, image generation, information research, and more. Adapt your approach to the specific type of task at hand.
+- You are an expert orchestrator. You don't just "do" tasks; you engineer solutions. This means you must understand the "why" before the "how".
+- In general, do not propose changes to code you haven't read. If a user asks about or wants you to modify a file, read it first. Understand existing code before suggesting modifications.
+- Do not create files unless they're absolutely necessary for achieving your goal. Generally prefer editing an existing file to creating a new one.
+- Avoid giving time estimates or predictions. Focus on what needs to be done.
+- If an approach fails, diagnose why before switching tactics—read the error, check your assumptions, try a focused fix. Don't retry the identical action blindly.
+
+# Task Orchestration and Planning
+
+- **TodoWrite Triggers — When It MUST Come First**: The \`TodoWrite\` tool MUST be your first tool call when:
+  - The user provides a clear list of multiple specific requirements or a numbered checklist
+  - The task involves modifying 3+ known files or crossing multiple modules with known targets
+  - The task has distinct phases (investigate → implement → verify) with clearly identified targets
+  - The user explicitly asks for a plan, task breakdown, or execution strategy
+- **Explore-First Exception**: When the request is BROAD or AMBIGUOUS (e.g. "排查问题", "improve performance", "refactor the auth system", "investigate why X is slow"), you MAY explore first — read files, search the codebase, or dispatch \`explore\` agents to understand scope. Once the scope is understood, create the Todo list before starting implementation work.
+- **STRICT PROHIBITION**: NEVER output step-by-step plans, checklists, or numbered task lists in plain Markdown text. If you need to present a plan or break down a task, you MUST exclusively use the \`TodoWrite\` tool.
+- **Delegate to Agents**: After creating the Todo list, delegate each non-trivial task to an appropriate Agent. Do not attempt to do everything yourself. Use the \`Agent\` tool with clear, self-contained prompts for each sub-task. Launch independent agents in parallel.
+- **Visible Task Decomposition**: Decompose broad requests into clear units (for example: investigate, implement, verify). Keep task titles actionable.
+- **Verification**: Every task is incomplete until verified. Always run tests, check the output, or use the \`Read\` tool to confirm your changes took effect as expected.`;
+}
+
+/**
+ * MANAGING_TASKS_SECTION: 任务管理相关系统提示词段落。
+ * 用法是强制复杂任务优先维护 Todo 状态，避免模型长时间单线程闷头执行。
+ * 注意：具体的 TodoWrite 触发规则已在 "Doing tasks" 部分统一说明，这里只保留任务状态管理规范。
+ */
+const MANAGING_TASKS_SECTION = `# Managing tasks
+
+- Update the status of tasks in real-time as you complete them (pending -> in_progress -> completed).
+- Keep exactly one task in_progress while work is active. Mark tasks completed as soon as evidence exists.
+- Use clear, actionable descriptions for each task.`;
+
+const REASONING_SECTION = `# Reasoning and Reflection
+
+- **Self-Correction**: If you find yourself repeating the same search or getting the same error 2-3 times, STOP. Reflect on why the current path is failing and propose an alternative strategy.
+- **Evidence-Based Decisions**: Base your actions on evidence found in the codebase, not assumptions. If you're unsure about a library's usage, search for existing patterns first.
+- **Incremental Progress**: Prefer small, verified steps over one massive, unverified change. This reduces the blast radius of errors.
+- **Self-Improvement Trigger**: When a tool fails unexpectedly, the user corrects you, a plan is disproved, or you discover a better reusable workflow, you MUST consider invoking the \`self-improvement\` skill instead of silently repeating the same mistake.`;
+
+// ── Section: Executing Actions ─────────────────────────────────
+
+const ACTIONS_SECTION = `# Executing actions with care
+
+Carefully consider the reversibility and blast radius of actions. Generally you can freely take local, reversible actions like editing files or running tests. But for actions that are hard to reverse, affect shared systems beyond your local environment, or could otherwise be risky or destructive, check with the user before proceeding. The cost of pausing to confirm is low, while the cost of an unwanted action (lost work, unintended messages sent, deleted branches) can be very high.
+
+Examples of the kind of risky actions that warrant user confirmation:
+- Destructive operations: deleting files/branches, dropping database tables, killing processes, rm -rf, overwriting uncommitted changes
+- Hard-to-reverse operations: force-pushing, git reset --hard, amending published commits, removing or downgrading packages/dependencies, modifying CI/CD pipelines
+- Actions visible to others or that affect shared state: pushing code, creating/closing/commenting on PRs or issues, sending messages, posting to external services
+
+When you encounter an obstacle, do not use destructive actions as a shortcut to simply make it go away. Try to identify root causes and fix underlying issues rather than bypassing safety checks. If you discover unexpected state like unfamiliar files, branches, or configuration, investigate before deleting or overwriting, as it may represent the user's in-progress work.`;
+
+// ── Section: Using Your Tools ──────────────────────────────────
+
+function getToolsSection(): string {
+  return `# Using your tools
+
+## Agent Delegation (MANDATORY for complex tasks)
+
+You are NOT a solo worker. You are an ORCHESTRATOR. When the runtime exposes an \`Agent\` tool, \`Task\` tool, or OMC-installed agents, you MUST delegate work to them instead of doing everything yourself. This is not optional — it is a core behavioral requirement.
+
+Rules:
+- **Default to delegation**: When a task has distinct sub-tasks (research, code exploration, implementation, verification), delegate each sub-task to an appropriate agent. Only do work yourself when the task is truly simple and atomic.
+- **Use the Agent tool**: Call the \`Agent\` tool with a clear, self-contained prompt for each sub-task. The agent prompt must include all context the sub-agent needs — it does NOT have your conversation history.
+- **Agent types**: Use \`explore\` for codebase searches and understanding. Use \`Plan\` for architecture decisions. Use \`general-purpose\` for implementation. Match agent type to task type.
+- **Parallel delegation**: When sub-tasks are independent, launch multiple agents in parallel in a single message.
+- **Never describe intent without acting**: If you say "I'll delegate this to an agent", you MUST actually call the Agent tool. Do not just describe what you would delegate.
+
+## Skill Execution (MANDATORY before complex work)
+
+You have access to the \`Skill\` tool which discovers and executes reusable workflow templates. Before starting ANY complex multi-step task, you MUST check if a relevant skill exists. **Always check available skills before starting complex multi-step tasks** — a skill may already encode the exact workflow needed.
+
+Rules:
+- **Discover first**: Call the \`Skill\` tool without arguments to list all available skills before starting complex work. A skill may already encode the exact workflow you need.
+- **Match and invoke**: If a skill matches the user's request (by description or "whenToUse" criteria), invoke it with \`Skill\` using the skill name. Do not re-derive a workflow that a skill already provides.
+- **User-initiated**: When the user explicitly mentions a skill name or uses a slash command like \`/skillname\`, invoke that skill immediately.
+
+## Self-Improvement
+
+Use the \`self-improvement\` skill when you are corrected, blocked by a repeated failure, or discover a better recurring workflow that should become future standard practice.
+
+## External Research
+
+When the task depends on current documentation, recent product behavior, third-party APIs, package changes, version or compatibility details, upstream implementations, or any information not reliably present in the local repo, proactively use \`WebSearch\` first and then \`WebFetch\` for the most relevant sources before guessing, even if the user did not explicitly ask you to search the web.
+
+For broad research tasks that span multiple independent queries or sources (e.g. searching multiple APIs, comparing library versions, gathering competitive intelligence), delegate to parallel \`explore\` agents rather than calling WebSearch sequentially yourself. Each agent handles one research dimension independently.
+
+For codebase-wide searches that require finding files across many directories or tracing cross-module references, prefer dispatching an \`explore\` agent over manual Glob/Grep calls.
+
+## Memory MCP and Atomic Knowledge Base
+
+- Use \`codepilot_memory_recent\` when recent project memory may matter.
+- Use \`codepilot_memory_search\` and \`codepilot_memory_get\` for past work, decisions, user preferences, recurring patterns, and historical context.
+- Use \`codepilot_kb_search\` for technical concepts, architecture entities, and project structure.
+- Use \`codepilot_kb_query\` for deep dependency tracing or graph-style architecture questions.
+- Use \`codepilot_memory_store\` to persist newly learned stable facts, decisions, preferences, and proven workflows.
+- Do NOT treat the Atomic Knowledge Base and memory MCP as the same thing: memory MCP stores dynamic facts and learned experience; the Atomic Knowledge Base / graphify explains structural architecture and dependency relationships.
+
+## Session Search
+
+When the user asks about prior discussion, earlier decisions, previous fixes, or "what did we do before?", prefer the \`codepilot_session_search\` tool before guessing from memory.
+
+## Tool Selection Rules
+
+- Do NOT use the Bash tool to run commands when a relevant dedicated tool is provided.
+  - To read files use Read instead of cat, head, tail, or sed
+  - To edit files use Edit instead of sed or awk
+  - To create files use Write instead of cat with heredoc or echo redirection
+  - To search for files use Glob instead of find or ls
+  - To search the content of files, use Grep instead of grep or rg
+  - To search local chat history, use codepilot_session_search instead of guessing what happened in earlier sessions
+- Reserve using the Bash exclusively for system commands and terminal operations.
+- Maximize efficiency by calling independent tools in parallel. Use sequential calls only when there is a strict data dependency.`;
+}
+
+// ── Section: Tone and Style ────────────────────────────────────
+
+const TONE_SECTION = `# Tone and style
+
+- Be professional, technical, and objective. You are a senior software engineer.
+- Only use emojis if the user explicitly requests it.
+- Your responses should be short and concise.
+- When referencing code, use the pattern [basename](file:///absolute/path/to/file#Lstart-Lend) to create clickable links.
+- Avoid conversational filler ("Okay", "I see", "Now I will"). Just perform the action.
+- **Language Adaptation (MANDATORY)**: If the user writes in Chinese (中文), your thinking process AND all output text MUST be in Chinese. If the user writes in English, respond in English. This applies to ALL sections including the internal thought process, plan descriptions, and conversation replies. Adapt your language to match the user's input — Chinese questions receive Chinese responses, English questions receive English responses.`;
+
+// ── Section: Output Efficiency ─────────────────────────────────
+
+const OUTPUT_SECTION = `# Output efficiency
+
+- **Action-Oriented**: Lead with the answer, action, or tool call. Keep user-facing answers concise.
+- **Thought Process**: Your thinking (internal thoughts) should be deep and analytical, but your text response to the user should be extremely concise.
+- **Milestones**: Only provide text updates at major plan milestones. Prefer factual conclusions over verbose execution logs.
+- **Final Answer Hygiene**: Never output raw tool calls, tool results, SSE events, transport frames, JSON content blocks, or internal control data as your final answer. Final answers must be plain user-facing prose plus concise bullets when useful.
+- **Skip Filler**: Do not restate the user's request. Do not provide a preamble before tool calls.
+- **Important Limitation**: 无论你调用了多少次工具，以及工具返回了什么结果，**你都不应该把工具执行的细节重复地写在你返回给用户的最终回复文本里！** 用户已经在界面上能看到这些工具执行的过程卡片了。`;
+
+const GLOBAL_PRINCIPLES_SECTION = `# Global Agent Principles
+
+1. **Evidence over Assumption**: Never assume a file exists or a function works. Search first.
+2. **Persistence with Purpose**: If a tool fails, analyze the error. Don't just try again.
+3. **Clean Context**: Keep your context focused. If you've gathered enough info from search, synthesize it and move to implementation.
+4. **User Trust**: Your planning and todo list are how the user trusts you. Keep them accurate.
+5. **Language Consistency (MANDATORY — 尾锚/end-anchor)**: 用户写中文 → 思考(thinking)与输出都用中文。User writes English → both thinking and output in English. This is the FINAL rule in the prompt — it overrides every prior language instruction. When the user writes Chinese, your THINKING PROCESS and ALL output MUST be in Chinese.
+6. **Knowledge Gap Resolution**: When uncertain about a topic, do NOT guess. First search the local knowledge base (MCP Memory + atomic knowledge files at agentHelper/knowledge/atoms/), then fall back to web search if needed. After learning something new, store it to the knowledge base and update the memory file for future reuse. Use the knowledge-seek skill for the full workflow.`;
 
 // ── Assembly ───────────────────────────────────────────────────
 
 export interface SystemPromptOptions {
   sessionId?: string;
   workingDirectory?: string;
-  userPrompt?: string;
   contextSnippets?: string[];
   modelId?: string;
   omcPluginEnabled?: boolean;
@@ -57,38 +209,45 @@ export interface SystemPromptResult {
 }
 
 /**
- * Build the host supplement prompt.
+ * Build the complete system prompt for the desktop agent runtime.
  */
 export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemPromptResult {
   const { modelId } = options;
   const parts: string[] = [
-    getHostSupplementSection(modelId),
-    OUTPUT_HYGIENE_SECTION,
+    getIdentitySection(modelId),
+    getDoingTasksSection(),
+    MANAGING_TASKS_SECTION,
+    REASONING_SECTION,
+    ACTIONS_SECTION,
+    getToolsSection(),
+    TONE_SECTION,
+    OUTPUT_SECTION,
+    GLOBAL_PRINCIPLES_SECTION,
   ].filter(Boolean);
 
   const referencedFiles: string[] = [];
 
-  // Environment section (platform, shell, working directory, git)
+  // 中文注释：功能名称「环境上下文注入」，用法是恢复历史版本里有效的工作目录、
+  // 平台、Shell、Git 信息，帮助模型更稳定地判断当前任务场景。
   const envSection = buildEnvironmentSection(options);
   if (envSection) {
     parts.push(envSection);
   }
 
-  // 注意：当前处于过渡状态。
-  // 此处的 discoverProjectInstructions() 手工拼接路径仍然保留，
-  // 但 warmup 和 chat 路由均已显式传入 includeDiscoveredProjectInstructions: false，
-  // 实际运行时此分支不会执行。
-  // 目标状态：当 Claude Code/OMC 能原生发现 `CLAUDE.md`、`AGENTS.md`、`.trae/rules` 后，
-  // 可移除此手工拼接逻辑，避免重复注入干扰决策。
+  // 中文注释：功能名称「宿主补充规则注入」，用法是仅注入 CodePilot 自己维护的补充规则，
+  // 避免再次把 Claude Code 已原生加载的 CLAUDE.md / AGENTS.md / rules 文件全文塞回
+  // appendSystemPrompt，导致桌面端和终端版发生重复 steering。
   if (options.workingDirectory && options.includeDiscoveredProjectInstructions !== false) {
     const projectInstructions = discoverProjectInstructions(options.workingDirectory, options);
     if (projectInstructions) {
-      parts.push(`# Project Instructions\n\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\n${projectInstructions.content}`);
+      parts.push(`# CodePilot Host Instructions\n\nThese are CodePilot-hosted supplemental instructions that are not part of Claude Code's native project/user instruction loading. Use them to supplement, not replace, Claude Code's default behavior.\n\n${projectInstructions.content}`);
       referencedFiles.push(...projectInstructions.files);
+      injectedInstructionSources = [];
     }
   }
 
-  // Knowledge Base instructions (graphify)
+  // 中文注释：功能名称「原子知识库提示注入」，用法是默认恢复 graphify/知识图谱
+  // 能力说明，让模型更主动地把结构理解与动态记忆区分开来。
   if (options.workingDirectory && options.knowledgeBaseEnabled !== false) {
     const kbInstructions = discoverKnowledgeBaseInstructions(options.workingDirectory);
     if (kbInstructions) {
@@ -106,9 +265,17 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
     }
   }
 
-  // User-provided system prompt
-  if (options.userPrompt) {
-    parts.push(`# User Instructions\n\n${options.userPrompt}`);
+  // 中文注释：功能名称「技能目录注入」，用法是把本地发现的 skills 目录注入系统提示，
+  // 让模型在复杂任务开始前能主动发现可用的 Skill，而不是盲目自己动手。
+  if (options.workingDirectory) {
+    try {
+      const skillsCatalog = buildDiscoveredSkillsCatalog(options.workingDirectory, 24, { lightweight: true });
+      if (skillsCatalog) {
+        parts.push(skillsCatalog);
+      }
+    } catch {
+      // skills discovery failed — don't block prompt assembly
+    }
   }
 
   return {
@@ -118,15 +285,14 @@ export function buildSystemPrompt(options: SystemPromptOptions = {}): SystemProm
   };
 }
 
-// ── Environment Section ────────────────────────────────────────
-
+// 中文注释：功能名称「环境上下文构建」，用法是恢复历史主控模式里的平台、Shell、
+// 工作目录和 Git 摘要，给复杂任务判断和工具选择提供更强的环境背景。
 function buildEnvironmentSection(options: SystemPromptOptions): string | null {
   const lines: string[] = ['# Environment'];
 
   if (options.workingDirectory) {
     lines.push(`- Primary working directory: ${options.workingDirectory}`);
 
-    // Check if git repo
     try {
       execSync('git rev-parse --is-inside-work-tree', {
         cwd: options.workingDirectory, encoding: 'utf-8', timeout: 3000, stdio: 'pipe',
@@ -137,7 +303,6 @@ function buildEnvironmentSection(options: SystemPromptOptions): string | null {
     }
   }
 
-  // Platform info
   lines.push(`- Platform: ${process.platform}`);
   const shell = process.env.SHELL ? path.basename(process.env.SHELL) : 'unknown';
   lines.push(`- Shell: ${shell}`);
@@ -145,17 +310,16 @@ function buildEnvironmentSection(options: SystemPromptOptions): string | null {
   try {
     const osVersion = execSync('uname -sr', { encoding: 'utf-8', timeout: 3000, stdio: 'pipe' }).trim();
     lines.push(`- OS Version: ${osVersion}`);
-  } catch { /* ignore */ }
+  } catch {
+    // ignore
+  }
 
-  // Model info
   if (options.modelId) {
     lines.push(`- Model: ${options.modelId}`);
   }
 
-  // Current date
   lines.push(`- Current date: ${new Date().toISOString().split('T')[0]}`);
 
-  // Git context (branch, user, status, recent commits)
   if (options.workingDirectory) {
     const gitContext = getGitContext(options.workingDirectory);
     if (gitContext) {
@@ -180,7 +344,6 @@ interface InstructionSource {
   filePath?: string;
 }
 
-const PROJECT_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/settings.md', '.claude/CLAUDE.md', '.trae/rules/rules.md'];
 const MAX_FILE_SIZE = 50 * 1024; // 50KB per file
 const GLOBAL_RULE_FILE_LIMIT = 24;
 
@@ -300,11 +463,11 @@ export function getExternalInstructionCandidates(homeDir = os.homedir()): Extern
   return candidates;
 }
 
-// 中文注释：功能名称「技能目录摘要」，用法是仅为测试和兼容导出保留轻量摘要生成能力；
-// 当前主聊天链路不会自动把这份目录再注入系统提示。
+// 中文注释：功能名称「技能目录摘要」，用法是生成轻量级 skills 可见性索引，
+// 注入系统提示让模型在复杂任务开始前能主动发现可用的 Skill。
 export function buildDiscoveredSkillsCatalog(
   cwd: string,
-  maxSkills = 24,
+  maxSkills = 40,
   options: { lightweight?: boolean } = {},
 ): string | null {
   const skills = discoverSkills(cwd);
@@ -316,19 +479,50 @@ export function buildDiscoveredSkillsCatalog(
       ? 'The following reusable skills are available via the `Skill` tool. This is a lightweight visibility index for local skills.'
       : 'The following reusable skills are available via the `Skill` tool. Prefer invoking `Skill` for matching workflows instead of re-deriving the workflow manually.',
   ];
-  for (const skill of skills.slice(0, maxSkills)) {
-    const description = (skill.description || 'No description provided').slice(0, 120);
-    const whenToUse = (skill.whenToUse || '').slice(0, 160);
-    const kind = skill.userInvocable ? 'slash+skill' : 'skill';
-    lines.push(`- ${skill.name} [${kind}, ${skill.context}] — ${description}`);
-    if (whenToUse) lines.push(`  when: ${whenToUse}`);
-    if (!lightweight) {
-      const source = (path.relative(cwd, skill.filePath) || skill.filePath).slice(0, 120);
-      if (source) lines.push(`  source: ${source}`);
+
+  // 中文注释：将技能按类别分组显示，让模型快速定位而非逐条扫描
+  const categories: { name: string; skills: typeof skills }[] = [
+    { name: 'Build & Deploy', skills: [] },
+    { name: 'Code Exploration', skills: [] },
+    { name: 'Debug & Troubleshoot', skills: [] },
+    { name: 'Test & Verify', skills: [] },
+    { name: 'Integrations', skills: [] },
+    { name: 'Knowledge', skills: [] },
+    { name: 'Other', skills: [] },
+  ];
+
+  const classify = (s: typeof skills[0]): number => {
+    const n = s.name.toLowerCase();
+    const d = (s.description + ' ' + (s.whenToUse || '')).toLowerCase();
+    if (n.includes('build') || n.includes('electron') || n.includes('package') || n.includes('deploy') || d.includes('构建') || d.includes('打包')) return 0;
+    if (n.includes('explore') || n.includes('search') || n.includes('find') || n.includes('locate') || n.includes('discover') || n.includes('codebase') || d.includes('探索') || d.includes('搜索')) return 1;
+    if (n.includes('debug') || n.includes('troubleshoot') || n.includes('diagnose') || n.includes('fix') || n.includes('recover') || n.includes('handle') || d.includes('调试') || d.includes('排查') || d.includes('修复')) return 2;
+    if (n.includes('test') || n.includes('verif') || n.includes('check') || n.includes('valid') || d.includes('测试') || d.includes('验证')) return 3;
+    if (n.includes('feishu') || n.includes('lark') || n.includes('wechat') || n.includes('telegram') || n.includes('bot') || n.includes('bridge') || n.includes('channel') || d.includes('飞书')) return 4;
+    if (n.includes('knowledge') || n.includes('learn') || n.includes('research') || n.includes('memory') || n.includes('graphify') || d.includes('知识') || d.includes('学习') || d.includes('研究')) return 5;
+    return 6;
+  };
+
+  let remaining = maxSkills;
+  for (const s of skills) {
+    if (remaining <= 0) break;
+    categories[classify(s)].skills.push(s);
+    remaining--;
+  }
+
+  for (const cat of categories) {
+    if (cat.skills.length === 0) continue;
+    lines.push(`\n### ${cat.name} (${cat.skills.length})`);
+    for (const skill of cat.skills) {
+      const description = (skill.description || 'No description provided').slice(0, 100);
+      const whenToUse = (skill.whenToUse || '').slice(0, 140);
+      const kind = skill.userInvocable ? 'slash+skill' : 'skill';
+      lines.push(`- ${skill.name} [${kind}, ${skill.context}] — ${description}`);
+      if (whenToUse) lines.push(`  triggers: ${whenToUse}`);
     }
   }
   if (skills.length > maxSkills) {
-    lines.push(`- ... ${skills.length - maxSkills} more skills available via the Skill tool`);
+    lines.push(`\n... ${skills.length - maxSkills} more skills — call the Skill tool without arguments to see them all.`);
   }
   return lines.join('\n');
 }
@@ -362,8 +556,9 @@ function discoverKnowledgeBaseInstructions(cwd: string): { content: string, file
 }
 
 /**
- * Discover project instructions with formal priority hierarchy.
- * Each source is tagged with its level for transparency.
+ * Discover CodePilot-hosted supplemental instructions.
+ * Native Claude Code project/user instructions are intentionally excluded here,
+ * because the SDK already loads them through settingSources.
  */
 function discoverProjectInstructions(cwd: string, options: SystemPromptOptions = {}): { content: string, files: string[] } | null {
   const sources: InstructionSource[] = [];
@@ -384,18 +579,29 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
     }
 
     // Project rules (apply if matched)
-    if (options.sessionId) {
-      // Find the project name/path for this session to match against project_ids
-      const db = getDb();
-      const session = db.prepare('SELECT working_directory FROM chat_sessions WHERE id = ?').get(options.sessionId) as any;
-      if (session) {
-        const currentPath = session.working_directory;
-        const projectRules = customRules.filter(r => {
-          if (r.type !== 'project') return false;
-          try {
-            const targetPaths = JSON.parse(r.project_ids);
-            return Array.isArray(targetPaths) && targetPaths.includes(currentPath);
-          } catch { return false; }
+    const currentPath = (() => {
+      if (options.sessionId) {
+        const db = getDb();
+        const session = db.prepare('SELECT working_directory FROM chat_sessions WHERE id = ?').get(options.sessionId) as any;
+        if (session?.working_directory) return session.working_directory as string;
+      }
+      return options.workingDirectory;
+    })();
+
+    if (currentPath) {
+      const projectRules = customRules.filter(r => {
+        if (r.type !== 'project') return false;
+        try {
+          const targetPaths = JSON.parse(r.project_ids);
+          return matchesProjectRulePaths(currentPath, targetPaths);
+        } catch { return false; }
+      });
+
+      for (const rule of projectRules) {
+        sources.push({
+          filename: `Rule: ${rule.name} (Project)`,
+          content: rule.content,
+          level: 'project'
         });
 
         for (const rule of projectRules) {
@@ -411,30 +617,53 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
     console.error('[agent-system-prompt] Failed to load custom rules from DB:', err);
   }
 
-  // 2. User-level (~/.claude/CLAUDE.md)
-  // Always load CLAUDE.md — OMC instructions are critical for multi-agent
-  // orchestration in both SDK and native runtime paths. The SDK runtime may
-  // also load CLAUDE.md natively via settingSources, but duplication of
-  // OMC instructions is harmless (it only reinforces the priority).
-  if (options.includeClaudeMd !== false) {
-    const userFile = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-    addSource(sources, seen, userFile, 'user', 'CLAUDE.md (user)');
+  // 2. Project .claude/rules/ directory (filesystem — supplements DB rules)
+  const projectRulesDir = path.join(cwd, '.claude', 'rules');
+  if (fs.existsSync(projectRulesDir)) {
+    try {
+      const ruleFiles = walkMarkdownFiles(projectRulesDir, GLOBAL_RULE_FILE_LIMIT);
+      for (const filePath of ruleFiles) {
+        if (seen.has(path.resolve(filePath))) continue;
+        const content = tryReadFile(filePath);
+        if (content) {
+          seen.add(path.resolve(filePath));
+          sources.push({
+            level: 'project',
+            filename: `Rule: ${path.basename(filePath, '.md')} (Project .claude/rules)`,
+            content,
+            filePath,
+          });
+        }
+      }
+    } catch {
+      // ignore filesystem rule scan errors
+    }
   }
 
-  // 3. Project-level (working directory)
-  for (const filename of PROJECT_FILES) {
-    const isClaude = filename.includes('CLAUDE.md') || filename === 'CLAUDE.local.md';
-    const isAgents = filename.includes('AGENTS.md');
-    const isTraeRules = filename === '.trae/rules/rules.md';
-
-    if (isClaude && options.includeClaudeMd === false) continue;
-    if (isAgents && options.includeAgentsMd === false) continue;
-    if (isTraeRules && options.syncProjectRules === false) continue;
-
-    addSource(sources, seen, path.join(cwd, filename), 'project', filename);
+  // 3. User ~/.claude/rules/ directory (filesystem — supplements DB rules)
+  const homeRulesDir = path.join(os.homedir(), '.claude', 'rules');
+  if (fs.existsSync(homeRulesDir) && homeRulesDir !== projectRulesDir) {
+    try {
+      const ruleFiles = walkMarkdownFiles(homeRulesDir, GLOBAL_RULE_FILE_LIMIT);
+      for (const filePath of ruleFiles) {
+        if (seen.has(path.resolve(filePath))) continue;
+        const content = tryReadFile(filePath);
+        if (content) {
+          seen.add(path.resolve(filePath));
+          sources.push({
+            level: 'user',
+            filename: `Rule: ${path.basename(filePath, '.md')} (User .claude/rules)`,
+            content,
+            filePath,
+          });
+        }
+      }
+    } catch {
+      // ignore filesystem rule scan errors
+    }
   }
 
-  // 3.5. Progressive Subdirectory Hints (Hermes P1)
+  // 4. Progressive Subdirectory Hints (Hermes P1)
   // These are appended dynamically during tool calls by agent-loop, but we also
   // inject them here so the agent sees any previously discovered hints in the
   // system prompt when it resumes.
@@ -455,32 +684,6 @@ function discoverProjectInstructions(cwd: string, options: SystemPromptOptions =
     } catch (e) {
       // Ignore errors if tracker not yet loaded
     }
-  }
-
-  // 4. Parent directory (monorepo root)
-  const parent = path.dirname(cwd);
-  if (parent !== cwd) {
-  if (options.includeClaudeMd !== false) {
-      addSource(sources, seen, path.join(parent, 'CLAUDE.md'), 'parent', 'CLAUDE.md (parent)');
-    }
-    if (options.includeAgentsMd !== false) {
-      addSource(sources, seen, path.join(parent, 'AGENTS.md'), 'parent', 'AGENTS.md (parent)');
-    }
-  }
-
-  // 5. Custom Skills (.agents/skills/*.md)
-  if (options.enableAgentsSkills !== false) {
-    const skillsDir = path.join(cwd, '.agents', 'skills');
-    try {
-      if (fs.existsSync(skillsDir) && fs.statSync(skillsDir).isDirectory()) {
-        const files = fs.readdirSync(skillsDir);
-        for (const file of files) {
-          if (file.endsWith('.md')) {
-            addSource(sources, seen, path.join(skillsDir, file), 'project', `.agents/skills/${file}`);
-          }
-        }
-      }
-    } catch { /* ignore readdir/stat errors */ }
   }
 
   if (sources.length === 0) return null;
@@ -531,8 +734,8 @@ function getGitContext(cwd: string): string | null {
     const recentCommits = run('git log --oneline -5 2>/dev/null');
 
     const parts = ['Git context:', `  Branch: ${branch}`, `  User: ${user}`];
-    if (status) parts.push(`\n  Status:\n${status.split('\n').map(l => '    ' + l).join('\n')}`);
-    if (recentCommits) parts.push(`\n  Recent commits:\n${recentCommits.split('\n').map(l => '    ' + l).join('\n')}`);
+    if (status) parts.push(`\n  Status:\n${status.split('\n').map((l: string) => '    ' + l).join('\n')}`);
+    if (recentCommits) parts.push(`\n  Recent commits:\n${recentCommits.split('\n').map((l: string) => '    ' + l).join('\n')}`);
 
     const result = parts.join('\n');
     _gitContextCache = { cwd, result, ts: Date.now() };

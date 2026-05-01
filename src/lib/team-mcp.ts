@@ -23,7 +23,10 @@ export function createTeamMcpServer(ctx: Omit<TeamRunnerOptions, 'goal'>) {
             goal,
           });
           return { content: [{ type: 'text' as const, text: result }] };
-        }
+        },
+        // 中文注释：功能名称「Team 首轮直出」，用法是让多 Agent 团队工具在首轮直接暴露，
+        // 避免模型先做 ToolSearch 才能调用 Team。
+        { alwaysLoad: true }
       )
     ]
   });

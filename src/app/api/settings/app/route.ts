@@ -32,6 +32,9 @@ const ALLOWED_KEYS = [
   'nightly_compaction_enabled',
   'nightly_compaction_provider_id',
   'nightly_compaction_model',
+  // JSON array of disabled skill names (e.g. '["skill-a","skill-b"]')
+  // Users toggle skills in the Skills Manager UI; disabled skills are hidden from AI globally
+  'disabled_skills',
 ];
 
 export async function GET() {

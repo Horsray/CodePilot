@@ -40,6 +40,10 @@ import {
   canReusePersistentClaudeSession,
   closePersistentClaudeSession,
   getPersistentClaudeTurn,
+  hasWarmedNativeClaudeQuery,
+  hasWarmedNativeClaudeQueryBySessionId,
+  takeWarmedNativeClaudeQuery,
+  takeWarmedNativeClaudeQueryBySessionId,
 } from './persistent-claude-session';
 // Static imports for resolveRuntime/detectTransport — used to be lazy
 // `require('./runtime')` / `require('./provider-transport')`, but Turbopack's
@@ -86,6 +90,76 @@ function sanitizeEnv(env: Record<string, string>): Record<string, string> {
     }
   }
   return clean;
+}
+
+type SyntheticSubagentSource = 'omc_plugin' | 'sdk_agent_tool';
+
+type SyntheticSubagentInfo = {
+  id: string;
+  name: string;
+  displayName: string;
+  prompt: string;
+  model?: string;
+  source: SyntheticSubagentSource;
+  runInBackground?: boolean;
+  taskId?: string;
+};
+
+function isTodoWriteToolName(name: string): boolean {
+  return name === 'TodoWrite' || name === 'mcp__codepilot-todo__TodoWrite' || name === 'mcp__codepilot-todo__codepilot_todo_write';
+}
+
+function isSyntheticSubagentToolName(name: string): boolean {
+  return name === 'Agent'
+    || name === 'mcp__codepilot-agent__Agent'
+    || name === 'Team'
+    || name === 'mcp__codepilot-team__Team'
+    || name === 'Task';
+}
+
+function getSyntheticSubagentInfo(params: {
+  input: unknown;
+  omcPluginEnabled: boolean;
+}): SyntheticSubagentInfo | null {
+  const toolInput = (params.input || {}) as {
+    agentId?: string;
+    agent_id?: string;
+    agent?: string;
+    subagent_type?: string;
+    task_type?: string;
+    id?: string;
+    prompt?: string;
+    task?: string;
+    description?: string;
+    displayName?: string;
+    display_name?: string;
+    model?: string;
+    name?: string;
+    run_in_background?: boolean;
+  };
+
+  const agentId = toolInput.agentId
+    || toolInput.agent_id
+    || toolInput.agent
+    || toolInput.subagent_type
+    || toolInput.task_type
+    || 'general';
+  const agentPrompt = toolInput.prompt || toolInput.task || toolInput.description || '';
+  const agentDisplayName = toolInput.displayName || toolInput.display_name || toolInput.name || agentId;
+  if (!agentPrompt.trim()) {
+    return null;
+  }
+
+  const source: SyntheticSubagentSource = params.omcPluginEnabled ? 'omc_plugin' : 'sdk_agent_tool';
+  return {
+    id: `subagent-${agentId}-${Date.now()}`,
+    name: agentId,
+    displayName: agentDisplayName,
+    prompt: agentPrompt.length > 200 ? agentPrompt.slice(0, 197) + '...' : agentPrompt,
+    model: toolInput.model,
+    source,
+    runInBackground: toolInput.run_in_background === true,
+  };
 }
 
 export function selectOnDemandMcpServerNames(
@@ -642,6 +716,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       let shadowHome: ShadowHome | null = null;
       let usingPersistentSession = false;
       let shadowHandleOwnedByPersistentSession = false;
+      let warmedQueryCleanup: (() => void) | null = null;
 
       // Resolve provider via the unified resolver. The caller may pass an explicit
       // provider (from resolveProvider().provider), or undefined when 'env' mode is
@@ -691,10 +766,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         } catch (error) {
           console.warn('[claude-client] Failed to resolve enabled plugins for SDK session:', error);
         }
-        const shouldUseFullClaudeCapabilities =
-          !!(resolved.settingSources && resolved.settingSources.length > 0) ||
-          enabledPlugins.length > 0;
-
         const queryOptions: Options = {
           cwd: resolvedWorkingDirectory.path,
           abortController,
@@ -702,14 +773,12 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
           env: sanitizeEnv(sdkEnv),
-          // 中文注释：功能名称「Claude Full Capabilities 选择」，用法是在检测到
-          // 已启用 Claude 插件（尤其 OMC）时，即使当前 provider 没有 settingSources，
-          // 也不要走 `--bare` 快速路径，保证 hooks、规则发现和插件编排能力能稳定接管。
-          ...(shouldUseFullClaudeCapabilities ? {} : { extraArgs: { bare: null } }),
           settingSources: resolved.settingSources as Options['settingSources'],
-          // Debug: log runtime mode to verify --bare / settingSources behavior
+          // 中文注释：功能名称「Claude Full Capabilities 固定开启」，用法是在单一
+          // Claude Code CLI 主路径下始终保持 FULL capabilities，不再保留 FAST/--bare
+          // 降级分支，避免 hooks、skills、OMC、联网工具被请求侧裁掉。
           ...(console.log(
-            `[claude-client] SDK mode: ${shouldUseFullClaudeCapabilities ? `FULL (--bare off, settingSources=${resolved.settingSources?.join(',') || '[]'}, plugins=${enabledPlugins.length})` : 'FAST (--bare on, settingSources=[], plugins=0)'}`,
+            `[claude-client] SDK mode: FULL (--bare off, settingSources=${resolved.settingSources?.join(',') || '[]'}, plugins=${enabledPlugins.length})`,
           ), {}),
           // Auto-allow all CodePilot built-in MCPs. These are host-defined
           // in-process servers (createSdkMcpServer in claude-client.ts below)
@@ -727,6 +796,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__codepilot-image-gen',
             'mcp__codepilot-cli-tools',
             'mcp__codepilot-dashboard',
+            'mcp__codepilot-team',
             'mcp__codepilot-todo',
             // codepilot_cli_tools specific
             'codepilot_cli_tools_list',
@@ -746,10 +816,13 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'Grep',
             'Skill',
             'Agent',
+            'Task',
             'TodoWrite',
             'mcp__codepilot-todo__TodoWrite',
             'AskUserQuestion',
             'mcp__codepilot-ask-user__AskUserQuestion',
+            'WebSearch',
+            'WebFetch',
             'webfetch__fetch_fetch_readable',
             'webfetch__fetch_fetch_markdown',
             'context7_resolve-library-id',
@@ -774,13 +847,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             // MCP github tools
             'mcp__github__get_file_contents',
             'mcp__github__search_repositories',
+            'mcp__codepilot-team__Team',
           ],
-          // When --bare is active (settingSources empty), explicitly declare
-          // tools to bypass CLAUDE_CODE_SIMPLE's hard limit to just Bash/Read/Edit.
-          // When --bare is NOT active, Claude Code discovers tools natively.
-          ...(shouldUseFullClaudeCapabilities
-            ? {}
-            : { tools: ['default', 'Grep', 'Glob', 'Bash', 'Read', 'Write', 'Edit'] as Options['tools'] }),
         };
 
         if (skipPermissions) {
@@ -918,8 +986,6 @@ if (claudePath) {
         //   'codepilot-team': createTeamMcpServer({ ... }),
         // };
 
-        let hasOnDemandMcpServers = onDemandMcpNames.size > 0;
-
         // Widget guidelines: progressive loading strategy.
         // The system prompt always includes WIDGET_SYSTEM_PROMPT with format rules.
         // The MCP server (detailed design specs) is only registered when the
@@ -938,58 +1004,103 @@ if (claudePath) {
           }
         }
 
-        // AskUserQuestion MCP: globally available — lets the AI ask structured questions.
-        // Without this, the AI has no way to present interactive choices to the user.
+        // AskUserQuestion: re-registered as MCP with a custom handler that bypasses
+        // the SDK's permission system. In bypassPermissions mode, canUseTool is never
+        // called, so we drive the interactive UI directly from the tool's execute
+        // handler via SSE events and the permission-registry.
         {
           const { createAskUserQuestionMcpServer, ASK_USER_QUESTION_MCP_SYSTEM_PROMPT } = await import('@/lib/ask-user-question-mcp');
           queryOptions.mcpServers = {
             ...(queryOptions.mcpServers || {}),
-            'codepilot-ask-user': createAskUserQuestionMcpServer(),
+            'codepilot-ask-user': createAskUserQuestionMcpServer(
+              async (toolName, input, toolUseId) => {
+                const permissionRequestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                const permEvent: PermissionRequestEvent = {
+                  permissionRequestId,
+                  toolName,
+                  toolInput: input,
+                  toolUseId: toolUseId || '',
+                };
+                const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString().replace('T', ' ').split('.')[0];
+                try {
+                  createPermissionRequest({
+                    id: permissionRequestId,
+                    sessionId,
+                    sdkSessionId: sdkSessionId || '',
+                    toolName,
+                    toolInput: JSON.stringify(input),
+                    decisionReason: '',
+                    expiresAt,
+                  });
+                } catch (e) {
+                  console.warn('[claude-client] Failed to persist AskUserQuestion permission to DB:', e);
+                }
+                controller.enqueue(formatSSE({
+                  type: 'permission_request',
+                  data: JSON.stringify(permEvent),
+                }));
+                if (!autoTrigger) {
+                  notifyPermissionRequest(toolName, input as Record<string, unknown>, telegramOpts).catch(() => {});
+                }
+                onRuntimeStatusChange?.('waiting_permission');
+                console.log('[AskUserQuestion handler] waiting for permission:', { permissionRequestId, toolName });
+                const result = await registerPendingPermission(permissionRequestId, input);
+                console.log('[AskUserQuestion handler] permission resolved:', {
+                  permissionRequestId, toolName, behavior: result.behavior,
+                  hasUpdatedInput: !!result.updatedInput,
+                });
+                onRuntimeStatusChange?.('running');
+                if (result.behavior === 'deny') {
+                  return { behavior: 'deny' as const };
+                }
+                return { behavior: 'allow' as const, updatedInput: (result.updatedInput || {}) as Record<string, unknown> };
+              }
+            ),
           };
           if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + ASK_USER_QUESTION_MCP_SYSTEM_PROMPT;
           }
         }
 
-        if (generativeUI !== false) {
-          const needsWidgetSpecs = (() => {
-            const widgetKeywords = /可视化|图表|流程图|时间线|架构图|对比|visualiz|diagram|chart|flowchart|timeline|infographic|interactive|widget|show-widget|hierarchy|dashboard/i;
-            // Check current user prompt
-            if (widgetKeywords.test(prompt)) return true;
-            // Check if conversation already has widgets (resume context)
-            if (conversationHistory?.some(m => m.content.includes('show-widget'))) return true;
-            // Check explicit widget/image-agent mode
-            if (imageAgentMode) return true;
-            return false;
-          })();
-
-          if (needsWidgetSpecs) {
-            hasOnDemandMcpServers = true;
-            const { createWidgetMcpServer } = await import('@/lib/widget-guidelines');
-            const widgetServer = createWidgetMcpServer();
-            queryOptions.mcpServers = {
-              ...(queryOptions.mcpServers || {}),
-              'codepilot-widget': widgetServer,
-            };
+        // 中文注释：功能名称「全量 MCP 常驻加载 - Team」，用法是每轮对话都加载 Team MCP，
+        // 与 warmup route 保持一致，确保 mcpSignature 匹配。
+        {
+          const { createTeamMcpServer, TEAM_MCP_SYSTEM_PROMPT } = await import('@/lib/team-mcp');
+          queryOptions.mcpServers = {
+            ...(queryOptions.mcpServers || {}),
+            'codepilot-team': createTeamMcpServer({
+              workingDirectory: resolvedWorkingDirectory.path,
+              providerId: options.providerId,
+              sessionProviderId: options.sessionProviderId,
+              parentModel: model,
+              permissionMode,
+              parentSessionId: sessionId,
+              emitSSE: (event) => {
+                controller.enqueue(formatSSE(event as SSEEvent));
+              },
+              abortSignal: abortController?.signal,
+            }),
+          };
+          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + TEAM_MCP_SYSTEM_PROMPT;
           }
         }
 
-        // Media MCP: import + generation tools (keyword-gated).
-        // Registered when the conversation involves media/image generation tasks
-        // in CODE mode. Design Agent mode uses the old image-gen-request flow
-        // and does NOT need these MCP tools.
-        const needsMediaMcp = (() => {
-          if (imageAgentMode) return false; // Design Agent uses its own flow
-          const mediaKeywords = /生成图片|画一|图像|图片|素材|保存.*素材|import.*library|save.*library|codepilot_import_media|codepilot_generate_image/i;
-          if (mediaKeywords.test(prompt)) return true;
-          if (conversationHistory?.some(m =>
-            mediaKeywords.test(m.content)
-          )) return true;
-          return false;
-        })();
+        // 中文注释：功能名称「全量 MCP 常驻加载 - Widget」，用法是每轮对话都加载 Widget MCP，
+        // 与 warmup route 保持一致，确保 mcpSignature 匹配。
+        // ⚠️ 不能用 generativeUI 条件门控，否则当 generativeUI=false 时 Widget MCP 缺失，
+        // warmup 和 chat 的 mcpSignature 不匹配，预热永远无法被消费。
+        {
+          const { createWidgetMcpServer } = await import('@/lib/widget-guidelines');
+          queryOptions.mcpServers = {
+            ...(queryOptions.mcpServers || {}),
+            'codepilot-widget': createWidgetMcpServer(),
+          };
+        }
 
-        if (needsMediaMcp) {
-          hasOnDemandMcpServers = true;
+        // 中文注释：功能名称「全量 MCP 常驻加载 - Media」，用法是每轮对话都加载 Media/ImageGen MCP，
+        // 与 warmup route 保持一致，确保 mcpSignature 匹配。
+        {
           const { createMediaImportMcpServer, MEDIA_MCP_SYSTEM_PROMPT } = await import('@/lib/media-import-mcp');
           const { createImageGenMcpServer } = await import('@/lib/image-gen-mcp');
           queryOptions.mcpServers = {
@@ -997,18 +1108,18 @@ if (claudePath) {
             'codepilot-media': createMediaImportMcpServer(sessionId, resolvedWorkingDirectory.path),
             'codepilot-image-gen': createImageGenMcpServer(sessionId, resolvedWorkingDirectory.path),
           };
-          // Inject media capability hint into system prompt
-          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
+          // 中文注释：imageAgentMode 时跳过 MEDIA_MCP_SYSTEM_PROMPT 注入，
+          // 因为 IMAGE_AGENT_SYSTEM_PROMPT 指示 AI 输出 image-gen-request 结构化代码块，
+          // 与 MEDIA_MCP_SYSTEM_PROMPT 的"使用 MCP 工具直接生成"指令矛盾。
+          // MCP server 注册保持不变，仅跳过系统提示词注入。
+          if (!imageAgentMode && queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + MEDIA_MCP_SYSTEM_PROMPT;
           }
         }
 
         // 中文注释：功能名称「CLI 工具 MCP 常驻挂载」，用法是每轮 Claude Code 会话都显式
         // 注入 CodePilot 的 CLI 工具管理 MCP，避免前端能看到 CLI 能力但会话里因为关键词门控
-        // 没注册，导致 AI “知道有功能却调不到”。
-        // 注意：不设置 hasOnDemandMcpServers，因为 CLI tools 是常驻加载的（预热时也加载），
-        // 不属于 keyword-gated 的按需 MCP。设为 true 会导致预热进程永远无法复用。
-        // hasOnDemandMcpServers = true;  // 已移至预热阶段常驻加载
+        // 没注册，导致 AI "知道有功能却调不到"。
         const { createCliToolsMcpServer, CLI_TOOLS_MCP_SYSTEM_PROMPT } = await import('@/lib/cli-tools-mcp');
         queryOptions.mcpServers = {
           ...(queryOptions.mcpServers || {}),
@@ -1018,16 +1129,9 @@ if (claudePath) {
           queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + CLI_TOOLS_MCP_SYSTEM_PROMPT;
         }
 
-        // Dashboard MCP: widget management capabilities (keyword-gated).
-        const needsDashboardMcp = (() => {
-          const dashboardKeywords = /dashboard|仪表盘|看板|pin.*widget|pinned.*widget|refresh.*widget|固定.*组件|刷新.*组件|codepilot_dashboard/i;
-          if (dashboardKeywords.test(prompt)) return true;
-          if (conversationHistory?.some(m => dashboardKeywords.test(m.content))) return true;
-          return false;
-        })();
-
-        if (needsDashboardMcp) {
-          hasOnDemandMcpServers = true;
+        // 中文注释：功能名称「全量 MCP 常驻加载 - Dashboard」，用法是每轮对话都加载 Dashboard MCP，
+        // 与 warmup route 保持一致，确保 mcpSignature 匹配。
+        {
           const { createDashboardMcpServer, DASHBOARD_MCP_SYSTEM_PROMPT } = await import('@/lib/dashboard-mcp');
           queryOptions.mcpServers = {
             ...(queryOptions.mcpServers || {}),
@@ -1091,6 +1195,13 @@ if (claudePath) {
           console.log('[claude-client] Injecting enabled plugins:', enabledPlugins.map(p => path.basename(p.path)).join(', '));
         }
 
+        // 中文注释：功能名称「Hook 生命周期固定开启」，用法是在唯一的 Claude Code CLI
+        // 主路径下始终观察 hook 事件，让 OMC/插件生命周期对桌面端保持可见。
+        // ⚠️ 必须在 buildPersistentClaudeSignature 之前设置，否则 warmup 路由
+        // 的签名包含 includeHookEvents=true，而 chat 路由签名中为 undefined，
+        // 导致签名永远不匹配，预热永远无法被消费，首轮始终冷启动。
+        queryOptions.includeHookEvents = true;
+
         // Resume session if we have an SDK session ID from a previous conversation turn.
         // Pre-check: verify working_directory exists before attempting resume.
         // Resume depends on session context (cwd/project scope), so if the
@@ -1119,6 +1230,21 @@ if (claudePath) {
           providerKey,
           options: queryOptions,
         });
+        console.log('[claude-client] Signature computed:', {
+          sessionId,
+          persistentSignature,
+          providerKey,
+          model: queryOptions.model,
+          cwd: queryOptions.cwd,
+          settingSources: queryOptions.settingSources,
+          mcpServerNames: queryOptions.mcpServers ? Object.keys(queryOptions.mcpServers) : [],
+          envAnthropicBaseUrl: queryOptions.env?.ANTHROPIC_BASE_URL || '(none)',
+          envAuthKind: queryOptions.env?.ANTHROPIC_AUTH_TOKEN ? 'auth_token' : queryOptions.env?.ANTHROPIC_API_KEY ? 'api_key' : 'none',
+          resolvedProviderId: resolved.provider?.id || '(none)',
+          resolvedHasCredentials: resolved.hasCredentials,
+          optionsProviderId: options.providerId,
+          optionsSessionProviderId: options.sessionProviderId,
+        });
         // 中文注释：功能名称「OMC 会话复用保活」，用法是在 OMC 启用时也继续允许
         // CodePilot 的持久会话池与预热结果复用，解决每轮对话都重新连接 Claude Code
         // 进程、首轮和后续轮次都明显变慢的问题。
@@ -1128,31 +1254,51 @@ if (claudePath) {
           adoptPersistentClaudeSessionBySignature(persistentSignature, sessionId);
         }
 
-        // 中文注释：功能名称「预热会话复用检查」，用法是当数据库中没有 sdkSessionId 时，
-        // 如果内存中存在刚刚预热好的 persistent session（带有 initData 且签名匹配），
-        // 允许通过 isSessionWarmedUp 检查来复用这个预热进程，避免被下面的 stale session 逻辑误杀。
-        // 但注意：如果本次请求加载了预热进程中没有的按需 MCP Server，则不能复用预热进程！
-        const isWarmedUp = !shouldBypassPersistentSession && sessionId
-          ? !!(await import('./persistent-claude-session').then(m => m.isSessionWarmedUp(sessionId)))
+        // 中文注释：功能名称「预热复用门控」，用法是检查 WarmQuery Store 中是否存在
+        // 当前 sessionId 的预热句柄。之前用签名匹配（hasWarmedNativeClaudeQuery），
+        // 但签名几乎不可能在 warmup route 和 chat route 之间完全一致，
+        // 导致 WarmQuery 永远无法被消费。改为按 sessionId 直接查找。
+        const canReuseWarmup = !shouldBypassPersistentSession && sessionId
+          ? hasWarmedNativeClaudeQueryBySessionId(sessionId)
           : false;
-        const canReuseWarmup = isWarmedUp && !hasOnDemandMcpServers;
+
+        if (!shouldBypassPersistentSession && sessionId) {
+          const { getWarmQueryDiagnostics } = await import('./persistent-claude-session');
+          const diag = getWarmQueryDiagnostics();
+          console.log('[claude-client] WarmQuery reuse check:', {
+            canReuseWarmup,
+            sessionId,
+            chatSignature: persistentSignature?.slice(0, 12) + '...',
+            storeSize: diag.storeSize,
+            storeEntries: diag.entries,
+          });
+        }
 
         if (!shouldBypassPersistentSession && !shouldResume && canReuseWarmup && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
           console.log(`[claude-client] Found warmed up persistent session ${sessionId}, allowing reuse despite missing sdkSessionId`);
           shouldResume = true;
         }
 
-        // If we are starting a fresh session (!shouldResume) but a persistent session
-        // exists for this ID, we MUST close the old one to avoid exponential history
-        // explosion (sending the full history as a single prompt to a session that
-        // already has the history).
-        if (!shouldBypassPersistentSession && !shouldResume && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+        const willReusePersistentSession = !shouldBypassPersistentSession && canReusePersistentClaudeSession(sessionId, persistentSignature);
+        // 中文注释：判断是否将消费 WarmQuery，用于后续控制 resume 和关闭旧 session
+        const willConsumeWarmQuery = canReuseWarmup && sessionId && (!shouldResume || !willReusePersistentSession);
+
+        // 中文注释：如果将消费 WarmQuery 启动新对话，但旧的 PersistentSession 仍存在，
+        // 必须关闭它，否则会导致历史膨胀（将完整历史作为 prompt 发送给已有历史的 session）。
+        if (!shouldBypassPersistentSession && willConsumeWarmQuery && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
+          console.log(`[claude-client] Closing stale persistent session ${sessionId} before consuming WarmQuery`);
+          closePersistentClaudeSession(sessionId);
+        }
+        // 中文注释：非 resume 且非 WarmQuery 消费时，PersistentSession 存在也需要关闭
+        if (!shouldBypassPersistentSession && !shouldResume && !willConsumeWarmQuery && canReusePersistentClaudeSession(sessionId, persistentSignature)) {
           console.log(`[claude-client] Closing stale persistent session ${sessionId} before starting fresh`);
           closePersistentClaudeSession(sessionId);
         }
 
-        const willReusePersistentSession = !shouldBypassPersistentSession && canReusePersistentClaudeSession(sessionId, persistentSignature);
-        const shouldPassResume = shouldResume && !willReusePersistentSession;
+        // 中文注释：如果 WarmQuery 存在且将被消费，就不走 resume 路径，
+        // 因为 WarmQuery 提供了更快的初始化路径（CLI 子进程已预热），
+        // 不需要 "Reconnecting to previous conversation..." 的提示。
+        const shouldPassResume = shouldResume && !willReusePersistentSession && !willConsumeWarmQuery;
 
         if (shouldPassResume) {
           // Emit visible status so the user sees feedback during resume initialization
@@ -1202,6 +1348,7 @@ if (claudePath) {
             'Grep',
             'Skill',
             'Agent',
+            'Task',
             'mcp__filesystem__read_file',
             'mcp__filesystem__read_multiple_files',
             'mcp__filesystem__write_file',
@@ -1289,15 +1436,6 @@ if (claudePath) {
           sessionTitle: undefined as string | undefined,
           workingDirectory: resolvedWorkingDirectory.path,
         };
-
-        // 中文注释：功能名称「Hook 生命周期可观测性恢复」，用法是在 Claude Code
-        // Full Capabilities 主路径下开启 hook 事件流，让插件/OMC 的 SessionStart、
-        // InstructionsLoaded、SubagentStart 等生命周期可以被观测与诊断。
-        // 这里先恢复 includeHookEvents，不额外注入应用侧控制 hooks，避免重新引入
-        // 旧版本 SDK 的 control-frame 污染问题。
-        if (shouldUseFullClaudeCapabilities) {
-          queryOptions.includeHookEvents = true;
-        }
 
         // Capture real-time stderr output from Claude Code process
         queryOptions.stderr = (data: string) => {
@@ -1462,7 +1600,29 @@ if (claudePath) {
         // time. Reassigned on resume-fallback to point at the fresh Query.
         let controlQuery: Query;
 
-        if (!shouldBypassPersistentSession) {
+        // 中文注释：消费 WarmQuery 的条件改为：
+        // 1. 不 bypass persistent session
+        // 2. WarmQuery 存在（canReuseWarmup）
+        // 3. sessionId 存在
+        // 4. prompt 是 string
+        // 5. 不在 resume 且 PersistentSession 可复用（旧逻辑）
+        //    或者：在 resume 但 PersistentSession 不可用（签名不匹配/已过期），
+        //    此时 WarmQuery 比失败的 resume 更快更可靠
+        const warmedNativeQuery = !shouldBypassPersistentSession
+          && canReuseWarmup
+          && sessionId
+          && typeof finalPrompt === 'string'
+          && (!shouldResume || !willReusePersistentSession)
+          ? takeWarmedNativeClaudeQueryBySessionId(sessionId)
+          : null;
+
+        if (warmedNativeQuery) {
+          console.log('[claude-client] Consuming official WarmQuery for first text turn');
+          const warmConversation = warmedNativeQuery.warmQuery.query(finalPrompt);
+          conversation = warmConversation;
+          controlQuery = warmConversation;
+          warmedQueryCleanup = warmedNativeQuery.cleanup;
+        } else if (!shouldBypassPersistentSession) {
           const persistentMessages = await promptToUserMessages(finalPrompt, sdkSessionId);
           try {
             const persistentTurn = getPersistentClaudeTurn({
@@ -1629,22 +1789,34 @@ if (claudePath) {
         const toolFilesAccumulator = new Set<string>();
         // 中文注释：功能名称「SDK子Agent追踪」，用法是追踪SDK runtime中Agent工具的调用，
         // 发射合成的subagent_start/complete SSE事件，使子Agent卡片在会话切换后仍能恢复渲染
-        const pendingAgentToolUse = new Map<string, {
-          id: string;
-          name: string;
-          displayName: string;
-          prompt: string;
-          model?: string;
-          source?: 'omc_plugin' | 'sdk_agent_tool';
-        }>();
+        const pendingAgentToolUse = new Map<string, SyntheticSubagentInfo>();
+        // 中文注释：功能名称「Agent嵌套深度追踪」，用法是追踪当前工具调用是否处于子Agent上下文中。
+        // 当SDK流中父Agent调用Agent/Team工具时，子Agent的工具调用(Read/Write/Bash等)会混在同一个流中，
+        // 通过维护一个栈结构，可以为每个tool_use标记parentAgentId，使客户端能正确归属工具调用。
+        const agentStack: string[] = [];
+        // 中文注释：记录每个tool_use_id对应的parentAgentId，用于在tool_result时也能正确标记
+        const toolParentAgentMap = new Map<string, string>();
+        const resolvePendingSubagent = (toolUseId?: string, taskId?: string): [string, SyntheticSubagentInfo] | null => {
+          if (toolUseId && pendingAgentToolUse.has(toolUseId)) {
+            return [toolUseId, pendingAgentToolUse.get(toolUseId)!];
+          }
+          if (taskId) {
+            for (const entry of pendingAgentToolUse.entries()) {
+              if (entry[1].taskId === taskId) {
+                return entry;
+              }
+            }
+          }
+          return null;
+        };
         // 中文注释：功能名称「Bash命令追踪」，用法是追踪SDK runtime中Bash工具的调用，
         // 在tool_result时发射terminal_mirror事件，将命令输出镜像到终端面板
         const pendingBashCommands = new Map<string, string>();
         for await (const message of conversation) {
           if (abortController?.signal.aborted) {
-            if (usingPersistentSession) {
-              closePersistentClaudeSession(sessionId);
-            }
+            // 中文注释：中断时不关闭 persistent session，保留预热成果供下一轮复用。
+            // persistent session 的生命周期由 idle timeout 自动管理。
+            console.log('[claude-client] Stream aborted for session', sessionId, '— keeping persistent session alive for reuse');
             break;
           }
 
@@ -1667,17 +1839,24 @@ if (claudePath) {
                   sdkToolUseCount += 1;
                   sdkDistinctTools.add(block.name);
                   console.log('[claude-client] tool_use:', { id: block.id, name: block.name, input: block.input });
+                  // 中文注释：如果当前处于子Agent上下文（agentStack非空），标记parentAgentId，
+                  // 使客户端能将此工具调用归属到正确的子Agent时间线而非主时间线
+                  const currentParentAgentId = agentStack.length > 0 ? agentStack[agentStack.length - 1] : undefined;
+                  if (currentParentAgentId) {
+                    toolParentAgentMap.set(block.id, currentParentAgentId);
+                  }
                   controller.enqueue(formatSSE({
                     type: 'tool_use',
                     data: JSON.stringify({
                       id: block.id,
                       name: block.name,
                       input: block.input,
+                      ...(currentParentAgentId ? { parentAgentId: currentParentAgentId } : {}),
                     }),
                   }));
 
                   // Track TodoWrite calls — sync deferred until tool_result confirms success
-                  if (block.name === 'TodoWrite' || block.name === 'mcp__codepilot-todo__TodoWrite' || block.name === 'mcp__codepilot-todo__codepilot_todo_write') {
+                  if (isTodoWriteToolName(block.name)) {
                     try {
                       const toolInput = block.input as {
                         todos?: Array<{ content: string; status: string; activeForm?: string }>;
@@ -1692,43 +1871,21 @@ if (claudePath) {
 
                   // 中文注释：功能名称「Agent工具检测」，用法是检测SDK runtime中的Agent/Team工具调用，
                   // 发射合成的subagent_start SSE事件，使子Agent卡片能实时显示并在会话切换后恢复
-                  const agentToolNames = ['Agent', 'mcp__codepilot-agent__Agent', 'Team', 'mcp__codepilot-team__Team'];
-                  if (agentToolNames.includes(block.name)) {
+                  if (isSyntheticSubagentToolName(block.name)) {
                     try {
-                      const toolInput = block.input as {
-                        agentId?: string;
-                        agent_id?: string;
-                        agent?: string;
-                        subagent_type?: string;
-                        id?: string;
-                        prompt?: string;
-                        task?: string;
-                        description?: string;
-                        displayName?: string;
-                        display_name?: string;
-                        model?: string;
-                      };
-                      // 中文注释：功能名称「Agent输入解析」，用法是正确解析Agent/Team工具的input字段，
-                      // 优先使用agent/subagent_type（MCP schema定义的字段），避免回退到block.id产生call_function_xxx乱码
-                      const agentId = toolInput?.agentId || toolInput?.agent_id || toolInput?.agent || toolInput?.subagent_type || 'general';
-                      const agentPrompt = toolInput?.prompt || toolInput?.task || toolInput?.description || '';
-                      const agentDisplayName = toolInput?.displayName || toolInput?.display_name || agentId;
-                      // 中文注释：功能名称「空智能体过滤」，用法是当Agent工具调用没有prompt/task时，
+                      const agentInfo = getSyntheticSubagentInfo({
+                        input: block.input,
+                        omcPluginEnabled,
+                      });
+                      // 中文注释：功能名称「空智能体过滤」，用法是当Agent/Task工具调用没有prompt/task时，
                       // 不发射subagent_start事件，避免产生无任务的空智能体卡片
-                      if (!agentPrompt.trim()) {
-                        console.warn('[claude-client] Skipping Agent tool_use with empty prompt:', block.id);
+                      if (!agentInfo) {
+                        console.warn('[claude-client] Skipping agentic tool_use with empty prompt:', block.id, block.name);
                       } else {
-                        const subAgentId = `subagent-${agentId}-${Date.now()}`;
-                        const agentSource: 'omc_plugin' | 'sdk_agent_tool' = omcPluginEnabled ? 'omc_plugin' : 'sdk_agent_tool';
-                        const agentInfo = {
-                          id: subAgentId,
-                          name: agentId,
-                          displayName: agentDisplayName,
-                          prompt: agentPrompt.length > 200 ? agentPrompt.slice(0, 197) + '...' : agentPrompt,
-                          model: toolInput?.model,
-                          source: agentSource,
-                        };
                         pendingAgentToolUse.set(block.id, agentInfo);
+                        // 中文注释：压入agent栈，标记当前进入子Agent上下文，
+                        // 后续子Agent发出的工具调用会被标记parentAgentId
+                        agentStack.push(block.id);
                         controller.enqueue(formatSSE({
                           type: 'subagent_start',
                           data: JSON.stringify(agentInfo),
@@ -1917,11 +2074,18 @@ if (claudePath) {
                       resultContent = resultContent.slice(0, markerIdx).trim();
                     }
 
+                    // 中文注释：查找此tool_result对应的parentAgentId（从tool_use时记录的映射中获取）
+                    const resultParentAgentId = toolParentAgentMap.get(block.tool_use_id);
                     const ssePayload: Record<string, unknown> = {
                       tool_use_id: block.tool_use_id,
                       content: resultContent,
                       is_error: block.is_error || false,
+                      ...(resultParentAgentId ? { parentAgentId: resultParentAgentId } : {}),
                     };
+                    // 清理已完成的映射
+                    if (resultParentAgentId) {
+                      toolParentAgentMap.delete(block.tool_use_id);
+                    }
                     console.log('[claude-client] tool_result payload:', { tool_use_id: block.tool_use_id, contentLength: resultContent?.length });
                     if (mediaBlocks.length > 0) {
                       ssePayload.media = mediaBlocks;
@@ -1967,10 +2131,13 @@ if (claudePath) {
                     // tool_result，发射合成的subagent_complete SSE事件，使子Agent卡片能正确显示完成状态
                     if (pendingAgentToolUse.has(block.tool_use_id)) {
                       const agentInfo = pendingAgentToolUse.get(block.tool_use_id)!;
-                      pendingAgentToolUse.delete(block.tool_use_id);
                       const reportText = resultContent.length > 500
                         ? resultContent.slice(0, 497) + '...'
                         : resultContent;
+                      pendingAgentToolUse.delete(block.tool_use_id);
+                      // 中文注释：弹出agent栈，标记当前离开子Agent上下文
+                      const stackIdx = agentStack.indexOf(block.tool_use_id);
+                      if (stackIdx >= 0) agentStack.splice(stackIdx, 1);
                       controller.enqueue(formatSSE({
                         type: 'subagent_complete',
                         data: JSON.stringify({
@@ -2030,11 +2197,14 @@ if (claudePath) {
               const evt = streamEvent.event;
               if (evt.type === 'content_block_delta' && 'delta' in evt) {
                 const delta = evt.delta;
+                // 中文注释：子Agent上下文标记，将thinking/text事件标记parentAgentId，
+                // 使客户端能将子Agent的思考内容路由到子Agent卡片而非主时间线
+                const streamParentId = agentStack.length > 0 ? agentStack[agentStack.length - 1] : undefined;
                 if ('text' in delta && delta.text) {
-                  controller.enqueue(formatSSE({ type: 'text', data: delta.text }));
+                  controller.enqueue(formatSSE({ type: 'text', data: delta.text, ...(streamParentId ? { parentAgentId: streamParentId } : {}) }));
                 }
                 if ('thinking' in delta && (delta as { thinking?: string }).thinking) {
-                  controller.enqueue(formatSSE({ type: 'thinking', data: (delta as { thinking: string }).thinking }));
+                  controller.enqueue(formatSSE({ type: 'thinking', data: (delta as { thinking: string }).thinking, ...(streamParentId ? { parentAgentId: streamParentId } : {}) }));
                 }
               }
               break;
@@ -2047,6 +2217,7 @@ if (claudePath) {
                   const initMsg = sysMsg as SDKSystemMessage & {
                     slash_commands?: unknown;
                     skills?: unknown;
+                    agents?: unknown;
                     plugins?: Array<{ name: string; path: string }>;
                     mcp_servers?: unknown;
                     output_style?: string;
@@ -2060,6 +2231,7 @@ if (claudePath) {
                       tools: sysMsg.tools,
                       slash_commands: initMsg.slash_commands,
                       skills: initMsg.skills,
+                      agents: initMsg.agents,
                       plugins: initMsg.plugins,
                       mcp_servers: initMsg.mcp_servers,
                       output_style: initMsg.output_style,
@@ -2081,11 +2253,87 @@ if (claudePath) {
                       data: statusMsg.permissionMode,
                     }));
                   }
+                } else if (sysMsg.subtype === 'task_started') {
+                  const taskStarted = sysMsg as SDKSystemMessage & {
+                    task_id: string;
+                    tool_use_id?: string;
+                    description?: string;
+                  };
+                  const pending = resolvePendingSubagent(taskStarted.tool_use_id, taskStarted.task_id);
+                  if (pending) {
+                    const [toolUseId, agentInfo] = pending;
+                    agentInfo.taskId = taskStarted.task_id;
+                    pendingAgentToolUse.set(toolUseId, agentInfo);
+                    controller.enqueue(formatSSE({
+                      type: 'subagent_progress',
+                      data: JSON.stringify({
+                        id: agentInfo.id,
+                        detail: `${taskStarted.description || 'Task started'}\n`,
+                        append: true,
+                      }),
+                    }));
+                  }
+                } else if (sysMsg.subtype === 'task_progress') {
+                  const taskProgress = sysMsg as SDKSystemMessage & {
+                    task_id: string;
+                    tool_use_id?: string;
+                    description?: string;
+                    summary?: string;
+                    last_tool_name?: string;
+                  };
+                  const pending = resolvePendingSubagent(taskProgress.tool_use_id, taskProgress.task_id);
+                  if (pending) {
+                    const [, agentInfo] = pending;
+                    const detail = taskProgress.summary || taskProgress.description || taskProgress.last_tool_name;
+                    if (detail) {
+                      controller.enqueue(formatSSE({
+                        type: 'subagent_progress',
+                        data: JSON.stringify({
+                          id: agentInfo.id,
+                          detail: `${detail}\n`,
+                          append: true,
+                        }),
+                      }));
+                    }
+                  }
+                } else if (sysMsg.subtype === 'task_updated') {
+                  const taskUpdated = sysMsg as SDKSystemMessage & {
+                    task_id: string;
+                    patch?: { status?: string; error?: string };
+                  };
+                  const pending = resolvePendingSubagent(undefined, taskUpdated.task_id);
+                  if (pending && (taskUpdated.patch?.status === 'failed' || taskUpdated.patch?.status === 'killed')) {
+                    const [toolUseId, agentInfo] = pending;
+                    pendingAgentToolUse.delete(toolUseId);
+                    controller.enqueue(formatSSE({
+                      type: 'subagent_complete',
+                      data: JSON.stringify({
+                        id: agentInfo.id,
+                        error: taskUpdated.patch?.error || `Task ${taskUpdated.patch?.status}`,
+                        source: agentInfo.source,
+                      }),
+                    }));
+                  }
                 } else if (sysMsg.subtype === 'task_notification') {
                   // Agent task completed/failed/stopped — surface as notification
                   const taskMsg = sysMsg as SDKSystemMessage & {
-                    status: string; summary: string; task_id: string;
+                    status: string; summary: string; task_id: string; tool_use_id?: string;
                   };
+                  const pending = resolvePendingSubagent(taskMsg.tool_use_id, taskMsg.task_id);
+                  if (pending) {
+                    const [toolUseId, agentInfo] = pending;
+                    pendingAgentToolUse.delete(toolUseId);
+                    const summary = (taskMsg.summary || '').slice(0, 500);
+                    controller.enqueue(formatSSE({
+                      type: 'subagent_complete',
+                      data: JSON.stringify({
+                        id: agentInfo.id,
+                        report: taskMsg.status === 'completed' ? summary : undefined,
+                        error: taskMsg.status === 'completed' ? undefined : (summary || `Task ${taskMsg.status}`),
+                        source: agentInfo.source,
+                      }),
+                    }));
+                  }
                   const title = taskMsg.status === 'completed' ? 'Task completed' : `Task ${taskMsg.status}`;
                   controller.enqueue(formatSSE({
                     type: 'status',
@@ -2144,6 +2392,17 @@ if (claudePath) {
                   elapsed_time_seconds: progressMsg.elapsed_time_seconds,
                 }),
               }));
+              if (pendingAgentToolUse.has(progressMsg.tool_use_id) && isSyntheticSubagentToolName(progressMsg.tool_name)) {
+                const agentInfo = pendingAgentToolUse.get(progressMsg.tool_use_id)!;
+                controller.enqueue(formatSSE({
+                  type: 'subagent_progress',
+                  data: JSON.stringify({
+                    id: agentInfo.id,
+                    detail: `${progressMsg.tool_name} running for ${Math.round(progressMsg.elapsed_time_seconds)}s\n`,
+                    append: true,
+                  }),
+                }));
+              }
               // Auto-timeout: abort if tool runs longer than configured threshold
               if (toolTimeoutSeconds > 0 && progressMsg.elapsed_time_seconds >= toolTimeoutSeconds) {
                 controller.enqueue(formatSSE({
@@ -2334,12 +2593,33 @@ if (claudePath) {
         controller.enqueue(formatSSE({ type: 'done', data: '' }));
         controller.close();
       } catch (error) {
-        if (usingPersistentSession) {
-          closePersistentClaudeSession(sessionId);
-        }
+        // 中文注释：功能名称「错误分类关闭策略」，用法是区分可恢复错误和不可恢复错误，
+        // 决定是否关闭 persistent session。
+        // 可恢复错误（MCP 工具调用失败、rate limit、网络超时等）：
+        //   persistent session 仍然可用，下一轮消息可以复用，不需要冷启动。
+        // 不可恢复错误（认证失败、配置错误、SDK 进程崩溃等）：
+        //   persistent session 不可用，必须关闭并重新创建。
         const rawMessage = error instanceof Error ? error.message : 'Unknown error';
-        // Log full error details for debugging (visible in terminal / dev tools)
         const stderrContent = error instanceof Error ? (error as { stderr?: string }).stderr : undefined;
+        const networkErrorCode = (error instanceof Error) ? (error as NodeJS.ErrnoException).code : undefined;
+        const isRecoverableError = /rate.?limit|429|529|overloaded/i.test(rawMessage)
+          || /timeout|ETIMEDOUT/i.test(rawMessage)
+          || /ECONNRESET|ECONNREFUSED|fetch failed|network/i.test(rawMessage)
+          || /MCP.*error|mcp.*fail|mcp.*crash/i.test(rawMessage)
+          || /tool.*fail|tool.*error|tool.*timeout/i.test(rawMessage)
+          || /server.*error|server.*fail|server.*crash/i.test(rawMessage)
+          || networkErrorCode === 'ECONNRESET'
+          || networkErrorCode === 'ETIMEDOUT'
+          || networkErrorCode === 'ECONNREFUSED';
+
+        if (usingPersistentSession) {
+          if (isRecoverableError) {
+            console.log('[claude-client] Recoverable error, keeping persistent session alive for reuse:', rawMessage.slice(0, 100));
+          } else {
+            console.log('[claude-client] Unrecoverable error, closing persistent session:', rawMessage.slice(0, 100));
+            closePersistentClaudeSession(sessionId);
+          }
+        }
         console.error('[claude-client] Stream error:', {
           message: rawMessage,
           stack: error instanceof Error ? error.stack : undefined,
@@ -2451,6 +2731,8 @@ if (claudePath) {
             const retryConversation = query({ prompt: retryPrompt, options: retryOptions });
 
             // Forward retry stream events (simplified — covers the critical path)
+            // 中文注释：重试路径也需要agent栈追踪，用于标记子Agent的工具调用
+            const retryAgentStack: string[] = [];
             for await (const msg of retryConversation) {
               if (abortController?.signal.aborted) break;
               switch (msg.type) {
@@ -2480,7 +2762,12 @@ if (claudePath) {
                   const aMsg = msg as SDKAssistantMessage;
                   for (const block of aMsg.message.content) {
                     if (block.type === 'tool_use') {
-                      controller.enqueue(formatSSE({ type: 'tool_use', data: JSON.stringify({ id: block.id, name: block.name, input: block.input }) }));
+                      // 中文注释：重试路径的agent栈追踪
+                      if (isSyntheticSubagentToolName(block.name)) {
+                        retryAgentStack.push(block.id);
+                      }
+                      const retryParentId = retryAgentStack.length > 0 ? retryAgentStack[retryAgentStack.length - 1] : undefined;
+                      controller.enqueue(formatSSE({ type: 'tool_use', data: JSON.stringify({ id: block.id, name: block.name, input: block.input, ...(retryParentId ? { parentAgentId: retryParentId } : {}) }) }));
                       // 中文注释：功能名称「恢复路径浏览器检测」，用法是在SDK session恢复路径中
                       // 也检测浏览器工具调用，确保压缩重试后浏览器仍能正确打开
                       const browserToolNames = ['codepilot_open_browser', 'mcp__codepilot-browser__codepilot_open_browser'];
@@ -2503,6 +2790,9 @@ if (claudePath) {
                   const uMsg = msg as { type: 'user'; message: { content: Array<{ type: string; content?: string | Array<Record<string, unknown>>; tool_use_id?: string; is_error?: boolean }> } };
                   for (const block of uMsg.message.content) {
                     if (block.type === 'tool_result') {
+                      // 中文注释：重试路径的agent栈弹出
+                      const retryStackIdx = retryAgentStack.indexOf(block.tool_use_id!);
+                      if (retryStackIdx >= 0) retryAgentStack.splice(retryStackIdx, 1);
                       const retryMedia: MediaBlock[] = [];
                       let retryContent = '';
 
@@ -2545,11 +2835,13 @@ if (claudePath) {
                         retryContent = retryContent.slice(0, retryMarkerIdx).trim();
                       }
 
+                      const retryResultParentId = retryAgentStack.length > 0 ? retryAgentStack[retryAgentStack.length - 1] : undefined;
                       controller.enqueue(formatSSE({ type: 'tool_result', data: JSON.stringify({
                         tool_use_id: block.tool_use_id,
                         content: retryContent,
                         ...(block.is_error ? { is_error: true } : {}),
                         ...(retryMedia.length > 0 ? { media: retryMedia } : {}),
+                        ...(retryResultParentId ? { parentAgentId: retryResultParentId } : {}),
                       }) }));
                     }
                   }
@@ -2558,11 +2850,12 @@ if (claudePath) {
                 case 'stream_event': {
                   const se = msg as { type: 'stream_event'; event: { type: string; delta?: { text?: string; thinking?: string }; index?: number } };
                   if (se.event.type === 'content_block_delta') {
+                    const retryStreamParentId = retryAgentStack.length > 0 ? retryAgentStack[retryAgentStack.length - 1] : undefined;
                     if (se.event.delta?.text) {
-                      controller.enqueue(formatSSE({ type: 'text', data: se.event.delta.text }));
+                      controller.enqueue(formatSSE({ type: 'text', data: se.event.delta.text, ...(retryStreamParentId ? { parentAgentId: retryStreamParentId } : {}) }));
                     }
                     if (se.event.delta?.thinking) {
-                      controller.enqueue(formatSSE({ type: 'thinking', data: se.event.delta.thinking }));
+                      controller.enqueue(formatSSE({ type: 'thinking', data: se.event.delta.thinking, ...(retryStreamParentId ? { parentAgentId: retryStreamParentId } : {}) }));
                     }
                   }
                   break;
@@ -2649,6 +2942,10 @@ if (claudePath) {
         controller.close();
       } finally {
         unregisterConversation(sessionId);
+        if (warmedQueryCleanup) {
+          warmedQueryCleanup();
+          warmedQueryCleanup = null;
+        }
         // Tear down shadow ~/.claude/ if we built one. Best-effort — the OS
         // will eventually GC tmpdir even if this fails.
         if (shadowHome && !shadowHandleOwnedByPersistentSession) {
@@ -2659,7 +2956,11 @@ if (claudePath) {
     },
 
     cancel() {
-      closePersistentClaudeSession(sessionId);
+      // 中文注释：功能名称「取消不销毁会话」，用法是用户点击停止按钮时只中断当前操作，
+      // 不关闭 persistent session。之前 cancel() 会调用 closePersistentClaudeSession，
+      // 导致预热成果被销毁，下一轮消息必须重新冷启动。
+      // persistent session 的生命周期由 idle timeout 自动管理。
+      console.log('[claude-client] Stream cancelled for session', sessionId, '— keeping persistent session alive for reuse');
       abortController?.abort();
     },
   });

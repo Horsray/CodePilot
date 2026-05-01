@@ -7,6 +7,7 @@ import {
   getProjectCommandsDir,
 } from "@/lib/skills-registry";
 import { invalidateSkillCache } from "@/lib/skill-discovery";
+import { getSetting } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
@@ -60,7 +61,20 @@ export async function GET(request: NextRequest) {
       // SDK capabilities not available, skip
     }
 
-    return NextResponse.json({ skills: all });
+    // 中文注释：读取 disabled_skills 设置，为每个技能标注启用/禁用状态
+    let disabledSet: Set<string> = new Set();
+    try {
+      const raw = getSetting('disabled_skills') || '[]';
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) disabledSet = new Set(list.map((s: string) => s.toLowerCase()));
+    } catch { /* ignore parse errors */ }
+
+    const annotated = all.map(s => ({
+      ...s,
+      disabled: disabledSet.has(s.name.toLowerCase()),
+    }));
+
+    return NextResponse.json({ skills: annotated });
   } catch (error) {
     console.error('[skills] Error:', error);
     return NextResponse.json(

@@ -17,7 +17,6 @@ import { useStickToBottomContext } from "use-stick-to-bottom";
 import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
 import { CodePilotLogo } from './CodePilotLogo';
-import { SubAgentTimeline } from './SubAgentTimeline';
 import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, RARITY_BG_GRADIENT, type Species, type Rarity } from '@/lib/buddy';
 
 /**
@@ -129,12 +128,14 @@ interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  parentAgentId?: string;
 }
 
 interface ToolResultInfo {
   tool_use_id: string;
   content: string;
   is_error?: boolean;
+  parentAgentId?: string;
 }
 
 /** Sub-agent tracking info for nested timeline display */

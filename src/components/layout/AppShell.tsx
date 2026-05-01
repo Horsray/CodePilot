@@ -6,7 +6,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { TooltipProvider } from "@/components/ui/tooltip";
 // NavRail removed — navigation merged into ChatListPanel
 import { ChatListPanel } from "./ChatListPanel";
-import { ResizeHandle } from "./ResizeHandle";
 import { UpdateDialog } from "./UpdateDialog";
 import { FeatureAnnouncementDialog } from "./FeatureAnnouncementDialog";
 import { UpdateBanner } from "./UpdateBanner";
@@ -62,8 +61,6 @@ function loadActiveColumn(): string {
 }
 
 const EMPTY_SET = new Set<string>();
-const CHATLIST_MIN = 180;
-const CHATLIST_MAX = 300;
 
 /** Extensions that default to "rendered" view mode */
 const RENDERED_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
@@ -83,11 +80,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
-  const [chatListOpenRaw, setChatListOpenRaw] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupInitialCard, setSetupInitialCard] = useState<'claude' | 'provider' | 'project' | undefined>();
   const [searchOpen, setSearchOpen] = useState(false);
   const store = usePanelStore();
+  const { chatListOpen, setChatListOpen: setChatListOpenRaw } = store;
 
   useGlobalSearchShortcut(() => setSearchOpen(true));
 
@@ -164,42 +161,53 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('hashchange', maybeOpenFromHash);
   }, []);
 
+  // Listen for sidebar quick-button events (dispatched from UnifiedTopBar when sidebar collapsed)
+  useEffect(() => {
+    const handleNewChat = async () => {
+      // 中文注释：侧边栏收起时新建会话 — 先展开侧边栏再创建
+      setChatListOpenRaw(true);
+      // Give the sidebar time to mount before dispatching
+      setTimeout(() => window.dispatchEvent(new CustomEvent('chatlist-new-chat')), 50);
+    };
+    const handleOpenBrowser = () => {
+      setChatListOpenRaw(true);
+      store.openBrowserTab('', '新标签页');
+    };
+    window.addEventListener('chatlist-new-chat-trigger', handleNewChat);
+    window.addEventListener('chatlist-open-browser', handleOpenBrowser);
+    return () => {
+      window.removeEventListener('chatlist-new-chat-trigger', handleNewChat);
+      window.removeEventListener('chatlist-open-browser', handleOpenBrowser);
+    };
+  }, [store, setChatListOpenRaw]);
+
   // Listen for open-global-search events from ChatListPanel
   useEffect(() => {
-    const handler = () => setSearchOpen(true);
+    const handler = () => {
+      setChatListOpenRaw(true);
+      setSearchOpen(true);
+    };
     window.addEventListener('open-global-search', handler);
     return () => window.removeEventListener('open-global-search', handler);
-  }, []);
+  }, [setChatListOpenRaw]);
 
   // Sync with viewport after hydration to avoid SSR mismatch
   useEffect(() => {
     // 中文注释：首屏挂载后按视口同步聊天列表开关，避免 SSR 与客户端宽度不一致。
     setChatListOpenRaw(window.matchMedia(`(min-width: ${LG_BREAKPOINT}px)`).matches);
-  }, []);
+  }, [setChatListOpenRaw]);
 
-  // Panel width state with localStorage persistence
+  // Panel width state with localStorage persistence (for floating ChatListPanel)
   const [chatListWidth, setChatListWidth] = useState(240);
 
   // Restore persisted width after hydration
   useEffect(() => {
-    // 中文注释：恢复聊天列表宽度；仅在客户端读取本地缓存并回填。
     const saved = localStorage.getItem("codepilot_chatlist_width");
     if (saved) setChatListWidth(parseInt(saved));
   }, []);
 
-  const handleChatListResize = useCallback((delta: number) => {
-    setChatListWidth((w) => Math.min(CHATLIST_MAX, Math.max(CHATLIST_MIN, w + delta)));
-  }, []);
-  const handleChatListResizeEnd = useCallback(() => {
-    setChatListWidth((w) => {
-      localStorage.setItem("codepilot_chatlist_width", String(w));
-      return w;
-    });
-  }, []);
-
   // Panel state — chatListOpen is no longer gated by route (sidebar always visible)
   const isChatRoute = pathname === "/chat" || pathname.startsWith("/chat/");
-  const chatListOpen = chatListOpenRaw;
 
 
   // --- New independent panel states ---
@@ -403,6 +411,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const panelContextValue = useMemo(
     () => ({
+      chatListOpen: store.chatListOpen,
+      setChatListOpen: store.setChatListOpen,
       fileTreeOpen: store.fileTreeOpen,
       setFileTreeOpen: store.setFileTreeOpen,
       gitPanelOpen: store.gitPanelOpen,
@@ -464,19 +474,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <ImageGenContext.Provider value={imageGenValue}>
         <BatchImageGenContext.Provider value={batchImageGenValue}>
         <TooltipProvider delayDuration={300}>
-          <div className="flex h-screen overflow-hidden">
+          <div className="flex h-screen overflow-hidden relative">
+            {/* 中文注释：ChatListPanel 悬浮布局 — 绝对定位于主内容之上，带阴影和圆角 */}
             <ErrorBoundary>
               <ChatListPanel
                 open={chatListOpen}
                 width={chatListWidth}
                 hasUpdate={updateContextValue.updateInfo?.updateAvailable ?? false}
                 readyToInstall={updateContextValue.updateInfo?.readyToInstall ?? false}
+                onToggle={() => setChatListOpenRaw(!chatListOpen)}
               />
             </ErrorBoundary>
-            {chatListOpen && (
-              <ResizeHandle side="left" onResize={handleChatListResize} onResizeEnd={handleChatListResizeEnd} />
-            )}
-            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            {/* 中文注释：侧边栏打开时，主内容区添加左边距以避开悬浮面板 */}
+            <div
+              className="flex min-w-0 flex-1 flex-col overflow-hidden transition-all duration-200"
+              style={{ paddingLeft: chatListOpen ? chatListWidth + 10 : 0 }}
+            >
               <UnifiedTopBar />
               <UpdateBanner />
               <div className="flex flex-1 min-h-0 overflow-hidden">

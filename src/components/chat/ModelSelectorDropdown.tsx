@@ -189,7 +189,7 @@ export function ModelSelectorDropdown({
                             </span>
                           )}
                         </span>
-                        {isActive && <span className="text-xs">&#10003;</span>}
+                        {isActive && <span className="text-xs text-primary">&#10003;</span>}
                       </CommandListItem>
                     );
                   })}

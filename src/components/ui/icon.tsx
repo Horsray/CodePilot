@@ -90,6 +90,7 @@ export { Star } from "@phosphor-icons/react/Star";
 export { Stethoscope } from "@phosphor-icons/react/Stethoscope";
 export { Stop } from "@phosphor-icons/react/Stop";
 export { Storefront } from "@phosphor-icons/react/Storefront";
+export { Stack } from "@phosphor-icons/react/Stack";
 export { Sun } from "@phosphor-icons/react/Sun";
 export { TelegramLogo } from "@phosphor-icons/react/TelegramLogo";
 export { Terminal } from "@phosphor-icons/react/Terminal";
@@ -123,6 +124,8 @@ export { BellSimple } from "@phosphor-icons/react/BellSimple";
 export { Calendar } from "@phosphor-icons/react/Calendar";
 export { Pause } from "@phosphor-icons/react/Pause";
 export { PauseCircle } from "@phosphor-icons/react/PauseCircle";
+export { Cloud } from "@phosphor-icons/react/Cloud";
+export { ClockCountdown } from "@phosphor-icons/react/ClockCountdown";
 
 export type { Icon, IconProps } from "@phosphor-icons/react";
 

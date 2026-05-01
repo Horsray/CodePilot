@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodePilot UI 质感升级预览</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+
+    /* 渐变边框效果 */
+    .gradient-border {
+      position: relative;
+    }
+    .gradient-border::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      padding: 1px;
+      background: linear-gradient(135deg, rgba(139, 92, 246, 0.4), rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.1));
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .gradient-border:focus-within::before {
+      opacity: 1;
+    }
+
+    /* 按钮微动效 */
+    .btn-premium {
+      background: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.15), 0 1px 3px rgba(0,0,0,0.1);
+      transition: all 0.15s ease;
+    }
+    .btn-premium:hover {
+      transform: scale(1.02);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 2px 8px rgba(99, 102, 241, 0.4);
+    }
+    .btn-premium:active {
+      transform: scale(0.98);
+    }
+
+    /* 图标按钮 */
+    .icon-btn {
+      transition: all 0.15s ease;
+    }
+    .icon-btn:hover {
+      background: rgba(99, 102, 241, 0.1);
+      transform: scale(1.05);
+    }
+
+    /* 玻璃态输入框 */
+    .glass-input {
+      background: rgba(30, 30, 40, 0.8);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.1);
+      transition: all 0.3s ease;
+    }
+    .glass-input:focus {
+      background: rgba(30, 30, 40, 0.9);
+      border-color: rgba(99, 102, 241, 0.5);
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+    }
+
+    /* 卡片面板 */
+    .card-panel {
+      background: linear-gradient(180deg, rgba(39, 39, 52, 0.9) 0%, rgba(30, 30, 40, 0.95) 100%);
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    /* 标签页指示器 */
+    .tab-item {
+      position: relative;
+      transition: all 0.2s ease;
+    }
+    .tab-item::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 50%;
+      width: 0;
+      height: 2px;
+      background: linear-gradient(90deg, #6366f1, #8b5cf6);
+      border-radius: 2px 2px 0 0;
+      transition: all 0.2s ease;
+      transform: translateX(-50%);
+    }
+    .tab-item.active::after {
+      width: 100%;
+    }
+    .tab-item:hover {
+      color: #a5b4fc;
+    }
+
+    /* 拖拽手柄 */
+    .drag-handle {
+      background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.3), transparent);
+      transition: all 0.2s ease;
+    }
+    .drag-handle:hover {
+      background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.5), transparent);
+    }
+    .drag-handle::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px;
+      height: 4px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 2px;
+      transition: all 0.2s ease;
+    }
+    .drag-handle:hover::before {
+      background: rgba(99, 102, 241, 0.6);
+    }
+
+    /* 侧边栏会话项 */
+    .session-item {
+      transition: all 0.15s ease;
+    }
+    .session-item:hover {
+      background: rgba(99, 102, 241, 0.08);
+    }
+    .session-item.active {
+      background: rgba(99, 102, 241, 0.15);
+      border-left: 2px solid #6366f1;
+    }
+
+    /* 发光效果 */
+    .glow-sm {
+      box-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
+    }
+    .glow-md {
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 min-h-screen text-white">
+
+  <div class="flex h-screen">
+    <!-- 左侧边栏 -->
+    <aside class="w-60 bg-slate-900/80 backdrop-blur-xl border-r border-slate-700/50 flex flex-col">
+      <!-- Logo 区域 -->
+      <div class="h-14 flex items-center justify-center px-4 border-b border-slate-700/30">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center glow-sm">
+          <span class="text-white font-bold text-sm">CP</span>
+        </div>
+        <span class="ml-2 font-semibold text-slate-200">CodePilot</span>
+      </div>
+
+      <!-- 新建会话按钮 -->
+      <div class="px-3 py-3">
+        <button class="w-full h-9 rounded-lg bg-gradient-to-b from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-sm font-medium flex items-center justify-center gap-2 shadow-lg hover:shadow-indigo-500/25 transition-all hover:scale-[1.02] active:scale-[0.98]">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+          </svg>
+          新建对话
+        </button>
+      </div>
+
+      <!-- 功能导航 -->
+      <div class="px-3 py-2 space-y-0.5">
+        <div class="text-[10px] font-medium text-slate-500 uppercase tracking-wider px-3 py-2">功能</div>
+        <a href="#" class="flex items-center gap-2 px-3 py-2 rounded-md text-slate-300 text-sm hover:bg-slate-800/50 transition-colors">
+          <span class="w-4 h-4">⚡</span> Skills
+        </a>
+        <a href="#" class="flex items-center gap-2 px-3 py-2 rounded-md text-slate-300 text-sm hover:bg-slate-800/50 transition-colors">
+          <span class="w-4 h-4">🔌</span> MCP
+        </a>
+        <a href="#" class="flex items-center gap-2 px-3 py-2 rounded-md text-slate-300 text-sm hover:bg-slate-800/50 transition-colors">
+          <span class="w-4 h-4">🎨</span> 画廊
+        </a>
+      </div>
+
+      <!-- 会话列表 -->
+      <div class="flex-1 overflow-y-auto px-3 py-2">
+        <div class="text-[10px] font-medium text-slate-500 uppercase tracking-wider px-3 py-2">最近会话</div>
+
+        <div class="session-item active pl-3 pr-2 py-2 rounded-md cursor-pointer">
+          <div class="text-sm text-slate-200 font-medium truncate">修复登录页面样式问题</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">今天 14:32</div>
+        </div>
+
+        <div class="session-item pl-3 pr-2 py-2 rounded-md cursor-pointer mt-1">
+          <div class="text-sm text-slate-300 truncate">优化数据库查询性能</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">今天 11:20</div>
+        </div>
+
+        <div class="session-item pl-3 pr-2 py-2 rounded-md cursor-pointer mt-1">
+          <div class="text-sm text-slate-300 truncate">实现用户反馈功能</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">昨天 16:45</div>
+        </div>
+
+        <div class="session-item pl-3 pr-2 py-2 rounded-md cursor-pointer mt-1">
+          <div class="text-sm text-slate-300 truncate">重构权限验证逻辑</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">昨天 10:30</div>
+        </div>
+      </div>
+
+      <!-- 设置入口 -->
+      <div class="px-3 py-3 border-t border-slate-700/30">
+        <button class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-slate-400 text-sm hover:bg-slate-800/50 hover:text-slate-200 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          设置
+        </button>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="flex-1 flex flex-col">
+      <!-- 顶部栏 -->
+      <header class="h-12 border-b border-slate-700/40 flex items-center justify-between px-4">
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-slate-300">修复登录页面样式问题</span>
+          <span class="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-xs">代码模式</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="icon-btn w-8 h-8 rounded-lg flex items-center justify-center text-slate-400">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/>
+            </svg>
+          </button>
+          <button class="icon-btn w-8 h-8 rounded-lg flex items-center justify-center text-slate-400">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 聊天区域 -->
+      <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        <!-- 用户消息 -->
+        <div class="flex gap-3">
+          <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center shrink-0">
+            <span class="text-white text-xs font-medium">ME</span>
+          </div>
+          <div class="bg-slate-800/60 rounded-2xl rounded-tl-sm px-4 py-3 max-w-xl">
+            <p class="text-sm text-slate-200">登录页面的按钮在暗色主题下不够明显，需要增强对比度和视觉层次感</p>
+          </div>
+        </div>
+
+        <!-- AI 消息 -->
+        <div class="flex gap-3">
+          <div class="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shrink-0 glow-sm">
+            <span class="text-white text-xs font-medium">AI</span>
+          </div>
+          <div class="bg-slate-800/60 rounded-2xl rounded-tr-sm px-4 py-3 max-w-xl">
+            <p class="text-sm text-slate-200">我来为按钮添加微渐变和内阴影效果，这可以增强立体感和可点击性。同时添加悬停态的放大和发光效果。</p>
+            <div class="mt-3 bg-slate-900/80 rounded-lg p-3 font-mono text-xs text-slate-400">
+              <span class="text-indigo-400">btn-premium</span> {'{'} <br>
+              &nbsp;&nbsp;background: <span class="text-green-400">linear-gradient</span>(180deg, #6366f1 0%, #4f46e5 100%);<br>
+              &nbsp;&nbsp;box-shadow: <span class="text-green-400">inset</span> 0 1px 0 rgba(255,255,255,0.15);<br>
+              &nbsp;&nbsp;<span class="text-slate-500">/* 悬停时增强 */</span><br>
+              &nbsp;&nbsp;<span class="text-indigo-400">hover</span>: <span class="text-green-400">transform</span>: scale(1.02);
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部面板 -->
+      <div class="border-t border-slate-700/40">
+        <!-- 拖拽手柄 -->
+        <div class="drag-handle h-[6px] relative cursor-row-resize"></div>
+
+        <!-- 标签页 -->
+        <div class="flex items-center h-10 px-4 gap-1 border-b border-slate-700/30">
+          <button class="tab-item active px-3 py-2 text-sm text-indigo-400 font-medium">
+            控制台
+          </button>
+          <button class="tab-item px-3 py-2 text-sm text-slate-400">
+            终端
+          </button>
+          <div class="flex-1"></div>
+          <button class="icon-btn w-7 h-7 rounded flex items-center justify-center text-slate-500">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- 面板内容 -->
+        <div class="h-32 bg-slate-900/50 p-3">
+          <div class="text-xs text-slate-500 font-mono">
+            > 正在监听文件变化...
+          </div>
+        </div>
+      </div>
+
+      <!-- 输入框区域 -->
+      <div class="p-4">
+        <div class="relative gradient-border rounded-2xl">
+          <div class="glass-input rounded-2xl p-4">
+            <textarea
+              class="w-full bg-transparent text-sm text-slate-200 placeholder-slate-500 outline-none resize-none"
+              rows="2"
+              placeholder="输入消息，Shift+Enter 换行..."
+            ></textarea>
+
+            <!-- 工具栏 -->
+            <div class="flex items-center justify-between mt-3 pt-3 border-t border-slate-700/30">
+              <div class="flex items-center gap-1">
+                <button class="icon-btn w-8 h-8 rounded-lg flex items-center justify-center text-slate-400" title="优化提示词">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/>
+                  </svg>
+                </button>
+                <button class="icon-btn w-8 h-8 rounded-lg flex items-center justify-center text-slate-400" title="附件">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+                  </svg>
+                </button>
+                <button class="icon-btn w-8 h-8 rounded-lg flex items-center justify-center text-slate-400" title="斜杠命令">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                  </svg>
+                </button>
+                <div class="w-px h-5 bg-slate-700 mx-1"></div>
+                <button class="px-2 py-1 rounded text-xs text-slate-400 hover:bg-slate-800 transition-colors">
+                  sonnet
+                </button>
+              </div>
+
+              <!-- 发送按钮 -->
+              <button class="btn-premium w-10 h-10 rounded-xl flex items-center justify-center text-white">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- 右侧面板 -->
+    <aside class="w-80 bg-slate-900/50 flex flex-col border-l border-slate-700/40">
+      <!-- 文件树面板 -->
+      <div class="card-panel m-3 rounded-xl p-3">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm font-medium text-slate-200">文件树</span>
+          <button class="icon-btn w-6 h-6 rounded flex items-center justify-center text-slate-500">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+          </button>
+        </div>
+        <div class="space-y-1">
+          <div class="flex items-center gap-2 px-2 py-1.5 rounded bg-indigo-500/10 text-indigo-300 text-sm">
+            <span>📁</span> src
+          </div>
+          <div class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-800/50 text-slate-300 text-sm ml-4">
+            <span>📁</span> components
+          </div>
+          <div class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-800/50 text-slate-300 text-sm ml-8">
+            <span>📄</span> Button.tsx
+          </div>
+        </div>
+      </div>
+
+      <!-- Git 状态面板 -->
+      <div class="card-panel m-3 rounded-xl p-3">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm font-medium text-slate-200">Git 状态</span>
+          <span class="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-xs">3 changed</span>
+        </div>
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-2 text-xs text-slate-400">
+            <span class="text-red-400">●</span> src/components/Button.tsx
+          </div>
+          <div class="flex items-center gap-2 text-xs text-slate-400">
+            <span class="text-green-400">●</span> src/styles/theme.css
+          </div>
+          <div class="flex items-center gap-2 text-xs text-slate-400">
+            <span class="text-yellow-400">●</span> src/app/chat/page.tsx
+          </div>
+        </div>
+      </div>
+
+      <!-- 助手面板 -->
+      <div class="card-panel m-3 rounded-xl p-3">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm font-medium text-slate-200">助手</span>
+          <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+        </div>
+        <div class="text-xs text-slate-400 leading-relaxed">
+          当前模型：Claude Sonnet 4<br>
+          上下文窗口：78%
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    // 标签页切换交互
+    document.querySelectorAll('.tab-item').forEach(tab => {
+      tab.addEventListener('click', function() {
+        document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+        this.classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>

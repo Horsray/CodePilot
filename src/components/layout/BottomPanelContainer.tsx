@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { usePanel, type BottomPanelTab } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
+import { cn } from "@/lib/utils";
 
 const WebTerminalPanelTab = dynamic(
   () => import("@/components/layout/panels/WebTerminalPanel").then((m) => ({ default: m.WebTerminalPanel })),
@@ -71,17 +72,17 @@ export function BottomPanelContainer() {
 
   return (
     <div
-      className="shrink-0 border-t border-border/40 bg-background flex flex-col relative z-20"
+      className="shrink-0 border-t border-border/40 bg-background/95 backdrop-blur-md flex flex-col relative z-20 shadow-[0_-4px_24px_rgba(0,0,0,0.08)]"
       style={{ height: collapsed ? 36 : height }}
     >
       {!collapsed && (
         <div
-          className="h-1 cursor-row-resize hover:bg-primary/20 transition-colors shrink-0"
+          className="h-1 cursor-row-resize hover:bg-primary/20 transition-colors shrink-0 rounded-t-xl"
           onMouseDown={handleMouseDown}
         />
       )}
 
-      <div className="flex items-center h-8 px-2 border-b border-border/40 shrink-0 gap-0.5">
+      <div className="flex items-center h-10 px-3 border-b border-border/40 shrink-0 gap-2 bg-muted/20">
         {tabs.map((tab) => (
           <Button
             key={tab.id}
@@ -95,7 +96,12 @@ export function BottomPanelContainer() {
                 setTimeout(() => window.dispatchEvent(new CustomEvent('action:focus-terminal')), 50);
               }
             }}
-            className="h-6 gap-1.5 px-2.5 text-[11px]"
+            className={cn(
+              "h-7 gap-1.5 px-3 text-xs font-medium rounded-lg transition-all",
+              bottomPanelTab === tab.id
+                ? "bg-primary/10 text-primary border border-primary/20 shadow-sm"
+                : "hover:bg-muted/60"
+            )}
           >
             {tab.icon}
             {tab.label}

@@ -1,11 +1,71 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { SpinnerGap, CheckCircle, XCircle, Clock, Robot, CaretDown, CaretRight, Lightning, Bug, MagnifyingGlass, Gear, TerminalWindow, Brain } from '@phosphor-icons/react';
+import { SpinnerGap, CheckCircle, XCircle, Clock, Robot, CaretDown, CaretRight, Lightning, Bug, MagnifyingGlass, Gear, TerminalWindow, Brain, File as FileIcon, PencilSimple, ArrowSquareOut } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { AGENT_META } from '../ai-elements/tool-actions-group';
+import { getToolDisplayName } from '@/lib/tool-display-names';
 
 import { SubAgentInfo } from '@/types';
+
+/**
+ * 获取工具调用的图标和颜色
+ */
+function getToolIcon(name: string): { icon: React.ElementType; color: string } {
+  const lower = name.toLowerCase();
+  if (lower.includes('read') || lower.includes('glob')) return { icon: FileIcon, color: 'text-blue-400' };
+  if (lower.includes('write') || lower.includes('edit')) return { icon: PencilSimple, color: 'text-orange-400' };
+  if (lower.includes('bash') || lower.includes('terminal') || lower.includes('exec')) return { icon: TerminalWindow, color: 'text-emerald-400' };
+  if (lower.includes('grep') || lower.includes('search')) return { icon: MagnifyingGlass, color: 'text-violet-400' };
+  if (lower.includes('fetch') || lower.includes('web') || lower.includes('navigate')) return { icon: ArrowSquareOut, color: 'text-cyan-400' };
+  return { icon: Gear, color: 'text-muted-foreground/60' };
+}
+
+/**
+ * SubAgentToolCalls - 子Agent工具调用紧凑列表
+ * 功能：在子Agent卡片展开时显示该Agent执行的工具调用列表
+ * 用法：在SubAgentCard展开详情中渲染，使子Agent有自己的独立时间线
+ */
+function SubAgentToolCalls({ toolCalls }: { toolCalls: NonNullable<SubAgentInfo['toolCalls']> }) {
+  if (!toolCalls || toolCalls.length === 0) return null;
+
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] text-muted-foreground/50 font-medium mb-1">工具调用 ({toolCalls.length})</div>
+      <div className="space-y-0.5">
+        {toolCalls.map((tool, idx) => {
+          const { icon: ToolIcon, color } = getToolIcon(tool.name);
+          const isCompleted = !!tool.result;
+          const isError = tool.isError;
+          return (
+            <div
+              key={tool.id || idx}
+              className={cn(
+                "flex items-center gap-1.5 px-2 py-1 rounded text-[11px]",
+                isError ? "bg-red-500/5" : isCompleted ? "bg-emerald-500/5" : "bg-blue-500/5"
+              )}
+            >
+              {isError ? (
+                <XCircle size={10} weight="fill" className="text-red-400 shrink-0" />
+              ) : isCompleted ? (
+                <CheckCircle size={10} weight="fill" className="text-emerald-400 shrink-0" />
+              ) : (
+                <SpinnerGap size={10} className="animate-spin text-blue-400 shrink-0" />
+              )}
+              <ToolIcon size={10} className={cn(color, "shrink-0")} />
+              <span className="text-foreground/70 truncate">{getToolDisplayName(tool.name)}</span>
+              {tool.result && (
+                <span className="text-muted-foreground/40 truncate ml-auto max-w-[200px]">
+                  {tool.result.length > 80 ? tool.result.slice(0, 80) + '...' : tool.result}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /**
  * 从进度文本中提取最近的工具调用信息
@@ -110,6 +170,33 @@ function HeartbeatIndicator({ lastUpdateAt, status }: { lastUpdateAt?: number; s
   );
 }
 
+const getAgentLabel = (name: string, displayName?: string) => {
+  const lowerName = name.toLowerCase();
+  if (AGENT_META[lowerName]) return AGENT_META[lowerName].label;
+
+  if (lowerName.includes('test')) return '测试';
+  if (lowerName.includes('qa')) return '质量检测';
+  if (lowerName.includes('debug')) return '调试';
+  if (lowerName.includes('plan')) return '规划';
+  if (lowerName.includes('search')) return '搜索';
+  if (lowerName.includes('explor')) return '探索';
+  if (lowerName.includes('exec')) return '执行';
+  if (lowerName.includes('review')) return '审查';
+  if (lowerName.includes('analys')) return '分析';
+  if (lowerName.includes('design')) return '设计';
+  if (lowerName.includes('writ')) return '撰写';
+  if (lowerName.includes('monitor')) return '监控';
+  if (lowerName.includes('optim')) return '优化';
+  if (lowerName.includes('deploy')) return '部署';
+  if (lowerName.includes('integrat')) return '集成';
+  if (lowerName.includes('research')) return '调研';
+  if (lowerName.includes('coordinat')) return '协调';
+
+  if (lowerName.startsWith('call_function_')) return '智能体';
+
+  return displayName || name;
+};
+
 export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [userInteractedAgents, setUserInteractedAgents] = useState<Set<string>>(new Set());
@@ -131,6 +218,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   // - 新Agent启动时，自动展开
   // - Agent完成时，如果用户没有手动操作过展开/收起，则自动收起
   // - 只要用户手动点击过展开/收起（进入了 userInteractedAgents），就不再干预它的状态
+  // - 注意：完成后卡片仍然保留在界面上（折叠状态），不会消失
   useEffect(() => {
     setExpandedAgents(prev => {
       const next = new Set(prev);
@@ -198,24 +286,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
     }
   };
 
-  // Add a fallback for names that might contain 'tester', 'qa', 'debugger' but aren't exact matches
-  const getAgentLabel = (name: string, displayName?: string) => {
-    const lowerName = name.toLowerCase();
-    if (AGENT_META[lowerName]) return AGENT_META[lowerName].label;
-    
-    if (lowerName.includes('test')) return '测试者';
-    if (lowerName.includes('qa')) return '质量保证';
-    if (lowerName.includes('debug')) return '调试者';
-    if (lowerName.includes('plan')) return '规划者';
-    if (lowerName.includes('search')) return '搜索者';
-    if (lowerName.includes('explor')) return '探索者';
-    if (lowerName.includes('exec')) return '执行者';
-    
-    // 如果是类似 call_function_xxx 的模型幻觉输出，直接显示通用名称
-    if (lowerName.startsWith('call_function_')) return '智能体';
-    
-    return displayName || name;
-  };
+  // getAgentLabel 已移至组件外部
   const getStatusBadge = (status: SubAgentInfo['status']) => {
     switch (status) {
       case 'running':
@@ -232,7 +303,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   const getSourceMeta = (source?: SubAgentInfo['source']) => {
     switch (source) {
       case 'omc_plugin':
-        return { label: 'OMC / Claude Code', className: 'text-violet-500/90 bg-violet-500/10 border-violet-500/20' };
+        return { label: 'OMC', className: 'text-violet-500/90 bg-violet-500/10 border-violet-500/20' };
       case 'sdk_agent_tool':
         return { label: 'Claude Code Agent', className: 'text-sky-500/90 bg-sky-500/10 border-sky-500/20' };
       case 'native_agent_tool':
@@ -244,13 +315,15 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
     }
   };
 
-  const summarySource = (() => {
-    const uniqueSources = Array.from(new Set(subAgents.map(agent => agent.source || 'unknown')));
-    if (uniqueSources.length === 1) {
-      return getSourceMeta(uniqueSources[0] as SubAgentInfo['source']).label;
-    }
-    return 'Mixed Sources';
-  })();
+  // 动态状态文本 - 紧凑徽章形式
+  const statusText = useMemo(() => {
+    if (totalCount === 0) return '';
+    if (runningCount > 0 && completedCount === 0) return `已派发 ${totalCount} 个任务，${runningCount} 个运行中`;
+    if (runningCount > 0) return `已完成 ${completedCount} 个，等待其余 ${runningCount} 个`;
+    if (errorCount > 0 && completedCount + errorCount === totalCount) return `${completedCount} 个完成，${errorCount} 个异常`;
+    if (completedCount === totalCount) return `全部 ${totalCount} 个任务已完成`;
+    return `${completedCount}/${totalCount} 已完成`;
+  }, [completedCount, errorCount, runningCount, totalCount]);
 
   return (
     <div className="mt-3 space-y-2 w-full max-w-full">
@@ -315,17 +388,18 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
 
                 <span className="text-muted-foreground/40 mx-1 shrink-0">|</span>
 
-                {/* 当前工具调用（运行中）或任务摘要 */}
-                {currentTool ? (
-                  <span className="flex items-center gap-1 text-[11px] text-blue-500/80 truncate flex-1 max-w-[400px]" title={currentTool.name}>
-                    <Gear size={10} className="animate-spin shrink-0" />
-                    <span className="truncate">{currentTool.name}</span>
-                  </span>
-                ) : (
-                  <span className="text-xs text-muted-foreground/70 truncate flex-1 max-w-[400px]" title={agent.prompt}>
+                {/* 任务摘要 + 当前工具调用（运行中） */}
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <span className="text-xs text-muted-foreground/70 truncate max-w-[300px]" title={agent.prompt}>
                     {agent.prompt}
                   </span>
-                )}
+                  {currentTool && (
+                    <span className="flex items-center gap-1 text-[10px] text-blue-500/70 shrink-0">
+                      <Gear size={9} className="animate-spin" />
+                      <span className="truncate max-w-[120px]">{currentTool.name}</span>
+                    </span>
+                  )}
+                </div>
 
                 <span className={cn('text-[10px] px-1.5 py-0.5 rounded border shrink-0', sourceMeta.className)}>
                   {sourceMeta.label}
@@ -372,6 +446,11 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                     <SubAgentProgress progress={currentProgress} />
                   )}
 
+                  {/* 子Agent工具调用时间线 */}
+                  {agent.toolCalls && agent.toolCalls.length > 0 && (
+                    <SubAgentToolCalls toolCalls={agent.toolCalls} />
+                  )}
+
                   {/* 报告输出 */}
                   {(agent.status === 'completed' || agent.status === 'error') && terminalReport && (
                     <div className="text-[11px] text-muted-foreground/80 p-3 rounded-md bg-muted/30 border border-border/40 max-h-96 overflow-y-auto">
@@ -389,36 +468,16 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
         </div>
       </div>
 
-      {/* 子Agent状态汇总 - 放在最后面跟随光标 */}
-      <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-muted/40 border border-border/30">
-        <div className="flex items-center gap-1.5">
-          <Robot size={14} className="text-primary" />
-          <span className="text-xs font-medium text-foreground">
-            Team Leader ｜ {runningCount > 0 ? <span className="font-mono text-[10px] bg-blue-500/10 text-blue-500/80 px-1.5 py-0.5 rounded border border-blue-500/20">{subAgents[0]?.model || 'Team'}</span> : '监控中'} ｜ 来源 {summarySource} ｜ 共派发 {totalCount} 个任务，已完成 {completedCount} 个
-          </span>
+      {/* 动态状态徽章 */}
+      {statusText && (
+        <div className="flex items-center gap-2 px-2.5 py-1 text-[11px] text-muted-foreground/70">
+          {runningCount > 0 && <SpinnerGap size={10} className="animate-spin text-blue-400" />}
+          {runningCount === 0 && completedCount === totalCount && <CheckCircle size={10} weight="fill" className="text-emerald-400" />}
+          {runningCount === 0 && errorCount > 0 && <XCircle size={10} weight="fill" className="text-amber-400" />}
+          <span>{statusText}</span>
         </div>
-        <div className="flex-1" />
-        <div className="flex items-center gap-3 text-[11px]">
-          {runningCount > 0 && (
-            <span className="flex items-center gap-1 text-blue-500">
-              <SpinnerGap size={10} className="animate-spin" />
-              {runningCount} 运行中
-            </span>
-          )}
-          {completedCount > 0 && (
-            <span className="flex items-center gap-1 text-emerald-500">
-              <CheckCircle size={10} weight="fill" />
-              {completedCount} 完成
-            </span>
-          )}
-          {errorCount > 0 && (
-            <span className="flex items-center gap-1 text-red-500">
-              <XCircle size={10} weight="fill" />
-              {errorCount} 错误
-            </span>
-          )}
-        </div>
-      </div>
+      )}
+
     </div>
   );
 }

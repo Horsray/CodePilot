@@ -345,145 +345,49 @@ async function executeDueTask(task: ScheduledTask, isSessionTask = false): Promi
     
     const system = `${baseSystem}\n\n=================================\n\nYou are executing a scheduled task. Be concise and direct.\nTask name: ${task.name}\nCurrent system time (Shanghai): ${systemTime}`;
 
-    let result = '';
-
-    if (task.tool_authorization) {
-      // Execute via Native path (AI SDK) with MCP tools support
-      const { runAgentLoop } = await import('./agent-loop');
-      let toolsOverride: any = undefined;
-      
-      if (task.tool_authorization.type === 'mcp' && task.tool_authorization.tool_ids) {
-        const { assembleTools } = await import('./agent-tools');
-        const all = assembleTools({ workingDirectory: task.working_directory || process.cwd() });
-        toolsOverride = {};
-        
-        // 1. Always include all built-in tools (not starting with mcp__)
+    // Build tools override if MCP authorization is configured
+    let toolsOverride: any = undefined;
+    if (task.tool_authorization?.type === 'mcp' && task.tool_authorization.tool_ids) {
+      const { assembleTools } = await import('./agent-tools');
+      const all = assembleTools({ workingDirectory: task.working_directory || process.cwd() });
+      toolsOverride = {};
+      for (const [key, tool] of Object.entries(all.tools)) {
+        if (!key.startsWith('mcp__')) {
+          toolsOverride[key] = tool;
+        }
+      }
+      for (const id of task.tool_authorization.tool_ids) {
+        if (all.tools[id]) toolsOverride[id] = all.tools[id];
+        const prefix = `mcp__${id}__`;
         for (const [key, tool] of Object.entries(all.tools)) {
-          if (!key.startsWith('mcp__')) {
+          if (key.startsWith(prefix)) {
             toolsOverride[key] = tool;
           }
         }
-        
-        // 2. Include selected MCP tools (tool_ids are MCP server names)
-        for (const id of task.tool_authorization.tool_ids) {
-          if (all.tools[id]) toolsOverride[id] = all.tools[id]; // exact match just in case
-          const prefix = `mcp__${id}__`;
-          for (const [key, tool] of Object.entries(all.tools)) {
-            if (key.startsWith(prefix)) {
-              toolsOverride[key] = tool;
-            }
-          }
-        }
       }
+    }
 
-      const stream = runAgentLoop({
-        prompt: task.prompt,
-        sessionId: targetSessionId || task.id,
-        providerId: resolved.provider?.id,
-        sessionProviderId: providerId,
-        model: resolved.upstreamModel || resolved.model || 'MiniMax-M2.7',
-        systemPrompt: system,
-        workingDirectory: task.working_directory || process.cwd(),
-        bypassPermissions: true, // Scheduled tasks run unattended, must bypass permissions
-        autoTrigger: true,
-        tools: toolsOverride,
-      });
+    // v2 multi-phase executor: analyze -> execute -> verify -> retry
+    const { executeTaskV2 } = await import('./task-executor-v2');
+    const v2Result = await executeTaskV2({
+      task,
+      prompt: task.prompt,
+      providerId: resolved.provider?.id || '',
+      sessionProviderId: providerId,
+      model: resolved.upstreamModel || resolved.model || 'MiniMax-M2.7',
+      baseSystem: system,
+      workingDirectory: task.working_directory || process.cwd(),
+      targetSessionId,
+      toolsOverride,
+      hasTools: !!task.tool_authorization,
+      currentTime: systemTime,
+    });
 
-      const reader = stream.getReader();
-      let buffer = '';
-      let executionLog = '';
-      let toolCallCount = 0;
+    const result = v2Result.output;
+    (task as any)._cleanOutput = v2Result.cleanOutput;
 
-      let currentToolName = '';
-      let currentToolInput = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += typeof value === 'string' ? value : new TextDecoder().decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === 'text') {
-                result += data.data;
-              } else if (data.type === 'tool_use') {
-                const tu = JSON.parse(data.data);
-                toolCallCount++;
-                currentToolName = tu.name;
-                currentToolInput = typeof tu.input === 'string' ? tu.input : JSON.stringify(tu.input);
-              } else if (data.type === 'tool_result') {
-                const tr = JSON.parse(data.data);
-                
-                // For bash commands, extract the command string
-                let displayInput = currentToolInput;
-                try {
-                  const parsedInput = JSON.parse(currentToolInput);
-                  if (currentToolName === 'Bash' && parsedInput.command) {
-                    displayInput = parsedInput.command;
-                  }
-                } catch {}
-
-                const inputPreview = displayInput.length > 50 ? displayInput.slice(0, 47) + '...' : displayInput;
-                executionLog += `- 🛠️ 调用工具：\`${currentToolName}\` (输入: ${inputPreview})\n`;
-                executionLog += `  - 结果：${tr.is_error ? '❌ 失败' : '✅ 成功'}\n`;
-              } else if (data.type === 'error') {
-                executionLog += `- ❌ 发生错误：${data.data}\n`;
-              }
-            } catch {}
-          }
-        }
-      }
-      
-      // Flush the remaining buffer
-      const finalLines = buffer.split('\n');
-      for (const line of finalLines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === 'text') result += data.data;
-          } catch {}
-        }
-      }
-
-      const finalStatus = executionLog.includes('❌ 失败') || executionLog.includes('❌ 发生错误') ? '失败' : '成功';
-      
-      const finalOutput = result.trim() || '(无文本输出)';
-
-      const formattedLog = `---定时任务结果---
-任务目标：
-${task.prompt}
-执行结果：${finalStatus}
-最终输出：
-${finalOutput}
---------------
-小结：工具使用：${toolCallCount}个${toolCallCount > 0 ? '\n' + executionLog.trim() : ''}`;
-
-      result = formattedLog;
-      // We also keep the clean output for the chat session
-      (task as any)._cleanOutput = finalOutput;
-    } else {
-      // Execute without tools (lightweight text generation)
-      const { generateTextFromProvider } = await import('./text-generator');
-      const rawResult = await generateTextFromProvider({
-        providerId: resolved.provider?.id || '',
-        model: resolved.upstreamModel || resolved.model || 'MiniMax-M2.7',
-        system,
-        prompt: task.prompt,
-        maxTokens: 4096,
-      });
-      const finalOutput = rawResult.trim() || '(无文本输出)';
-      result = `---定时任务结果---
-任务目标：
-${task.prompt}
-执行结果：成功
-最终输出：
-${finalOutput}
---------------
-小结：未使用工具`;
-      (task as any)._cleanOutput = finalOutput;
+    if (!v2Result.success) {
+      throw new Error(v2Result.cleanOutput.slice(0, 500));
     }
 
     // Success — update SQLite (skip for session tasks)

@@ -2,6 +2,7 @@
 
 import { Lightning, Trash, Sparkle } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
@@ -19,6 +20,7 @@ export interface SkillItem {
   installedSource?: "agents" | "claude";
   filePath: string;
   autoExtracted?: boolean;
+  disabled?: boolean;
 }
 
 interface SkillListItemProps {
@@ -26,6 +28,7 @@ interface SkillListItemProps {
   selected: boolean;
   onSelect: () => void;
   onDelete: (skill: SkillItem) => void;
+  onToggle?: (skill: SkillItem, disabled: boolean) => void;
 }
 
 export function SkillListItem({
@@ -33,11 +36,13 @@ export function SkillListItem({
   selected,
   onSelect,
   onDelete,
+  onToggle,
 }: SkillListItemProps) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const canDelete = skill.source === "global" || skill.source === "project";
+  const [toggling, setToggling] = useState(false);
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -87,6 +92,27 @@ export function SkillListItem({
           {skill.description}
         </p>
       </div>
+      {onToggle && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+              <Switch
+                checked={!skill.disabled}
+                disabled={toggling}
+                onCheckedChange={(checked) => {
+                  setToggling(true);
+                  onToggle(skill, !checked);
+                  setTimeout(() => setToggling(false), 500);
+                }}
+                className="scale-75"
+              />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {skill.disabled ? t('skills.enableSkill') : t('skills.disableSkill')}
+          </TooltipContent>
+        </Tooltip>
+      )}
       {canDelete && (hovered || confirmDelete) && (
         <Tooltip>
           <TooltipTrigger asChild>

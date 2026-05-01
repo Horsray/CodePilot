@@ -333,30 +333,41 @@ export function extractSearchGroupSummary(tools: ToolAction[]): { queryCount: nu
 }
 
 export const AGENT_META: Record<string, { icon: React.ElementType, color: string, bg: string, label: string }> = {
-  search: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '搜索者' },
-  explorer: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者' },
-  explore: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索者' },
-  planner: { icon: ListChecks, color: 'text-purple-500', bg: 'bg-purple-500/10', label: '规划者' },
-  executor: { icon: PencilSimple, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '执行者' },
-  verifier: { icon: ShieldCheck, color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: '验证者' },
-  analyst: { icon: Brain, color: 'text-indigo-500', bg: 'bg-indigo-500/10', label: '分析者' },
-  tester: { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: '测试者' },
-  qa: { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: '质量保证' },
-  debugger: { icon: Wrench, color: 'text-yellow-500', bg: 'bg-yellow-500/10', label: '调试者' },
-  general: { icon: Robot, color: 'text-slate-500', bg: 'bg-slate-500/10', label: '通用助手' },
-  architect: { icon: Brain, color: 'text-indigo-600', bg: 'bg-indigo-600/10', label: '架构师' },
-  tracer: { icon: MagnifyingGlass, color: 'text-blue-400', bg: 'bg-blue-400/10', label: '追踪者' },
-  'security-reviewer': { icon: ShieldCheck, color: 'text-rose-600', bg: 'bg-rose-600/10', label: '安全审查员' },
-  'code-reviewer': { icon: Eyeglasses, color: 'text-violet-500', bg: 'bg-violet-500/10', label: '代码审查员' },
-  'test-engineer': { icon: ShieldCheck, color: 'text-rose-400', bg: 'bg-rose-400/10', label: '测试工程师' },
-  designer: { icon: NotePencil, color: 'text-pink-500', bg: 'bg-pink-500/10', label: '设计师' },
-  writer: { icon: NotePencil, color: 'text-cyan-500', bg: 'bg-cyan-500/10', label: '技术作者' },
-  'qa-tester': { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: 'QA 测试员' },
-  scientist: { icon: Brain, color: 'text-teal-500', bg: 'bg-teal-500/10', label: '数据科学家' },
-  'document-specialist': { icon: NotePencil, color: 'text-sky-500', bg: 'bg-sky-500/10', label: '文档专家' },
-  'git-master': { icon: Code, color: 'text-orange-600', bg: 'bg-orange-600/10', label: 'Git 大师' },
-  'code-simplifier': { icon: Wrench, color: 'text-yellow-600', bg: 'bg-yellow-600/10', label: '代码简化者' },
-  critic: { icon: Eyeglasses, color: 'text-red-500', bg: 'bg-red-500/10', label: '审查员' }
+  search: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '搜索' },
+  explorer: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索' },
+  explore: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '探索' },
+  planner: { icon: ListChecks, color: 'text-purple-500', bg: 'bg-purple-500/10', label: '规划' },
+  executor: { icon: PencilSimple, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '执行' },
+  verifier: { icon: ShieldCheck, color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: '校验' },
+  analyst: { icon: Brain, color: 'text-indigo-500', bg: 'bg-indigo-500/10', label: '分析' },
+  tester: { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: '测试' },
+  qa: { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', 'label': '质量检测' },
+  debugger: { icon: Wrench, color: 'text-yellow-500', bg: 'bg-yellow-500/10', label: '调试' },
+  general: { icon: Robot, color: 'text-slate-500', bg: 'bg-slate-500/10', label: '通用' },
+  architect: { icon: Brain, color: 'text-indigo-600', bg: 'bg-indigo-600/10', label: '架构' },
+  tracer: { icon: MagnifyingGlass, color: 'text-blue-400', bg: 'bg-blue-400/10', label: '追踪' },
+  'security-reviewer': { icon: ShieldCheck, color: 'text-rose-600', bg: 'bg-rose-600/10', label: '安全审查' },
+  'code-reviewer': { icon: Eyeglasses, color: 'text-violet-500', bg: 'bg-violet-500/10', label: '代码审查' },
+  'test-engineer': { icon: ShieldCheck, color: 'text-rose-400', bg: 'bg-rose-400/10', label: '测试工程' },
+  designer: { icon: NotePencil, color: 'text-pink-500', bg: 'bg-pink-500/10', label: '设计' },
+  writer: { icon: NotePencil, color: 'text-cyan-500', bg: 'bg-cyan-500/10', label: '文档撰写' },
+  'qa-tester': { icon: ShieldCheck, color: 'text-rose-500', bg: 'bg-rose-500/10', label: 'QA 测试' },
+  scientist: { icon: Brain, color: 'text-teal-500', bg: 'bg-teal-500/10', label: '数据科学' },
+  'document-specialist': { icon: NotePencil, color: 'text-sky-500', bg: 'bg-sky-500/10', label: '文档整理' },
+  'git-master': { icon: Code, color: 'text-orange-600', bg: 'bg-orange-600/10', label: 'Git' },
+  'code-simplifier': { icon: Wrench, color: 'text-yellow-600', bg: 'bg-yellow-600/10', label: '代码精简' },
+  critic: { icon: Eyeglasses, color: 'text-red-500', bg: 'bg-red-500/10', label: '评审' },
+  // 新增角色翻译
+  researcher: { icon: MagnifyingGlass, color: 'text-blue-500', bg: 'bg-blue-500/10', label: '调研' },
+  coordinator: { icon: Robot, color: 'text-purple-500', bg: 'bg-purple-500/10', label: '协调' },
+  monitor: { icon: Eye, color: 'text-teal-500', bg: 'bg-teal-500/10', label: '监控' },
+  optimizer: { icon: Lightning, color: 'text-amber-500', bg: 'bg-amber-500/10', label: '优化' },
+  refactoring: { icon: Wrench, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '重构' },
+  integration: { icon: Globe, color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: '集成' },
+  deployment: { icon: Play, color: 'text-blue-600', bg: 'bg-blue-600/10', label: '部署' },
+  documentation: { icon: NotePencil, color: 'text-cyan-500', bg: 'bg-cyan-500/10', label: '文档' },
+  review: { icon: Eyeglasses, color: 'text-violet-500', bg: 'bg-violet-500/10', label: '审查' },
+  implement: { icon: PencilSimple, color: 'text-orange-500', bg: 'bg-orange-500/10', label: '实现' },
 };
 
 export function isSubAgentTool(name: string): boolean {
@@ -1631,61 +1642,7 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
 // Compact row for a single tool action
 // ---------------------------------------------------------------------------
 
-const MCP_TOOL_NAME_MAP: Record<string, string> = {
-  'mcp__memory__search_nodes': '搜索记忆节点',
-  'mcp__memory__read_graph': '读取记忆图谱',
-  'mcp__memory__create_entities': '创建记忆实体',
-  'mcp__fetch__fetch_markdown': '抓取网页(Markdown)',
-  'mcp__fetch__fetch_readable': '抓取网页(Readable)',
-  'mcp__fetch__fetch_json': '抓取网页(JSON)',
-  'mcp__codepilot-memory-search__codepilot_memory_recent': '记忆召回',
-  'mcp__filesystem__read_multiple_files': '读取多个文件',
-  'mcp__filesystem__list_directory': '查看目录内容',
-  'mcp__filesystem__directory_tree': '查看目录树',
-  'mcp__filesystem__read_file': '读取文件',
-  'mcp__filesystem__write_file': '写入文件',
-  'mcp__filesystem__create_directory': '创建目录',
-  'mcp__filesystem__move_file': '移动文件',
-  'mcp__filesystem__search_files': '搜索文件',
-  'mcp__codepilot-todo__codepilot_mcp_activate': '激活 MCP 工具',
-};
-
-function getToolDisplayName(name: string): string {
-  // Try to find an exact match first
-  if (MCP_TOOL_NAME_MAP[name]) {
-    return MCP_TOOL_NAME_MAP[name];
-  }
-
-  const lowerName = name.toLowerCase();
-
-  if (lowerName === 'websearch' || lowerName === 'web_search') {
-    return '联网搜索';
-  }
-
-  if (lowerName.includes('webfetch') || (lowerName.includes('fetch') && !lowerName.includes('filesystem'))) {
-    return '网页抓取';
-  }
-
-  // If it's a memory tool that wasn't exactly matched above
-  if (lowerName.includes('memory')) {
-    if (lowerName.includes('search') || lowerName.includes('recent')) return '记忆召回';
-    if (lowerName.includes('store') || lowerName.includes('save') || lowerName.includes('write')) return '记忆整理';
-    return '记忆操作';
-  }
-  
-  // If it's a filesystem tool
-  if (lowerName.includes('filesystem')) {
-    if (lowerName.includes('read_multiple')) return '读取多个文件';
-    if (lowerName.includes('read_text') || lowerName.includes('read_file')) return '读取文件';
-    if (lowerName.includes('list_dir')) return '查看目录内容';
-    if (lowerName.includes('dir_tree') || lowerName.includes('directory_tree')) return '查看目录树';
-    if (lowerName.includes('write')) return '写入文件';
-    if (lowerName.includes('search')) return '搜索文件';
-    return '文件系统操作';
-  }
-
-  return name;
-}
+import { getToolDisplayName } from '@/lib/tool-display-names';
 
 function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggle }: { tool: ToolAction; streamingToolOutput?: string; expandedOverride?: boolean; onToggle?: () => void }) {
   const renderer = getRenderer(tool.name, tool.input);

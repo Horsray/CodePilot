@@ -96,13 +96,18 @@ describe('persistent-claude-session', () => {
     );
   });
 
-  it('does not change signatures when mcpServers or systemPrompt change (by design — these vary per-turn)', () => {
+  it('changes signatures when baked systemPrompt type/preset or mcpServers change', () => {
     const options: Options = {
       cwd: '/tmp/project-a',
       model: 'sonnet',
       settingSources: [],
       mcpServers: {
         fetch: { type: 'stdio', command: 'uvx', args: ['mcp-server-fetch'] },
+      },
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        append: 'base prompt',
       },
     };
 
@@ -112,9 +117,31 @@ describe('persistent-claude-session', () => {
         github: { type: 'stdio', command: 'github-mcp-server', args: [] },
       },
     };
+    // 中文注释：append 内容是 volatile 的（包含 Todo 状态、Dashboard、memory hint 等），
+    // 不应纳入签名，否则持久化 session 每轮都会重建。
+    const appendChanged: Options = {
+      ...options,
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        append: 'different prompt',
+      },
+    };
+    const presetChanged: Options = {
+      ...options,
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        append: 'base prompt',
+      },
+    };
 
     const original = buildPersistentClaudeSignature({ providerKey: 'provider-a', options });
-    assert.equal(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: mcpChanged }));
+    assert.notEqual(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: mcpChanged }));
+    // append changes should NOT change signature (volatile content)
+    assert.equal(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: appendChanged }));
+    // preset changes SHOULD change signature
+    assert.notEqual(original, buildPersistentClaudeSignature({ providerKey: 'provider-a', options: presetChanged }));
   });
 
   it('does not include credential values in signatures', () => {
@@ -203,6 +230,7 @@ describe('persistent-claude-session', () => {
       tools: ['Read'],
       slash_commands: ['/test'],
       skills: [{ name: 'demo' }],
+      agents: undefined,
       plugins: [{ name: 'plugin-a' }],
       mcp_servers: [{ name: 'fetch' }],
     });

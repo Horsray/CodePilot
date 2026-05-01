@@ -16,7 +16,7 @@ import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview
 import { WidgetRenderer } from './WidgetRenderer';
 import { ReferencedContexts } from './ReferencedContexts';
 import { AgentTimeline } from './AgentTimeline';
-import { SubAgentTimeline } from './SubAgentTimeline';
+import { SubAgentStatusBar } from './SubAgentStatusBar';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
 import {
   appendTimelineReasoning,
@@ -109,6 +109,7 @@ interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  parentAgentId?: string;
 }
 
 interface ToolResultInfo {
@@ -116,6 +117,7 @@ interface ToolResultInfo {
   content: string;
   is_error?: boolean;
   media?: MediaBlock[];
+  parentAgentId?: string;
 }
 
 interface StreamingMessageProps {
@@ -133,7 +135,7 @@ interface StreamingMessageProps {
   statusPayload?: Record<string, any>;
   onForceStop?: () => void;
   // 中文注释：功能名称「子Agent快照数据」，用法是从streamSnapshot传入子Agent数据，
-  // 使SubAgentTimelineStreamAdapter在切换会话后能恢复卡片渲染
+  // 使SubAgentStatusBar在切换会话后能恢复渲染
   subAgents?: any[];
 }
 
@@ -331,8 +333,84 @@ export function StreamingMessage({
   const { t } = useTranslation();
   const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
 
-  // SubAgentTimeline 卡片渲染已移除，不再过滤 agent/team 工具，全部交给时间线渲染
-  const timelineTools = toolUses;
+  // 中文注释：功能名称「子Agent工具调用路由」，用法是将带有parentAgentId的工具调用
+  // 从主时间线中过滤出来，路由到对应的SubAgentInfo中，避免子Agent的工具调用污染主时间线。
+  // 主时间线只保留没有parentAgentId的工具调用（即主Agent自己的工具调用）。
+  const timelineTools = useMemo(
+    () => toolUses.filter(t => !t.parentAgentId),
+    [toolUses],
+  );
+  const timelineToolResults = useMemo(
+    () => toolResults.filter(r => !r.parentAgentId),
+    [toolResults],
+  );
+
+  // Preserve the last known sub-agents so the SubAgentStatusBar stays visible
+  // after streaming ends and the snapshot is cleared.
+  // Also listen to window events as a fallback in case streaming snapshot doesn't carry subAgents.
+  const lastSubAgentsRef = useRef<any[]>([]);
+  if (Array.isArray(streamingSubAgents) && streamingSubAgents.length > 0) {
+    lastSubAgentsRef.current = streamingSubAgents;
+  }
+
+  // Fallback: listen to subagents-sync window events from stream-session-manager
+  const [fallbackSubAgents, setFallbackSubAgents] = useState<any[]>([]);
+  useEffect(() => {
+    if (!sessionId) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId && Array.isArray(detail.subAgents)) {
+        setFallbackSubAgents(detail.subAgents);
+      }
+    };
+    window.addEventListener('subagents-sync', handler);
+    return () => window.removeEventListener('subagents-sync', handler);
+  }, [sessionId]);
+
+  // Merge: prefer streaming snapshot, fallback to window events
+  if (fallbackSubAgents.length > 0 && lastSubAgentsRef.current.length === 0) {
+    lastSubAgentsRef.current = fallbackSubAgents;
+  }
+  const hasStreamingSubAgents = lastSubAgentsRef.current.length > 0;
+
+  // 中文注释：将子Agent的工具调用和结果按parentAgentId分组，合并到streamingSubAgents中，
+  // 使SubAgentStatusBar能渲染子Agent的独立状态。
+  // 依赖 fallbackSubAgents 以确保窗口事件触发时也能重新计算。
+  const enrichedSubAgents = useMemo(() => {
+    const baseAgents = streamingSubAgents && streamingSubAgents.length > 0
+      ? streamingSubAgents
+      : lastSubAgentsRef.current;
+    if (baseAgents.length === 0) return baseAgents;
+
+    // 按parentAgentId分组子Agent的工具调用
+    const agentToolMap = new Map<string, Array<{ id: string; name: string; input: unknown; result?: string; isError?: boolean }>>();
+    for (const tool of toolUses) {
+      if (tool.parentAgentId) {
+        const list = agentToolMap.get(tool.parentAgentId) || [];
+        list.push({ id: tool.id, name: tool.name, input: tool.input });
+        agentToolMap.set(tool.parentAgentId, list);
+      }
+    }
+    // 附加tool_result到对应工具
+    for (const result of toolResults) {
+      if (result.parentAgentId) {
+        const list = agentToolMap.get(result.parentAgentId);
+        if (list) {
+          const tool = list.find(t => t.id === result.tool_use_id);
+          if (tool) {
+            tool.result = result.content;
+            tool.isError = result.is_error;
+          }
+        }
+      }
+    }
+
+    return baseAgents.map(agent => ({
+      ...agent,
+      toolCalls: agentToolMap.get(agent.id) || agent.toolCalls || [],
+    }));
+  }, [streamingSubAgents, toolUses, toolResults, fallbackSubAgents]);
+
   const [finalContentStart, setFinalContentStart] = useState(0);
   const timelineStateRef = useRef<ReturnType<typeof createTimelineAccumulator> | null>(null);
   const prevSnapshotRef = useRef<{
@@ -353,16 +431,16 @@ export function StreamingMessage({
     lastStatusPayload: null,
   });
   const bufferedContent = useBufferedContent(content, isStreaming);
-  const hasStreamingSubAgents = Array.isArray(streamingSubAgents) && streamingSubAgents.length > 0;
+
   const mediaPreview = useMemo(() => {
     const allMedia = toolResults.flatMap((result) => result.media || []);
     return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
   }, [toolResults]);
 
   const completionInfo = useMemo(() => {
-    if (isStreaming || toolUses.length === 0) return null;
-    const mappedTools = toolUses.map((tool) => {
-      const result = toolResults.find((r) => r.tool_use_id === tool.id);
+    if (isStreaming || timelineTools.length === 0) return null;
+    const mappedTools = timelineTools.map((tool) => {
+      const result = timelineToolResults.find((r) => r.tool_use_id === tool.id);
       return {
         id: tool.id,
         name: tool.name,
@@ -372,7 +450,7 @@ export function StreamingMessage({
         media: result?.media,
       };
     });
-    const errCount = toolResults.filter(t => t.is_error).length;
+    const errCount = timelineToolResults.filter(t => t.is_error).length;
     const changedFiles = mappedTools
       .map(t => ({ tool: t as any, diff: extractDiff(t as any) }))
       .filter((x): x is { tool: any; diff: NonNullable<ReturnType<typeof extractDiff>> } => x.diff !== null);
@@ -392,7 +470,7 @@ export function StreamingMessage({
 
     const finalChangedFiles = Array.from(mergedFiles.values());
     return finalChangedFiles.length > 0 || errCount > 0 ? { errCount, changedFiles: finalChangedFiles } : null;
-  }, [isStreaming, toolUses, toolResults]);
+  }, [isStreaming, timelineTools, timelineToolResults]);
 
   // 中文注释：功能名称「时间线增量更新优化」，用法是追踪是否有实质变化（新工具、新思考、状态变化），
   // 纯文本流式过程中跳过 cloneTimelineSteps 深拷贝和 setLiveTimelineSteps state 更新，
@@ -450,10 +528,12 @@ export function StreamingMessage({
     }
 
     const currentContent = content || '';
-    const completedToolIds = new Set(toolResults.map((result) => result.tool_use_id));
-    const allToolsCompleted = toolUses.length > 0 && toolUses.every((tool) => completedToolIds.has(tool.id));
-    const hasNewTool = toolUses.some((tool) => !currentPrev.toolUseIds.includes(tool.id));
-    if (hasNewTool || toolResults.some((r) => currentPrev.toolResults[r.tool_use_id] === undefined)) {
+    // 中文注释：使用过滤后的timelineTools/timelineToolResults（排除子Agent工具调用），
+    // 避免子Agent的工具调用污染主时间线
+    const completedToolIds = new Set(timelineToolResults.map((result) => result.tool_use_id));
+    const allToolsCompleted = timelineTools.length > 0 && timelineTools.every((tool) => completedToolIds.has(tool.id));
+    const hasNewTool = timelineTools.some((tool) => !currentPrev.toolUseIds.includes(tool.id));
+    if (hasNewTool || timelineToolResults.some((r) => currentPrev.toolResults[r.tool_use_id] === undefined)) {
       hasStructuralChangeRef.current = true;
     }
     let activityContentLength = currentPrev.activityContentLength;
@@ -478,14 +558,16 @@ export function StreamingMessage({
     }
 
     // tool_use 增量：新工具直接接在当前事件后，不强行把思考和工具拆成两坨。
-    toolUses.forEach((tool, index) => {
+    // 中文注释：使用过滤后的timelineTools，只渲染主Agent自己的工具调用
+    timelineTools.forEach((tool, index) => {
       if (!currentPrev.toolUseIds.includes(tool.id)) {
         appendTimelineToolUse(currentState, tool, now + index);
       }
     });
 
     // tool_result 增量更新
-    toolResults.forEach((result, index) => {
+    // 中文注释：使用过滤后的timelineToolResults，只渲染主Agent自己的工具结果
+    timelineToolResults.forEach((result, index) => {
       const key = result.tool_use_id;
       const marker = `${result.content}::${result.is_error ? '1' : '0'}`;
       if (currentPrev.toolResults[key] !== marker) {
@@ -493,8 +575,8 @@ export function StreamingMessage({
       }
     });
 
-    if (toolUses.length > 0 && !allToolsCompleted) {
-      consumeActivityContent(currentContent.length, now + toolUses.length + toolResults.length + 1);
+    if (timelineTools.length > 0 && !allToolsCompleted) {
+      consumeActivityContent(currentContent.length, now + timelineTools.length + timelineToolResults.length + 1);
     }
 
     if (!isStreaming && currentPrev.isStreaming) {
@@ -518,13 +600,13 @@ export function StreamingMessage({
       thinking: currentThinking,
       content: currentContent,
       activityContentLength,
-      toolUseIds: toolUses.map((t) => t.id),
+      toolUseIds: timelineTools.map((t) => t.id),
       toolResults: Object.fromEntries(
-        toolResults.map((r) => [r.tool_use_id, `${r.content}::${r.is_error ? '1' : '0'}`]),
+        timelineToolResults.map((r) => [r.tool_use_id, `${r.content}::${r.is_error ? '1' : '0'}`]),
       ),
       lastStatusPayload: statusPayload,
     };
-  }, [content, isStreaming, thinkingContent, toolResults, toolUses, statusPayload]);
+  }, [content, isStreaming, thinkingContent, timelineToolResults, timelineTools, statusPayload]);
 
   // Filter out leaked SSE raw data that wasn't properly parsed
   const cleanContent = useMemo(() => {
@@ -535,6 +617,11 @@ export function StreamingMessage({
 
   const renderedContent = useMemo(() => {
     if (!cleanContent) return null;
+
+    // 中文注释：功能名称「防止thinking内容双重渲染」，用法是当时间线已包含thinking步骤时，
+    // 跳过MessageContent区域的渲染，避免thinking文本在时间线（12px约束容器）和消息区域
+    // （text-sm/14px Streamdown）同时渲染导致的字体闪现bug。
+    if (liveTimelineSteps.some(step => step.reasoning.trim())) return null;
 
     const contentToRender = cleanContent;
 
@@ -733,7 +820,7 @@ export function StreamingMessage({
         {(timelineTools.length > 0 || liveTimelineSteps.length > 0 || hasStreamingSubAgents) && (
           <ToolActionsGroup
             tools={timelineTools.map((tool) => {
-              const result = toolResults.find((r) => r.tool_use_id === tool.id);
+              const result = timelineToolResults.find((r) => r.tool_use_id === tool.id);
               return {
                 id: tool.id,
                 name: tool.name,
@@ -757,15 +844,16 @@ export function StreamingMessage({
         {/* Media from tool results — rendered outside tool group so images stay visible */}
         {mediaPreview}
 
-        {/* 中文注释：功能名称「流式子Agent可视化」，用法是在主消息还没产出 tool_result 前，
-            直接把 streamSnapshot 里的 subAgents 渲染出来，避免 thinking 后子Agent已在后台运行，
-            但界面完全无反馈，造成“挂住”的错觉。 */}
-        {hasStreamingSubAgents && (
-          <SubAgentTimeline subAgents={streamingSubAgents} />
-        )}
-
-        {/* Streaming text content rendered via Streamdown */}
+        {/* Streaming text content rendered via Streamdown — rendered before SubAgentStatusBar
+            so the parent agent's own work flows naturally above the status bar. */}
         {renderedContent}
+
+        {/* 中文注释：功能名称「子Agent内联状态条」，用法是替代原 SubAgentTimeline 卡片，
+            用一行紧凑状态条显示所有子Agent的执行状态和进度。
+            只要有子Agent就一直显示，直到流式结束由MessageItem接管。 */}
+        {enrichedSubAgents.length > 0 && (
+          <SubAgentStatusBar subAgents={enrichedSubAgents} />
+        )}
 
         {/* Completion Bar rendered only once at the end of the message when done */}
         {completionInfo && completionInfo.changedFiles.length > 0 && (
@@ -778,7 +866,7 @@ export function StreamingMessage({
         )}
 
         {/* Loading indicator when no content yet and no thinking content — evolves over time */}
-        {isStreaming && liveTimelineSteps.length === 0 && !content && toolUses.length === 0 && !thinkingContent && !hasStreamingSubAgents && (
+        {isStreaming && liveTimelineSteps.length === 0 && !content && timelineTools.length === 0 && !thinkingContent && !hasStreamingSubAgents && (
           <div className="py-2">
             <ThinkingPhaseLabel />
           </div>

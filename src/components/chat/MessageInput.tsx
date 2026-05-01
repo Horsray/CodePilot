@@ -37,7 +37,6 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { resolveKeyAction, cycleIndex, resolveDirectSlash, dispatchBadge, buildCliAppend, parseMentionRefs, dedupeMentionsByPath } from '@/lib/message-input-logic';
 import { QuickActions } from './QuickActions';
 import { ImageGenToggle } from './ImageGenToggle';
-import { SkillUsageIndicator } from './SkillUsageIndicator';
 
 const MAX_MENTION_FILE_BYTES = 256 * 1024; // 256KB per @file mention
 const MAX_MENTION_FILE_COUNT = 6;
@@ -798,10 +797,8 @@ export function MessageInput({
     <div className="bg-background/80 backdrop-blur-lg px-4 pt-2 pb-1">
       <div className="mx-auto">
         <div className="relative">
-          {/* 技能调用指示器 — 显示在输入框右上角 */}
-          <SkillUsageIndicator toolUses={toolUses} toolResults={toolResults} />
 
-          {/* Slash Command / File Popover */}
+{/* Slash Command / File Popover */}
           <SlashCommandPopover
             popoverMode={popover.popoverMode}
             popoverRef={popover.popoverRef}

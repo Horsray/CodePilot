@@ -9,6 +9,18 @@ import { Button } from "@/components/ui/button";
 import { SpinnerGap } from "@/components/ui/icon";
 import type { Terminal } from "@xterm/xterm";
 
+// 缓存在终端面板未打开时通过文件树右键触发的待执行命令
+let pendingExecuteCommand: string | null = null;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('terminal:execute-command', (e: Event) => {
+    const customEvent = e as CustomEvent;
+    const detail = customEvent.detail as { command: string } | undefined;
+    if (!detail) return;
+    pendingExecuteCommand = detail.command;
+  });
+}
+
 /**
  * WebTerminalPanel — wraps XtermTerminal with the web-based PTY backend.
  */
@@ -65,10 +77,17 @@ function WebTerminalSession({ terminalId }: { terminalId?: string }) {
       // Create PTY session with current terminal dimensions
       try {
         const id = terminalId || "default";
-        
+
         await terminal.create(term.cols, term.rows, id);
       } catch (err) {
         setError(t('terminal.terminalError', { error: err instanceof Error ? err.message : 'Unknown error' }));
+      }
+
+      // 执行缓存的待执行命令（通过文件树右键触发）
+      if (pendingExecuteCommand && xtermRef.current) {
+        const cmd = pendingExecuteCommand;
+        pendingExecuteCommand = null;
+        terminal.write(cmd + '\r');
       }
     },
     [terminal, t]
@@ -131,6 +150,25 @@ function WebTerminalSession({ terminalId }: { terminalId?: string }) {
     window.addEventListener('terminal:mirror', handleMirror);
     return () => window.removeEventListener('terminal:mirror', handleMirror);
   }, [ready]);
+
+  // 接收文件树右键「在终端中打开/执行」的命令
+  useEffect(() => {
+    if (!ready || !xtermRef.current) return;
+
+    const handleExecuteCommand = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const detail = customEvent.detail as { command: string } | undefined;
+      if (!detail) return;
+      const term = xtermRef.current;
+      if (!term) return;
+
+      terminal.write(detail.command + '\r');
+      pendingExecuteCommand = null;
+    };
+
+    window.addEventListener('terminal:execute-command', handleExecuteCommand);
+    return () => window.removeEventListener('terminal:execute-command', handleExecuteCommand);
+  }, [ready, terminal]);
 
   const handleRetry = useCallback(() => {
     setError(null);

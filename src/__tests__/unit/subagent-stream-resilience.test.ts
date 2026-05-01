@@ -36,4 +36,23 @@ describe('subagent stream resilience', () => {
     assert.match(route, /\/team.*已停用|DISABLED.*\/team/);
     assert.match(teamRunner, /Team Job/);
   });
+
+  it('treats native Task tool usage as first-class subagent lifecycle in the SDK path', () => {
+    const claudeClient = read('src/lib/claude-client.ts');
+
+    assert.match(claudeClient, /name === 'Task'/);
+    assert.match(claudeClient, /subtype === 'task_started'/);
+    assert.match(claudeClient, /subtype === 'task_progress'/);
+    assert.match(claudeClient, /subtype === 'task_notification'/);
+    assert.match(claudeClient, /type: 'subagent_start'/);
+    assert.match(claudeClient, /type: 'subagent_complete'/);
+  });
+
+  it('recovers persisted Task tool blocks into subagent cards after reload', () => {
+    const messageItem = read('src/components/chat/MessageItem.tsx');
+
+    assert.match(messageItem, /lower === 'task'/);
+    assert.match(messageItem, /input\.subagent_type \|\| input\.task_type/);
+    assert.match(messageItem, /input\.displayName \|\| input\.display_name \|\| input\.name \|\| agentId/);
+  });
 });

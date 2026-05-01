@@ -24,6 +24,8 @@ export interface WorkspaceTab {
 }
 
 export interface PanelContextValue {
+  chatListOpen: boolean;
+  setChatListOpen: (open: boolean) => void;
   fileTreeOpen: boolean;
   setFileTreeOpen: (open: boolean) => void;
   gitPanelOpen: boolean;

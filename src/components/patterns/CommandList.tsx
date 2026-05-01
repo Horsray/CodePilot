@@ -2,7 +2,7 @@ import { type ReactNode, type RefObject, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { CaretDown } from "@/components/ui/icon";
+import { CaretDown, MagnifyingGlass } from "@/components/ui/icon";
 
 /* ------------------------------------------------------------------ */
 /*  CommandList — shared popover/command-list pattern                  */
@@ -20,7 +20,7 @@ export function CommandList({ children, className }: CommandListProps) {
   return (
     <div
       className={cn(
-        "absolute bottom-full left-0 mb-2 rounded-xl border bg-popover shadow-lg overflow-hidden z-50",
+        "absolute bottom-full left-0 mb-2 rounded-2xl border border-primary/10 bg-white shadow-xl overflow-hidden z-50",
         className,
       )}
     >
@@ -47,16 +47,19 @@ export function CommandListSearch({
   inputRef,
 }: CommandListSearchProps) {
   return (
-    <div className="px-3 py-2 border-b">
-      <Input
-        ref={inputRef}
-        type="text"
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        className="h-auto w-full border-0 bg-transparent p-0 text-sm text-foreground shadow-none placeholder:text-muted-foreground outline-none focus-visible:ring-0 focus-visible:border-transparent"
-      />
+    <div className="p-3 border-b border-border/50 bg-muted/30">
+      <div className="relative">
+        <MagnifyingGlass className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+        <Input
+          ref={inputRef}
+          type="text"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          className="h-9 pl-9 pr-4 bg-white shadow-sm text-sm"
+        />
+      </div>
     </div>
   );
 }
@@ -70,7 +73,7 @@ interface CommandListItemsProps {
 
 export function CommandListItems({ children, className }: CommandListItemsProps) {
   return (
-    <div className={cn("max-h-64 overflow-y-auto overflow-x-hidden py-1", className)}>
+    <div className={cn("max-h-[20rem] overflow-y-auto overflow-x-hidden p-1.5", className)}>
       {children}
     </div>
   );
@@ -102,8 +105,8 @@ export function CommandListItem({
       variant="ghost"
       size="sm"
       className={cn(
-        "flex w-full items-center justify-start gap-2 rounded-none px-3 py-1.5 text-left text-sm font-normal transition-colors h-auto",
-        active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
+        "flex w-full items-center justify-start gap-2 rounded-xl px-4 py-2.5 text-left text-sm font-normal transition-all duration-150 h-auto",
+        active ? "text-primary" : "hover:bg-accent/60",
         className,
       )}
       onClick={onClick}
@@ -127,10 +130,13 @@ interface CommandListGroupProps {
 
 export function CommandListGroup({ label, separator, children, expandable, expanded, onToggle }: CommandListGroupProps) {
   return (
-    <div className={cn(separator && "border-t")}>
+    <div className={cn(separator && "border-t border-border/50")}>
       {label && (
-        <div 
-          className={cn("px-3 py-1.5 text-[10px] font-medium text-muted-foreground flex justify-between items-center", expandable && "cursor-pointer hover:bg-accent/50")}
+        <div
+          className={cn("px-4 py-2 text-[10px] font-semibold uppercase tracking-wider flex justify-between items-center cursor-pointer transition-colors duration-150",
+            expandable && "hover:bg-accent/30",
+            expanded && "bg-primary/5 text-primary"
+          )}
           onClick={expandable ? onToggle : undefined}
         >
           <span>{label}</span>
@@ -152,7 +158,7 @@ interface CommandListFooterProps {
 
 export function CommandListFooter({ children }: CommandListFooterProps) {
   return (
-    <div className="border-t px-3 py-1.5">
+    <div className="border-t border-border/50 px-3 py-2 bg-muted/20">
       {children}
     </div>
   );
@@ -171,7 +177,7 @@ export function CommandListFooterAction({ onClick, children }: CommandListFooter
       type="button"
       variant="ghost"
       size="sm"
-      className="flex w-full items-center justify-start gap-2 rounded-none px-0 py-1 text-xs font-normal text-muted-foreground hover:text-foreground hover:bg-transparent h-auto transition-colors"
+      className="flex w-full items-center justify-start gap-2 rounded-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 h-auto transition-all duration-150"
       onClick={onClick}
     >
       {children}
@@ -187,7 +193,7 @@ interface CommandListEmptyProps {
 
 export function CommandListEmpty({ children }: CommandListEmptyProps) {
   return (
-    <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+    <div className="px-4 py-6 text-center text-xs text-muted-foreground">
       {children}
     </div>
   );

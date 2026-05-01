@@ -9,6 +9,7 @@ import {
   getProjectSkillsDir,
 } from "@/lib/skills-registry";
 import { invalidateSkillCache } from "@/lib/skill-discovery";
+import { getSetting, setSetting } from "@/lib/db";
 
 type SkillSource = "global" | "project";
 type SkillMatch = {
@@ -254,6 +255,39 @@ export async function DELETE(
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to delete skill" },
+      { status: 500 }
+    );
+  }
+}
+
+// 中文注释：功能名称「技能启用/禁用切换」，用法是通过 PATCH 更新 disabled_skills 列表，
+// 让用户在管理面板关闭技能后，AI 全局不可见。
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ name: string }> }
+) {
+  try {
+    const { name } = await params;
+    const body = await request.json();
+    const { disabled } = body as { disabled: boolean };
+
+    const raw = getSetting('disabled_skills') || '[]';
+    let disabledList: string[] = [];
+    try { disabledList = JSON.parse(raw); } catch { disabledList = []; }
+
+    if (disabled) {
+      if (!disabledList.includes(name)) disabledList.push(name);
+    } else {
+      disabledList = disabledList.filter((n: string) => n !== name);
+    }
+
+    setSetting('disabled_skills', JSON.stringify(disabledList));
+    invalidateSkillCache();
+
+    return NextResponse.json({ name, disabled, disabledList });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to toggle skill" },
       { status: 500 }
     );
   }

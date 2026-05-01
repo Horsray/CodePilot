@@ -4,12 +4,12 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   ChatCircle,
-  MagicWand,
-  Cube,
+  Lightning,
+  Stack,
   Shapes,
   Gear,
   ShareNetwork,
-  Toolbox,
+  Terminal,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,9 +32,9 @@ interface NavRailProps {
 
 const navItems = [
   { href: "/chat", label: "Chats", icon: ChatCircle },
-  { href: "/skills", label: "Skills", icon: MagicWand },
-  { href: "/mcp", label: "MCP", icon: Cube },
-  { href: "/cli-tools", label: "CLI Tools", icon: Toolbox },
+  { href: "/skills", label: "Skills", icon: Lightning },
+  { href: "/mcp", label: "MCP", icon: Stack },
+  { href: "/cli-tools", label: "CLI Tools", icon: Terminal },
   { href: "/gallery", label: "Gallery", icon: Shapes },
   { href: "/bridge", label: "Bridge", icon: ShareNetwork },
 ] as const;

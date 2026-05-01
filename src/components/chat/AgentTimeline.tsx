@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getToolDisplayName } from '@/lib/tool-display-names';
 import {
   Brain,
   CaretDown,
@@ -254,7 +255,7 @@ function getActivityInfo(step: TimelineStep) {
             const summaryLine = lines.find(l => /^found\s+\d+/i.test(l) || /^找到\s+\d+/i.test(l) || /^匹配\s+\d+/i.test(l) || /^\d+\s+matches/i.test(l) || /^\d+\s+results/i.test(l));
             if (summaryLine) return summaryLine;
           }
-          return isDone ? '检索完成' : `使用 ${tool.name} 搜索内容`;
+          return isDone ? '检索完成' : `使用 ${getToolDisplayName(tool.name)} 搜索内容`;
         })(),
         colorClass: 'text-blue-500/80',
         bgClass: 'bg-blue-500/10'
@@ -288,7 +289,7 @@ function getActivityInfo(step: TimelineStep) {
                return `读取了 ${lines.length} 行`;
             }
           }
-          return `使用了 ${tool.name} 工具`;
+          return `使用了 ${getToolDisplayName(tool.name)} 工具`;
         })(),
         colorClass: 'text-blue-500/80',
         bgClass: 'bg-blue-500/10'
@@ -311,7 +312,7 @@ function getActivityInfo(step: TimelineStep) {
     return {
       type: 'calling',
       icon: <Gear size={14} weight="bold" className="text-violet-500" />,
-      label: isDone ? `调用 ${tool.name}` : `正在调用 ${tool.name}`,
+      label: isDone ? `调用 ${getToolDisplayName(tool.name)}` : `正在调用 ${getToolDisplayName(tool.name)}`,
       subtitle: (() => {
         if (tool.result) {
           const lines = tool.result.split('\n').filter(l => l.trim());
@@ -568,8 +569,8 @@ function ActivityCard({
                       ) : (
                         <Gear size={12} weight="bold" className="text-primary/60 shrink-0" />
                       )}
-                      <span className="truncate font-mono text-[11px] text-foreground/70">
-                        {tool.name}
+                      <span className="truncate text-[11px] text-foreground/70">
+                        {getToolDisplayName(tool.name)}
                       </span>
                     </div>
                     <span className="text-[10px] text-muted-foreground/50">

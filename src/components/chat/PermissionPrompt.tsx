@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
+import { getToolDisplayName } from '@/lib/tool-display-names';
 import {
   MessageResponse,
 } from '@/components/ai-elements/message';
@@ -112,72 +113,96 @@ function AskUserQuestionUI({
   });
 
   return (
-    <div className="space-y-4 py-2">
+    <div className="py-1 space-y-5">
       {questions.map((q, i) => {
         const qIdx = String(i);
         const selected = selections[qIdx] || new Set<string>();
         return (
-          <div key={qIdx} className="space-y-2">
+          <div key={qIdx} className="space-y-2.5">
             {q.header && (
-              <span className="inline-block rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {q.header}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="h-px flex-1 bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+                <span className="text-[10px] text-primary/70 font-medium px-2">{q.header}</span>
+                <span className="h-px flex-1 bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+              </div>
             )}
-            <p className="text-sm font-medium">{q.question}</p>
-            <div className="flex flex-wrap gap-2">
+            <p className="text-sm font-semibold text-foreground">{q.question}</p>
+            <div className="space-y-0.5 animate-in fade-in slide-in-from-top-1 duration-200">
               {q.options.map((opt) => {
                 const isSelected = selected.has(opt.label);
                 return (
-                  <Button
+                  <button
                     key={opt.label}
-                    variant="outline"
-                    size="sm"
+                    type="button"
                     onClick={() => toggleOption(qIdx, opt.label, q.multiSelect)}
-                    className={isSelected
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border bg-background text-foreground hover:bg-muted'
-                    }
+                    className={cn(
+                      "w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-all duration-150",
+                      "hover:bg-muted/30",
+                      isSelected && 'bg-primary/5'
+                    )}
                     title={opt.description}
                   >
-                    {q.multiSelect && (
-                      <span className="mr-1.5">{isSelected ? '☑' : '☐'}</span>
+                    <span className={cn(
+                      "flex-shrink-0 w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center transition-all",
+                      isSelected ? 'border-primary bg-primary' : 'border-muted-foreground/30'
+                    )}>
+                      {isSelected && (
+                        <span className="w-1 h-1 rounded-full bg-white" />
+                      )}
+                    </span>
+                    <span className={cn(
+                      "text-[12px]",
+                      isSelected ? 'text-foreground font-medium' : 'text-foreground/60'
+                    )}>{opt.label}</span>
+                    {opt.description && (
+                      <span className="text-[10px] text-muted-foreground/40 ml-auto">{opt.description}</span>
                     )}
-                    {opt.label}
-                  </Button>
+                  </button>
                 );
               })}
-              <Button
-                variant="outline"
-                size="sm"
+              <button
+                type="button"
                 onClick={() => toggleOther(qIdx, q.multiSelect)}
-                className={useOther[qIdx]
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border bg-background text-foreground hover:bg-muted'
-                }
+                className={cn(
+                  "w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-all duration-150",
+                  "hover:bg-muted/30",
+                  useOther[qIdx] && 'bg-primary/5'
+                )}
               >
-                Other
-              </Button>
+                <span className={cn(
+                  "flex-shrink-0 w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center transition-all",
+                  useOther[qIdx] ? 'border-primary bg-primary' : 'border-muted-foreground/30'
+                )}>
+                  {useOther[qIdx] && (
+                    <span className="w-1 h-1 rounded-full bg-white" />
+                  )}
+                </span>
+                <span className="text-[12px] text-foreground/60">其他</span>
+              </button>
             </div>
             {useOther[qIdx] && (
               <Input
                 type="text"
-                placeholder="Type your answer..."
+                placeholder="请输入..."
                 value={otherTexts[qIdx] || ''}
                 onChange={(e) => setOtherTexts((prev) => ({ ...prev, [qIdx]: e.target.value }))}
-                className="text-xs"
+                className="h-7 text-[11px] rounded-lg ml-6"
                 autoFocus
               />
             )}
           </div>
         );
       })}
-      <Button
-        onClick={handleSubmit}
-        disabled={!hasAnswer}
-        size="sm"
-      >
-        Submit
-      </Button>
+      <div className="flex justify-end pt-1">
+        <Button
+          onClick={handleSubmit}
+          disabled={!hasAnswer}
+          size="sm"
+          className="text-[11px] h-7 px-4 rounded-lg"
+        >
+          确认
+        </Button>
+      </div>
     </div>
   );
 }
@@ -450,7 +475,8 @@ export function PermissionPrompt({
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl border-t border-border bg-background px-4 py-3 max-h-[50vh] overflow-y-auto">
+    <div className="mx-auto w-full max-w-2xl px-4 py-3">
+      <div className="rounded-2xl border border-border/60 bg-background/95 backdrop-blur-sm shadow-xl shadow-black/10 p-4 space-y-4">
       {/* ExitPlanMode */}
       {pendingPermission?.toolName === 'ExitPlanMode' && !isResolved && (
         <ExitPlanModeUI
@@ -486,7 +512,7 @@ export function PermissionPrompt({
           state={getConfirmationState()}
         >
           <ConfirmationTitle>
-            <span className="font-medium">{pendingPermission.toolName}</span>
+            <span className="font-medium">{getToolDisplayName(pendingPermission.toolName)}</span>
             {pendingPermission.decisionReason && (
               <span className="text-muted-foreground ml-2">
                 — {pendingPermission.decisionReason}
@@ -540,6 +566,7 @@ export function PermissionPrompt({
           {permissionResolved === 'allow' ? t('streaming.allowed') : t('streaming.denied')}
         </p>
       )}
+      </div>
     </div>
   );
 }

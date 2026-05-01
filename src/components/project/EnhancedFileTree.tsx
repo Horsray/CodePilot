@@ -19,7 +19,9 @@ import {
   ArrowSquareOut,
   ChatCircleText,
   Play,
+  TerminalWindow,
 } from "@/components/ui/icon";
+import { usePanelStore } from "@/store/usePanelStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -155,6 +157,19 @@ const getFileIcon = (name: string, isDirectory: boolean, isOpen?: boolean) => {
   }
 };
 
+// 可执行文件扩展名
+const EXECUTABLE_EXTENSIONS = new Set([
+  "sh", "bash", "zsh", "command", "fish", "csh",
+  "py", "rb", "pl", "pm",
+]);
+
+function isExecutableFile(node: FileTreeNode): boolean {
+  if (node.type !== "file") return false;
+  if (node.extension && EXECUTABLE_EXTENSIONS.has(node.extension)) return true;
+  if (!node.extension) return true;
+  return false;
+}
+
 // 扁平化节点类型
 interface FlatNode {
   node: FileTreeNode;
@@ -217,6 +232,7 @@ function TreeNode({
   const isSelected = selectedPath === node.path;
   const isDirectory = node.type === "directory";
   const paddingLeft = level * 12 + 8;
+  const executable = isExecutableFile(node);
 
   const handleClick = () => {
     if (isDirectory) {
@@ -224,6 +240,20 @@ function TreeNode({
     } else {
       onSelect(node.path);
     }
+  };
+
+  const handleOpenInTerminal = (targetPath: string) => {
+    const store = usePanelStore.getState();
+    store.setBottomPanelOpen(true);
+    store.setBottomPanelTab("terminal");
+    window.dispatchEvent(new CustomEvent('terminal:execute-command', { detail: { command: `cd "${targetPath}"` } }));
+  };
+
+  const handleExecuteInTerminal = (targetPath: string) => {
+    const store = usePanelStore.getState();
+    store.setBottomPanelOpen(true);
+    store.setBottomPanelTab("terminal");
+    window.dispatchEvent(new CustomEvent('terminal:execute-command', { detail: { command: `"${targetPath}"` } }));
   };
 
   return (
@@ -263,48 +293,62 @@ function TreeNode({
         <ContextMenuContent className="w-48">
           {isDirectory ? (
             <>
-              <ContextMenuItem onClick={() => onSelect(node.path)}>
+              <ContextMenuItem onSelect={() => onSelect(node.path)}>
                 <FolderOpen size={14} className="mr-2" />
                 打开文件夹
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => onNewFile(node.path)}>
+              <ContextMenuItem onSelect={() => onNewFile(node.path)}>
                 <Plus size={14} className="mr-2" />
                 新建文件
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => onNewFolder(node.path)}>
+              <ContextMenuItem onSelect={() => onNewFolder(node.path)}>
                 <FolderPlus size={14} className="mr-2" />
                 新建文件夹
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => handleOpenInTerminal(node.path)}>
+                <TerminalWindow size={14} className="mr-2" />
+                在终端中打开
               </ContextMenuItem>
               <ContextMenuSeparator />
             </>
           ) : (
             <>
-              <ContextMenuItem onClick={() => onSelect(node.path)}>
+              <ContextMenuItem onSelect={() => onSelect(node.path)}>
                 <File size={14} className="mr-2" />
                 打开文件
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => onAddToChat(node.path)}>
+              <ContextMenuItem onSelect={() => onAddToChat(node.path)}>
                 <ChatCircleText size={14} className="mr-2" />
                 添加到对话
               </ContextMenuItem>
               <ContextMenuSeparator />
+              {executable && (
+                <>
+                  <ContextMenuItem onSelect={() => handleExecuteInTerminal(node.path)}>
+                    <TerminalWindow size={14} className="mr-2" />
+                    在终端中执行
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                </>
+              )}
             </>
           )}
-          <ContextMenuItem onClick={() => onRename(node.path, isDirectory)}>
+          <ContextMenuItem onSelect={() => onRename(node.path, isDirectory)}>
             <PencilSimple size={14} className="mr-2" />
             重命名
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => onCopyPath(node.path)}>
+          <ContextMenuItem onSelect={() => onCopyPath(node.path)}>
             <Copy size={14} className="mr-2" />
             复制路径
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => onOpenInFinder(node.path)}>
+          <ContextMenuItem onSelect={() => onOpenInFinder(node.path)}>
             <ArrowSquareOut size={14} className="mr-2" />
             在 Finder 中打开
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem 
+          <ContextMenuItem
             onClick={() => onDelete(node.path, isDirectory)}
             className="text-red-600"
           >

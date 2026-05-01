@@ -7,12 +7,15 @@ import {
   Folder,
   Globe,
   FileCode,
-  PencilSimple,
+  NotePencil,
   DotOutline,
   ChartBar,
   Terminal,
   SquaresFour,
   X,
+  Plus,
+  MagnifyingGlass,
+  SidebarSimple,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +38,8 @@ export function UnifiedTopBar() {
     setSessionTitle,
     sessionId,
     workingDirectory,
+    chatListOpen,
+    setChatListOpen,
     fileTreeOpen,
     setFileTreeOpen,
     gitPanelOpen,
@@ -55,7 +60,7 @@ export function UnifiedTopBar() {
     setBottomPanelTab,
   } = usePanel();
   const { t } = useTranslation();
-  const { isWindows } = useClientPlatform();
+  const { isWindows, isMac } = useClientPlatform();
   const [buddySpecies, setBuddySpecies] = useState('');
 
   useEffect(() => {
@@ -123,23 +128,79 @@ export function UnifiedTopBar() {
   // Extract project name from working directory
   const projectName = workingDirectory ? workingDirectory.split(/[\\/]/).filter(Boolean).pop() || '' : '';
 
-  // On non-chat routes, render only a thin drag region (no visible bar)
+  // 中文注释：当侧边栏收起时，在红绿灯按钮右侧显示快捷操作按钮
+  const sidebarQuickButtons = !chatListOpen ? (
+    <div
+      className="flex items-center gap-0.5 shrink-0"
+      style={{ WebkitAppRegion: 'no-drag', paddingLeft: isMac ? '4px' : '0' } as React.CSSProperties}
+    >
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+        onClick={() => setChatListOpen(true)}
+        title="展开侧边栏"
+      >
+        <SidebarSimple size={14} />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+        onClick={() => {
+          window.dispatchEvent(new CustomEvent('chatlist-new-chat-trigger'));
+        }}
+        title="新建对话"
+      >
+        <Plus size={14} />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+        onClick={() => window.dispatchEvent(new CustomEvent('open-global-search'))}
+        title="搜索"
+      >
+        <MagnifyingGlass size={14} />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+        onClick={() => {
+          window.dispatchEvent(new CustomEvent('chatlist-open-browser'));
+        }}
+        title="内置浏览器"
+      >
+        <Globe size={14} />
+      </Button>
+    </div>
+  ) : null;
+
+  // On non-chat routes, render thin drag region with quick buttons when sidebar collapsed
   if (!isChatRoute) {
-    // Thin drag region for macOS window dragging — just enough for traffic light area
     return (
       <div
-        className="h-3 shrink-0"
+        className="h-12 shrink-0 flex items-center"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      />
+      >
+        <div style={{ paddingLeft: isMac ? '70px' : '8px' }}>
+          {sidebarQuickButtons}
+        </div>
+      </div>
     );
   }
 
   return (
     <>
       <div
-        className="flex h-12 shrink-0 items-center gap-2 bg-background px-3"
+        className="flex h-12 shrink-0 items-center gap-2 bg-background px-3 border-b border-border/40"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
+        {/* 中文注释：侧边栏收起时显示快捷按钮，macOS 需额外左边距避开红绿灯 */}
+        {!chatListOpen && isMac && <div style={{ width: '62px' }} className="shrink-0" />}
+        {sidebarQuickButtons}
+
         {/* Left: project + current chat tab */}
         <div
           className="flex items-center gap-1.5 min-w-0 shrink"
@@ -207,7 +268,7 @@ export function UnifiedTopBar() {
                   onClick={handleStartEditTitle}
                   className="shrink-0 h-auto w-auto p-0.5"
                 >
-                  <PencilSimple size={12} className="text-muted-foreground" />
+                  <NotePencil size={12} className="text-muted-foreground" />
                 </Button>
               </div>
             )
@@ -247,7 +308,7 @@ export function UnifiedTopBar() {
                   ) : tab.kind === "terminal" ? (
                       <Terminal size={13} className="shrink-0" />
                     ) : (
-                    <PencilSimple size={13} className="shrink-0" />
+                    <NotePencil size={13} className="shrink-0" />
                   )}
                   <span className="max-w-[180px] truncate">{tab.title}</span>
                   {tab.closable && (

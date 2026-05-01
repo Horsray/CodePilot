@@ -11,17 +11,17 @@ import {
   Plus,
   FolderPlus,
   Lightning,
-  Cube,
+  Stack,
   Terminal,
-  Toolbox,
   Image,
   ShareNetwork,
   Gear,
   ListBullets,
   BookOpen,
-  Timer,
-  MagicWand,
+  ClockCountdown,
   Shapes,
+  PlugsConnected,
+  SidebarSimple,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { usePanel } from "@/hooks/usePanel";
@@ -51,6 +51,7 @@ interface ChatListPanelProps {
   width?: number;
   hasUpdate?: boolean;
   readyToInstall?: boolean;
+  onToggle?: () => void;
 }
 
 import {
@@ -61,7 +62,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 
-export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatListPanelProps) {
+export function ChatListPanel({ open, width, hasUpdate, readyToInstall, onToggle }: ChatListPanelProps) {
   const pathname = usePathname();
   const router = useRouter();
   const {
@@ -321,6 +322,13 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
     }, 5000);
     return () => clearInterval(interval);
   }, [fetchSessions]);
+
+  // 中文注释：监听侧边栏快捷按钮触发的新建会话事件
+  useEffect(() => {
+    const handler = () => handleNewChat();
+    window.addEventListener('chatlist-new-chat', handler);
+    return () => window.removeEventListener('chatlist-new-chat', handler);
+  }, [handleNewChat]);
 
   // Global context menu for empty space
   const handleGlobalContextMenu = (e: React.MouseEvent) => {
@@ -650,22 +658,34 @@ export function ChatListPanel({ open, width, hasUpdate, readyToInstall }: ChatLi
   if (!open) return null;
 
   const navItems = [
-    { href: "/skills", label: t('nav.skills' as TranslationKey), icon: MagicWand },
-    { href: "/mcp", label: t('nav.mcp' as TranslationKey), icon: Cube },
-    { href: "/cli-tools", label: t('nav.cliTools' as TranslationKey), icon: Toolbox },
+    { href: "/skills", label: t('nav.skills' as TranslationKey), icon: Lightning },
+    { href: "/mcp", label: t('nav.mcp' as TranslationKey), icon: Stack },
+    { href: "/cli-tools", label: t('nav.cliTools' as TranslationKey), icon: Terminal },
     { href: "/gallery", label: t('nav.gallery' as TranslationKey), icon: Shapes },
     { href: "/knowledge-base", label: t('nav.knowledgeBase' as TranslationKey), icon: BookOpen },
-    { href: "/scheduled-tasks", label: t('nav.scheduledTasks' as TranslationKey), icon: Timer },
-    { href: "/bridge", label: t('nav.bridge' as TranslationKey), icon: ShareNetwork },
+    { href: "/scheduled-tasks", label: t('nav.scheduledTasks' as TranslationKey), icon: ClockCountdown },
+    { href: "/bridge", label: t('nav.bridge' as TranslationKey), icon: PlugsConnected },
   ];
 
   return (
     <aside
-      className="hidden h-full shrink-0 flex-col overflow-hidden bg-sidebar/80 backdrop-blur-xl lg:flex"
+      className="absolute top-1.5 left-1.5 bottom-1.5 z-30 flex flex-col overflow-hidden bg-sidebar/95 backdrop-blur-xl rounded-xl shadow-[0_8px_40px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.06)] dark:shadow-[0_8px_40px_rgba(0,0,0,0.4),0_0_0_1px_rgba(255,255,255,0.06)]"
       style={{ width: width ?? 240 }}
       onContextMenu={handleGlobalContextMenu}
     >
-      <div className="h-4 shrink-0 mt-2" />
+      <div className="h-10 shrink-0 flex items-center justify-end px-3">
+        {onToggle && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+            onClick={onToggle}
+            title="收起侧边栏"
+          >
+            <SidebarSimple size={16} />
+          </Button>
+        )}
+      </div>
       <div className="flex shrink-0 items-center justify-center px-3 pb-2">
         <img src="/icons/toplogo.png" alt="CodePilot" className="h-8 w-auto object-contain" />
       </div>

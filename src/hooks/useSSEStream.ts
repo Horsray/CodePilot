@@ -5,6 +5,7 @@ interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  parentAgentId?: string;
 }
 
 interface ToolResultInfo {
@@ -12,6 +13,7 @@ interface ToolResultInfo {
   content: string;
   is_error?: boolean;
   media?: MediaBlock[];
+  parentAgentId?: string;
 }
 
 export interface SkillNudgeData {
@@ -44,6 +46,8 @@ export interface SSECallbacks {
   onTaskUpdate: (sessionId: string) => void;
   onRewindPoint: (sdkUserMessageId: string) => void;
   onThinking?: (delta: string) => void;
+  /** 子Agent的思考内容增量，用于路由到子Agent卡片的进度区域 */
+  onSubAgentThinking?: (parentAgentId: string, delta: string) => void;
   onKeepAlive: () => void;
   onError: (accumulated: string) => void;
   /** 中文注释：功能名称「引用上下文回调」，用法是把本轮注入的规则/文件列表同步到流式 UI。 */
@@ -151,7 +155,13 @@ function handleSSEEvent(
     }
 
     case 'thinking': {
-      callbacks.onThinking?.(event.data);
+      // 中文注释：如果thinking事件带有parentAgentId，说明是子Agent的思考内容，
+      // 路由到onSubAgentThinking而非onThinking，避免子Agent思考污染主时间线
+      if (event.parentAgentId) {
+        callbacks.onSubAgentThinking?.(event.parentAgentId, event.data);
+      } else {
+        callbacks.onThinking?.(event.data);
+      }
       return accumulated;
     }
 
@@ -162,6 +172,7 @@ function handleSSEEvent(
           id: toolData.id,
           name: toolData.name,
           input: toolData.input,
+          ...(toolData.parentAgentId ? { parentAgentId: toolData.parentAgentId } : {}),
         });
       } catch {
         // skip malformed tool_use data
@@ -179,6 +190,7 @@ function handleSSEEvent(
           ...(Array.isArray(resultData.media) && resultData.media.length > 0
             ? { media: resultData.media }
             : {}),
+          ...(resultData.parentAgentId ? { parentAgentId: resultData.parentAgentId } : {}),
         });
       } catch {
         // skip malformed tool_result data
@@ -248,6 +260,9 @@ function handleSSEEvent(
             tools: statusData.tools,
             slash_commands: statusData.slash_commands,
             skills: statusData.skills,
+            // 中文注释：功能名称「初始化 agents 透传」，用法是把后端 status 事件里的
+            // agents 能力快照写入前端状态，确保状态栏能显示当前会话真实拿到的 subagents。
+            agents: statusData.agents,
             plugins: statusData.plugins,
             mcp_servers: statusData.mcp_servers,
             output_style: statusData.output_style,

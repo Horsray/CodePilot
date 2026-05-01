@@ -109,7 +109,7 @@ export function TaskList({ sessionId }: TaskListProps) {
   const finished = completed + failed;
   const running = tasks.filter((task) => task.status === "in_progress").length;
   const progress = Math.round((finished / Math.max(tasks.length, 1)) * 100);
-  
+
   // Find the most recently completed task to display in the header
   const lastCompletedTask = tasks
     .filter(t => t.status === "completed" && t.updated_at)
@@ -117,37 +117,36 @@ export function TaskList({ sessionId }: TaskListProps) {
 
   return (
     <div className="py-2 shrink-0">
-      <div className="text-[11px] font-medium text-foreground/80 mb-2">待办</div>
       <div className="mb-1.5">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex min-w-0 items-center gap-1.5">
             <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-primary/10 text-primary">
               {running > 0 ? <SpinnerGap size={10} className="animate-spin" /> : <ListBullets size={10} weight="bold" />}
             </div>
-            <div className="min-w-0 flex items-center gap-1.5">
-              <div className="text-[10px] font-medium text-foreground/80 whitespace-nowrap">
-                任务进度
-              </div>
-              <div className="text-[10px] text-muted-foreground/80 whitespace-nowrap border-l border-border/60 pl-1.5">
-                {finished}/{tasks.length} 已处理
-                {failed > 0 && <span className="text-red-500/70 ml-1">({failed} 失败)</span>}
-              </div>
-              {lastCompletedTask && (
-                <div className="text-[10px] text-muted-foreground/60 whitespace-nowrap border-l border-border/60 pl-1.5">
-                  {formatCompletedTime(lastCompletedTask.updated_at)}
-                </div>
-              )}
+            <div className="text-xs font-semibold text-foreground/90 whitespace-nowrap tracking-tight">
+              任务进度
             </div>
           </div>
-          <div className="font-mono text-[10px] text-muted-foreground/65 shrink-0">
+          <div className="font-mono text-[10px] text-primary shrink-0">
             {progress}%
           </div>
         </div>
-        <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-muted/60">
+        <div className="h-0.5 overflow-hidden rounded-full bg-muted/60">
           <div
             className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
             style={{ width: `${progress}%` }}
           />
+        </div>
+        <div className="flex items-center gap-2 mt-1">
+          <div className="text-[10px] text-muted-foreground/80 whitespace-nowrap">
+            {finished}/{tasks.length} 已处理
+            {failed > 0 && <span className="text-red-500/70 ml-1">({failed} 失败)</span>}
+          </div>
+          {lastCompletedTask && (
+            <div className="text-[10px] text-muted-foreground/60 whitespace-nowrap">
+              {formatCompletedTime(lastCompletedTask.updated_at)}
+            </div>
+          )}
         </div>
       </div>
 
@@ -175,7 +174,7 @@ export function TaskList({ sessionId }: TaskListProps) {
             <div className="flex items-center min-w-0 flex-1">
               <span
                 className={cn(
-                  "truncate text-[11px]",
+                  "truncate text-[12px]",
                   isRunning && "font-medium text-foreground/90",
                   isDone && "text-muted-foreground/75",
                   isFailed && "text-red-500/80 line-through"

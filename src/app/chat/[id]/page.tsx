@@ -177,12 +177,21 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
         if (cancelled) return;
         if (res.ok) {
           const data = await res.json();
+          // 中文注释：输出预热诊断信息到浏览器 console，方便排查预热问题
+          console.log('[warmup] Warmup completed:', {
+            warmed_up: data.warmed_up,
+            from_cache: data.from_cache,
+            session_id: data.warmup_session_id,
+            model: data.model,
+            provider_key: data.provider_key,
+            mcp_count: data.mcp_count,
+            mcp_names: data.mcp_names,
+          });
           if (data.warmed_up && data.model) {
             setWarmupModel(data.model);
           }
           setWarmupState('ready');
         } else {
-          // 预热失败不影响正常对话，后续发送消息时会自动创建 persistent session
           console.warn('[warmup] Session warmup failed, will init on first message');
           setWarmupState('failed');
         }

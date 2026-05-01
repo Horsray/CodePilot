@@ -401,6 +401,9 @@ const en = {
   'skills.marketplaceHint': 'Browse the Skills Marketplace',
   'skills.marketplaceHintDesc': 'Search and install community skills from Skills.sh',
   'skills.noReadme': 'No description available for this skill',
+  'skills.disableSkill': 'Disable — hide from AI',
+  'skills.enableSkill': 'Enable — visible to AI',
+  'skills.disabledHint': 'Disabled skills are hidden from AI globally',
 
   // ── MCP ─────────────────────────────────────────────────────
   'mcp.addServer': 'Add Server',

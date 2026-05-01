@@ -63,7 +63,7 @@ Use multiple passes and end with findings first.
     assert.doesNotMatch(catalog!, /This is a long body that should not be injected directly/);
   });
 
-  it('does not auto-inject skill catalogs into the host supplement prompt', () => {
+  it('auto-injects lightweight skill catalog into the desktop system prompt', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-omc-skill-catalog-'));
     tempDirs.push(tmpDir);
     swapTempHome(tmpDir);
@@ -83,22 +83,31 @@ when_to_use: When the user asks for reviews
     );
 
     invalidateSkillCache();
-    const promptWithoutOmc = buildSystemPrompt({ workingDirectory: tmpDir, omcPluginEnabled: false });
-    const promptWithOmc = buildSystemPrompt({ workingDirectory: tmpDir, omcPluginEnabled: true });
-
-    assert.doesNotMatch(promptWithoutOmc.prompt, /Auto-Discovered Skills Catalog|Lightweight Skills Visibility|auto-review/);
-    assert.doesNotMatch(promptWithOmc.prompt, /Auto-Discovered Skills Catalog|Lightweight Skills Visibility|auto-review/);
+    // 中文注释：技能目录现在会以轻量索引形式注入系统提示，
+    // 让模型在复杂任务开始前能主动发现可用的 Skill。
+    const prompt = buildSystemPrompt({ workingDirectory: tmpDir });
+    assert.match(prompt.prompt, /Lightweight Skills Visibility/);
+    assert.match(prompt.prompt, /auto-review/);
+    assert.doesNotMatch(prompt.prompt, /This is a long body/);
   });
 
-  it('keeps only the minimal host supplement guidance', () => {
+  it('restores historical desktop orchestration guidance with self-improvement and memory rules', () => {
     const prompt = buildSystemPrompt();
-    assert.match(prompt.prompt, /CodePilot Host Supplement/);
-    assert.match(prompt.prompt, /Claude Code native behavior/);
+    assert.match(prompt.prompt, /# Identity/);
+    assert.match(prompt.prompt, /HueyingAgent/);
+    assert.match(prompt.prompt, /TodoWrite First for Complex Work/);
+    assert.match(prompt.prompt, /Always check available skills before starting complex multi-step tasks/i);
+    assert.match(prompt.prompt, /TodoWrite/);
+    assert.match(prompt.prompt, /Agent/);
+    assert.match(prompt.prompt, /WebSearch/);
+    assert.match(prompt.prompt, /self-improvement/);
+    assert.match(prompt.prompt, /codepilot_memory_recent/);
+    assert.match(prompt.prompt, /codepilot_kb_search/);
     assert.match(prompt.prompt, /Output Hygiene/);
-    assert.doesNotMatch(prompt.prompt, /External Research \(IMPORTANT\)|Runtime Focus \(IMPORTANT\)/);
+    assert.doesNotMatch(prompt.prompt, /Runtime Focus \(IMPORTANT\)/);
   });
 
-  it('does not inject request-specific skill hints into the host supplement prompt', () => {
+  it('injects lightweight skill catalog but not request-specific skill hints', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-relevant-skills-'));
     tempDirs.push(tmpDir);
     swapTempHome(tmpDir);
@@ -134,11 +143,26 @@ when_to_use: When the user asks for release notes or changelog drafting
     invalidateSkillCache();
     const prompt = buildSystemPrompt({
       workingDirectory: tmpDir,
-      userPrompt: '请帮我做一次代码审查并定位性能瓶颈，先别直接改代码。',
     });
 
-    assert.doesNotMatch(prompt.prompt, /Relevant Skill Hints|code-review-helper|release-notes/);
-    assert.match(prompt.prompt, /CodePilot Host Supplement/);
-    assert.doesNotMatch(prompt.prompt, /请帮我做一次代码审查并定位性能瓶颈/);
+    // 中文注释：轻量级技能目录索引现在会注入系统提示，
+    // 但 "Relevant Skill Hints"（请求级别的技能提示）不会注入。
+    assert.match(prompt.prompt, /Lightweight Skills Visibility/);
+    assert.match(prompt.prompt, /code-review-helper/);
+    assert.match(prompt.prompt, /release-notes/);
+    assert.doesNotMatch(prompt.prompt, /Relevant Skill Hints/);
+    assert.doesNotMatch(prompt.prompt, /# User Instructions/);
+  });
+
+  it('does not inline native CLAUDE or AGENTS files into the appended host prompt', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-native-rules-'));
+    tempDirs.push(tmpDir);
+    swapTempHome(tmpDir);
+
+    fs.writeFileSync(path.join(tmpDir, 'CLAUDE.md'), '# Native Claude\nRead FILEMAP first.\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'AGENTS.md'), '# Native Agents\nUse /team when needed.\n', 'utf8');
+
+    const prompt = buildSystemPrompt({ workingDirectory: tmpDir });
+    assert.doesNotMatch(prompt.prompt, /Native Claude|Read FILEMAP first|Use \/team when needed/);
   });
 });

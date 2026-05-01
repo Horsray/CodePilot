@@ -411,6 +411,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     const result = await consumeSSEStream(reader, {
       onText: (acc) => {
         markActive();
+        // Clear "正在处理结果..." status when parent starts producing text
+        if (stream.snapshot.statusText === '正在处理子任务结果…') {
+          stream.snapshot = { ...stream.snapshot, statusText: undefined };
+          emit(stream, 'snapshot-updated');
+        }
         stream.accumulatedText = acc;
         consumeActivityText();
         stream.thinkingPhaseEnded = true;
@@ -430,6 +435,11 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onThinking: (delta) => {
         markActive();
+        // Clear "正在处理结果..." status when parent starts producing content
+        if (stream.snapshot.statusText === '正在处理子任务结果…') {
+          stream.snapshot = { ...stream.snapshot, statusText: undefined };
+          emit(stream, 'snapshot-updated');
+        }
         // If non-thinking content has arrived since last thinking delta,
         // this is a new thinking phase (e.g. after a tool_use round-trip).
         // Reset the live accumulator so the UI shows only the current phase.
@@ -443,6 +453,25 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         }
         stream.accumulatedThinking += delta;
         throttledThinkingEmit();
+      },
+      // 中文注释：功能名称「子Agent思考路由」，用法是将子Agent的思考内容增量路由到
+      // 对应子Agent的progress字段，而非主Agent的accumulatedThinking，
+      // 解决子Agent思考内容出现在主时间线思考卡片中的问题。
+      onSubAgentThinking: (parentAgentId, delta) => {
+        markActive();
+        const idx = stream.subAgents.findIndex(a => a.id === parentAgentId);
+        if (idx >= 0) {
+          const updated = [...stream.subAgents];
+          const oldProgress = updated[idx].progress || '';
+          // 保留最近的思考内容，避免无限增长
+          const newProgress = oldProgress + delta;
+          updated[idx] = {
+            ...updated[idx],
+            progress: newProgress.length > 10000 ? '...' + newProgress.slice(-10000) : newProgress,
+          };
+          stream.subAgents = updated;
+          emit(stream, 'snapshot-updated');
+        }
       },
       onToolUse: (tool) => {
         markActive();
@@ -753,6 +782,19 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         emit(stream, 'snapshot-updated');
         window.dispatchEvent(new CustomEvent('subagents-sync', { detail: { sessionId: params.sessionId, subAgents: updated } }));
       }
+      // 中文注释：功能名称「子Agent全部完成后状态提示」，用法是所有子Agent完成后
+      // 设置statusText为"正在处理结果..."，让用户知道父Agent仍在工作。
+      // 当父Agent产生新的thinking/text时，onThinking/onText会清除该状态。
+      const allDone = stream.subAgents.length > 0 && stream.subAgents.every(
+        a => a.status === 'completed' || a.status === 'error'
+      );
+      if (allDone) {
+        stream.snapshot = {
+          ...stream.snapshot,
+          statusText: '正在处理子任务结果…',
+        };
+        emit(stream, 'snapshot-updated');
+      }
         window.dispatchEvent(new CustomEvent('subagent-complete', { detail: { sessionId: params.sessionId, ...data } }));
       },
     });
@@ -1023,21 +1065,14 @@ export function stopStream(sessionId: string): void {
   const stream = getStreamsMap().get(sessionId);
   if (stream && stream.snapshot.phase === 'active') {
     stream.abortReason = 'manual_stop';
-    // Try graceful interrupt first, fallback to abort
+    // 立即中止客户端流 — 用户点击停止后无延迟响应
+    stream.abortController.abort();
+    // 并行通知服务器做清理（fire-and-forget）
     fetch('/api/chat/interrupt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId }),
-    }).catch(() => {
-      // Interrupt failed, force abort
-    }).finally(() => {
-      // Always abort after a short delay to ensure cleanup
-      streamTimeout(stream, () => {
-        if (stream.snapshot.phase === 'active') {
-          stream.abortController.abort();
-        }
-      }, 2000);
-    });
+    }).catch(() => {});
   }
 }
 

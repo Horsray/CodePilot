@@ -616,6 +616,10 @@ export interface SubAgentInfo {
   progress?: string;
   model?: string;
   source?: SubAgentSource;
+  // 中文注释：功能名称「子Agent工具调用归属」，用法是存储归属于该子Agent的工具调用，
+  // 用于在子Agent卡片内渲染独立的子时间线，避免污染主时间线。
+  toolCalls?: Array<{ id: string; name: string; input: unknown; result?: string; isError?: boolean }>;
+  timelineSteps?: TimelineStep[];
 }
 
 // ==========================================
@@ -654,6 +658,8 @@ export type SSEEventType =
 export interface SSEEvent {
   type: SSEEventType;
   data: string;
+  /** 当此事件属于子Agent时，标记父Agent的ID */
+  parentAgentId?: string;
 }
 
 // 中文注释：功能名称「提示词规则来源元数据」，用法是标记本轮系统提示里实际注入的规则/索引/技能目录来源，
@@ -674,6 +680,7 @@ export interface ClaudeInitMeta {
   tools?: unknown;
   slash_commands?: unknown;
   skills?: unknown;
+  agents?: unknown;
   plugins?: Array<{ name: string; path: string }>;
   mcp_servers?: unknown;
   output_style?: string;
@@ -1148,6 +1155,8 @@ export interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  /** 当此工具调用属于子Agent时，标记父Agent的ID */
+  parentAgentId?: string;
 }
 
 export interface ToolResultInfo {
@@ -1155,6 +1164,8 @@ export interface ToolResultInfo {
   content: string;
   is_error?: boolean;
   media?: MediaBlock[];
+  /** 当此工具结果属于子Agent时，标记父Agent的ID */
+  parentAgentId?: string;
 }
 
 export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped' | 'aborted';

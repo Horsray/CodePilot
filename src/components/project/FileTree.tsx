@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Virtuoso } from "react-virtuoso";
-import { ArrowsClockwise, MagnifyingGlass, FileCode, Code, File, Image as ImageIcon, FileZip, Play } from "@/components/ui/icon";
+import { ArrowsClockwise, MagnifyingGlass, FileCode, Code, File, Image as ImageIcon, FileZip, Play, Copy, Trash, PencilSimple, ArrowSquareOut, ChatCircleText, FolderPlus } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -20,10 +20,20 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { usePanelStore } from "@/store/usePanelStore";
 import { useTerminal } from "@/hooks/useTerminal";
+import { showToast } from "@/hooks/useToast";
 
 interface FileTreeProps {
   workingDirectory: string;
@@ -138,6 +148,19 @@ interface FlatNode {
   isExpanded: boolean;
 }
 
+const EXECUTABLE_EXTENSIONS = new Set([
+  "sh", "bash", "zsh", "command", "fish", "csh",
+  "py", "rb", "pl", "pm",
+]);
+
+function isExecutableFile(node: FileTreeNode): boolean {
+  if (node.type !== "file") return false;
+  if (node.extension && EXECUTABLE_EXTENSIONS.has(node.extension)) return true;
+  // Files without extension are potentially binary executables
+  if (!node.extension) return true;
+  return false;
+}
+
 function FlatTreeNodeItem({
   flatNode,
   togglePath,
@@ -145,6 +168,13 @@ function FlatTreeNodeItem({
   onSelect,
   onAdd,
   highlightPath,
+  onNewFile,
+  onNewFolder,
+  onRename,
+  onDelete,
+  onCopyPath,
+  onOpenInFinder,
+  onAddToChat,
 }: {
   flatNode: FlatNode;
   togglePath: (path: string) => void;
@@ -152,22 +182,33 @@ function FlatTreeNodeItem({
   onSelect?: (path: string) => void;
   onAdd?: (path: string) => void;
   highlightPath?: string;
+  onNewFile?: (parentPath: string) => void;
+  onNewFolder?: (parentPath: string) => void;
+  onRename?: (path: string, isDirectory: boolean) => void;
+  onDelete?: (path: string, isDirectory: boolean) => void;
+  onCopyPath?: (path: string) => void;
+  onOpenInFinder?: (path: string) => void;
+  onAddToChat?: (path: string) => void;
 }) {
   const { node, level, isExpanded } = flatNode;
   const isDirectory = node.type === "directory";
   const isSelected = selectedPath === node.path;
   const isHighlighted = highlightPath === node.path;
   const paddingLeft = level * 16 + 8; // 16px per level
+  const executable = isExecutableFile(node);
 
-  const handleOpenInTerminal = () => {
-    let command = "";
-    if (isDirectory) {
-      command = `cd "${node.path}"`;
-    } else {
-      command = `"${node.path}"`;
-    }
-    usePanelStore.getState().setTerminalOpen(true);
-    window.dispatchEvent(new CustomEvent('terminal:execute-command', { detail: { command } }));
+  const handleOpenInTerminal = (targetPath: string) => {
+    const store = usePanelStore.getState();
+    store.setBottomPanelOpen(true);
+    store.setBottomPanelTab("terminal");
+    window.dispatchEvent(new CustomEvent('terminal:execute-command', { detail: { command: `cd "${targetPath}"` } }));
+  };
+
+  const handleExecuteInTerminal = (targetPath: string) => {
+    const store = usePanelStore.getState();
+    store.setBottomPanelOpen(true);
+    store.setBottomPanelTab("terminal");
+    window.dispatchEvent(new CustomEvent('terminal:execute-command', { detail: { command: `"${targetPath}"` } }));
   };
 
   if (isDirectory) {
@@ -202,10 +243,45 @@ function FlatTreeNodeItem({
             <FileTreeName>{node.name}</FileTreeName>
           </div>
         </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem onSelect={handleOpenInTerminal}>
+        <ContextMenuContent className="w-48">
+          <ContextMenuItem onSelect={() => onSelect?.(node.path)}>
+            <FolderOpen size={14} className="mr-2" />
+            <span>打开文件夹</span>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => onNewFile?.(node.path)}>
+            <Plus size={14} className="mr-2" />
+            <span>新建文件</span>
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => onNewFolder?.(node.path)}>
+            <FolderPlus size={14} className="mr-2" />
+            <span>新建文件夹</span>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleOpenInTerminal(node.path)}>
             <TerminalWindow size={14} className="mr-2" />
             <span>在终端中打开</span>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => onRename?.(node.path, true)}>
+            <PencilSimple size={14} className="mr-2" />
+            <span>重命名</span>
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => onCopyPath?.(node.path)}>
+            <Copy size={14} className="mr-2" />
+            <span>复制路径</span>
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => onOpenInFinder?.(node.path)}>
+            <ArrowSquareOut size={14} className="mr-2" />
+            <span>在 Finder 中打开</span>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            onSelect={() => onDelete?.(node.path, true)}
+            className="text-red-600"
+          >
+            <Trash size={14} className="mr-2" />
+            <span>删除</span>
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -253,10 +329,44 @@ function FlatTreeNodeItem({
           )}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={handleOpenInTerminal}>
-          <TerminalWindow size={14} className="mr-2" />
-          <span>在终端中打开</span>
+      <ContextMenuContent className="w-48">
+        <ContextMenuItem onSelect={() => onSelect?.(node.path)}>
+          <File size={14} className="mr-2" />
+          <span>打开文件</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onAddToChat?.(node.path)}>
+          <ChatCircleText size={14} className="mr-2" />
+          <span>添加到对话</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {executable && (
+          <>
+            <ContextMenuItem onSelect={() => handleExecuteInTerminal(node.path)}>
+              <TerminalWindow size={14} className="mr-2" />
+              <span>在终端中执行</span>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem onSelect={() => onRename?.(node.path, false)}>
+          <PencilSimple size={14} className="mr-2" />
+          <span>重命名</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onCopyPath?.(node.path)}>
+          <Copy size={14} className="mr-2" />
+          <span>复制路径</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onOpenInFinder?.(node.path)}>
+          <ArrowSquareOut size={14} className="mr-2" />
+          <span>在 Finder 中打开</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() => onDelete?.(node.path, false)}
+          className="text-red-600"
+        >
+          <Trash size={14} className="mr-2" />
+          <span>删除</span>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -291,41 +401,24 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
   const { t } = useTranslation();
   const seekKeyRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  // Clear stale tree data when switching projects to avoid cross-session seek races.
-  useEffect(() => {
-    setTree([]);
-    setError(null);
-    treeRef.current = [];
-    seekKeyRef.current = null;
-  }, [workingDirectory]);
-
-  // Load expanded paths from localStorage when workingDirectory changes
-  useEffect(() => {
-    if (workingDirectory) {
-      try {
-        const key = getExpandedPathsKey(workingDirectory);
-        const saved = localStorage.getItem(key);
-        if (saved) {
-          const paths = JSON.parse(saved);
-          setExpandedPaths(new Set(paths));
-        } else {
-          // Default: all collapsed
-          setExpandedPaths(new Set());
-        }
-      } catch {
-        setExpandedPaths(new Set());
-      }
-    } else {
-      setExpandedPaths(new Set());
-    }
-  }, [workingDirectory]);
+  // Dialog states
+  const [newItemDialog, setNewItemDialog] = useState<{
+    open: boolean;
+    type: "file" | "folder";
+    parentPath: string;
+    name: string;
+  }>({ open: false, type: "file", parentPath: "", name: "" });
+  const [renameDialog, setRenameDialog] = useState<{
+    open: boolean;
+    path: string;
+    isDirectory: boolean;
+    newName: string;
+  }>({ open: false, path: "", isDirectory: false, newName: "" });
+  const [deleteDialog, setDeleteDialog] = useState<{
+    open: boolean;
+    path: string;
+    isDirectory: boolean;
+  }>({ open: false, path: "", isDirectory: false });
 
   const fetchTree = useCallback(async () => {
     // Always cancel in-flight request first — even when clearing directory,
@@ -387,6 +480,153 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
         abortRef.current = null;
         setLoading(false);
       }
+    }
+  }, [workingDirectory]);
+
+  // Handlers for context menu actions
+  const handleNewFile = useCallback((parentPath: string) => {
+    setNewItemDialog({ open: true, type: "file", parentPath, name: "" });
+  }, []);
+
+  const handleNewFolder = useCallback((parentPath: string) => {
+    setNewItemDialog({ open: true, type: "folder", parentPath, name: "" });
+  }, []);
+
+  const handleCreateItem = useCallback(async () => {
+    if (!newItemDialog.name.trim()) return;
+    const basePath = newItemDialog.parentPath || workingDirectory;
+    const fullPath = `${basePath}/${newItemDialog.name}`;
+    try {
+      const res = await fetch("/api/files/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: fullPath, type: newItemDialog.type }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "创建失败");
+      }
+      showToast({ type: "success", message: newItemDialog.type === "file" ? "文件创建成功" : "文件夹创建成功" });
+      setNewItemDialog({ open: false, type: "file", parentPath: "", name: "" });
+      fetchTree();
+    } catch (err) {
+      showToast({ type: "error", message: err instanceof Error ? err.message : "创建失败" });
+    }
+  }, [newItemDialog, workingDirectory, fetchTree]);
+
+  const handleRename = useCallback((path: string, isDirectory: boolean) => {
+    const name = path.split("/").pop() || "";
+    setRenameDialog({ open: true, path, isDirectory, newName: name });
+  }, []);
+
+  const handleDoRename = useCallback(async () => {
+    if (!renameDialog.newName.trim() || !renameDialog.path) return;
+    try {
+      const res = await fetch("/api/files/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: renameDialog.path, newName: renameDialog.newName }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "重命名失败");
+      }
+      showToast({ type: "success", message: "重命名成功" });
+      setRenameDialog({ open: false, path: "", isDirectory: false, newName: "" });
+      fetchTree();
+    } catch (err) {
+      showToast({ type: "error", message: err instanceof Error ? err.message : "重命名失败" });
+    }
+  }, [renameDialog, fetchTree]);
+
+  const handleDelete = useCallback((path: string, isDirectory: boolean) => {
+    setDeleteDialog({ open: true, path, isDirectory });
+  }, []);
+
+  const handleDoDelete = useCallback(async () => {
+    try {
+      const res = await fetch("/api/files/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: deleteDialog.path, recursive: deleteDialog.isDirectory }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "删除失败");
+      }
+      showToast({ type: "success", message: "删除成功" });
+      setDeleteDialog({ open: false, path: "", isDirectory: false });
+      fetchTree();
+    } catch (err) {
+      showToast({ type: "error", message: err instanceof Error ? err.message : "删除失败" });
+    }
+  }, [deleteDialog, fetchTree]);
+
+  const handleCopyPath = useCallback(async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      showToast({ type: "success", message: "路径已复制到剪贴板" });
+    } catch {
+      showToast({ type: "error", message: "复制失败" });
+    }
+  }, []);
+
+  const handleOpenInFinder = useCallback(async (path: string) => {
+    try {
+      const res = await fetch("/api/files/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "打开失败");
+      }
+    } catch (err) {
+      showToast({ type: "error", message: err instanceof Error ? err.message : "打开失败" });
+    }
+  }, []);
+
+  const handleAddToChat = useCallback((path: string) => {
+    if (onFileAdd) {
+      onFileAdd(path);
+      showToast({ type: "success", message: "文件已添加到对话" });
+    }
+  }, [onFileAdd]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Clear stale tree data when switching projects to avoid cross-session seek races.
+  useEffect(() => {
+    setTree([]);
+    setError(null);
+    treeRef.current = [];
+    seekKeyRef.current = null;
+  }, [workingDirectory]);
+
+  // Load expanded paths from localStorage when workingDirectory changes
+  useEffect(() => {
+    if (workingDirectory) {
+      try {
+        const key = getExpandedPathsKey(workingDirectory);
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const paths = JSON.parse(saved);
+          setExpandedPaths(new Set(paths));
+        } else {
+          // Default: all collapsed
+          setExpandedPaths(new Set());
+        }
+      } catch {
+        setExpandedPaths(new Set());
+      }
+    } else {
+      setExpandedPaths(new Set());
     }
   }, [workingDirectory]);
 
@@ -583,12 +823,94 @@ export function FileTree({ workingDirectory, onFileSelect, onFileAdd, highlightP
                   onSelect={handleSelect}
                   onAdd={onFileAdd}
                   highlightPath={highlightPath}
+                  onNewFile={handleNewFile}
+                  onNewFolder={handleNewFolder}
+                  onRename={handleRename}
+                  onDelete={handleDelete}
+                  onCopyPath={handleCopyPath}
+                  onOpenInFinder={handleOpenInFinder}
+                  onAddToChat={handleAddToChat}
                 />
               )}
             />
           </AIFileTree>
         )}
       </div>
+
+      {/* 新建文件/文件夹对话框 */}
+      <Dialog open={newItemDialog.open} onOpenChange={(open) => setNewItemDialog((prev) => ({ ...prev, open }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{newItemDialog.type === "file" ? "新建文件" : "新建文件夹"}</DialogTitle>
+            <DialogDescription>
+              在 {newItemDialog.parentPath || workingDirectory} 下创建
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            placeholder={newItemDialog.type === "file" ? "文件名" : "文件夹名"}
+            value={newItemDialog.name}
+            onChange={(e) => setNewItemDialog((prev) => ({ ...prev, name: e.target.value }))}
+            onKeyDown={(e) => e.key === "Enter" && handleCreateItem()}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setNewItemDialog({ open: false, type: "file", parentPath: "", name: "" })}>
+              取消
+            </Button>
+            <Button size="sm" onClick={handleCreateItem} disabled={!newItemDialog.name.trim()}>
+              创建
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 重命名对话框 */}
+      <Dialog open={renameDialog.open} onOpenChange={(open) => setRenameDialog((prev) => ({ ...prev, open }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重命名</DialogTitle>
+            <DialogDescription>
+              {renameDialog.isDirectory ? "重命名文件夹" : "重命名文件"}
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={renameDialog.newName}
+            onChange={(e) => setRenameDialog((prev) => ({ ...prev, newName: e.target.value }))}
+            onKeyDown={(e) => e.key === "Enter" && handleDoRename()}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRenameDialog({ open: false, path: "", isDirectory: false, newName: "" })}>
+              取消
+            </Button>
+            <Button size="sm" onClick={handleDoRename} disabled={!renameDialog.newName.trim()}>
+              重命名
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除确认对话框 */}
+      <Dialog open={deleteDialog.open} onOpenChange={(open) => setDeleteDialog((prev) => ({ ...prev, open }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认删除</DialogTitle>
+            <DialogDescription>
+              {deleteDialog.isDirectory
+                ? `确定要删除文件夹 "${deleteDialog.path.split("/").pop()}" 及其所有内容吗？此操作不可撤销。`
+                : `确定要删除文件 "${deleteDialog.path.split("/").pop()}" 吗？此操作不可撤销。`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setDeleteDialog({ open: false, path: "", isDirectory: false })}>
+              取消
+            </Button>
+            <Button size="sm" variant="destructive" onClick={handleDoDelete}>
+              删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
 } from '@/components/ai-elements/message';
 import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
+import { SubAgentStatusBar } from './SubAgentStatusBar';
 import { Button } from "@/components/ui/button";
 import { Copy, Check, CheckCircle, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise, XCircle, PauseCircle } from "@/components/ui/icon";
 import { FileAttachmentDisplay } from './FileAttachmentDisplay';
@@ -780,11 +781,11 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
 
         // 中文注释：功能名称「子Agent回退提取」，用法是当消息中没有sub_agents块时，
         // 从Agent/Team tool_use和tool_result对中提取子Agent信息，确保会话切换后卡片仍能渲染
-        const isAgentOrTeamTool = (name: string) => {
+        const isAgenticTool = (name: string) => {
           const lower = name.toLowerCase();
-          return lower === 'agent' || lower === 'team' || lower === 'todowrite' || lower.includes('mcp__codepilot-agent__') || lower.includes('mcp__codepilot-team__') || lower.includes('mcp__codepilot-todo__');
+          return lower === 'agent' || lower === 'team' || lower === 'task' || lower.includes('mcp__codepilot-agent__') || lower.includes('mcp__codepilot-team__');
         };
-        const toolUseBlocks = parsed.filter(b => b.type === 'tool_use' && isAgentOrTeamTool(b.name));
+        const toolUseBlocks = parsed.filter(b => b.type === 'tool_use' && isAgenticTool(b.name));
         if (toolUseBlocks.length > 0) {
           const toolResultMap = new Map<string, { content: string; isError?: boolean }>();
           parsed.filter(b => b.type === 'tool_result').forEach(b => {
@@ -793,11 +794,11 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           return toolUseBlocks.map((block, i) => {
             const input = block.input || {};
             const result = toolResultMap.get(block.id);
-            // 中文注释：功能名称「Agent输入解析」，用法是正确解析Agent/Team工具的input字段，
-            // 优先使用agent/subagent_type，避免回退到block.id产生call_function_xxx乱码
-            const agentId = input.agentId || input.agent_id || input.agent || input.subagent_type || 'general';
+            // 中文注释：功能名称「Agent输入解析」，用法是同时兼容Agent/Team与原生Task工具，
+            // 优先使用agent/subagent_type/name字段，避免回退到block.id产生乱码或丢失Explore等身份
+            const agentId = input.agentId || input.agent_id || input.agent || input.subagent_type || input.task_type || 'general';
             const prompt = input.prompt || input.task || input.description || '';
-            const displayName = input.displayName || input.display_name || agentId;
+            const displayName = input.displayName || input.display_name || input.name || agentId;
             // 中文注释：功能名称「空智能体过滤」，用法是跳过没有prompt的Agent工具调用，
             // 避免产生无任务的空智能体卡片
             if (!prompt.trim()) return null;
@@ -829,7 +830,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     return null;
   }, [message.content, isUser]);
 
-  // SubAgentTimeline 卡片渲染已移除，不再过滤 agent/team 工具，全部交给时间线渲染
+  // 子Agent状态条使用 SubAgentStatusBar，不再过滤 agent/team 工具，全部交给时间线渲染
   const timelineTools = pairedTools;
 
   const showAssistantAvatar = !isUser && isAssistantProject;
@@ -901,7 +902,10 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
           return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
         })()}
 
-        {/* SubAgentTimeline 卡片渲染已移除，改由 ToolActionsGroup 内的 TeamAgentTimelines 时间线驱动 */}
+        {/* 子Agent状态条 - 会话切换后从消息内容中恢复 */}
+        {!isUser && subAgents && subAgents.length > 0 && (
+          <SubAgentStatusBar subAgents={subAgents} />
+        )}
 
         {/* Text content */}
         {displayText && (

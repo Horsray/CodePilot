@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { getToolDisplayName } from '@/lib/tool-display-names';
 import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup, ClaudeInitMeta } from '@/types';
 import { MessageList } from './MessageList';
 import { TerminalReasonChip } from './TerminalReasonChip';
@@ -16,6 +17,7 @@ import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { Button } from '@/components/ui/button';
 import { SpinnerGap } from '@/components/ui/icon';
 import { usePanel } from '@/hooks/usePanel';
+import { usePanelStore } from '@/store/usePanelStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { showToast } from '@/hooks/useToast';
 import type { TranslationKey } from '@/i18n';
@@ -285,7 +287,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           type: "success",
           message: `检测到高价值工作流（${detail.step || 0} 步 / ${detail.distinctToolCount || 0} 个工具）`,
           description: (detail.toolNames && detail.toolNames.length > 0)
-            ? `包含工具：${detail.toolNames.slice(0, 6).join('、')}${detail.toolNames.length > 6 ? ` 等 ${detail.toolNames.length} 个` : ''}`
+            ? `包含工具：${detail.toolNames.slice(0, 6).map((n: string) => getToolDisplayName(n)).join('、')}${detail.toolNames.length > 6 ? ` 等 ${detail.toolNames.length} 个` : ''}`
             : "可将本次流程保存为 Skill，后续一键复用",
           action: {
             label: "保存为 Skill",
@@ -336,6 +338,17 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, provider_id: newProviderId }),
     }).catch(() => {});
+    // 中文注释：切换模型/provider 后触发预热，让 WarmQuery Store 中的签名与新模型匹配，
+    // 避免下一轮消息因签名不匹配走冷启动
+    fetch('/api/chat/warmup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        model,
+        provider_id: newProviderId,
+      }),
+    }).catch(() => {});
   }, [sessionId]);
 
   // ── Extracted hooks ──
@@ -348,7 +361,26 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       tailTrimmedRef.current = false;
       reconcileWithDb();
     }
-  }, [reconcileWithDb]);
+
+    // Refresh session title — server generates it pre-stream now, so it's
+    // already persisted by the time the stream completes. Short delay just
+    // covers any last-write latency.
+    if (phase === 'completed' && sessionId) {
+      setTimeout(() => {
+        fetch(`/api/chat/sessions/${sessionId}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (data?.session?.title) {
+              usePanelStore.getState().setSessionTitle(data.session.title);
+              window.dispatchEvent(new CustomEvent('session-updated', {
+                detail: { id: sessionId, title: data.session.title }
+              }));
+            }
+          })
+          .catch(() => {});
+      }, 500);
+    }
+  }, [reconcileWithDb, sessionId]);
 
   useStreamSubscription({
     sessionId,
@@ -1269,10 +1301,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
             {/* 会话状态指示器：显示 agent 数量、工具调用数、技能调用数 */}
             <SessionStatusIndicator
               subAgents={subAgents}
-              toolCount={toolUses.length}
+              toolUses={toolUses}
               skillCount={toolUses.filter((t: any) => t.name === 'Skill').length}
-              initMeta={sdkInitMeta}
-              instructionSources={sdkInitMeta?.instruction_sources}
             />
             <RuntimeBadge providerId={currentProviderId} />
             <ContextUsageIndicator

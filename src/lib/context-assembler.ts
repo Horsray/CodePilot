@@ -23,7 +23,7 @@ export interface ContextAssemblyConfig {
   /** Entry point: controls which layers are injected */
   entryPoint: 'desktop' | 'bridge';
   /** Current user prompt (used for workspace retrieval + widget keyword detection) */
-  userPrompt: string;
+  userPrompt?: string;
   /** Per-request system prompt append (e.g., skill injection for image generation) */
   systemPromptAppend?: string;
   /** Conversation history (for widget keyword detection in resume context) */
@@ -62,7 +62,7 @@ export interface AssembledContext {
 // ── Main function ────────────────────────────────────────────────────
 
 export async function assembleContext(config: ContextAssemblyConfig): Promise<AssembledContext> {
-  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, files } = config;
+  const { session, entryPoint, userPrompt = '', systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, files } = config;
   const _unused_history = conversationHistory;
   const t0 = Date.now();
 
@@ -75,7 +75,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   let includeClaudeMd = getSetting('include_claude_md') !== 'false';
   let enableAgentsSkills = getSetting('enable_agents_skills') !== 'false';
   let syncProjectRules = getSetting('sync_project_rules') !== 'false';
-  let knowledgeBaseEnabled = getSetting('knowledge_base_enabled') !== 'false';
+  let knowledgeBaseEnabled = false;
 
   // ── Layer 1: Workspace prompt (if assistant project session) ──────
   // For imageAgentMode, we skip the workspace prompt and assistant instructions
@@ -226,8 +226,8 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   }
 
   // [STATIC 2] Base Agent Persona & Task Orchestration
-  // Uses buildSystemPrompt to inject the core engineering persona,
-  // planning rules, and Team Orchestration instructions if enabled.
+  // 中文注释：功能名称「主控系统提示词前置注入」，用法是恢复历史主控模式，
+  // 让系统提示词作为前置静态层尽早建立 Todo、Agent、Skill、联网等执行规则。
   const basePromptResult = buildSystemPrompt({
     sessionId: session.id,
     workingDirectory: session.working_directory || undefined,
@@ -249,7 +249,8 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   }
 
   // [STATIC 3] Workspace identity files (soul/user/claude.md)
-  // Note: workspacePrompt was computed earlier WITHOUT memory hint (identity only)
+  // 中文注释：功能名称「assistant workspace 身份层恢复」，用法是恢复历史有效路径，
+  // 继续把工作区身份文件作为系统提示的静态上下文参与编排。
   if (workspacePrompt) {
     staticParts.push(workspacePrompt);
   }
@@ -260,6 +261,8 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   }
 
   // [VOLATILE 5] Assistant project instructions — state-dependent
+  // 中文注释：功能名称「assistant workspace 状态指令恢复」，用法是恢复历史有效路径，
+  // 继续允许 onboarding、heartbeat、buddy、memory-file-update 等状态规则参与系统提示。
   if (assistantProjectInstructions) {
     volatileParts.push(assistantProjectInstructions);
   }
@@ -267,7 +270,33 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   // Widget MCP keyword detection is handled solely in claude-client.ts
   // where the actual MCP server registration happens.
 
-  // [VOLATILE 6] Dashboard context (desktop only)
+  // [VOLATILE 6] Current Todo List State
+  try {
+    const { getTasksBySession } = await import('@/lib/db');
+    const tasks = getTasksBySession(session.id);
+    // 中文注释：功能名称「全局 Todo 状态恢复」，用法是无论当前列表是否为空，
+    // 都把 Todo 作为本轮执行前约束注入，避免模型在复杂任务里直接越过任务编排。
+    let taskPrompt = `<current-todo-list>\n`;
+    if (tasks && tasks.length > 0) {
+      taskPrompt += `Here is the CURRENT state of the Todo list for this session.\n`;
+      taskPrompt += `Before any further tool work, reconcile this list with TodoWrite. If the plan is stale, missing steps, or missing a current in_progress item, update it immediately.\n\n`;
+      tasks.forEach((t, i) => {
+        const check = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
+        const desc = t.description ? ` - ${t.description}` : '';
+        taskPrompt += `${i + 1}. ${check} (${t.status}) ${t.title}${desc}\n`;
+      });
+    } else {
+      taskPrompt += `The current Todo list is empty.\n`;
+      taskPrompt += `If the request is CLEAR and specific (known files, numbered requirements, 3+ distinct implementation steps), create a TodoWrite list before starting work.\n`;
+      taskPrompt += `If the request is BROAD or needs investigation first (e.g. "排查问题", "improve performance", "investigate why X"), you may explore the codebase or dispatch research agents to understand scope before writing the Todo list.\n`;
+    }
+    taskPrompt += `</current-todo-list>`;
+    volatileParts.push(taskPrompt);
+  } catch {
+    // ignore
+  }
+
+  // [VOLATILE 6.5] Dashboard context (desktop only)
   if (entryPoint === 'desktop' && session.working_directory) {
     try {
       const { readDashboard } = await import('@/lib/dashboard-store');
@@ -280,29 +309,6 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     } catch {
       // Dashboard read failed — don't block
     }
-  }
-
-  // [VOLATILE 6.5] Current Todo List State
-  try {
-    const { getTasksBySession } = await import('@/lib/db');
-    const tasks = getTasksBySession(session.id);
-    if (tasks && tasks.length > 0) {
-      // 中文注释：功能名称「轻量 Todo 上下文」，用法是只把当前任务状态作为会话事实提供，
-      // 不再在宿主提示里强制要求“先 Todo 再执行”或“必须立刻改状态”，避免和 OMC /
-      // Claude Code 原生编排发生冲突。
-      let taskPrompt = `<current-todo-list>\n`;
-      taskPrompt += `Here is the CURRENT state of the Todo list for this session.\n`;
-      taskPrompt += `Use it as progress context. If you naturally decide to update task status, you may use TodoWrite.\n\n`;
-      tasks.forEach((t, i) => {
-        const check = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
-        const desc = t.description ? ` - ${t.description}` : '';
-        taskPrompt += `${i + 1}. ${check} (${t.status}) ${t.title}${desc}\n`;
-      });
-      taskPrompt += `</current-todo-list>`;
-      volatileParts.push(taskPrompt);
-    }
-  } catch {
-    // ignore
   }
 
   // [VOLATILE 7] Per-request append (image agent mode, skills, etc.)

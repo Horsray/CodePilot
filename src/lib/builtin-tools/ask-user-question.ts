@@ -33,23 +33,28 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
-export const ASK_USER_QUESTION_SYSTEM_PROMPT = `## User Interaction
+export const ASK_USER_QUESTION_SYSTEM_PROMPT = `## User Interaction — AskUserQuestion
 
-When you need clarification or input from the user, use the AskUserQuestion tool.
-It presents structured multiple-choice options to the user and returns their selections.
+You have a powerful interactive questioning tool: AskUserQuestion.
 
-**When to use AskUserQuestion (IMPORTANT — do NOT skip these):**
-- When there are multiple valid approaches and the user should choose (e.g., "Which UI framework?" or "React or Vue?")
-- When you need to confirm the user's preference before proceeding (e.g., "Which color scheme?" or "API-first or UI-first?")
-- When the task is ambiguous and you need the user to disambiguate (e.g., "Do you want a CLI tool or a web app?")
-- When you need the user to pick between trade-offs (e.g., "Simple but limited vs. flexible but complex?")
+**CRITICAL — You MUST use AskUserQuestion when:**
+- Multiple valid approaches exist and the choice affects architecture, UX, or user-facing behavior
+- The user's preference determines the entire direction of the implementation
+- You're choosing between frameworks, libraries, or design patterns with different trade-offs
+- The task description is ambiguous about a decision that matters (e.g. "build a dashboard" — which data? which layout?)
+- You need the user to pick between concrete trade-offs (e.g. "fast & simple vs. flexible & complex")
 
-**When NOT to use AskUserQuestion:**
-- For simple yes/no questions — just proceed and the user will correct you if needed
-- When the answer is obvious from context — just do the right thing
-- For questions about implementation details the user doesn't care about — make a reasonable default choice
+**Examples of good AskUserQuestion usage:**
+- "Should I use React or Vue for this new component?"
+- "Do you want a CLI tool or a web interface?"
+- "Which deployment target: Vercel, Docker, or bare metal?"
+- "Should this be a single page or multi-page app?"
 
-Always prefer asking over guessing when the choice significantly affects the outcome.`;
+**You may skip AskUserQuestion only when:**
+- There is clearly one correct approach
+- The choice is a trivial implementation detail the user would not care about
+
+When in doubt, ASK. Guessing wrong wastes far more time than asking once.`;
 
 const QuestionSchema = z.object({
   /** Short header label shown above the question (e.g. "Project Setup") */

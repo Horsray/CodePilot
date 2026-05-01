@@ -4,6 +4,8 @@ import { create } from "zustand";
 import type { PreviewViewMode, WorkspaceTab, BottomPanelTab, OpenBrowserTabOptions } from "@/hooks/usePanel";
 
 interface PanelStore {
+  chatListOpen: boolean;
+  setChatListOpen: (open: boolean) => void;
   fileTreeOpen: boolean;
   setFileTreeOpen: (open: boolean) => void;
   gitPanelOpen: boolean;
@@ -53,6 +55,8 @@ interface PanelStore {
 }
 
 export const usePanelStore = create<PanelStore>((set, get) => ({
+  chatListOpen: false,
+  setChatListOpen: (open) => set({ chatListOpen: open }),
   fileTreeOpen: false,
   setFileTreeOpen: (open) => set({ fileTreeOpen: open }),
   gitPanelOpen: false,

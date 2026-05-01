@@ -61,7 +61,7 @@ export function FileAwareSubmitButton({
       status={canQueue ? 'ready' : status}
       onStop={canQueue ? undefined : onStop}
       disabled={!enabled}
-      className="rounded-full"
+      className="rounded-xl shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-150"
     >
       {canQueue ? (
         <ArrowUp size={16} />

@@ -231,19 +231,20 @@ describe('System prompt builder', () => {
   it('includes base prompt', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
     const result = buildSystemPrompt();
-    assert.ok(result.prompt.includes('CodePilot Host Supplement'));
+    assert.ok(result.prompt.includes('# Identity'));
   });
 
-  it('includes working directory', async () => {
+  it('includes working directory when provided', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
     const result = buildSystemPrompt({ workingDirectory: '/test/dir' });
     assert.ok(result.prompt.includes('/test/dir'));
   });
 
-  it('does not duplicate the user prompt into the host supplement', async () => {
+  it('does not inject request-specific user instructions into the system prompt', async () => {
     const { buildSystemPrompt } = await import('@/lib/agent-system-prompt');
-    const result = buildSystemPrompt({ userPrompt: 'Be concise' });
-    assert.ok(!result.prompt.includes('Be concise'));
+    const result = buildSystemPrompt();
+    assert.equal(result.prompt.includes('# User Instructions'), false);
+    assert.equal(result.prompt.includes('Be concise'), false);
   });
 
   it('includes context snippets', async () => {

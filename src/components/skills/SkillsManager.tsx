@@ -104,6 +104,29 @@ export function SkillsManager() {
     [buildSkillUrl]
   );
 
+  const handleToggle = useCallback(
+    async (skill: SkillItem, disabled: boolean) => {
+      const res = await fetch(buildSkillUrl(skill), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disabled }),
+      });
+      if (res.ok) {
+        setSkills((prev) =>
+          prev.map((s) =>
+            s.name === skill.name && s.source === skill.source
+              ? { ...s, disabled }
+              : s
+          )
+        );
+        if (selected?.name === skill.name && selected?.source === skill.source) {
+          setSelected((prev) => prev ? { ...prev, disabled } : null);
+        }
+      }
+    },
+    [buildSkillUrl, selected]
+  );
+
   const handleDelete = useCallback(
     async (skill: SkillItem) => {
       const res = await fetch(buildSkillUrl(skill), { method: "DELETE" });
@@ -234,6 +257,7 @@ export function SkillsManager() {
                       }
                       onSelect={() => setSelected(skill)}
                       onDelete={handleDelete}
+                      onToggle={handleToggle}
                     />
                   ))}
                 </div>
@@ -253,6 +277,7 @@ export function SkillsManager() {
                       }
                       onSelect={() => setSelected(skill)}
                       onDelete={handleDelete}
+                      onToggle={handleToggle}
                     />
                   ))}
                 </div>
@@ -273,6 +298,7 @@ export function SkillsManager() {
                       }
                       onSelect={() => setSelected(skill)}
                       onDelete={handleDelete}
+                      onToggle={handleToggle}
                     />
                   ))}
                 </div>

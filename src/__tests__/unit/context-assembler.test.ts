@@ -126,4 +126,17 @@ describe('assembleContext', () => {
 
     assert.doesNotMatch(result.systemPrompt || '', /## IMPORTANT: Multi-Agent Orchestration Priority/);
   });
+
+  it('injects a strong empty-todo reminder for complex-work bootstrap', async () => {
+    const { assembleContext } = await import('../../lib/context-assembler');
+    const result = await assembleContext({
+      session: makeSession(),
+      entryPoint: 'desktop',
+      userPrompt: '调查这个复杂回归并修改代码',
+    });
+
+    assert.match(result.systemPrompt || '', /current Todo list is empty/i);
+    assert.match(result.systemPrompt || '', /create a TodoWrite list before starting work/i);
+    assert.match(result.systemPrompt || '', /you may explore the codebase or dispatch research agents/i);
+  });
 });

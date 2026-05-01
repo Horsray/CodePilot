@@ -26,7 +26,7 @@ export function PanelZone() {
   if (!anyOpen) return null;
 
   return (
-    <div className="flex h-full shrink-0 border-l border-border/40 overflow-hidden">
+    <div className="flex h-full shrink-0 border-l border-border/40 overflow-hidden mt-1">
       {assistantPanelOpen && <AssistantPanel />}
       {previewOpen && previewFile && <PreviewPanel />}
       {gitPanelOpen && <GitPanelContainer />}
