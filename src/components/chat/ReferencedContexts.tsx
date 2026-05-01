@@ -22,7 +22,12 @@ export function ReferencedContexts({ files, className, isStreaming }: Referenced
     }
   }, [isStreaming]);
 
-  if (!files || files.length === 0) return null;
+  // 过滤系统级来源（不可在前端维护，无需暴露给用户）
+  const filteredFiles = files.filter(
+    f => !f.includes('Skills Catalog') && !f.includes('Widget')
+  );
+
+  if (!filteredFiles || filteredFiles.length === 0) return null;
 
   const handleOpenFile = (path: string) => {
     // If the path contains (Global) or (user) suffix, clean it up before opening
@@ -78,24 +83,29 @@ export function ReferencedContexts({ files, className, isStreaming }: Referenced
         className="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-muted/30 hover:bg-muted/50 text-[11px] text-muted-foreground transition-colors mb-2"
       >
         {expanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
-        <span>参考了 {files.length} 个上下文</span>
+        <span>参考了 {filteredFiles.length} 个上下文</span>
       </button>
 
       {expanded && (
         <div className="flex items-start gap-1.5 pl-0.5">
           <Book size={12} className="text-muted-foreground mt-0.5 shrink-0" />
           <div className="flex flex-wrap gap-1.5">
-            {files.map((file, idx) => {
+            {filteredFiles.map((file, idx) => {
               const isAgents = file.includes('AGENTS.md');
               const isClaude = file.includes('CLAUDE.md');
               const isRules = file.includes('rules.md');
               const isDbRule = file.startsWith('Rule: ');
               const isSubdir = file.includes('Subdirectory Hints');
+              const isKnowledge = file.includes('graphify') || file.includes('Knowledge');
+              const isEnvironment = file === 'Environment';
+              const isSession = file.includes('Session');
+              const isWorkspace = file.includes('Workspace Identity');
+              const isMemory = file.includes('Memory');
 
               return (
                 <ContextMenu key={idx}>
                   <ContextMenuTrigger asChild>
-                    <button 
+                    <button
                       onClick={() => handleOpenFile(file)}
                       className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-border/40 bg-muted/20 text-[10px] text-muted-foreground/80 hover:text-foreground hover:bg-muted/40 hover:border-border/60 transition-colors"
                     >
@@ -104,7 +114,12 @@ export function ReferencedContexts({ files, className, isStreaming }: Referenced
                         isAgents && "text-blue-500/70",
                         isRules && "text-emerald-500/70",
                         isDbRule && "text-amber-500/70",
-                        isSubdir && "text-orange-500/70"
+                        isSubdir && "text-orange-500/70",
+                        isKnowledge && "text-teal-500/70",
+                        isEnvironment && "text-slate-500/70",
+                        isSession && "text-violet-500/70",
+                        isWorkspace && "text-sky-500/70",
+                        isMemory && "text-rose-500/70"
                       )} />
                       <span>{fname(file)}</span>
                     </button>

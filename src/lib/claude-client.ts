@@ -40,8 +40,10 @@ import {
   canReusePersistentClaudeSession,
   closePersistentClaudeSession,
   getPersistentClaudeTurn,
+  hasPersistentSessionBySessionId,
   hasWarmedNativeClaudeQuery,
   hasWarmedNativeClaudeQueryBySessionId,
+  isSignatureCompatible,
   takeWarmedNativeClaudeQuery,
   takeWarmedNativeClaudeQueryBySessionId,
 } from './persistent-claude-session';
@@ -111,9 +113,7 @@ function isTodoWriteToolName(name: string): boolean {
 
 function isSyntheticSubagentToolName(name: string): boolean {
   return name === 'Agent'
-    || name === 'mcp__codepilot-agent__Agent'
     || name === 'Team'
-    || name === 'mcp__codepilot-team__Team'
     || name === 'Task';
 }
 
@@ -774,16 +774,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           allowDangerouslySkipPermissions: true,
           env: sanitizeEnv(sdkEnv),
           settingSources: resolved.settingSources as Options['settingSources'],
-          // Exclude the SDK's built-in 'Agent' tool — CodePilot's Agent MCP server
-          // (codepilot-agent) provides the Agent tool instead. The built-in Agent
-          // validates subagent_type against capitalized names (Explore, General-purpose)
-          // which conflicts with CodePilot's lowercase IDs and OMC agent names.
-          tools: [
-            'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-            'Skill', 'Task', 'TodoWrite', 'WebSearch', 'WebFetch',
-            'AskUserQuestion', 'NotebookEdit', 'ReadMcpResource',
-            'EnterWorktree', 'ExitWorktree', 'Config',
-          ],
           // 中文注释：功能名称「Claude Full Capabilities 固定开启」，用法是在单一
           // Claude Code CLI 主路径下始终保持 FULL capabilities，不再保留 FAST/--bare
           // 降级分支，避免 hooks、skills、OMC、联网工具被请求侧裁掉。
@@ -806,7 +796,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__codepilot-image-gen',
             'mcp__codepilot-cli-tools',
             'mcp__codepilot-dashboard',
-            'mcp__codepilot-team',
             'mcp__codepilot-todo',
             // codepilot_cli_tools specific
             'codepilot_cli_tools_list',
@@ -817,8 +806,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'codepilot_cli_tools_install',
             'codepilot_mcp_activate',
             'mcp__codepilot-todo__codepilot_mcp_activate',
-            // Agent MCP tool (CodePilot's agent system, replaces SDK built-in Agent)
-            'mcp__codepilot-agent__Agent',
             // Builtin tools
             'Read',
             'Write',
@@ -827,10 +814,7 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'Glob',
             'Grep',
             'Skill',
-            // 'Agent' — REMOVED: CodePilot's Agent MCP server (codepilot-agent)
-            // provides the Agent tool instead. The SDK's built-in Agent validates
-            // subagent_type against capitalized names (Explore, General-purpose),
-            // which conflicts with CodePilot's lowercase agent IDs.
+            'Agent',
             'Task',
             'TodoWrite',
             'mcp__codepilot-todo__TodoWrite',
@@ -862,7 +846,6 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             // MCP github tools
             'mcp__github__get_file_contents',
             'mcp__github__search_repositories',
-            'mcp__codepilot-team__Team',
           ],
         };
 
@@ -983,37 +966,8 @@ if (claudePath) {
         // Session history search: REMOVED — OMC provides session_search via
         // mcp__plugin_oh-my-claudecode_t__session_search which covers this.
 
-        // Agent MCP: Re-enabled — CodePilot's Agent MCP server provides the Agent
-        // tool with correct handling of lowercase agent IDs and OMC agent names.
-        // The SDK's built-in Agent tool has been removed from allowedTools to
-        // avoid conflicts (it validates subagent_type against capitalized names
-        // like "Explore" which don't match CodePilot's lowercase registry).
-        {
-          const { createAgentMcpServer, AGENT_MCP_SYSTEM_PROMPT } = await import('@/lib/agent-mcp');
-          queryOptions.mcpServers = {
-            ...(queryOptions.mcpServers || {}),
-            'codepilot-agent': createAgentMcpServer({
-              workingDirectory: resolvedWorkingDirectory.path,
-              providerId: options.providerId,
-              sessionProviderId: options.sessionProviderId,
-              parentModel: model,
-              permissionMode,
-              parentSessionId: sessionId,
-              abortSignal: abortController?.signal,
-            }),
-          };
-          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + AGENT_MCP_SYSTEM_PROMPT;
-          }
-        }
-
-        // Team MCP: DISABLED — OMC's team orchestration handles this now.
-        //
-        // const { createTeamMcpServer, TEAM_MCP_SYSTEM_PROMPT } = await import('@/lib/team-mcp');
-        // queryOptions.mcpServers = {
-        //   ...(queryOptions.mcpServers || {}),
-        //   'codepilot-team': createTeamMcpServer({ ... }),
-        // };
+        // Agent and Team: handled natively by Claude Code SDK and OMC plugin.
+        // CodePilot no longer provides codepilot-agent or codepilot-team MCP servers.
 
         // Widget guidelines: progressive loading strategy.
         // The system prompt always includes WIDGET_SYSTEM_PROMPT with format rules.
@@ -1088,30 +1042,6 @@ if (claudePath) {
           };
           if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + ASK_USER_QUESTION_MCP_SYSTEM_PROMPT;
-          }
-        }
-
-        // 中文注释：功能名称「全量 MCP 常驻加载 - Team」，用法是每轮对话都加载 Team MCP，
-        // 与 warmup route 保持一致，确保 mcpSignature 匹配。
-        {
-          const { createTeamMcpServer, TEAM_MCP_SYSTEM_PROMPT } = await import('@/lib/team-mcp');
-          queryOptions.mcpServers = {
-            ...(queryOptions.mcpServers || {}),
-            'codepilot-team': createTeamMcpServer({
-              workingDirectory: resolvedWorkingDirectory.path,
-              providerId: options.providerId,
-              sessionProviderId: options.sessionProviderId,
-              parentModel: model,
-              permissionMode,
-              parentSessionId: sessionId,
-              emitSSE: (event) => {
-                controller.enqueue(formatSSE(event as SSEEvent));
-              },
-              abortSignal: abortController?.signal,
-            }),
-          };
-          if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-            queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + TEAM_MCP_SYSTEM_PROMPT;
           }
         }
 
@@ -1282,8 +1212,26 @@ if (claudePath) {
         // 进程、首轮和后续轮次都明显变慢的问题。
         const shouldBypassPersistentSession = false;
 
-        if (!shouldBypassPersistentSession && sessionId && !sdkSessionId && !canReusePersistentClaudeSession(sessionId, persistentSignature)) {
-          adoptPersistentClaudeSessionBySignature(persistentSignature, sessionId);
+        // 中文注释：功能名称「预热接力」，用法是尝试将 warmup 创建的 persistent session
+        // 接管到当前 sessionId。warmup route 可能用 warmup:provider:model:cwd 作为 key，
+        // chat route 用真实 sessionId。通过签名匹配找到 warmup 的 entry 并 adopt。
+        if (!shouldBypassPersistentSession && sessionId && !sdkSessionId) {
+          // 先检查是否已有完全匹配的 session
+          const canReuseDirectly = canReusePersistentClaudeSession(sessionId, persistentSignature);
+          console.log('[claude-client] Pre-adoption check:', {
+            sessionId,
+            canReuseDirectly,
+            hasSession: hasPersistentSessionBySessionId(sessionId),
+            sdkSessionId: sdkSessionId || '(none)',
+            chatModel: queryOptions.model,
+            chatCwd: queryOptions.cwd,
+            chatPermMode: queryOptions.permissionMode,
+          });
+          if (!canReuseDirectly) {
+            // 尝试按签名查找并 adopt（可能从 warmup:xxx 过来）
+            const adopted = adoptPersistentClaudeSessionBySignature(persistentSignature, sessionId);
+            console.log('[claude-client] Adoption result:', { adopted, sessionId });
+          }
         }
 
         // 中文注释：功能名称「预热复用门控」，用法是检查 WarmQuery Store 中是否存在
@@ -1307,7 +1255,21 @@ if (claudePath) {
           });
         }
 
-        const willReusePersistentSession = !shouldBypassPersistentSession && canReusePersistentClaudeSession(sessionId, persistentSignature);
+        // 中文注释：使用模糊签名匹配代替精确匹配，解决 warmup route 和 chat route
+        // 签名不一致导致预热 session 永远无法复用的问题。
+        // 模糊匹配只检查关键字段（provider/model/cwd），允许非关键字段有差异。
+        const canReuseExact = canReusePersistentClaudeSession(sessionId, persistentSignature);
+        const hasBySessionId = hasPersistentSessionBySessionId(sessionId);
+        const willReusePersistentSession = !shouldBypassPersistentSession && (canReuseExact || hasBySessionId);
+        console.log('[claude-client] Reuse decision:', {
+          sessionId,
+          canReuseExact,
+          hasBySessionId,
+          willReusePersistentSession,
+          canReuseWarmup,
+          shouldResume,
+          sdkSessionId: sdkSessionId || '(none)',
+        });
         // 中文注释：WarmQuery 是 one-shot 预热句柄，不能接力成后续轮次的后台会话。
         // 如果 persistent session 可复用，必须优先使用 persistent，避免首轮消费
         // WarmQuery 后第二轮退回 resume 冷启动。
@@ -1366,7 +1328,6 @@ if (claudePath) {
             'Grep',
             'Skill',
             'Agent',
-            'mcp__codepilot-agent__Agent',
             'Task',
             'mcp__filesystem__read_file',
             'mcp__filesystem__read_multiple_files',

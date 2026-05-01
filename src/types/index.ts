@@ -665,7 +665,7 @@ export interface SSEEvent {
 // 中文注释：功能名称「提示词规则来源元数据」，用法是标记本轮系统提示里实际注入的规则/索引/技能目录来源，
 // 供前端状态栏和诊断界面区分“已发现”和“本轮已注入”。
 export type PromptInstructionLevel = 'global' | 'personal' | 'user' | 'project' | 'workspace' | 'parent';
-export type PromptInstructionCategory = 'hard_rule' | 'repo_instruction' | 'index_doc' | 'skill_catalog' | 'workspace_hint';
+export type PromptInstructionCategory = 'hard_rule' | 'repo_instruction' | 'index_doc' | 'skill_catalog' | 'workspace_hint' | 'environment' | 'knowledge_base' | 'widget_prompt' | 'session_prompt' | 'workspace_identity' | 'memory';
 
 export interface PromptInstructionSourceMeta {
   filename: string;

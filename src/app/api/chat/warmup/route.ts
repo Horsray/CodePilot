@@ -142,10 +142,12 @@ export async function POST(request: NextRequest) {
     // 但是，为了安全，我们也可以选择只加载全局的。
 
     // 中文注释：构建最低配置的 queryOptions，不仅包含签名相关字段，还必须包含系统提示词和基础 MCP
+    // permissionMode 必须与 chat route 完全一致：claude-client.ts 硬编码为 'bypassPermissions'。
+    // 之前的 'trust'/'explore' 与 chat route 的 'bypassPermissions' 不同，导致签名永远不匹配。
     const queryOptions: Options = {
       cwd: resolvedCwd.path,
       includePartialMessages: true,
-      permissionMode: (session?.permission_profile || 'default') as Options['permissionMode'],
+      permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       env: sanitizeEnv(setup.env),
       settingSources: resolved.settingSources as Options['settingSources'],
@@ -245,24 +247,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    {
-      const { createTeamMcpServer, TEAM_MCP_SYSTEM_PROMPT } = await import('@/lib/team-mcp');
-      queryOptions.mcpServers = {
-        ...(queryOptions.mcpServers || {}),
-        'codepilot-team': createTeamMcpServer({
-          workingDirectory: resolvedCwd.path,
-          providerId: requestedProviderId || session?.provider_id || undefined,
-          sessionProviderId: session?.provider_id || undefined,
-          parentModel: requestedModel || session?.model || resolved.model || undefined,
-          permissionMode: (session?.permission_profile || 'default') as Options['permissionMode'],
-          parentSessionId: session_id || undefined,
-          emitSSE: () => {},
-        }),
-      };
-      if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-        queryOptions.systemPrompt.append += '\n\n' + TEAM_MCP_SYSTEM_PROMPT;
-      }
-    }
+    // Team MCP: handled natively by OMC plugin, no need for codepilot-team.
 
     // 加入所有内置 MCP 的 allowedTools 以防自动触发权限弹窗
     const allowedTools = [
@@ -274,7 +259,6 @@ export async function POST(request: NextRequest) {
       'mcp__codepilot-image-gen',
       'mcp__codepilot-cli-tools',
       'mcp__codepilot-dashboard',
-      'mcp__codepilot-team',
       'mcp__codepilot-todo',
       'codepilot_generate_image',
       'codepilot_import_media',
@@ -322,7 +306,6 @@ export async function POST(request: NextRequest) {
       'webfetch__fetch_fetch_markdown',
       'mcp__github__get_file_contents',
       'mcp__github__search_repositories',
-      'mcp__codepilot-team__Team',
       'AskUserQuestion',
       'mcp__codepilot-ask-user__AskUserQuestion',
       'WebSearch',
@@ -368,16 +351,17 @@ export async function POST(request: NextRequest) {
     });
     console.log('[warmup API] Signature computed:', {
       warmupSessionId,
-      signature,
-      providerKey: resolved.provider?.id || requestedProviderId || session?.provider_id || 'env',
+      realSessionId: session_id || '(none)',
+      signature: signature.slice(0, 80) + '...',
+      signatureParsed: (() => { try { const s = JSON.parse(signature); return { providerKey: s.providerKey, model: s.model, cwd: s.cwd?.slice(-30), permissionMode: s.permissionMode, settingSources: s.settingSources, authKind: s.env?.authKind }; } catch { return '(parse error)'; } })(),
+      providerKey,
       model: queryOptions.model,
-      cwd: queryOptions.cwd,
+      cwd: queryOptions.cwd?.slice(-30),
+      permissionMode: queryOptions.permissionMode,
       settingSources: queryOptions.settingSources,
       mcpServerNames: queryOptions.mcpServers ? Object.keys(queryOptions.mcpServers) : [],
       envAnthropicBaseUrl: queryOptions.env?.ANTHROPIC_BASE_URL || '(none)',
       envAuthKind: queryOptions.env?.ANTHROPIC_AUTH_TOKEN ? 'auth_token' : queryOptions.env?.ANTHROPIC_API_KEY ? 'api_key' : 'none',
-      resolvedProviderId: resolved.provider?.id || '(none)',
-      resolvedHasCredentials: resolved.hasCredentials,
     });
 
     // 中文注释：功能名称「预热会话接力复用」，用法是在空白聊天页已经按 cwd/model 预热过时，

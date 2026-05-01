@@ -270,6 +270,7 @@ export function DashboardPanel() {
           {/* Top slot for TaskList and Context Compression */}
           {sessionId && <div className="border-b border-border/40 mx-4"><TaskList sessionId={sessionId} /></div>}
           <div className="mx-4" id="dashboard-context-slot" />
+          <div className="mx-4" id="dashboard-memory-slot" />
           <div className="h-[1px] w-[calc(100%-2rem)] mx-auto bg-border/40 shrink-0" />
           
           {loading ? (

@@ -1,9 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { PendingSessionMessage } from '@/lib/pending-session-message';
 import {
-  FIRST_TURN_WARMUP_IDLE_GRACE_MS,
-  FIRST_TURN_WARMUP_TIMEOUT_MS,
   getPendingFirstTurnStatusText,
   getPendingFirstTurnRemainingDelayMs,
   shouldReleasePendingFirstTurn,
@@ -18,6 +18,11 @@ function createPending(createdAt: number): PendingSessionMessage {
   };
 }
 
+const ROOT = process.cwd();
+function read(relPath: string) {
+  return fs.readFileSync(path.join(ROOT, relPath), 'utf8');
+}
+
 describe('shouldReleasePendingFirstTurn', () => {
   it('releases immediately when warmup is ready', () => {
     const pending = createPending(Date.now());
@@ -29,74 +34,57 @@ describe('shouldReleasePendingFirstTurn', () => {
     assert.equal(shouldReleasePendingFirstTurn(pending, 'failed'), true);
   });
 
-  it('waits while warmup is still in progress within timeout budget', () => {
+  it('releases immediately while warmup is still in progress', () => {
     const createdAt = Date.now();
     const pending = createPending(createdAt);
     assert.equal(
-      shouldReleasePendingFirstTurn(pending, 'warming', createdAt + FIRST_TURN_WARMUP_TIMEOUT_MS - 1),
-      false,
-    );
-  });
-
-  it('falls back to direct send after timeout budget', () => {
-    const createdAt = Date.now();
-    const pending = createPending(createdAt);
-    assert.equal(
-      shouldReleasePendingFirstTurn(pending, 'warming', createdAt + FIRST_TURN_WARMUP_TIMEOUT_MS),
+      shouldReleasePendingFirstTurn(pending, 'warming', createdAt + 60_000),
       true,
     );
   });
 
-  it('only waits for a short grace window while warmup is still idle', () => {
+  it('releases immediately while warmup is still idle', () => {
     const createdAt = Date.now();
     const pending = createPending(createdAt);
     assert.equal(
-      shouldReleasePendingFirstTurn(pending, 'idle', createdAt + FIRST_TURN_WARMUP_IDLE_GRACE_MS - 1),
-      false,
-    );
-    assert.equal(
-      shouldReleasePendingFirstTurn(pending, 'idle', createdAt + FIRST_TURN_WARMUP_IDLE_GRACE_MS),
+      shouldReleasePendingFirstTurn(pending, 'idle', createdAt + 60_000),
       true,
     );
   });
 });
 
 describe('getPendingFirstTurnStatusText', () => {
-  it('returns session bootstrap status while warmup is still idle', () => {
+  it('does not show a blocking warmup status while warmup is still idle', () => {
     const createdAt = Date.now();
     const pending = createPending(createdAt);
     assert.equal(
       getPendingFirstTurnStatusText(pending, 'idle', createdAt + 100),
-      '正在建立新会话...',
+      null,
     );
   });
 
-  it('returns preparing status while waiting for warmup', () => {
+  it('does not show a blocking warmup status while warmup is running', () => {
     const createdAt = Date.now();
     const pending = createPending(createdAt);
     assert.equal(
       getPendingFirstTurnStatusText(pending, 'warming', createdAt + 1000),
-      '正在准备 Claude Code 环境...',
+      null,
     );
   });
 
-  it('returns fallback send status after timeout', () => {
-    const createdAt = Date.now();
-    const pending = createPending(createdAt);
-    assert.equal(
-      getPendingFirstTurnStatusText(pending, 'warming', createdAt + FIRST_TURN_WARMUP_TIMEOUT_MS + 1),
-      '正在直接发送首条消息...',
-    );
-  });
 });
 
 describe('getPendingFirstTurnRemainingDelayMs', () => {
-  it('uses the short idle grace window before warmup actually starts', () => {
+  it('always returns zero because warmup must not block sending', () => {
     const createdAt = Date.now();
     const pending = createPending(createdAt);
     assert.equal(
       getPendingFirstTurnRemainingDelayMs(pending, 'idle', createdAt),
-      FIRST_TURN_WARMUP_IDLE_GRACE_MS,
+      0,
+    );
+    assert.equal(
+      getPendingFirstTurnRemainingDelayMs(pending, 'warming', createdAt + 60_000),
+      0,
     );
   });
 
@@ -104,5 +92,13 @@ describe('getPendingFirstTurnRemainingDelayMs', () => {
     const pending = createPending(Date.now());
     assert.equal(getPendingFirstTurnRemainingDelayMs(pending, 'ready'), 0);
     assert.equal(getPendingFirstTurnRemainingDelayMs(null, 'warming'), 0);
+  });
+});
+
+describe('ChatView warmup input behavior', () => {
+  it('does not disable prompt input while background warmup is running', () => {
+    const chatView = read('src/components/chat/ChatView.tsx');
+    assert.match(chatView, /<MessageInput[\s\S]*disabled=\{false\}/);
+    assert.doesNotMatch(chatView, /disabled=\{!isStreaming && .*runtimeWarmupState/);
   });
 });

@@ -11,6 +11,17 @@ const WARMUP_TIMEOUT_MS = 15_000;
 // 中文注释：功能名称「预热后的空闲超时」，用法是预热完成后 session 保持存活的时间，
 // 与 IDLE_TIMEOUT_MS 相同为 30 分钟，确保相近对话不需要重新加载
 const WARMUP_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+// 中文注释：功能名称「轮次锁超时」，用法是 acquireTurn() 等待前一轮释放锁的最大时间。
+// 如果前一轮的 SDK 子进程崩溃或超时，release() 永远不会被调用，导致后续请求死锁。
+// 超时后强制释放锁并关闭僵死 session，让新请求可以创建新 session。
+const TURN_LOCK_TIMEOUT_MS = 90_000;
+
+// 中文注释：功能名称「消息迭代超时」，用法是 getPersistentClaudeTurn() 中等待 SDK 消息的最大时间。
+// 如果 SDK 子进程挂起（不产生任何消息），超时后关闭 session 并抛出错误，
+// 让调用方可以回退到 one-shot 查询。
+const ITERATOR_TIMEOUT_MS = 120_000;
+
 const GLOBAL_KEY = '__persistentClaudeSessions__' as const;
 const WARM_QUERY_GLOBAL_KEY = '__warmClaudeQueries__' as const;
 const PENDING_WARMUP_GLOBAL_KEY = '__pendingWarmupPromises__' as const;
@@ -310,6 +321,50 @@ export function buildPersistentClaudeSignature(params: {
   });
 }
 
+// 中文注释：功能名称「签名兼容性检查」，用法是比较两个签名是否"兼容"（而非精确相等）。
+// 兼容意味着关键配置相同（provider、model、cwd、env），允许非关键字段有差异。
+// 这解决了 warmup route 和 chat route 因 permissionMode、settingSources 等字段
+// 不同导致签名永远不匹配的问题。
+//
+// 兼容的签名可以复用同一个 persistent session，因为：
+// - provider 相同 → 使用同一个 API 端点和认证
+// - model 相同 → 使用同一个模型
+// - cwd 相同 → 使用同一个工作目录
+// - env 相同 → 使用同一个环境配置
+//
+// 不兼容的签名必须重建 session，因为关键配置变化了。
+export function isSignatureCompatible(sig1: string, sig2: string): boolean {
+  if (sig1 === sig2) return true; // 快速路径：完全相同
+
+  try {
+    const a = JSON.parse(sig1);
+    const b = JSON.parse(sig2);
+
+    const result = (
+      a.providerKey === b.providerKey &&
+      a.cwd === b.cwd &&
+      a.model === b.model &&
+      a.env?.ANTHROPIC_BASE_URL === b.env?.ANTHROPIC_BASE_URL &&
+      a.env?.authKind === b.env?.authKind
+    );
+
+    if (!result) {
+      console.log('[isSignatureCompatible] MISMATCH:', {
+        providerKey: [a.providerKey, b.providerKey, a.providerKey === b.providerKey],
+        cwd: [a.cwd?.slice(-30), b.cwd?.slice(-30), a.cwd === b.cwd],
+        model: [a.model, b.model, a.model === b.model],
+        baseUrl: [a.env?.ANTHROPIC_BASE_URL, b.env?.ANTHROPIC_BASE_URL, a.env?.ANTHROPIC_BASE_URL === b.env?.ANTHROPIC_BASE_URL],
+        authKind: [a.env?.authKind, b.env?.authKind, a.env?.authKind === b.env?.authKind],
+      });
+    }
+
+    return result;
+  } catch {
+    // 解析失败，降级为精确比较
+    return sig1 === sig2;
+  }
+}
+
 function clearIdleTimer(entry: PersistentClaudeEntry): void {
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
@@ -421,8 +476,24 @@ async function acquireTurn(entry: PersistentClaudeEntry): Promise<() => void> {
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
-  entry.turnLock = previous.then(() => current);
-  await previous;
+
+  // 中文注释：添加超时保护，防止前一轮 SDK 子进程崩溃导致死锁。
+  // 如果前一轮在 TURN_LOCK_TIMEOUT_MS 内未释放锁，强制重置锁链，
+  // 让当前请求可以继续执行，而不是无限等待。
+  const timeoutPromise = new Promise<'timeout'>((resolve) => {
+    setTimeout(() => resolve('timeout'), TURN_LOCK_TIMEOUT_MS);
+  });
+
+  const result = await Promise.race([previous.then(() => 'ok' as const), timeoutPromise]);
+
+  if (result === 'timeout') {
+    // 强制重置锁链：绕过卡死的前一轮，让当前轮直接接管
+    console.warn('[persistent-claude-session] Turn lock timeout — force-resetting lock chain');
+    entry.turnLock = current;
+  } else {
+    entry.turnLock = previous.then(() => current);
+  }
+
   entry.releaseTurn = release;
   return () => {
     if (entry.releaseTurn === release) entry.releaseTurn = null;
@@ -440,9 +511,28 @@ export function getPersistentClaudeTurn(params: {
   const store = getStore();
   const existing = store.get(params.codepilotSessionId);
   let entry = existing;
-  let reused = !!entry && entry.signature === params.signature;
+  // 中文注释：使用模糊签名匹配代替精确匹配。
+  // 精确匹配要求所有字段（包括 permissionMode、settingSources 等 volatile 字段）完全一致，
+  // 但 warmup route 和 chat route 几乎不可能产生完全一致的签名。
+  // 模糊匹配只检查关键字段（provider、model、cwd），允许非关键字段有差异。
+  let reused = !!entry && isSignatureCompatible(entry.signature, params.signature);
 
-  if (entry && entry.signature !== params.signature) {
+  console.log('[getPersistentClaudeTurn] Entry lookup:', {
+    codepilotSessionId: params.codepilotSessionId,
+    hasExisting: !!existing,
+    existingWarmedUp: existing?.warmedUp,
+    existingSignaturePrefix: existing?.signature?.slice(0, 40),
+    newSignaturePrefix: params.signature?.slice(0, 40),
+    reused,
+    storeSize: store.size,
+    storeKeys: Array.from(store.keys()),
+    newModel: params.options.model,
+    newCwd: params.options.cwd?.slice(-30),
+  });
+
+  if (entry && !reused) {
+    // 关键配置变化（provider/model/cwd），需要重建 session
+    console.log('[getPersistentClaudeTurn] Signature incompatible, destroying old entry and creating new one');
     closeEntry(entry);
     store.delete(params.codepilotSessionId);
     entry = undefined;
@@ -462,8 +552,9 @@ export function getPersistentClaudeTurn(params: {
   clearIdleTimer(entry);
 
   const conversation = (async function* (): AsyncGenerator<SDKMessage> {
-    const release = await acquireTurn(entry!);
+    let release: (() => void) | null = null;
     try {
+      release = await acquireTurn(entry!);
       if (entry!.warmupPromise) {
         await entry!.warmupPromise.catch(() => null);
       }
@@ -473,10 +564,26 @@ export function getPersistentClaudeTurn(params: {
       }
 
       while (true) {
-        const next = await entry!.iterator.next();
+        // 中文注释：为 iterator.next() 添加超时保护。如果 SDK 子进程挂起
+        // （不产生任何消息），超时后关闭 session 并抛出错误，让调用方可以
+        // 回退到 one-shot 查询，而不是无限等待。
+        const nextPromise = entry!.iterator.next();
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`Iterator timeout after ${ITERATOR_TIMEOUT_MS}ms — SDK subprocess may be hung`));
+          }, ITERATOR_TIMEOUT_MS);
+        });
+
+        const next = await Promise.race([nextPromise, timeoutPromise]);
         if (next.done) {
           closePersistentClaudeSession(params.codepilotSessionId);
           return;
+        }
+        const initData = extractWarmupInitData(next.value as SDKSystemMessage);
+        if (initData) {
+          entry!.warmedUp = true;
+          entry!.initData = initData;
+          entry!.lastUsedAt = Date.now();
         }
         yield next.value;
         if (next.value.type === 'result') {
@@ -489,7 +596,7 @@ export function getPersistentClaudeTurn(params: {
       closePersistentClaudeSession(params.codepilotSessionId);
       throw error;
     } finally {
-      release();
+      release?.();
     }
   })();
 
@@ -509,7 +616,7 @@ export async function warmupNativeClaudeQuery(params: {
   const store = getWarmQueryStore();
   const existing = store.get(params.codepilotSessionId);
 
-  if (existing && existing.signature === params.signature) {
+  if (existing && isSignatureCompatible(existing.signature, params.signature)) {
     existing.lastUsedAt = Date.now();
     scheduleWarmQueryIdleClose(params.codepilotSessionId, existing);
     return true;
@@ -571,7 +678,8 @@ export async function warmupNativeClaudeQuery(params: {
 }
 
 export function hasWarmedNativeClaudeQuery(sessionId: string, signature: string): boolean {
-  return getWarmQueryStore().get(sessionId)?.signature === signature;
+  const entry = getWarmQueryStore().get(sessionId);
+  return !!entry && isSignatureCompatible(entry.signature, signature);
 }
 
 // 中文注释：功能名称「按 sessionId 查找预热」，用法是只按 sessionId 查找 WarmQuery，
@@ -585,11 +693,11 @@ export function hasWarmedNativeClaudeQueryBySessionId(sessionId: string): boolea
 export function adoptWarmedNativeClaudeQueryBySignature(signature: string, targetSessionId: string): boolean {
   const store = getWarmQueryStore();
   if (store.has(targetSessionId)) {
-    return store.get(targetSessionId)?.signature === signature;
+    return isSignatureCompatible(store.get(targetSessionId)!.signature, signature);
   }
 
   for (const [sessionId, entry] of store.entries()) {
-    if (entry.signature !== signature) continue;
+    if (!isSignatureCompatible(entry.signature, signature)) continue;
     if (sessionId === targetSessionId) return true;
     store.delete(sessionId);
     entry.codepilotSessionId = targetSessionId;
@@ -606,7 +714,9 @@ export function takeWarmedNativeClaudeQuery(params: {
 }): WarmClaudeQueryHandle | null {
   const store = getWarmQueryStore();
   const entry = store.get(params.codepilotSessionId);
-  if (!entry || entry.signature !== params.signature) {
+  // 中文注释：使用模糊签名匹配，避免 warmup 和 chat route 因 volatile 字段不同
+  // 导致签名不匹配，无法消费已预热的 WarmQuery。
+  if (!entry || !isSignatureCompatible(entry.signature, params.signature)) {
     return null;
   }
 
@@ -661,17 +771,42 @@ export async function warmupPersistentClaudeSession(params: {
   const store = getStore();
   let entry = store.get(params.codepilotSessionId);
 
-  // 中文注释：已预热且签名匹配，直接返回缓存的 init 数据
-  if (entry && entry.warmedUp && entry.signature === params.signature && entry.initData) {
+  console.log('[warmupPersistentClaudeSession] Called:', {
+    codepilotSessionId: params.codepilotSessionId,
+    model: params.options.model,
+    cwd: params.options.cwd?.slice(-30),
+    permissionMode: params.options.permissionMode,
+    hasExistingEntry: !!entry,
+    existingWarmedUp: entry?.warmedUp,
+    existingSignaturePrefix: entry?.signature?.slice(0, 40),
+    newSignaturePrefix: params.signature?.slice(0, 40),
+    signaturesCompatible: entry ? isSignatureCompatible(entry.signature, params.signature) : 'no entry',
+    storeSize: store.size,
+    storeKeys: Array.from(store.keys()),
+  });
+
+  // 中文注释：已预热且签名兼容，直接返回缓存的 init 数据
+  // 使用模糊匹配：warmup 和 chat route 的 permissionMode、settingSources 等
+  // volatile 字段可能不同，但只要关键字段（provider/model/cwd/env）一致就复用。
+  if (entry && entry.warmedUp && isSignatureCompatible(entry.signature, params.signature) && entry.initData) {
     return entry.initData;
   }
 
-  if (entry && entry.signature === params.signature && entry.warmupPromise) {
+  if (entry && isSignatureCompatible(entry.signature, params.signature) && entry.warmupPromise) {
     return entry.warmupPromise;
   }
 
-  // 中文注释：签名不匹配，销毁旧 session 重新预热
-  if (entry && entry.signature !== params.signature) {
+  if (entry && isSignatureCompatible(entry.signature, params.signature)) {
+    entry.lastUsedAt = Date.now();
+    scheduleIdleClose(params.codepilotSessionId, entry);
+    return entry.initData ?? {
+      model: typeof params.options.model === 'string' ? params.options.model : '',
+      session_id: '',
+    };
+  }
+
+  // 中文注释：关键配置不兼容（provider/model/cwd/env 变化），销毁旧 session 重新预热
+  if (entry && !isSignatureCompatible(entry.signature, params.signature)) {
     closeEntry(entry);
     store.delete(params.codepilotSessionId);
     entry = undefined;
@@ -781,7 +916,9 @@ export function ensurePersistentClaudeSession(
   const store = getStore();
   const existing = store.get(codepilotSessionId);
   if (existing) {
-    if (existing.signature === signature) {
+    // 中文注释：使用模糊签名匹配，避免 warmup 和 chat route 因 volatile 字段不同
+    // 导致签名不匹配，每次都销毁重建 session。
+    if (isSignatureCompatible(existing.signature, signature)) {
       existing.lastUsedAt = Date.now();
       scheduleIdleClose(codepilotSessionId, existing);
       return;
@@ -831,24 +968,96 @@ export function hasPersistentClaudeSession(sessionId: string): boolean {
 }
 
 export function canReusePersistentClaudeSession(sessionId: string, signature: string): boolean {
-  return getStore().get(sessionId)?.signature === signature;
+  const entry = getStore().get(sessionId);
+  if (!entry) return false;
+  // 中文注释：使用模糊签名匹配，避免 warmup 和 chat route 因 volatile 字段不同
+  // 导致签名不匹配，无法复用已预热的 session。
+  return isSignatureCompatible(entry.signature, signature);
+}
+
+// 中文注释：功能名称「模糊签名兼容检查」，用法是只检查签名中的关键字段（provider、model、cwd），
+// 忽略 volatile 字段（permissionMode、settingSources、systemPrompt 等）。
+// 这样即使 warmup route 和 chat route 的非关键字段略有不同，也能复用预热 session。
+// 只有在关键配置真正变化时（如切换模型、切换 provider、切换工作目录）才需要重建 session。
+export function canReusePersistentClaudeSessionFuzzy(sessionId: string, newOptions: Options, newProviderKey: string): boolean {
+  const entry = getStore().get(sessionId);
+  if (!entry) return false;
+
+  // 解析已有签名中的关键字段
+  try {
+    const oldSig = JSON.parse(entry.signature);
+    const newEnv = newOptions.env || {};
+    // 只检查关键字段：providerKey、cwd、model、env 中的 BASE_URL 和 auth 类型
+    return (
+      oldSig.providerKey === newProviderKey &&
+      oldSig.cwd === newOptions.cwd &&
+      oldSig.model === (newOptions.model || '') &&
+      oldSig.env?.ANTHROPIC_BASE_URL === (newEnv.ANTHROPIC_BASE_URL || '') &&
+      oldSig.env?.authKind === (newEnv.ANTHROPIC_AUTH_TOKEN ? 'auth_token' : newEnv.ANTHROPIC_API_KEY ? 'api_key' : 'none')
+    );
+  } catch {
+    // 签名解析失败，不允许复用
+    return false;
+  }
+}
+
+// 中文注释：功能名称「按 sessionId 查找持久会话」，用法是只按 sessionId 查找，
+// 不检查签名。用于 warmup route 和 chat route 之间的接力，
+// 因为签名匹配在实践中几乎不可能完全一致。
+export function hasPersistentSessionBySessionId(sessionId: string): boolean {
+  return getStore().has(sessionId);
+}
+
+// 中文注释：功能名称「按签名查找持久会话」，用法是在 store 中查找任意一个
+// 签名匹配的 entry，不管它的 sessionId 是什么。用于 warmup → chat 接力：
+// warmup 用 warmupSessionId 存储，chat 用 real sessionId 查找，
+// 通过签名匹配找到 warmup 的 entry 并 adopt 过来。
+export function findPersistentSessionBySignature(signature: string): string | null {
+  const store = getStore();
+  for (const [sessionId, entry] of store.entries()) {
+    // 中文注释：使用模糊签名匹配，只检查关键字段（provider/model/cwd/env）
+    if (isSignatureCompatible(entry.signature, signature)) {
+      return sessionId;
+    }
+  }
+  return null;
 }
 
 export function adoptPersistentClaudeSessionBySignature(signature: string, targetSessionId: string): boolean {
   const store = getStore();
+
+  console.log('[adoptPersistentClaudeSessionBySignature] Called:', {
+    targetSessionId,
+    newSigPrefix: signature?.slice(0, 40),
+    storeSize: store.size,
+    storeKeys: Array.from(store.keys()),
+    targetExists: store.has(targetSessionId),
+  });
+
   if (store.has(targetSessionId)) {
-    return store.get(targetSessionId)?.signature === signature;
+    // 使用模糊匹配：只要关键字段兼容就认为匹配
+    const compatible = isSignatureCompatible(store.get(targetSessionId)!.signature, signature);
+    console.log('[adoptPersistentClaudeSessionBySignature] Target already exists, compatible:', compatible);
+    return compatible;
   }
 
   for (const [sessionId, entry] of store.entries()) {
-    if (entry.signature !== signature) continue;
+    const compatible = isSignatureCompatible(entry.signature, signature);
+    console.log('[adoptPersistentClaudeSessionBySignature] Checking entry:', {
+      sessionId,
+      entrySigPrefix: entry.signature?.slice(0, 40),
+      compatible,
+    });
+    if (!compatible) continue;
     if (sessionId === targetSessionId) return true;
     store.delete(sessionId);
     entry.codepilotSessionId = targetSessionId;
     store.set(targetSessionId, entry);
+    console.log('[adoptPersistentClaudeSessionBySignature] Adopted:', { from: sessionId, to: targetSessionId });
     return true;
   }
 
+  console.log('[adoptPersistentClaudeSessionBySignature] No compatible entry found');
   return false;
 }
 

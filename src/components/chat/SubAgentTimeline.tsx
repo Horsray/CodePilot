@@ -218,16 +218,12 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
   // - 新Agent启动时，自动展开
   // - Agent完成时，如果用户没有手动操作过展开/收起，则自动收起
   // - 只要用户手动点击过展开/收起（进入了 userInteractedAgents），就不再干预它的状态
-  // - 注意：完成后卡片仍然保留在界面上（折叠状态），不会消失
   useEffect(() => {
     setExpandedAgents(prev => {
       const next = new Set(prev);
       let changed = false;
       subAgents.forEach(agent => {
-        // 如果用户手动干预过，则不自动处理
-        if (userInteractedAgents.has(agent.id)) {
-          return;
-        }
+        if (userInteractedAgents.has(agent.id)) return;
 
         if (agent.status === 'running' && !next.has(agent.id)) {
           next.add(agent.id);

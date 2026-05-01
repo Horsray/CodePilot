@@ -10,7 +10,10 @@
  *   Bridge:  workspace + session + assistant instructions + CLI tools (no widget)
  */
 
-import type { ChatSession } from '@/types';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import type { ChatSession, PromptInstructionSourceMeta } from '@/types';
 import { getProviderOptions, getSetting } from '@/lib/db';
 import { EGG_IMAGE_URL } from '@/lib/buddy';
 import { buildSystemPrompt } from './agent-system-prompt';
@@ -70,6 +73,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   let memoryHint = '';
   let assistantProjectInstructions = '';
   const referencedContexts: string[] = [];
+  const instructionSources: PromptInstructionSourceMeta[] = [];
   let isAssistantProject = false;
   let includeAgentsMd = getSetting('include_agents_md') !== 'false';
   let includeClaudeMd = getSetting('include_claude_md') !== 'false';
@@ -220,6 +224,8 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     try {
       const { WIDGET_SYSTEM_PROMPT } = await import('@/lib/widget-guidelines');
       staticParts.push(WIDGET_SYSTEM_PROMPT);
+      referencedContexts.push('Widget System Prompt');
+      instructionSources.push({ filename: 'Widget System Prompt', level: 'workspace', category: 'widget_prompt' });
     } catch {
       // Widget prompt injection failed — don't block
     }
@@ -237,15 +243,47 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
     enableAgentsSkills,
     syncProjectRules,
     knowledgeBaseEnabled,
-    includeDiscoveredProjectInstructions: false,
+    includeDiscoveredProjectInstructions: true,
   });
   staticParts.push(basePromptResult.prompt);
   if (basePromptResult.referencedFiles) {
     referencedContexts.push(...basePromptResult.referencedFiles);
   }
+  if (basePromptResult.instructionSources) {
+    instructionSources.push(...basePromptResult.instructionSources);
+  }
+
+  // Track SDK-native loaded files (CLAUDE.md, AGENTS.md) for UI display.
+  // These are loaded by the SDK via settingSources — we only track their
+  // existence here so the "referenced contexts" UI shows them, without
+  // duplicating their content in the system prompt.
+  const cwd = session.working_directory || '';
+  if (cwd) {
+    const sdkNativeFiles: Array<{ filename: string; filePath: string; category: PromptInstructionSourceMeta['category'] }> = [
+      { filename: 'CLAUDE.md', filePath: path.join(cwd, 'CLAUDE.md'), category: 'repo_instruction' },
+      { filename: 'CLAUDE.local.md', filePath: path.join(cwd, 'CLAUDE.local.md'), category: 'repo_instruction' },
+      { filename: 'AGENTS.md', filePath: path.join(cwd, 'AGENTS.md'), category: 'repo_instruction' },
+      { filename: 'AGENTS.local.md', filePath: path.join(cwd, 'AGENTS.local.md'), category: 'repo_instruction' },
+    ];
+    const homeDir = os.homedir();
+    const userFiles: Array<{ filename: string; filePath: string; category: PromptInstructionSourceMeta['category'] }> = [
+      { filename: 'CLAUDE.md (user)', filePath: path.join(homeDir, '.claude', 'CLAUDE.md'), category: 'hard_rule' },
+      { filename: 'CLAUDE.local.md (user)', filePath: path.join(homeDir, '.claude', 'CLAUDE.local.md'), category: 'hard_rule' },
+    ];
+    for (const f of [...sdkNativeFiles, ...userFiles]) {
+      try {
+        if (fs.existsSync(f.filePath)) {
+          referencedContexts.push(f.filePath);
+          instructionSources.push({ filename: f.filename, level: 'workspace', category: f.category, filePath: f.filePath });
+        }
+      } catch { /* ignore */ }
+    }
+  }
 
   if (session.system_prompt && session.system_prompt.trim()) {
     staticParts.push(session.system_prompt);
+    referencedContexts.push('Session System Prompt');
+    instructionSources.push({ filename: 'Session System Prompt', level: 'workspace', category: 'session_prompt' });
   }
 
   // [STATIC 3] Workspace identity files (soul/user/claude.md)
@@ -253,11 +291,15 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   // 继续把工作区身份文件作为系统提示的静态上下文参与编排。
   if (workspacePrompt) {
     staticParts.push(workspacePrompt);
+    referencedContexts.push('Workspace Identity (soul/user/claude.md)');
+    instructionSources.push({ filename: 'Workspace Identity (soul/user/claude.md)', level: 'workspace', category: 'workspace_identity' });
   }
 
   // [VOLATILE 4] Memory hint — changes daily
   if (memoryHint) {
     volatileParts.push(memoryHint);
+    referencedContexts.push('Memory Hint (daily)');
+    instructionSources.push({ filename: 'Memory Hint (daily)', level: 'workspace', category: 'memory' });
   }
 
   // [VOLATILE 5] Assistant project instructions — state-dependent
@@ -325,7 +367,7 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   return {
     systemPrompt: finalSystemPrompt,
     referencedContexts,
-    instructionSources: basePromptResult.instructionSources || [],
+    instructionSources,
     generativeUIEnabled,
     assistantProjectInstructions,
     isAssistantProject,

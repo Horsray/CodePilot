@@ -190,7 +190,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
           if (data.warmed_up && data.model) {
             setWarmupModel(data.model);
           }
-          setWarmupState('ready');
+          setWarmupState(data.warmed_up ? 'ready' : 'failed');
         } else {
           console.warn('[warmup] Session warmup failed, will init on first message');
           setWarmupState('failed');

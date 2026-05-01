@@ -374,8 +374,7 @@ export function isSubAgentTool(name: string): boolean {
   const lowerName = name.toLowerCase();
   // Do NOT filter out 'team' tool, so the "团队协作模式" card remains visible!
   // Only filter out the individual sub-agents that are already rendered by SubAgentTimeline.
-  if (['agent', 'mcp__codepilot-agent__agent'].includes(lowerName)) return true;
-  if (lowerName.includes('mcp__codepilot-agent__')) return true;
+  if (lowerName === 'agent') return true;
   return !!AGENT_META[lowerName] || lowerName.endsWith('agent') || lowerName.replace(/\s+/g, '') === 'searchagent';
 }
 

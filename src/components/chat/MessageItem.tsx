@@ -792,7 +792,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
         // 从Agent/Team tool_use和tool_result对中提取子Agent信息，确保会话切换后卡片仍能渲染
         const isAgenticTool = (name: string) => {
           const lower = name.toLowerCase();
-          return lower === 'agent' || lower === 'team' || lower === 'task' || lower.includes('mcp__codepilot-agent__') || lower.includes('mcp__codepilot-team__');
+          return lower === 'agent' || lower === 'team' || lower === 'task';
         };
         const toolUseBlocks = parsed.filter(b => b.type === 'tool_use' && isAgenticTool(b.name));
         if (toolUseBlocks.length > 0) {

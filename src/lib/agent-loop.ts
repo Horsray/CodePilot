@@ -675,7 +675,6 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 {
                   const tn = event.toolName.toLowerCase();
                   const isAgentCall = tn === 'agent'
-                    || tn === 'mcp__codepilot-agent__agent'
                     || tn.includes('__agent')
                     || (tn.endsWith('agent') && tn !== 'subagent-progress');
                   if (isAgentCall) {
@@ -803,7 +802,6 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 {
                   const tn = (event as any).toolName?.toLowerCase() || '';
                   const isAgentResult = tn === 'agent'
-                    || tn === 'mcp__codepilot-agent__agent'
                     || tn.includes('__agent')
                     || (tn.endsWith('agent') && tn !== 'subagent-progress');
                   if (isAgentResult) {
@@ -875,7 +873,6 @@ Example: If the user asks about GitHub issues, call codepilot_mcp_activate({ ser
                 {
                   const tn = (event as any).toolName?.toLowerCase() || '';
                   const isAgentResult = tn === 'agent'
-                    || tn === 'mcp__codepilot-agent__agent'
                     || tn.includes('__agent')
                     || (tn.endsWith('agent') && tn !== 'subagent-progress');
                   if (isAgentResult) {

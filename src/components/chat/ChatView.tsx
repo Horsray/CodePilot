@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { BatchExecutionDashboard, BatchContextSync } from './batch-image-gen';
 import { ContextWidgetPortal } from './context-widget/ContextWidgetPortal';
+import { MemoryPanelPortal } from './context-widget/MemoryPanelPortal';
 import { setLastGeneratedImages, loadLastGenerated } from '@/lib/image-ref-store';
 import { useChatCommands } from '@/hooks/useChatCommands';
 import { useAssistantTrigger } from '@/hooks/useAssistantTrigger';
@@ -52,6 +53,7 @@ import {
   getSnapshot,
   getRewindPoints,
   respondToPermission,
+  isStreamActive,
 } from '@/lib/stream-session-manager';
 
 interface QueuedMessage {
@@ -99,6 +101,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingSessionMessage | null>(() => peekPendingSessionMessage(sessionId));
   const [pendingInitialReleaseTick, setPendingInitialReleaseTick] = useState(0);
+  const [runtimeWarmupState, setRuntimeWarmupState] = useState<'idle' | 'warming' | 'ready' | 'failed'>(warmupState);
   const [permissionProfile, setPermissionProfile] = useState<'default' | 'full_access'>(initialPermissionProfile || 'default');
 
   // Whether this session's working directory matches the configured assistant workspace
@@ -209,6 +212,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // Sync model/provider when session data loads
   useEffect(() => { if (modelName) setCurrentModel(modelName); }, [modelName]);
   useEffect(() => { if (providerId) setCurrentProviderId(providerId); }, [providerId]);
+  useEffect(() => { setRuntimeWarmupState(warmupState); }, [warmupState]);
   useEffect(() => { setSummaryBoundaryRowid(initialSummaryBoundaryRowid || 0); }, [initialSummaryBoundaryRowid]);
 
   // Fetch provider-specific options (with abort to prevent stale responses on fast switch)
@@ -276,8 +280,53 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const rewindPoints = getRewindPoints(sessionId);
   const subAgents = streamSnapshot?.subAgents ?? [];
   const pendingInitialStatusText = !isStreaming
-    ? getPendingFirstTurnStatusText(pendingInitialMessage, warmupState)
+    ? getPendingFirstTurnStatusText(pendingInitialMessage, runtimeWarmupState)
     : null;
+
+  // 中文注释：预热 effect — 当 sessionId 或 model/provider 变化时触发。
+  // ⚠️ 不要把 isStreaming 放进依赖数组！isStreaming 变化会触发 cleanup → abort，
+  // 中断正在进行中的 warmup fetch（需要 7-8 秒完成），导致预热永远无法完成。
+  // guard 条件中的 isStreaming 检查已经足够：只在非流式状态下启动预热。
+  useEffect(() => {
+    if (!sessionId || !currentModel || isStreaming || isStreamActive(sessionId)) return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function warmupRuntime() {
+      try {
+        setRuntimeWarmupState('warming');
+        const res = await fetch('/api/chat/warmup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            model: currentModel,
+            provider_id: currentProviderId,
+          }),
+          signal: controller.signal,
+        });
+        if (cancelled) return;
+        if (!res.ok) {
+          setRuntimeWarmupState('failed');
+          return;
+        }
+        const data = await res.json();
+        setRuntimeWarmupState(data?.warmed_up ? 'ready' : 'failed');
+      } catch {
+        if (!cancelled) {
+          setRuntimeWarmupState('failed');
+        }
+      }
+    }
+
+    warmupRuntime();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, currentModel, currentProviderId]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -916,11 +965,11 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
   useEffect(() => {
     if (!pendingInitialMessage || isStreaming) return;
-    if (shouldReleasePendingFirstTurn(pendingInitialMessage, warmupState)) return;
+    if (shouldReleasePendingFirstTurn(pendingInitialMessage, runtimeWarmupState)) return;
 
     const remainingDelayMs = getPendingFirstTurnRemainingDelayMs(
       pendingInitialMessage,
-      warmupState,
+      runtimeWarmupState,
     );
 
     const timeoutId = window.setTimeout(() => {
@@ -928,11 +977,11 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     }, Math.max(50, remainingDelayMs));
 
     return () => window.clearTimeout(timeoutId);
-  }, [pendingInitialMessage, warmupState, isStreaming]);
+  }, [pendingInitialMessage, runtimeWarmupState, isStreaming]);
 
   useEffect(() => {
     if (!pendingInitialMessage || isStreaming) return;
-    if (!shouldReleasePendingFirstTurn(pendingInitialMessage, warmupState)) return;
+    if (!shouldReleasePendingFirstTurn(pendingInitialMessage, runtimeWarmupState)) return;
 
     const pending = consumePendingSessionMessage(sessionId) || pendingInitialMessage;
     setPendingInitialMessage(null);
@@ -944,7 +993,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       pending.mentions,
       pending.clientMessageId,
     );
-  }, [sessionId, pendingInitialMessage, pendingInitialReleaseTick, warmupState, isStreaming, sendMessageInternal]);
+  }, [sessionId, pendingInitialMessage, pendingInitialReleaseTick, runtimeWarmupState, isStreaming, sendMessageInternal]);
 
   // ── Dequeue: when streaming finishes and queue is non-empty, send next ──
   useEffect(() => {
@@ -1211,6 +1260,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           cappedSetMessages(prev => [...prev, compressionMsg]);
         }}
       />
+      {workingDirectory && <MemoryPanelPortal workingDirectory={workingDirectory} />}
 
       {/* Queued message banner — shown above input when messages are waiting */}
       {messageQueue.length > 0 && (

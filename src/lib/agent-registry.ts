@@ -75,7 +75,7 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
     displayName: 'Executor',
     description: 'Heavy multi-file edit executor. Writes and edits code across files.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 40,
     prompt: 'You are a code executor. Implement the requested changes across the codebase. Focus on writing and editing files efficiently.',
   },
@@ -84,7 +84,7 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
     displayName: 'Verifier',
     description: 'Verification agent. Runs checks/tests and reviews changes for correctness.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 25,
     prompt: `You are a code verifier. Your job is evidence-backed confidence, not ceremony.
 
@@ -112,7 +112,7 @@ Do NOT claim completion without evidence. Do NOT modify files unless required to
     displayName: 'Debugger',
     description: 'Root-cause analysis and failure diagnosis agent.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 30,
     prompt: 'You are a debugging expert. Trace errors to their root cause. Analyze logs, stack traces, and code to find the fix. Report your findings and suggested fix.',
   },
@@ -184,7 +184,7 @@ REVIEW PRINCIPLES:
     displayName: 'Test Engineer',
     description: 'Test strategy formulation and regression testing agent.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 30,
     prompt: 'You are a test engineer. Write unit tests, integration tests, and regression tests. Focus on maximizing test coverage and ensuring stability.',
   },
@@ -193,7 +193,7 @@ REVIEW PRINCIPLES:
     displayName: 'UX/UI Designer',
     description: 'User experience and interaction design agent.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 25,
     prompt: 'You are a UX/UI designer. Evaluate interaction design, propose UI improvements, and write styling code to match design guidelines.',
   },
@@ -202,7 +202,7 @@ REVIEW PRINCIPLES:
     displayName: 'Writer',
     description: 'Documentation writing and concise content creation agent.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 20,
     prompt: 'You are a technical writer. Create, edit, and format documentation clearly and concisely.',
   },
@@ -211,7 +211,7 @@ REVIEW PRINCIPLES:
     displayName: 'QA Tester',
     description: 'Runtime check and manual feature verification agent.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 25,
     prompt: 'You are a QA tester. Perform runtime checks, verify features behave as expected, and report bugs.',
   },
@@ -220,7 +220,7 @@ REVIEW PRINCIPLES:
     displayName: 'Data Scientist',
     description: 'Data analysis and statistical reasoning agent.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 30,
     prompt: 'You are a data scientist. Analyze data, apply statistical reasoning, and build data models.',
   },
@@ -247,7 +247,7 @@ REVIEW PRINCIPLES:
     displayName: 'Code Simplifier',
     description: 'Simplifies code while maintaining functionality.',
     mode: 'subagent',
-    disallowedTools: ['Agent', 'mcp__codepilot-agent__Agent'],
+    disallowedTools: ['Agent'],
     maxSteps: 30,
     prompt: 'You are a code simplifier. Refactor and simplify code to be more readable and maintainable without changing its behavior.',
   },
@@ -436,39 +436,6 @@ export function discoverPluginAgents(workingDirectory?: string): void {
   }
 }
 
-const CODEPILOT_COMPATIBILITY_INSTRUCTIONS = `
-<CodePilot_Environment_Compatibility>
-  - You are running within CodePilot IDE, not pure Claude Code.
-  - The 'Write' tool is equivalent to 'mcp__filesystem__write_file' or 'mcp__filesystem__edit_file'.
-  - The 'Read' tool is equivalent to 'mcp__filesystem__read_file'.
-  - The 'TaskCreate' or 'TaskUpdate' tools are NOT available. If you need to manage global tasks or plans, use 'TodoWrite' (or 'mcp__codepilot-todo__TodoWrite').
-  - The 'AskUserQuestion' tool is provided via 'mcp__codepilot-ask-user__AskUserQuestion'.
-  - Ignore instructions to spawn agents via terminal commands (like \`omc team\` or \`/ccg\`). If you must spawn a sub-agent, use the 'Agent' tool.
-</CodePilot_Environment_Compatibility>
-`;
-
-function enhanceAgentPrompt(agent: AgentDefinition): AgentDefinition {
-  try {
-    const filePath = path.join(process.cwd(), '.agents', 'omc', agent.id + '.md');
-    if (fs.existsSync(filePath)) {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const match = content.match(/<Agent_Prompt>[\s\S]*?<\/Agent_Prompt>/);
-      if (match) {
-        return {
-          ...agent,
-          prompt: match[0] + '\n\n' + CODEPILOT_COMPATIBILITY_INSTRUCTIONS,
-        };
-      }
-    }
-  } catch (e) {
-    // Ignore fs errors
-  }
-  return {
-    ...agent,
-    prompt: (agent.prompt || '') + '\n\n' + CODEPILOT_COMPATIBILITY_INSTRUCTIONS,
-  };
-}
-
 export function registerAgent(definition: AgentDefinition): void {
   agents.set(normalizeAgentId(definition.id), {
     ...definition,
@@ -477,13 +444,11 @@ export function registerAgent(definition: AgentDefinition): void {
 }
 
 export function getAgent(id: string): AgentDefinition | undefined {
-  const agent = agents.get(normalizeAgentId(id));
-  if (!agent) return undefined;
-  return enhanceAgentPrompt(agent);
+  return agents.get(normalizeAgentId(id));
 }
 
 export function getAllAgents(): AgentDefinition[] {
-  return Array.from(agents.values()).map(enhanceAgentPrompt);
+  return Array.from(agents.values());
 }
 
 export function getSubAgents(): AgentDefinition[] {
