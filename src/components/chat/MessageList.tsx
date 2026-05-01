@@ -391,6 +391,16 @@ export function MessageList({
           )}
         </ContextCompressionDivider>
 
+        {/* Compression progress bar — renders at the bottom of the conversation
+            so it's visible to the user without scrolling to the top */}
+        {isContextCompressing && (
+          <DividerRow
+            label={t('context.compressing' as TranslationKey)}
+            spinning={true}
+            progress={compressionProgress}
+          />
+        )}
+
         {isStreaming && (
           <StreamingMessage
             content={streamingContent}
@@ -423,15 +433,15 @@ function DividerRow({ label, spinning, progress }: { label: string; spinning: bo
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground/70">
           {spinning && <SpinnerGap size={14} className="animate-spin" />}
           <span>{label}</span>
-          {spinning && progress && (
-            <span className="text-[11px] tabular-nums">{progress.percentage}%</span>
+          {spinning && (
+            <span className="text-[11px] tabular-nums font-medium">{progress?.percentage ?? 0}%</span>
           )}
         </div>
         <div className="h-px flex-1 bg-border/50" />
       </div>
       {spinning && (
         <div className="mt-1.5 mx-auto max-w-md">
-          <div className="h-[3px] w-full rounded-full overflow-hidden bg-muted/40">
+          <div className="h-[5px] w-full rounded-full overflow-hidden bg-muted/40">
             <div
               className="h-full rounded-full transition-all duration-500 ease-out"
               style={{
@@ -462,7 +472,9 @@ function ContextCompressionDivider({
   isCompressing: boolean;
 }) {
   const dividerIndex = useMemo(() => {
-    if (isCompressing) return 0;
+    // During active compression, don't render the divider inside the message
+    // list — progress is shown at the bottom of the conversation instead.
+    if (isCompressing) return -1;
     if (!hasSummary) return -1;
     if (boundaryRowid <= 0) return 0;
     const idx = messages.findIndex((m) => (m._rowid ?? Number.POSITIVE_INFINITY) > boundaryRowid);

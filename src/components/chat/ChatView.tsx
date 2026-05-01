@@ -525,25 +525,18 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     return () => window.removeEventListener('context-compressing', handler);
   }, [sessionId]);
 
-  // Clear compression progress and remove temp message when compression finishes
+  // Clear compression progress when compression finishes
   useEffect(() => {
     if (!isCompressing) {
       setCompressionProgress(null);
-      // Remove the temporary compression message card
-      if (tempCompactMsgIdRef.current) {
-        const tempId = tempCompactMsgIdRef.current;
-        tempCompactMsgIdRef.current = null;
-        cappedSetMessages(prev => prev.filter(m => m.id !== tempId));
-      }
     }
   }, [isCompressing]);
 
-  const isContextCompressing = statusText === 'Compressing context...';
+  const isContextCompressing = statusText === 'Compressing context...' || isCompressing;
 
   // Phase 1b — TerminalReason action state
   // Refs (not state) so the context-compressed handler above can read the
   // latest value without re-subscribing.
-  const tempCompactMsgIdRef = useRef<string | null>(null);
   const pendingRetryAfterCompactRef = useRef(false);
   const pendingRetryMessageRef = useRef<string | null>(null);
   /** Timeout handle so we don't leak a pending retry if /compact never
@@ -917,6 +910,12 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         clearPendingRetry();
       }
 
+      // Detect /compact command — activate compression UI for both
+      // manual typing and button click paths.
+      if (content.trim() === '/compact' || content.trim().startsWith('/compact ')) {
+        setIsCompressing(true);
+      }
+
       // Queue message if currently streaming — hold above input, send after completion
       if (isStreaming) {
         setMessageQueue((prev) => [...prev, { clientMessageId, content, files, systemPromptAppend, displayOverride, mentions }]);
@@ -1284,18 +1283,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onCompress={() => {
           setIsCompressing(true);
           sendMessage('/compact', undefined, undefined, '压缩上下文');
-          // Add a temporary streaming assistant message to show the indicator immediately
-          const tempId = 'temp-compact-' + Date.now();
-          tempCompactMsgIdRef.current = tempId;
-          const compressionMsg: Message = {
-            id: tempId,
-            session_id: sessionId,
-            role: 'assistant',
-            content: '上下文压缩中...',
-            created_at: new Date().toISOString(),
-            token_usage: null,
-          };
-          cappedSetMessages(prev => [...prev, compressionMsg]);
         }}
         isCompressing={isCompressing}
         compressionProgress={compressionProgress}

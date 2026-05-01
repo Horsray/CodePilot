@@ -25,12 +25,18 @@ function getPty() {
     try {
       // Check if we are in Electron packaged app and load from asar.unpacked
       if (process.env.ELECTRON_RUN_AS_NODE || process.versions.electron) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const path = require('path');
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const fs = require('fs');
         const asarPath = path.join(process.execPath, '..', '..', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty');
         if (fs.existsSync(asarPath)) {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          pty = require(asarPath);
+          // eval hides the dynamic path from Turbopack static analysis —
+          // without it, every route that imports pty-manager emits a
+          // "Module not found: Can't resolve <dynamic>" warning, and
+          // dozens of import traces × 1 warning each = hundreds of
+          // console.warn lines per dev startup, saturating the CPU.
+          pty = eval('require')(asarPath);
           return pty as typeof import('node-pty');
         }
       }
