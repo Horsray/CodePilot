@@ -549,6 +549,32 @@ export function getPersistentClaudeTurn(params: {
     // 将当前请求最新的 options（包含新的 canUseTool 和 stderr 等回调）赋值给 entry，
     // 使得底层代理能够把事件正确路由到当前的 SSE 连接。
     entry.currentOptions = params.options;
+
+    // 中文注释：功能名称「复用时模型切换」，用法是在复用已有 persistent session 时，
+    // 如果 model 发生变化，通过 SDK 的 setModel() API 动态切换 subprocess 的模型，
+    // 而不是销毁重建。setModel() 是 fire-and-forget，在 acquireTurn 等待锁期间完成。
+    const reusedModelChanged = (() => {
+      try {
+        const oldSig = JSON.parse(entry.signature || '{}');
+        const newSig = JSON.parse(params.signature || '{}');
+        return oldSig.model !== newSig.model;
+      } catch { return false; }
+    })();
+    if (reusedModelChanged) {
+      const newModel = typeof params.options.model === 'string' ? params.options.model : '';
+      if (newModel) {
+        entry.query.setModel(newModel).then(
+          () => console.log('[getPersistentClaudeTurn] setModel() succeeded:', newModel),
+          (err) => console.warn('[getPersistentClaudeTurn] setModel() failed:', err),
+        );
+        // 更新签名中的 model，保持一致性
+        try {
+          const sigObj = JSON.parse(entry.signature || '{}');
+          sigObj.model = newModel;
+          entry.signature = JSON.stringify(sigObj);
+        } catch { /* ignore */ }
+      }
+    }
   }
 
   clearIdleTimer(entry);
@@ -789,7 +815,38 @@ export async function warmupPersistentClaudeSession(params: {
 
   // 中文注释：已预热且签名兼容，直接返回缓存的 init 数据
   // 使用模糊匹配：warmup 和 chat route 的 permissionMode、settingSources 等
-  // volatile 字段可能不同，但只要关键字段（provider/model/cwd/env）一致就复用。
+  // volatile 字段可能不同，但只要关键字段（provider/cwd/env）一致就复用。
+  // ⚠️ model 变化时不需要销毁 subprocess —— SDK 的 model 是 per-request 参数，
+  // 同一个 subprocess 可以处理不同 model 的请求。只需更新签名和 initData.model 即可。
+  const modelChanged = (() => {
+    try {
+      const oldSig = JSON.parse(entry?.signature || '{}');
+      const newSig = JSON.parse(params.signature || '{}');
+      return oldSig.model !== newSig.model;
+    } catch { return false; }
+  })();
+
+  // 中文注释：功能名称「模型切换热更新」，用法是在 provider/cwd/env 兼容的前提下，
+  // 仅 model 变化时不销毁 subprocess，而是通过 SDK 的 setModel() API 切换模型。
+  // setModel() 是 Query 接口的方法，可以在 streaming input mode 下动态切换模型，
+  // 无需重启 subprocess，避免冷启动。
+  if (entry && entry.warmedUp && isSignatureCompatible(entry.signature, params.signature) && entry.initData && modelChanged) {
+    const oldModel = (() => { try { return JSON.parse(entry.signature || '{}').model; } catch { return '?'; } })();
+    const newModel = typeof params.options.model === 'string' ? params.options.model : entry.initData.model;
+    // 调用 SDK 的 setModel() 切换 subprocess 的模型
+    try {
+      await entry.query.setModel(newModel);
+      console.log('[persistent-claude-session] setModel() succeeded:', { oldModel, newModel });
+    } catch (err) {
+      console.warn('[persistent-claude-session] setModel() failed, updating signature only:', err);
+    }
+    entry.signature = params.signature;
+    entry.initData = { ...entry.initData, model: newModel };
+    entry.lastUsedAt = Date.now();
+    scheduleWarmupIdleClose(params.codepilotSessionId, entry);
+    return entry.initData;
+  }
+
   if (entry && entry.warmedUp && isSignatureCompatible(entry.signature, params.signature) && entry.initData) {
     return entry.initData;
   }
@@ -807,8 +864,9 @@ export async function warmupPersistentClaudeSession(params: {
     };
   }
 
-  // 中文注释：关键配置不兼容（provider/model/cwd/env 变化），销毁旧 session 重新预热
-  if (entry && !isSignatureCompatible(entry.signature, params.signature)) {
+  // 中文注释：关键配置不兼容（provider/cwd/env 变化），销毁旧 session 重新预热
+  // 注意：仅 model 变化不会走到这里（已在上面处理），只有真正不兼容时才销毁。
+  if (entry) {
     closeEntry(entry);
     store.delete(params.codepilotSessionId);
     entry = undefined;

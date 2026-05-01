@@ -8,7 +8,6 @@ import {
   buildPersistentClaudeSignature,
   adoptPersistentClaudeSessionBySignature,
   warmupPersistentClaudeSession,
-  isSessionWarmedUp,
 } from '@/lib/persistent-claude-session';
 import { loadAllMcpServers } from '@/lib/mcp-loader';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
@@ -365,10 +364,11 @@ export async function POST(request: NextRequest) {
       adoptPersistentClaudeSessionBySignature(signature, warmupSessionId);
     }
 
-    if (isSessionWarmedUp(warmupSessionId)) {
-      console.log('[warmup API] Persistent session already warmed for', warmupSessionId);
-      return Response.json({ warmed_up: true, from_cache: true, warmup_session_id: warmupSessionId });
-    }
+    // 中文注释：不再用 isSessionWarmedUp 提前返回。
+    // isSessionWarmedUp 只检查 entry 存在且 warmedUp=true，不检查 model，
+    // 导致切换模型后旧 entry 还在就直接返回成功，warmupPersistentClaudeSession
+    // 根本没被调用，新 model 没有被预热。
+    // 让 warmupPersistentClaudeSession 自己处理 model 变化的检测和重建。
 
     // 中文注释：预热 persistent Claude session，而不是额外启动 one-shot WarmQuery。
     // 一个 CodePilot 会话应该对应一个后台 Claude Code 进程；WarmQuery 无法接力给
