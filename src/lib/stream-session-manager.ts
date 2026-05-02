@@ -537,6 +537,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onContextCompressing: (data) => {
         markActive();
+        console.log('[stream-session-manager] onContextCompressing:', data);
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('context-compressing', {
             detail: { sessionId: params.sessionId, ...data },
@@ -545,6 +546,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onContextCompressed: (data) => {
         markActive();
+        console.log('[stream-session-manager] onContextCompressed:', data);
         // Dispatch the 'context-compressed' window event that ChatView
         // uses to flip hasSummary state and show the context indicator.
         // Also show a brief human-readable status line so the user knows
@@ -625,6 +627,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onContextUsage: (snap) => {
         markActive();
+        console.log('[stream-session-manager] onContextUsage:', JSON.stringify(snap));
         stream.snapshot = { ...stream.snapshot, contextUsageSnapshot: snap };
         emit(stream, 'snapshot-updated');
       },

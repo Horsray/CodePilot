@@ -19,6 +19,7 @@ import { SpinnerGap } from '@/components/ui/icon';
 import { usePanel } from '@/hooks/usePanel';
 import { usePanelStore } from '@/store/usePanelStore';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useImageGen } from '@/hooks/useImageGen';
 import { showToast } from '@/hooks/useToast';
 import type { TranslationKey } from '@/i18n';
 import { PermissionPrompt } from './PermissionPrompt';
@@ -53,7 +54,6 @@ import {
   getSnapshot,
   getRewindPoints,
   respondToPermission,
-  isStreamActive,
 } from '@/lib/stream-session-manager';
 
 interface QueuedMessage {
@@ -98,6 +98,8 @@ function normalizedUserContent(content: string): string {
 export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, warmupState = 'idle', initialPermissionProfile, initialMode, initialHasSummary, initialSummaryBoundaryRowid, isLoading }: ChatViewProps) {
   const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setIsAssistantWorkspace } = usePanel();
   const { t } = useTranslation();
+  const imageGen = useImageGen();
+  const imageAgentMode = imageGen.state.enabled;
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingSessionMessage | null>(() => peekPendingSessionMessage(sessionId));
@@ -202,8 +204,10 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     });
   }, []);
   const [mode, setMode] = useState<'code' | 'plan'>(initialMode || 'code');
-  const [currentModel, setCurrentModel] = useState(() => modelName || (typeof window !== 'undefined' ? localStorage.getItem('codepilot:last-model') : null) || 'sonnet');
-  const [currentProviderId, setCurrentProviderId] = useState(() => providerId || (typeof window !== 'undefined' ? localStorage.getItem('codepilot:last-provider-id') : null) || '');
+  // 中文注释：不从 localStorage 初始化 model/provider，避免用旧 session 的值触发错误预热。
+  // 由 sync effect（resolveSessionModel 完成后）或 handleProviderModelChange（用户切换）设置正确值。
+  const [currentModel, setCurrentModel] = useState(() => modelName || '');
+  const [currentProviderId, setCurrentProviderId] = useState(() => providerId || '');
   const [selectedEffort, setSelectedEffort] = useState<string | undefined>('max');
   const [thinkingMode, setThinkingMode] = useState<string>('enabled'); // Deepseek 默认开启思考
   const [context1m, setContext1m] = useState(false);
@@ -212,9 +216,85 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   const [isCompressing, setIsCompressing] = useState(false);
   const [compressionProgress, setCompressionProgress] = useState<{ percentage: number; charsGenerated: number } | null>(null);
 
-  // Sync model/provider when session data loads
-  useEffect(() => { if (modelName) setCurrentModel(modelName); }, [modelName]);
-  useEffect(() => { if (providerId) setCurrentProviderId(providerId); }, [providerId]);
+  const warmupAbortRef = useRef<AbortController | null>(null);
+  // 中文注释：用户手动切换模型后，阻止 sync effect 用 DB 旧值覆盖。
+  const userSelectedModelRef = useRef(false);
+
+  // 中文注释：统一的预热触发函数。
+  // 由 sync effect(初始挂载/session 切换) 和 handleProviderModelChange(用户切换模型) 共同调用。
+  const triggerWarmup = useCallback((model: string, providerId: string) => {
+    if (!sessionId || !model) return;
+
+    // 取消上一次预热请求
+    if (warmupAbortRef.current) {
+      warmupAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    warmupAbortRef.current = controller;
+
+    console.log('[ChatView] triggerWarmup:', { sessionId, model, providerId: providerId || '(empty)' });
+    setRuntimeWarmupState('warming');
+
+    fetch('/api/chat/warmup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        model,
+        provider_id: providerId,
+      }),
+      signal: controller.signal,
+    })
+      .then(res => {
+        if (controller.signal.aborted) return;
+        if (!res.ok) {
+          setRuntimeWarmupState('failed');
+          return;
+        }
+        return res.json();
+      })
+      .then(data => {
+        if (!data || controller.signal.aborted) return;
+        console.log('[ChatView] Warmup result:', {
+          warmed_up: data.warmed_up,
+          model: data.model,
+          provider_key: data.provider_key,
+        });
+        setRuntimeWarmupState(data.warmed_up ? 'ready' : 'failed');
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setRuntimeWarmupState('failed');
+        }
+      });
+  }, [sessionId]);
+
+  // Sync model/provider when session data loads, and trigger warmup for the resolved values.
+  // 中文注释：当 session 信息加载完成（resolveSessionModel 解析出真实 model/provider），
+  // 同步到本地 state 并触发预热。这处理了初始挂载时 localStorage 有旧值、
+  // 但 session 实际使用不同 model/provider 的情况。
+  // ⚠️ 用户手动切换模型后（userSelectedModelRef），不再用 DB 旧值覆盖。
+  useEffect(() => {
+    console.log('[ChatView] Sync effect fired:', { modelName, providerId, sessionId, userSelected: userSelectedModelRef.current });
+    if (!modelName) return;
+    if (userSelectedModelRef.current) {
+      console.log('[ChatView] Sync effect SKIPPED — user already selected model');
+      return;
+    }
+    setCurrentModel(modelName);
+    if (sessionId) {
+      console.log('[ChatView] Sync effect → triggerWarmup:', { model: modelName, providerId: providerId || '(empty)' });
+      triggerWarmup(modelName, providerId || '');
+    }
+  }, [modelName, providerId, sessionId, triggerWarmup]);
+
+  // 中文注释：预热失败后 5 秒自动隐藏 banner
+  useEffect(() => {
+    if (runtimeWarmupState !== 'failed') return;
+    const timer = setTimeout(() => setRuntimeWarmupState('idle'), 5000);
+    return () => clearTimeout(timer);
+  }, [runtimeWarmupState]);
+
   useEffect(() => { setRuntimeWarmupState(warmupState); }, [warmupState]);
   useEffect(() => { setSummaryBoundaryRowid(initialSummaryBoundaryRowid || 0); }, [initialSummaryBoundaryRowid]);
 
@@ -286,50 +366,9 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     ? getPendingFirstTurnStatusText(pendingInitialMessage, runtimeWarmupState)
     : null;
 
-  // 中文注释：预热 effect — 当 sessionId 或 model/provider 变化时触发。
-  // ⚠️ 不要把 isStreaming 放进依赖数组！isStreaming 变化会触发 cleanup → abort，
-  // 中断正在进行中的 warmup fetch（需要 7-8 秒完成），导致预热永远无法完成。
-  // guard 条件中的 isStreaming 检查已经足够：只在非流式状态下启动预热。
-  useEffect(() => {
-    if (!sessionId || !currentModel || isStreaming || isStreamActive(sessionId)) return;
-
-    let cancelled = false;
-    const controller = new AbortController();
-
-    async function warmupRuntime() {
-      try {
-        setRuntimeWarmupState('warming');
-        const res = await fetch('/api/chat/warmup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session_id: sessionId,
-            model: currentModel,
-            provider_id: currentProviderId,
-          }),
-          signal: controller.signal,
-        });
-        if (cancelled) return;
-        if (!res.ok) {
-          setRuntimeWarmupState('failed');
-          return;
-        }
-        const data = await res.json();
-        setRuntimeWarmupState(data?.warmed_up ? 'ready' : 'failed');
-      } catch {
-        if (!cancelled) {
-          setRuntimeWarmupState('failed');
-        }
-      }
-    }
-
-    warmupRuntime();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, currentModel, currentProviderId]);
+  // 中文注释：初始挂载预热由 sync effect（modelName 变化 → triggerWarmup）统一处理，
+  // 确保使用 resolveSessionModel 解析后的真实 model/provider，避免 localStorage 旧值导致预热错误。
+  // 用户切换模型的预热由 handleProviderModelChange → triggerWarmup 直接触发。
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -383,22 +422,29 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   }, [sessionId]);
 
   const handleProviderModelChange = useCallback((newProviderId: string, model: string) => {
+    console.log('[ChatView] handleProviderModelChange:', { newProviderId, model, sessionId });
+    userSelectedModelRef.current = true; // 阻止 sync effect 用 DB 旧值覆盖
     setCurrentProviderId(newProviderId);
     setCurrentModel(model);
     fetch(`/api/chat/sessions/${sessionId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, provider_id: newProviderId }),
-    }).catch(() => {});
-    // 中文注释：不再在此处触发预热 — 预热由 useEffect([sessionId, currentModel, currentProviderId])
-    // 统一管理，避免双重预热竞争同一进程。useEffect 会正确设置 runtimeWarmupState，
-    // 控制发送按钮和顶部状态提示。
-  }, [sessionId]);
+    }).then(r => {
+      console.log('[ChatView] PATCH session result:', { ok: r.ok, status: r.status });
+    }).catch(err => {
+      console.warn('[ChatView] PATCH session FAILED:', err);
+    });
+    // 中文注释：直接触发预热，不依赖 useEffect。
+    console.log('[ChatView] handleProviderModelChange → triggerWarmup:', { model, providerId: newProviderId });
+    triggerWarmup(model, newProviderId);
+  }, [sessionId, triggerWarmup]);
 
   // ── Extracted hooks ──
 
   const handleStreamCompleted = useCallback((phase: string) => {
     // Clear compressing state when any stream completes (success or error)
+    console.log('[ChatView] handleStreamCompleted phase:', phase, 'isCompressing was:', isCompressing);
     setIsCompressing(false);
     // Only reconcile on normal completion — both messages are persisted.
     // Error/stopped/idle-timeout paths emit 'completed' before the server
@@ -453,6 +499,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // 2. Manual /compact: response message contains the compression marker
   useEffect(() => {
     if (!hasSummary && messages.some(m => m.role === 'assistant' && m.content.includes('上下文已压缩'))) {
+      console.log('[ChatView] Detected "上下文已压缩" in assistant message — setting hasSummary=true, isCompressing=false');
       setHasSummary(true);
       setIsCompressing(false);
     }
@@ -461,6 +508,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
+      console.log('[ChatView] context-compressed window event:', detail);
       if (detail?.sessionId === sessionId) {
         setHasSummary(true);
         setIsCompressing(false);
@@ -510,6 +558,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
+        console.log('[ChatView] context-compressing progress:', detail.percentage, 'charsGenerated:', detail.charsGenerated);
         setCompressionProgress({ percentage: detail.percentage ?? 0, charsGenerated: detail.charsGenerated ?? 0 });
       }
     };
@@ -838,6 +887,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   /** Start an API stream for the given content. Does NOT add a user message to the list. */
   const doStartStream = useCallback(
     (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[], clientMessageId?: string) => {
+      console.log('[ChatView] doStartStream:', { model: currentModel, providerId: currentProviderId, content: content.slice(0, 30) });
       const notices = pendingImageNoticesRef.current.length > 0
         ? [...pendingImageNoticesRef.current]
         : undefined;
@@ -1191,9 +1241,14 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
       {/* Warmup status banner — top center, non-blocking */}
       {runtimeWarmupState === 'warming' && (
-        <div className="flex items-center justify-center gap-2 py-1.5 bg-muted/40 border-b border-border/30">
-          <SpinnerGap size={12} className="animate-spin text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">正在预热模型...</span>
+        <div className="flex items-center justify-center gap-2 py-2 bg-blue-50 dark:bg-blue-950/30 border-b border-blue-200 dark:border-blue-800">
+          <SpinnerGap size={14} className="animate-spin text-blue-600 dark:text-blue-400" />
+          <span className="text-sm font-medium text-blue-700 dark:text-blue-300">正在预热模型...</span>
+        </div>
+      )}
+      {runtimeWarmupState === 'failed' && (
+        <div className="flex items-center justify-center gap-2 py-2 bg-red-50 dark:bg-red-950/30 border-b border-red-200 dark:border-red-800">
+          <span className="text-sm font-medium text-red-700 dark:text-red-300">预热失败，首次消息可能较慢</span>
         </div>
       )}
       <MessageList
@@ -1281,8 +1336,10 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         upstreamModelId={currentModelMeta.upstreamModelId}
         toolFiles={toolFiles}
         onCompress={() => {
+          console.log('[ChatView] onCompress triggered — starting /compact stream (no user message)');
           setIsCompressing(true);
-          sendMessage('/compact', undefined, undefined, '压缩上下文');
+          setCompressionProgress({ percentage: 0, charsGenerated: 0 });
+          doStartStream('/compact');
         }}
         isCompressing={isCompressing}
         compressionProgress={compressionProgress}
@@ -1343,7 +1400,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onSend={sendMessage}
         onCommand={handleCommand}
         onStop={stopStreaming}
-        disabled={runtimeWarmupState === 'warming'}
+        disableSubmit={runtimeWarmupState === 'warming'}
         isStreaming={isStreaming}
         sessionId={sessionId}
         modelName={currentModel}

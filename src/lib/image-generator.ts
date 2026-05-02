@@ -203,6 +203,7 @@ interface ProviderRow {
   api_key: string;
   base_url: string;
   extra_env?: string;
+  options_json?: string;
 }
 
 /**
@@ -220,15 +221,24 @@ function pickImageProvider(
 ): { row: ProviderRow; family: ImageFamily } {
   const db = getDb();
   const rows = db.prepare(
-    "SELECT id, provider_type, api_key, base_url, extra_env FROM api_providers WHERE provider_type IN ('gemini-image', 'openai-image') AND api_key != ''"
+    "SELECT id, provider_type, api_key, base_url, extra_env, options_json FROM api_providers WHERE provider_type IN ('gemini-image', 'openai-image') AND api_key != ''"
   ).all() as ProviderRow[];
 
   if (rows.length === 0) {
     throw new Error('No image provider configured. Please add a Gemini Image or OpenAI Image provider in Settings.');
   }
 
-  const toFamily = (pt: string): ImageFamily => (pt === 'openai-image' ? 'openai' : 'gemini');
-  const byFamily = (f: ImageFamily) => rows.find(r => toFamily(r.provider_type) === f);
+  // Determine SDK family: respect options_json.media_protocol for custom-media
+  // providers that use OpenAI-compatible API despite provider_type being 'gemini-image'.
+  const toFamily = (row: ProviderRow): ImageFamily => {
+    try {
+      const opts = JSON.parse(row.options_json || '{}');
+      // Relay platforms (神马 etc.) use OpenAI-compatible API regardless of provider_type
+      if (opts.media_protocol === 'openai-images' || opts.media_protocol === 'custom-image') return 'openai';
+    } catch { /* ignore */ }
+    return row.provider_type === 'openai-image' ? 'openai' : 'gemini';
+  };
+  const byFamily = (f: ImageFamily) => rows.find(r => toFamily(r) === f);
 
   // 1) Explicit provider id takes precedence over everything else.
   if (providerId) {
@@ -236,7 +246,7 @@ function pickImageProvider(
     if (!match) {
       throw new Error(`Image provider '${providerId}' is not configured or has no API key. Check Settings → Media Providers.`);
     }
-    return { row: match, family: toFamily(match.provider_type) };
+    return { row: match, family: toFamily(match) };
   }
 
   // 2) Family hint from the model id (e.g. user passed model='gpt-image-2').
@@ -250,7 +260,7 @@ function pickImageProvider(
   const activeId = getSetting('active_image_provider_id');
   if (activeId) {
     const match = rows.find(r => r.id === activeId);
-    if (match) return { row: match, family: toFamily(match.provider_type) };
+    if (match) return { row: match, family: toFamily(match) };
     // Stored id no longer valid (provider deleted / key cleared) — fall through
     // to the implicit picker rather than throwing, so callers aren't broken.
   }
@@ -261,7 +271,176 @@ function pickImageProvider(
   const openai = byFamily('openai');
   if (openai) return { row: openai, family: 'openai' };
   // rows.length > 0 guarantees we won't reach here, but TypeScript wants it
-  return { row: rows[0], family: toFamily(rows[0].provider_type) };
+  return { row: rows[0], family: toFamily(rows[0]) };
+}
+
+/**
+ * Generate images via relay platform async API (e.g. 神马中转).
+ *
+ * Flow: POST multipart form → get task_id → poll until complete → download images.
+ * This bypasses the AI SDK because relay platforms use a different API contract
+ * than the standard OpenAI /v1/images/generations endpoint.
+ */
+async function generateImageViaRelay(params: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  prompt: string;
+  aspectRatio?: string;
+  imageSize?: string;
+  referenceImages?: string[];
+  abortSignal?: AbortSignal;
+}): Promise<{ mediaType: string; uint8Array: Uint8Array }[]> {
+  const base = params.baseUrl.replace(/\/+$/, '');
+
+  // Build Chat Completions request — relay platforms use /v1/chat/completions for image gen
+  const messages: Array<Record<string, unknown>> = [];
+
+  // If reference images, add them as user message content
+  if (params.referenceImages && params.referenceImages.length > 0) {
+    const content: Array<Record<string, unknown>> = [];
+    for (const base64 of params.referenceImages) {
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:image/png;base64,${base64}` },
+      });
+    }
+    content.push({ type: 'text', text: params.prompt });
+    messages.push({ role: 'user', content });
+  } else {
+    messages.push({ role: 'user', content: params.prompt });
+  }
+
+  const body: Record<string, unknown> = {
+    model: params.model,
+    messages,
+  };
+
+  // Pass image size and aspect ratio as extra body params
+  if (params.imageSize) body.image_size = params.imageSize;
+  if (params.aspectRatio && params.aspectRatio !== 'auto') body.aspect_ratio = params.aspectRatio;
+
+  const chatUrl = `${base}/v1/chat/completions`;
+  console.log(`[image-generator] relay chat request: ${chatUrl}, model=${params.model}`);
+
+  const res = await fetch(chatUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${params.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal: params.abortSignal || AbortSignal.timeout(600_000),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Relay API failed (${res.status}): ${errText.slice(0, 200)}`);
+  }
+
+  const resData = await res.json() as Record<string, unknown>;
+  console.log('[image-generator] relay chat response keys:', Object.keys(resData));
+
+  // Dump choices structure for debugging
+  const choicesDebug = resData.choices;
+  if (Array.isArray(choicesDebug) && choicesDebug.length > 0) {
+    const first = choicesDebug[0] as Record<string, unknown>;
+    const msg = first.message as Record<string, unknown> | undefined;
+    if (msg) {
+      const contentType = typeof msg.content;
+      const contentPreview = contentType === 'string'
+        ? (msg.content as string).slice(0, 500)
+        : JSON.stringify(msg.content).slice(0, 500);
+      console.log('[image-generator] choices[0].message.content type:', contentType, 'preview:', contentPreview);
+    } else {
+      console.log('[image-generator] choices[0] keys:', Object.keys(first), 'full:', JSON.stringify(first).slice(0, 500));
+    }
+  }
+
+  const resultImages: { mediaType: string; uint8Array: Uint8Array }[] = [];
+  const imageUrls: string[] = [];
+
+  // Helper to extract images from a data object
+  function extractFromData(data: unknown): void {
+    if (!data) return;
+    if (typeof data === 'string') {
+      // Markdown image: ![...](url)
+      const mdMatch = data.match(/!\[[^\]]*\]\(([^)]+)\)/);
+      if (mdMatch) { imageUrls.push(mdMatch[1]); return; }
+      // Could be a URL or base64
+      if (data.startsWith('http')) imageUrls.push(data);
+      else if (data.startsWith('data:')) {
+        const match = data.match(/^data:(image\/\w+);base64,(.+)$/);
+        if (match) resultImages.push({ mediaType: match[1], uint8Array: new Uint8Array(Buffer.from(match[2], 'base64')) });
+      }
+      return;
+    }
+    if (!Array.isArray(data)) return;
+    for (const item of data) {
+      if (typeof item === 'string') {
+        if (item.startsWith('http')) imageUrls.push(item);
+        continue;
+      }
+      if (typeof item !== 'object' || !item) continue;
+      const obj = item as Record<string, unknown>;
+      if (typeof obj.url === 'string' && obj.url) imageUrls.push(obj.url);
+      if (typeof obj.b64_json === 'string' && obj.b64_json) {
+        resultImages.push({ mediaType: 'image/png', uint8Array: new Uint8Array(Buffer.from(obj.b64_json, 'base64')) });
+      }
+      if (typeof obj.image_url === 'object' && obj.image_url) {
+        const imgObj = obj.image_url as Record<string, unknown>;
+        if (typeof imgObj.url === 'string') imageUrls.push(imgObj.url);
+      }
+    }
+  }
+
+  // Standard OpenAI format: choices[].message.content or choices[].content
+  const choices = resData.choices as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      const message = choice.message as Record<string, unknown> | undefined;
+      if (message) {
+        // content can be string (URL/base64) or array of parts
+        if (typeof message.content === 'string') extractFromData(message.content);
+        else if (Array.isArray(message.content)) extractFromData(message.content);
+      }
+      // Some platforms put content directly on choice
+      if (typeof choice.content === 'string') extractFromData(choice.content);
+    }
+  }
+
+  // Chat format: data[] (some relay platforms)
+  extractFromData(resData.data);
+
+  // Also check resData.data.data (nested)
+  if (resData.data && typeof resData.data === 'object' && !Array.isArray(resData.data)) {
+    const nested = resData.data as Record<string, unknown>;
+    extractFromData(nested.data);
+    if (typeof nested.url === 'string') imageUrls.push(nested.url);
+  }
+
+  // Top-level images/url
+  if (Array.isArray(resData.images)) extractFromData(resData.images);
+  if (typeof resData.url === 'string') imageUrls.push(resData.url);
+
+  console.log('[image-generator] extracted imageUrls:', imageUrls.length, 'base64Images:', resultImages.length);
+
+  // Download any URLs
+  for (const url of imageUrls) {
+    const imgRes = await fetch(url);
+    if (!imgRes.ok) throw new Error(`Failed to download result image: ${imgRes.status}`);
+    const arrayBuf = await imgRes.arrayBuffer();
+    const contentType = imgRes.headers.get('content-type') || 'image/png';
+    resultImages.push({ mediaType: contentType, uint8Array: new Uint8Array(arrayBuf) });
+  }
+
+  if (resultImages.length === 0) {
+    console.log('[image-generator] relay full response:', JSON.stringify(resData).slice(0, 2000));
+    throw new Error('No images found in relay response');
+  }
+
+  console.log(`[image-generator] relay completed: ${resultImages.length} image(s)`);
+  return resultImages;
 }
 
 /**
@@ -306,25 +485,49 @@ export async function generateSingleImage(params: GenerateSingleImageParams): Pr
   let images: { mediaType: string; uint8Array: Uint8Array }[];
 
   if (family === 'openai') {
-    const openai = createOpenAI({
-      apiKey: provider.api_key,
-      baseURL: provider.base_url || undefined,
-    });
-    const size = mapAspectToOpenAISize(aspectRatio, imageSize, requestedModel);
-    // When reference images are present, pass them as `prompt.images` — the
-    // ai SDK routes this to /images/edits for OpenAI (see @ai-sdk/openai
-    // image doGenerate) and supplies them as `input_image` for Gemini.
-    const prompt = refImageData.length > 0
-      ? { text: params.prompt, images: refImageData }
-      : params.prompt;
-    const result = await generateImage({
-      model: openai.image(requestedModel),
-      prompt,
-      size,
-      maxRetries: 3,
-      abortSignal: params.abortSignal || AbortSignal.timeout(300_000),
-    });
-    images = result.images.map(img => ({ mediaType: img.mediaType, uint8Array: img.uint8Array }));
+    // Check if this is a relay platform with async task-based API
+    // (e.g. 神马中转). These use /v1/images/edits with FormData + polling,
+    // not the standard OpenAI /v1/images/generations JSON API.
+    // Any non-official-OpenAI base_url with media_protocol set is a relay.
+    const isOfficialOpenAI = /api\.openai\.com/i.test(provider.base_url || '');
+    let isRelayPlatform = !isOfficialOpenAI;
+    try {
+      const opts = JSON.parse(provider.options_json || '{}');
+      // If media_protocol is explicitly set, respect it
+      if (opts.media_protocol) {
+        isRelayPlatform = true;
+      }
+    } catch { /* ignore */ }
+
+    if (isRelayPlatform) {
+      images = await generateImageViaRelay({
+        baseUrl: provider.base_url,
+        apiKey: provider.api_key,
+        model: requestedModel,
+        prompt: params.prompt,
+        aspectRatio,
+        imageSize,
+        referenceImages: refImageData,
+        abortSignal: params.abortSignal,
+      });
+    } else {
+      const openai = createOpenAI({
+        apiKey: provider.api_key,
+        baseURL: provider.base_url || undefined,
+      });
+      const size = mapAspectToOpenAISize(aspectRatio, imageSize, requestedModel);
+      const prompt = refImageData.length > 0
+        ? { text: params.prompt, images: refImageData }
+        : params.prompt;
+      const result = await generateImage({
+        model: openai.image(requestedModel),
+        prompt,
+        size,
+        maxRetries: 3,
+        abortSignal: params.abortSignal || AbortSignal.timeout(300_000),
+      });
+      images = result.images.map(img => ({ mediaType: img.mediaType, uint8Array: img.uint8Array }));
+    }
   } else {
     const google = createGoogleGenerativeAI({
       apiKey: provider.api_key,

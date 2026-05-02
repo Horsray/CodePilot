@@ -11,6 +11,7 @@ import {
   isSessionWarmedUp,
   getWarmupStatus,
   getSignaturePoolDiagnostics,
+  closePersistentClaudeSession,
 } from '@/lib/persistent-claude-session';
 import { loadAllMcpServers } from '@/lib/mcp-loader';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
@@ -52,16 +53,27 @@ export async function POST(request: NextRequest) {
       working_directory,
       model: requestedModel,
       provider_id: requestedProviderId,
+      imageAgentMode,
     } = body as {
       session_id?: string;
       working_directory?: string;
       model?: string;
       provider_id?: string;
+      imageAgentMode?: boolean;
     };
 
     if (!session_id && !working_directory) {
       return Response.json({ error: 'session_id or working_directory is required' }, { status: 400 });
     }
+
+    console.log('========== [warmup API] ==========');
+    console.log('[warmup API] Request body:', JSON.stringify({
+      session_id,
+      model: requestedModel,
+      provider_id: requestedProviderId,
+      working_directory,
+      imageAgentMode,
+    }));
 
     const session = session_id ? getSession(session_id) : null;
     if (session_id && !session) {
@@ -73,7 +85,28 @@ export async function POST(request: NextRequest) {
     // 第二步：resolveForClaudeCode(explicitProvider, ...) 传入 provider 对象
     // 之前只用了 resolveForClaudeCode(undefined, ...)，导致签名中的 providerKey/env
     // 与 chat route 不匹配，WarmQuery 永远无法被消费。
-    const effectiveProviderId = requestedProviderId || session?.provider_id || '';
+    let effectiveProviderId = requestedProviderId || session?.provider_id || '';
+
+    // 中文注释：当 provider_id 为空但 model 有值时，搜索所有 provider 找到拥有该 model 的 provider。
+    // 否则 resolveProviderUnified 会通过 fallback chain 选择一个完全不同的 provider
+    //（如 DeepSeek 代替 MiniMax），导致签名 MISMATCH 和冷启动。
+    if (!effectiveProviderId && requestedModel) {
+      try {
+        const { getAllProviders, getModelsForProvider } = await import('@/lib/db');
+        const allProviders = getAllProviders();
+        for (const p of allProviders) {
+          if (!p.is_active) continue;
+          const models = getModelsForProvider(p.id);
+          if (models.some(m => m.model_id === requestedModel)) {
+            effectiveProviderId = p.id;
+            console.log(`[warmup API] Found provider ${p.name} (${p.id.slice(0, 8)}***) for model "${requestedModel}"`);
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn('[warmup API] Failed to search providers for model:', err);
+      }
+    }
     const unifiedResolved = resolveProviderUnified({
       providerId: effectiveProviderId || undefined,
       sessionProviderId: session?.provider_id || undefined,
@@ -83,6 +116,17 @@ export async function POST(request: NextRequest) {
     const resolved = resolveForClaudeCode(unifiedResolved.provider, {
       providerId: effectiveProviderId || undefined,
       sessionProviderId: session?.provider_id || undefined,
+    });
+
+    console.log('[warmup API] Resolution:', {
+      effectiveProviderId: effectiveProviderId || '(empty)',
+      resolvedProviderId: resolved.provider?.id?.slice(0, 8) + '***' || '(none)',
+      resolvedProviderName: resolved.provider?.name || '(none)',
+      resolvedModel: resolved.model || '(none)',
+      upstreamModel: resolved.upstreamModel || '(none)',
+      requestedModel: requestedModel || '(empty)',
+      sessionModel: session?.model || '(empty)',
+      sessionProviderId: session?.provider_id?.slice(0, 8) + '***' || '(empty)',
     });
 
     // 中文注释：准备 SDK 子进程环境变量和 shadow home
@@ -103,7 +147,7 @@ export async function POST(request: NextRequest) {
     ]);
     const warmupSessionId =
       session_id
-      || `warmup:${resolved.provider?.id || requestedProviderId || 'env'}:${requestedModel || session?.model || resolved.model || 'default'}:${resolvedCwd.path}`;
+      || `warmup:${resolved.provider?.id || requestedProviderId || 'env'}:${requestedModel || session?.model || resolved.model || 'default'}:${imageAgentMode ? 'imgagent' : 'normal'}:${resolvedCwd.path}`;
 
     // 中文注释：功能名称「OMC 预热对齐」，用法是在检测到已启用 OMC 插件时仍然允许
     // 启动持久会话预热，避免首轮消息每次都重新冷启动 Claude Code 进程。
@@ -227,14 +271,22 @@ export async function POST(request: NextRequest) {
 
     {
       const { createMediaImportMcpServer, MEDIA_MCP_SYSTEM_PROMPT } = await import('@/lib/media-import-mcp');
-      const { createImageGenMcpServer } = await import('@/lib/image-gen-mcp');
       queryOptions.mcpServers = {
         ...(queryOptions.mcpServers || {}),
         'codepilot-media': createMediaImportMcpServer(warmupSessionId, resolvedCwd.path),
-        'codepilot-image-gen': createImageGenMcpServer(warmupSessionId, resolvedCwd.path),
       };
+      // imageAgentMode=true 时不注册 codepilot-image-gen，注入 IMAGE_AGENT_SYSTEM_PROMPT
+      if (!imageAgentMode) {
+        const { createImageGenMcpServer } = await import('@/lib/image-gen-mcp');
+        queryOptions.mcpServers['codepilot-image-gen'] = createImageGenMcpServer(warmupSessionId, resolvedCwd.path);
+      }
       if (queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
-        queryOptions.systemPrompt.append += '\n\n' + MEDIA_MCP_SYSTEM_PROMPT;
+        if (imageAgentMode) {
+          const { IMAGE_AGENT_SYSTEM_PROMPT } = await import('@/lib/constants/image-agent-prompt');
+          queryOptions.systemPrompt.append += '\n\n' + IMAGE_AGENT_SYSTEM_PROMPT;
+        } else {
+          queryOptions.systemPrompt.append += '\n\n' + MEDIA_MCP_SYSTEM_PROMPT;
+        }
       }
     }
 
@@ -258,11 +310,11 @@ export async function POST(request: NextRequest) {
       'mcp__codepilot-widget',
       'mcp__codepilot-widget-guidelines',
       'mcp__codepilot-media',
-      'mcp__codepilot-image-gen',
+      ...(imageAgentMode ? [] : ['mcp__codepilot-image-gen']),
       'mcp__codepilot-cli-tools',
       'mcp__codepilot-dashboard',
       'mcp__codepilot-todo',
-      'codepilot_generate_image',
+      ...(imageAgentMode ? [] : ['codepilot_generate_image']),
       'codepilot_import_media',
       'codepilot_load_widget_guidelines',
       'codepilot_cli_tools_list',
@@ -372,6 +424,12 @@ export async function POST(request: NextRequest) {
       adoptPersistentClaudeSessionBySignature(signature, warmupSessionId);
     }
 
+    // imageAgentMode=true 时先销毁旧 session，确保 warmup 创建的新 session 无 codepilot-image-gen MCP。
+    // 这样 chat 请求复用 warmup session 时，模型看不到 image-gen 工具。
+    if (imageAgentMode) {
+      closePersistentClaudeSession(warmupSessionId);
+    }
+
     if (isSessionWarmedUp(warmupSessionId)) {
       console.log('[warmup API] Persistent session already warmed for', warmupSessionId);
       return Response.json({ warmed_up: true, from_cache: true, warmup_session_id: warmupSessionId });
@@ -386,11 +444,14 @@ export async function POST(request: NextRequest) {
       options: queryOptions,
       shadowHandle: setup.shadow || undefined,
     });
+    // 中文注释：即使 initData 为 null（超时/错误），entry 仍保留在 store 中且标记为 warmedUp。
+    // 检查 store 中的 entry 状态来决定 warmed_up，而非仅看 initData。
+    const entryWarmedUp = isSessionWarmedUp(warmupSessionId);
     // 中文注释：返回诊断信息给前端，方便用户在浏览器 console 中查看预热状态
     // from_pool 表示此次预热复用了签名池中的 session（零冷启动切换）
     const poolDiag = getSignaturePoolDiagnostics();
     return Response.json({
-      warmed_up: !!initData,
+      warmed_up: entryWarmedUp,
       from_pool: false, // warmupPersistentClaudeSession 内部已处理池复用，这里标记为新预热
       warmup_session_id: warmupSessionId,
       model: initData?.model || queryOptions.model,

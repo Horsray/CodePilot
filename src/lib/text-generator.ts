@@ -1,4 +1,4 @@
-import { streamText } from 'ai';
+import { streamText, generateText } from 'ai';
 import { createModel } from './ai-provider';
 
 export interface StreamTextParams {
@@ -24,10 +24,22 @@ export interface StreamTextParams {
  * for SDK proxy providers (Kimi, GLM, MiniMax, etc.) that expect short aliases.
  */
 export async function* streamTextFromProvider(params: StreamTextParams): AsyncIterable<string> {
-  const { languageModel } = createModel({
-    providerId: params.providerId,
-    model: params.model,
-  });
+  let languageModel: ReturnType<typeof createModel>['languageModel'];
+  try {
+    const result = createModel({
+      providerId: params.providerId,
+      model: params.model,
+    });
+    languageModel = result.languageModel;
+  } catch (err) {
+    const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error('[text-generator] createModel failed:', {
+      providerId: params.providerId || '(env)',
+      model: params.model,
+      error: errMsg,
+    });
+    throw err;
+  }
 
   const result = streamText({
     model: languageModel,
@@ -44,12 +56,61 @@ export async function* streamTextFromProvider(params: StreamTextParams): AsyncIt
 
 /**
  * Generate complete text (non-streaming) from the user's current provider.
- * Useful when you need the full response as a string.
+ * Uses generateText() instead of streamText() to get the full result including
+ * text, reasoning, finishReason, and usage — avoiding the issue where textStream
+ * is empty when the model outputs only thinking/reasoning tokens.
  */
 export async function generateTextFromProvider(params: StreamTextParams): Promise<string> {
-  const chunks: string[] = [];
-  for await (const chunk of streamTextFromProvider(params)) {
-    chunks.push(chunk);
+  let languageModel: ReturnType<typeof createModel>['languageModel'];
+  try {
+    const result = createModel({
+      providerId: params.providerId,
+      model: params.model,
+    });
+    languageModel = result.languageModel;
+  } catch (err) {
+    const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error('[text-generator] createModel failed:', {
+      providerId: params.providerId || '(env)',
+      model: params.model,
+      error: errMsg,
+    });
+    throw err;
   }
-  return chunks.join('');
+
+  const result = await generateText({
+    model: languageModel,
+    system: params.system,
+    prompt: params.prompt,
+    maxOutputTokens: params.maxTokens || 4096,
+    abortSignal: params.abortSignal || AbortSignal.timeout(120_000),
+  });
+
+  // 中文注释：通过 unknown 中间层访问 reasoning 属性，
+  // 不同版本 AI SDK 的 GenerateTextResult 类型定义可能不包含 reasoning。
+  const resultAny = result as unknown as Record<string, unknown>;
+
+  // Debug: log full result metadata to diagnose empty responses
+  if (!result.text?.trim()) {
+    console.warn('[text-generator] generateText returned empty text:', {
+      providerId: params.providerId || '(env)',
+      model: params.model,
+      finishReason: result.finishReason,
+      textLength: result.text?.length || 0,
+      reasoningLength: typeof resultAny.reasoning === 'string' ? resultAny.reasoning.length : 0,
+      usage: result.usage,
+    });
+  }
+
+  // Prefer text; fall back to reasoning if text is empty
+  // (some models put everything in reasoning when thinking is enabled)
+  const text = result.text?.trim();
+  if (text) return text;
+
+  if (typeof resultAny.reasoning === 'string' && resultAny.reasoning.trim()) {
+    console.log('[text-generator] Using reasoning as fallback text');
+    return resultAny.reasoning.trim();
+  }
+
+  return '';
 }

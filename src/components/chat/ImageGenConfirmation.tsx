@@ -23,7 +23,7 @@ interface ActiveImageInfo {
 }
 
 const ASPECT_RATIOS = [
-  '1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '21:9',
+  'auto', '1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '21:9',
 ] as const;
 
 const RESOLUTIONS = ['1K', '2K', '4K'] as const;
@@ -53,6 +53,7 @@ export function ImageGenConfirmation({
   referenceImages,
 }: ImageGenConfirmationProps) {
   const { t } = useTranslation();
+  const isZh = t('nav.chats') === '对话';
   const { sessionId: panelSessionId } = usePanel();
   const sessionId = sessionIdProp || panelSessionId;
   const { providerGroups } = useProviderModels(undefined, undefined, true);
@@ -61,12 +62,12 @@ export function ImageGenConfirmation({
   const [aspectRatio, setAspectRatio] = useState(
     ASPECT_RATIOS.includes(initialAspectRatio as typeof ASPECT_RATIOS[number])
       ? initialAspectRatio
-      : '1:1'
+      : 'auto'
   );
   const [resolution, setResolution] = useState(
     RESOLUTIONS.includes(initialResolution as typeof RESOLUTIONS[number])
       ? initialResolution
-      : '1K'
+      : '4K'
   );
 
   // Flatten models for easy selection
@@ -88,23 +89,6 @@ export function ImageGenConfirmation({
     }
     return null;
   });
-
-  // Update selectedModel when providerGroups load if not already set
-  useEffect(() => {
-    if (!selectedModel && allImageModels.length > 0) {
-      if (initialModel) {
-        for (const g of providerGroups) {
-          const m = g.models.find(m => m.value === initialModel);
-          if (m) {
-            setSelectedModel({ providerId: g.provider_id, modelId: m.value });
-            return;
-          }
-        }
-      }
-      // Fallback to first available
-      setSelectedModel({ providerId: allImageModels[0].providerId, modelId: allImageModels[0].modelId });
-    }
-  }, [providerGroups, selectedModel, initialModel, allImageModels]);
 
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<ImageGenResult | null>(null);
@@ -135,7 +119,31 @@ export function ImageGenConfirmation({
     };
   }, []);
 
-
+  // Update selectedModel when providerGroups or activeInfo load
+  useEffect(() => {
+    if (!selectedModel && allImageModels.length > 0) {
+      // 1. Try initialModel from AI code block
+      if (initialModel) {
+        for (const g of providerGroups) {
+          const m = g.models.find(m => m.value === initialModel);
+          if (m) {
+            setSelectedModel({ providerId: g.provider_id, modelId: m.value });
+            return;
+          }
+        }
+      }
+      // 2. Try active provider's configured default model
+      if (activeInfo?.model) {
+        const match = allImageModels.find(m => m.modelId === activeInfo.model);
+        if (match) {
+          setSelectedModel({ providerId: match.providerId, modelId: match.modelId });
+          return;
+        }
+      }
+      // 3. Fallback to first available
+      setSelectedModel({ providerId: allImageModels[0].providerId, modelId: allImageModels[0].modelId });
+    }
+  }, [providerGroups, selectedModel, initialModel, allImageModels, activeInfo?.model]);
   const handleStop = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort();
@@ -155,12 +163,15 @@ export function ImageGenConfirmation({
       const refData = referenceImages?.filter(r => r.data).map(r => ({ mimeType: r.mimeType, data: r.data! }));
       const refPaths = referenceImages?.filter(r => r.localPath).map(r => r.localPath!);
 
+      // "auto" → don't send aspectRatio, let backend decide
+      const resolvedAspectRatio = aspectRatio === 'auto' ? undefined : aspectRatio;
+
       const res = await fetch('/api/media/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          aspectRatio,
+          ...(resolvedAspectRatio ? { aspectRatio: resolvedAspectRatio } : {}),
           imageSize: resolution,
           sessionId,
           providerId: selectedModel?.providerId,
@@ -306,17 +317,14 @@ export function ImageGenConfirmation({
               • No active set at all (fresh install) → muted hint
             The endpoint already computes the modelLabel + stale flag; we
             just map them to the three UI variants here. */}
-        {activeInfo && !activeInfo.stale && activeInfo.modelLabel ? (
+        {activeInfo && !activeInfo.stale && activeInfo.providerName ? (
           <span
             className="inline-flex items-center gap-1 text-[11px] text-muted-foreground max-w-[55%] min-w-0"
-            title={`${activeInfo.modelLabel} · ${activeInfo.providerName ?? ''}`}
+            title={activeInfo.providerName}
           >
             <PaintBrush size={12} className="shrink-0" />
-            <span className="truncate">
-              <span className="text-foreground/80">{activeInfo.modelLabel}</span>
-              {activeInfo.providerName ? (
-                <span className="ml-1 text-muted-foreground/80">· {activeInfo.providerName}</span>
-              ) : null}
+            <span className="truncate text-foreground/80">
+              {activeInfo.providerName}
             </span>
           </span>
         ) : activeInfo?.stale ? (
@@ -400,7 +408,7 @@ export function ImageGenConfirmation({
                       : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-foreground/30'
                   )}
                 >
-                  {m.label} ({m.providerType === 'gemini-image' ? 'Google' : m.providerName})
+                  {m.label}{m.providerName ? ` (${m.providerName})` : ''}
                 </Button>
               ))}
             </div>
@@ -426,7 +434,7 @@ export function ImageGenConfirmation({
                     : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-foreground/30'
                 )}
               >
-                {ratio}
+                {ratio === 'auto' ? (isZh ? '自动' : 'Auto') : ratio}
               </Button>
             ))}
           </div>

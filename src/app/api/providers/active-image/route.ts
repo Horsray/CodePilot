@@ -12,6 +12,26 @@ function resolveModelForProvider(provider: ApiProvider): { model: string; modelL
   const isOpenAI = provider.provider_type === 'openai-image';
   const envKey = isOpenAI ? 'OPENAI_IMAGE_MODEL' : 'GEMINI_IMAGE_MODEL';
   let configuredModel = isOpenAI ? 'gpt-image-2' : 'gemini-3.1-flash-image-preview';
+
+  // For custom-media providers with _custom_models, use the first custom model
+  // as default (or role_models_json.default if it exists in the custom list).
+  try {
+    const envOv = JSON.parse(provider.env_overrides_json || '{}');
+    const parsedCustom = typeof envOv._custom_models === 'string' ? JSON.parse(envOv._custom_models) : envOv._custom_models;
+    if (Array.isArray(parsedCustom) && parsedCustom.length > 0) {
+      // Try role_models_json.default first
+      try {
+        const rm = JSON.parse(provider.role_models_json || '{}');
+        if (rm.default && parsedCustom.some((m: { modelId: string }) => m.modelId === rm.default)) {
+          const match = parsedCustom.find((m: { modelId: string }) => m.modelId === rm.default);
+          return { model: rm.default, modelLabel: match?.displayName || rm.default };
+        }
+      } catch { /* ignore */ }
+      // Fall back to first custom model
+      return { model: parsedCustom[0].modelId, modelLabel: parsedCustom[0].displayName || parsedCustom[0].modelId };
+    }
+  } catch { /* ignore */ }
+
   try {
     const env = JSON.parse(provider.extra_env || '{}');
     if (typeof env[envKey] === 'string' && env[envKey]) configuredModel = env[envKey];

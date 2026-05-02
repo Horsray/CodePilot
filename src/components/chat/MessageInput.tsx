@@ -48,6 +48,8 @@ interface MessageInputProps {
   onCommand?: (command: string) => void;
   onStop?: () => void;
   disabled?: boolean;
+  /** Disable only the submit button (e.g. during warmup), textarea remains editable */
+  disableSubmit?: boolean;
   isStreaming?: boolean;
   sessionId?: string;
   modelName?: string;
@@ -114,6 +116,7 @@ export function MessageInput({
   onCommand,
   onStop,
   disabled,
+  disableSubmit,
   isStreaming,
   sessionId,
   modelName,
@@ -374,6 +377,10 @@ export function MessageInput({
 
   const handleSubmit = useCallback(async (msg: { text: string; files: Array<{ type: string; url: string; filename?: string; mediaType?: string }> }, e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    // 中文注释：disabled 或 disableSubmit 时阻止发送（包括 Enter 快捷键），
+    // 确保预热完成前不能发消息。disabled 只控制按钮视觉状态，
+    // 表单 onSubmit 不受按钮 disabled 影响，必须手动检查。
+    if (disabled || disableSubmit) return;
     const content = inputValue.trim();
 
     popover.closePopover();
@@ -528,7 +535,7 @@ export function MessageInput({
     const finalContent = `${content}${mentionAppend}`.trim();
     const hasFiles = files.length > 0;
 
-    if ((!finalContent && !hasFiles) || disabled) return;
+    if ((!finalContent && !hasFiles) || disabled || disableSubmit) return;
 
     // Check if it's a direct slash command typed in the input.
     if (!hasFiles) {
@@ -567,7 +574,7 @@ export function MessageInput({
   );
   setInputValue('');
   setOptimizedOriginalText(null);
-}, [inputValue, mentionNodeTypes, onSend, onCommand, disabled, isStreaming, popover, badges, cliBadge, imageGen, addBadgeWithOrder, clearBadgesWithOrder, setCliBadge, setInputValue, setOptimizedOriginalText, fetchDirectorySummary, fetchMentionFileAttachment]);
+}, [inputValue, mentionNodeTypes, onSend, onCommand, disabled, disableSubmit, isStreaming, popover, badges, cliBadge, imageGen, addBadgeWithOrder, clearBadgesWithOrder, setCliBadge, setInputValue, setOptimizedOriginalText, fetchDirectorySummary, fetchMentionFileAttachment]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -879,7 +886,6 @@ export function MessageInput({
               onChange={(e) => slashCommands.handleInputChange(e.currentTarget.value)}
               onKeyDown={handleKeyDown}
               onFocus={handleAssistantFocus}
-              disabled={disabled}
               className="min-h-10"
             />
             <PromptInputFooter>
@@ -967,7 +973,7 @@ export function MessageInput({
               <FileAwareSubmitButton
                 status={chatStatus}
                 onStop={onStop}
-                disabled={disabled}
+                disabled={disabled || disableSubmit}
                 inputValue={inputValue}
                 hasBadge={hasBadge}
                 isImageAgentOn={imageGen.state.enabled}

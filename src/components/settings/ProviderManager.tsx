@@ -643,7 +643,21 @@ export function ProviderManager() {
                 {/* Media-provider model selector — capsule buttons */}
                 {(provider.provider_type === 'gemini-image' || provider.provider_type === 'openai-image') && (() => {
                   const isOpenAI = provider.provider_type === 'openai-image';
-                  const models = isOpenAI ? OPENAI_IMAGE_MODELS : GEMINI_IMAGE_MODELS;
+                  // Use user-configured models from _custom_models if available,
+                  // otherwise fall back to hardcoded catalog constants.
+                  let models = isOpenAI ? OPENAI_IMAGE_MODELS : GEMINI_IMAGE_MODELS;
+                  if (!isOpenAI) {
+                    try {
+                      const envOv = JSON.parse(provider.env_overrides_json || '{}');
+                      const parsed = typeof envOv._custom_models === 'string' ? JSON.parse(envOv._custom_models) : envOv._custom_models;
+                      if (Array.isArray(parsed) && parsed.length > 0) {
+                        models = parsed.map((m: { modelId: string; displayName: string }) => ({
+                          value: m.modelId,
+                          label: m.displayName || m.modelId,
+                        }));
+                      }
+                    } catch { /* keep default */ }
+                  }
                   const current = isOpenAI ? getOpenAIImageModel(provider) : getGeminiImageModel(provider);
                   const isActiveProvider = activeImageProviderId === provider.id;
                   return (

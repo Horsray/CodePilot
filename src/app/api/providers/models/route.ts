@@ -162,6 +162,30 @@ export async function GET(request: Request) {
       // Get models: DB provider_models first, then catalog defaults, then env fallback
       let rawModels: ModelEntry[];
 
+      // Check for _custom_models in env_overrides_json — if present, use ONLY
+      // those models (user-configured custom-media providers). Skip catalog
+      // defaults and role_models injection to avoid showing hardcoded models
+      // that don't exist on the user's relay platform.
+      let hasCustomModels = false;
+      try {
+        const envObj = JSON.parse(provider.env_overrides_json || '{}');
+        const parsedCustom = typeof envObj._custom_models === 'string' ? JSON.parse(envObj._custom_models) : envObj._custom_models;
+        if (Array.isArray(parsedCustom) && parsedCustom.length > 0) {
+          rawModels = parsedCustom
+            .filter((cm: { modelId?: string }) => cm.modelId)
+            .map((cm: { modelId: string; displayName?: string }) => ({
+              value: cm.modelId,
+              label: cm.displayName || cm.modelId,
+            }));
+          hasCustomModels = true;
+        } else {
+          rawModels = [];
+        }
+      } catch {
+        rawModels = [];
+      }
+
+      if (!hasCustomModels) {
       // 1) Check DB provider_models table
       let dbModels: { value: string; label: string; upstreamModelId?: string; capabilities?: Record<string, unknown> }[] = [];
       try {
@@ -252,6 +276,7 @@ export async function GET(request: Request) {
           rawModels.unshift({ value: envObj.ANTHROPIC_MODEL, label: envObj.ANTHROPIC_MODEL });
         }
       } catch { /* ignore */ }
+      } // end if (!hasCustomModels)
 
       const models = deduplicateModels(rawModels).map(m => {
         // Pass upstream so alias windows resolve per provider:

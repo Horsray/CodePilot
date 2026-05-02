@@ -101,6 +101,8 @@ export function PresetConnectDialog({
   const [showAdvanced, setShowAdvanced] = useState(false);
   // Structured model rows for custom-media: [{modelId, displayName}]
   const [customModels, setCustomModels] = useState<Array<{modelId: string; displayName: string}>>([{modelId: '', displayName: ''}]);
+  // Eye toggle for API key visibility (custom-media)
+  const [showApiKey, setShowApiKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -197,6 +199,7 @@ export function PresetConnectDialog({
     setTesting(false);
     setTestResult(null);
     setClearStoredKey(false);
+    setShowApiKey(false);
 
     if (isEdit && editProvider) {
       // Edit mode — pre-fill from existing provider
@@ -227,6 +230,12 @@ export function PresetConnectDialog({
           : (presetEnv['ANTHROPIC_API_KEY'] || '');
         setApiKey(defaultToken);
         setHasStoredKey(false);
+      } else if (preset.key === "custom-media" && editProvider.api_key) {
+        // custom-media: show the (masked) stored key directly in the input
+        // so users can see what's configured. The save logic will detect if
+        // the key unchanged (still masked) and omit it to preserve the real key.
+        setApiKey(editProvider.api_key);
+        setHasStoredKey(true);
       } else {
         setApiKey("");
         setHasStoredKey(!!editProvider.api_key);
@@ -261,8 +270,9 @@ export function PresetConnectDialog({
       // Parse structured custom models from env_overrides_json._custom_models
       try {
         const envOv = JSON.parse(editProvider.env_overrides_json || "{}");
-        if (Array.isArray(envOv._custom_models) && envOv._custom_models.length > 0) {
-          setCustomModels(envOv._custom_models.map((m: {modelId?: string; displayName?: string}) => ({
+        const parsedCustom = typeof envOv._custom_models === 'string' ? JSON.parse(envOv._custom_models) : envOv._custom_models;
+        if (Array.isArray(parsedCustom) && parsedCustom.length > 0) {
+          setCustomModels(parsedCustom.map((m: {modelId?: string; displayName?: string}) => ({
             modelId: m.modelId || '',
             displayName: m.displayName || '',
           })));
@@ -486,10 +496,10 @@ export function PresetConnectDialog({
       // Serialize structured custom models into env_overrides_json
       const validModels = customModels.filter(m => m.modelId.trim());
       if (validModels.length > 0) {
-        envOverridesObj._custom_models = validModels.map(m => ({
+        envOverridesObj._custom_models = JSON.stringify(validModels.map(m => ({
           modelId: m.modelId.trim(),
           displayName: m.displayName.trim(),
-        }));
+        })));
         // Also populate model_names for backward compatibility
         envOverridesObj.model_names = validModels.map(m => m.modelId.trim()).join(",");
       } else {
@@ -587,6 +597,11 @@ export function PresetConnectDialog({
       //       PUT body has no api_key → updateProvider() preserves DB value.
       //   create mode / no stored key → pass apiKey as-is (possibly "").
       const apiKeyForSave: string | undefined = (() => {
+        // custom-media: if the key is still the masked value from DB (starts with ***),
+        // omit it so the backend preserves the real stored key.
+        if (preset.key === "custom-media" && isEdit && hasStoredKey && editProvider?.api_key && apiKey === editProvider.api_key) {
+          return undefined;
+        }
         if (apiKey) return apiKey;
         if (isEdit && hasStoredKey && clearStoredKey) return "";
         if (isEdit && hasStoredKey) return undefined;
@@ -770,24 +785,37 @@ export function PresetConnectDialog({
                     </SelectContent>
                   </Select>
                 )}
-                <Input
-                  type={preset.key === "custom-media" ? "text" : "password"}
-                  value={apiKey}
-                  onChange={(e) => {
-                    setApiKey(e.target.value);
-                    // Typing a new key overrides any pending "clear" intent
-                    if (clearStoredKey) setClearStoredKey(false);
-                  }}
-                  placeholder={
-                    clearStoredKey
-                      ? (isZh ? "保存后将清空已存密钥" : "Stored key will be cleared on save")
-                      : hasStoredKey
-                      ? (isZh ? "已保存，留空则沿用原密钥" : "Saved — leave blank to keep existing")
-                      : (authStyle === "auth_token" ? "token-..." : "sk-...")
-                  }
-                  className="text-sm font-mono flex-1"
-                  autoFocus
-                />
+                <div className="flex gap-1.5 flex-1 min-w-0">
+                  <Input
+                    type={preset.key === "custom-media" ? (showApiKey ? "text" : "password") : "password"}
+                    value={apiKey}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                      // Typing a new key overrides any pending "clear" intent
+                      if (clearStoredKey) setClearStoredKey(false);
+                    }}
+                    placeholder={
+                      clearStoredKey
+                        ? (isZh ? "保存后将清空已存密钥" : "Stored key will be cleared on save")
+                        : hasStoredKey
+                        ? (isZh ? "已保存，留空则沿用原密钥" : "Saved — leave blank to keep existing")
+                        : (authStyle === "auth_token" ? "token-..." : "sk-...")
+                    }
+                    className="text-sm font-mono flex-1"
+                    autoFocus
+                  />
+                  {preset.key === "custom-media" && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="shrink-0 text-muted-foreground hover:text-foreground"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                    >
+                      {showApiKey ? "🙈" : "👁"}
+                    </Button>
+                  )}
+                </div>
               </div>
               {/* Show auth style badge for non-thirdparty presets (auto-determined) */}
               {preset.key !== "anthropic-thirdparty" && (

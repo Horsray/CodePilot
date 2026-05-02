@@ -807,7 +807,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
             'mcp__codepilot-widget',
             'mcp__codepilot-widget-guidelines',
             'mcp__codepilot-media',
-            'mcp__codepilot-image-gen',
+            // imageAgentMode 时禁止调用 image-gen 工具，强制模型输出 image-gen-request 代码块
+            ...(imageAgentMode ? [] : ['mcp__codepilot-image-gen']),
             'mcp__codepilot-cli-tools',
             'mcp__codepilot-dashboard',
             'mcp__codepilot-todo',
@@ -1075,16 +1076,17 @@ if (claudePath) {
         // 与 warmup route 保持一致，确保 mcpSignature 匹配。
         {
           const { createMediaImportMcpServer, MEDIA_MCP_SYSTEM_PROMPT } = await import('@/lib/media-import-mcp');
-          const { createImageGenMcpServer } = await import('@/lib/image-gen-mcp');
           queryOptions.mcpServers = {
             ...(queryOptions.mcpServers || {}),
             'codepilot-media': createMediaImportMcpServer(sessionId, resolvedWorkingDirectory.path),
-            'codepilot-image-gen': createImageGenMcpServer(sessionId, resolvedWorkingDirectory.path),
           };
-          // 中文注释：imageAgentMode 时跳过 MEDIA_MCP_SYSTEM_PROMPT 注入，
-          // 因为 IMAGE_AGENT_SYSTEM_PROMPT 指示 AI 输出 image-gen-request 结构化代码块，
-          // 与 MEDIA_MCP_SYSTEM_PROMPT 的"使用 MCP 工具直接生成"指令矛盾。
-          // MCP server 注册保持不变（保持 mcpSignature 一致），仅跳过系统提示词注入。
+          // 中文注释：imageAgentMode=true 时不注册 codepilot-image-gen MCP server。
+          // 这样模型完全看不到该工具，只能按 IMAGE_AGENT_SYSTEM_PROMPT 输出 image-gen-request 代码块。
+          // 签名不匹配会导致无法复用 warmup session，但这正是期望行为。
+          if (!imageAgentMode) {
+            const { createImageGenMcpServer } = await import('@/lib/image-gen-mcp');
+            queryOptions.mcpServers['codepilot-image-gen'] = createImageGenMcpServer(sessionId, resolvedWorkingDirectory.path);
+          }
           if (!imageAgentMode && queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + MEDIA_MCP_SYSTEM_PROMPT;
           }

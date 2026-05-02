@@ -438,6 +438,8 @@ export function buildPersistentClaudeSignature(params: {
     extraArgs: params.options.extraArgs,
     pathToClaudeCodeExecutable: params.options.pathToClaudeCodeExecutable,
     includeHookEvents: params.options.includeHookEvents,
+    // 中文注释：MCP server 列表纳入签名，确保不同 MCP 配置的 session 不会互相复用。
+    // 例如 imageAgentMode=true 时不注册 codepilot-image-gen，签名与默认模式不同。
     env: {
       ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
       ANTHROPIC_MODEL: env.ANTHROPIC_MODEL,
@@ -479,13 +481,13 @@ export function isSignatureCompatible(sig1: string, sig2: string): boolean {
     );
 
     if (!result) {
-      console.log('[isSignatureCompatible] MISMATCH:', {
-        providerKey: [a.providerKey, b.providerKey, a.providerKey === b.providerKey],
-        cwd: [a.cwd?.slice(-30), b.cwd?.slice(-30), a.cwd === b.cwd],
-        model: [a.model, b.model, a.model === b.model],
-        baseUrl: [a.env?.ANTHROPIC_BASE_URL, b.env?.ANTHROPIC_BASE_URL, a.env?.ANTHROPIC_BASE_URL === b.env?.ANTHROPIC_BASE_URL],
-        authKind: [a.env?.authKind, b.env?.authKind, a.env?.authKind === b.env?.authKind],
-      });
+      const diffs: string[] = [];
+      if (a.providerKey !== b.providerKey) diffs.push(`providerKey: "${a.providerKey}" vs "${b.providerKey}"`);
+      if (a.model !== b.model) diffs.push(`model: "${a.model}" vs "${b.model}"`);
+      if (a.cwd !== b.cwd) diffs.push(`cwd: "${a.cwd?.slice(-30)}" vs "${b.cwd?.slice(-30)}"`);
+      if (a.env?.ANTHROPIC_BASE_URL !== b.env?.ANTHROPIC_BASE_URL) diffs.push(`baseUrl: "${a.env?.ANTHROPIC_BASE_URL}" vs "${b.env?.ANTHROPIC_BASE_URL}"`);
+      if (a.env?.authKind !== b.env?.authKind) diffs.push(`authKind: "${a.env?.authKind}" vs "${b.env?.authKind}"`);
+      console.log(`[isSignatureCompatible] MISMATCH — ${diffs.join(', ') || 'unknown field'}`);
     }
 
     return result;
@@ -949,12 +951,10 @@ export async function warmupPersistentClaudeSession(params: {
   }
 
   // 中文注释：关键配置不兼容（provider/model/cwd/env 变化），移入池中保留而非销毁
-  const hadExistingEntry = !!entry;
   if (entry && !isSignatureCompatible(entry.signature, params.signature)) {
     moveToPool(params.codepilotSessionId, entry);
     entry = undefined;
   }
-  const wasSwitched = hadExistingEntry && !entry;
 
   // 中文注释：在创建新 entry 之前，先检查签名池是否有兼容的 session 可复用。
   // 这是模型切换零冷启动的关键：切走时旧 session 移入池中，切回时直接取出。
@@ -989,19 +989,15 @@ export async function warmupPersistentClaudeSession(params: {
     );
     store.set(params.codepilotSessionId, entry);
 
-    // 中文注释：功能名称「模型切换快速预热」，用法是检测到签名不兼容（模型/provider/cwd 变更）
-    // 时只创建 entry 启动 CLI 进程，立即返回不设 warmupPromise。
-    // 不启动后台 init 消费——避免与 chat turn 的 iterator.next() 并发调用同一 AsyncIterator。
-    // init 消息由 getPersistentClaudeTurn 的首次 iterator.next() 自然接收并 yield 为 SSE status。
-    if (wasSwitched) {
-      console.log('[warmupPersistentClaudeSession] Fast warmup for model switch — entry created, process starting in background');
-      return {
-        model: typeof params.options.model === 'string' ? params.options.model : '',
-        session_id: '',
-      };
-    }
-
-    // 中文注释：空白页预热→完整等待 init，确认进程可用后再返回
+    // 中文注释：完整预热——等待 init 确认进程可用后再返回。
+    // 无论是空白页预热还是模型切换，都需要等待 init 完成，否则：
+    // 1. 前端收到 warmed_up=false，发送按钮不会禁用，用户可能在冷启动状态下发送消息
+    // 2. warmupPromise 未设置，getPersistentClaudeTurn 不会等待 init，首轮冷启动
+    // 3. warmup 和 chat turn 可能并发调用 iterator.next()，导致消息丢失
+    //
+    // 容错策略：
+    // - 超时/错误时不销毁 session，保留在 store 中供首轮消息复用
+    // - 首轮消息通过 getPersistentClaudeTurn 会等待 warmupPromise，自然消费 init
     entry.warmupPromise = (async () => {
       try {
         // 中文注释：功能名称「预热 init 等待容错」，用法是在开启 hook 事件后，
@@ -1018,37 +1014,53 @@ export async function warmupPersistentClaudeSession(params: {
           const next = await Promise.race([nextPromise, timeoutPromise]);
 
           if (next.done) {
-            closePersistentClaudeSession(params.codepilotSessionId);
+            console.warn('[persistent-claude-session] Warmup: iterator done before init');
+            // 中文注释：不销毁 session，保留在 store 中。首轮消息会重新创建。
+            entry.warmedUp = true;
+            entry.lastUsedAt = Date.now();
+            scheduleWarmupIdleClose(params.codepilotSessionId, entry);
             return null;
           }
 
           const msg = next.value as SDKSystemMessage;
           const initData = extractWarmupInitData(msg);
           if (initData) {
-          entry.warmedUp = true;
-          entry.initData = initData;
-          entry.lastUsedAt = Date.now();
+            entry.warmedUp = true;
+            entry.initData = initData;
+            entry.lastUsedAt = Date.now();
 
-          // 中文注释：预热完成后启动空闲超时，30 分钟内无消息则关闭 session
-          scheduleWarmupIdleClose(params.codepilotSessionId, entry);
+            // 中文注释：预热完成后启动空闲超时，30 分钟内无消息则关闭 session
+            scheduleWarmupIdleClose(params.codepilotSessionId, entry);
 
-          return initData;
-        }
+            return initData;
+          }
 
           if (isWarmupSkippableSystemMessage(msg)) {
             continue;
           }
 
           console.warn('[persistent-claude-session] Warmup: received non-init message before init:', msg.type);
-          closePersistentClaudeSession(params.codepilotSessionId);
+          // 中文注释：非 init 消息——不销毁 session，让首轮消息自然处理
+          entry.warmedUp = true;
+          entry.lastUsedAt = Date.now();
+          scheduleWarmupIdleClose(params.codepilotSessionId, entry);
           return null;
         }
 
-        closePersistentClaudeSession(params.codepilotSessionId);
+        // 中文注释：超时——不销毁 session，保留在 store 中供首轮消息复用。
+        // 首轮消息的 getPersistentClaudeTurn 会等待 warmupPromise 完成后自然消费 init。
+        console.warn('[persistent-claude-session] Warmup timed out — entry kept for first message reuse');
+        entry.warmedUp = true;
+        entry.lastUsedAt = Date.now();
+        scheduleWarmupIdleClose(params.codepilotSessionId, entry);
         return null;
       } catch (error) {
-        console.warn('[persistent-claude-session] Warmup failed:', error);
-        closePersistentClaudeSession(params.codepilotSessionId);
+        // 中文注释：错误——不销毁 session，保留在 store 中供首轮消息复用。
+        // 首轮消息的 getPersistentClaudeTurn 会等待 warmupPromise 完成后自然消费 init。
+        console.warn('[persistent-claude-session] Warmup error (entry preserved):', error);
+        entry.warmedUp = true;
+        entry.lastUsedAt = Date.now();
+        scheduleWarmupIdleClose(params.codepilotSessionId, entry);
         return null;
       } finally {
         entry.warmupPromise = null;

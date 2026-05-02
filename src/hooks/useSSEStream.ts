@@ -248,6 +248,7 @@ function handleSSEEvent(
         // structured stats, so we intercept here before it hits the generic
         // notification branch which would pass the full message string.
         if (statusData.subtype === 'context_compressed') {
+          console.log('[useSSEStream] context_compressed:', statusData.stats);
           callbacks.onContextCompressed?.({
             message: statusData.message || '',
             messagesCompressed: statusData.stats?.messagesCompressed || 0,
@@ -256,6 +257,7 @@ function handleSSEEvent(
           return accumulated;
         }
         if (statusData.subtype === 'context_compressing') {
+          console.log('[useSSEStream] context_compressing:', statusData.percentage, 'charsGenerated:', statusData.charsGenerated);
           callbacks.onContextCompressing?.({
             percentage: statusData.percentage ?? 0,
             charsGenerated: statusData.charsGenerated ?? 0,
@@ -328,6 +330,7 @@ function handleSSEEvent(
       // silently; estimator fallback already covers the no-snapshot case.
       try {
         const snap = JSON.parse(event.data) as ContextUsageSnapshot;
+        console.log('[useSSEStream] context_usage:', JSON.stringify(snap));
         callbacks.onContextUsage?.(snap);
       } catch { /* estimator still applies */ }
       return accumulated;

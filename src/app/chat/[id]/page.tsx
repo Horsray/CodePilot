@@ -8,7 +8,6 @@ import { ChatView } from '@/components/chat/ChatView';
 import { SpinnerGap } from "@/components/ui/icon";
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
-import { isStreamActive } from '@/lib/stream-session-manager';
 import { preloadFileTreePanel } from '@/components/layout/panels/fileTreePanelLoader';
 import { prefetchRootFileTree } from '@/lib/file-tree-cache';
 
@@ -30,9 +29,6 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   const [sessionMode, setSessionMode] = useState<'code' | 'plan'>('code');
   const [sessionHasSummary, setSessionHasSummary] = useState(false);
   const [sessionSummaryBoundaryRowid, setSessionSummaryBoundaryRowid] = useState(0);
-  // 中文注释：会话预热状态，'idle' | 'warming' | 'ready' | 'failed'
-  const [warmupState, setWarmupState] = useState<'idle' | 'warming' | 'ready' | 'failed'>('idle');
-  const [warmupModel, setWarmupModel] = useState<string>('');
   const { workingDirectory, setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
   const targetFilePath = searchParams.get('file') || undefined;
   const { t } = useTranslation();
@@ -69,6 +65,12 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
           if (cancelled) return;
           const resolved = await resolveSessionModel(data.session.model || '', data.session.provider_id || '');
           if (cancelled) return;
+          console.log('[page.tsx] resolveSessionModel result:', {
+            sessionModel: data.session.model || '',
+            sessionProviderId: data.session.provider_id || '',
+            resolvedModel: resolved.model,
+            resolvedProviderId: resolved.providerId,
+          });
           setSessionModel(resolved.model);
           setSessionProviderId(resolved.providerId);
           setSessionPermissionProfile(data.session.permission_profile || 'default');
@@ -149,66 +151,10 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     };
   }, [id]);
 
-  // 中文注释：会话预热 — 在 session 信息和消息加载完成后，后台启动 SDK 子进程。
-  // 预热不阻塞 UI 渲染，用户可以立即看到对话界面并发送消息。
-  // 如果当前已有活跃 stream（用户切换会话后又切回来），跳过预热，
-  // 避免对已运行的 persistent session 造成干扰。
-  useEffect(() => {
-    if (!sessionInfoLoaded) return;
-
-    // 活跃 stream 已存在 → 服务器端正使用 persistent session，跳过预热
-    if (isStreamActive(id)) {
-      setWarmupState('ready');
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-
-    async function warmup() {
-      try {
-        setWarmupState('warming');
-        const res = await fetch('/api/chat/warmup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: id }),
-          signal: controller.signal,
-        });
-        if (cancelled) return;
-        if (res.ok) {
-          const data = await res.json();
-          // 中文注释：输出预热诊断信息到浏览器 console，方便排查预热问题
-          console.log('[warmup] Warmup completed:', {
-            warmed_up: data.warmed_up,
-            from_cache: data.from_cache,
-            session_id: data.warmup_session_id,
-            model: data.model,
-            provider_key: data.provider_key,
-            mcp_count: data.mcp_count,
-            mcp_names: data.mcp_names,
-          });
-          if (data.warmed_up && data.model) {
-            setWarmupModel(data.model);
-          }
-          setWarmupState(data.warmed_up ? 'ready' : 'failed');
-        } else {
-          console.warn('[warmup] Session warmup failed, will init on first message');
-          setWarmupState('failed');
-        }
-      } catch (err) {
-        if (!cancelled) {
-          console.warn('[warmup] Session warmup error:', err);
-          setWarmupState('failed');
-        }
-      }
-    }
-
-    warmup();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [id, sessionInfoLoaded]);
+  // 中文注释：预热统一由 ChatView 管理（useEffect([sessionId, currentModel, currentProviderId])），
+  // 不在 page.tsx 重复触发。原因是 page.tsx 的 sessionModel/sessionProviderId 来自 DB，
+  // 用户在 ChatView 中切换模型后 DB 值可能未更新，导致 page.tsx 用旧 provider 预热，
+  // ChatView 用新 provider 预热，签名不匹配，旧 entry 被丢弃，预热白费。
 
   // Auto-open file tree when jumping from a file search result
   useEffect(() => {
@@ -286,7 +232,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} warmupState={warmupState} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} initialSummaryBoundaryRowid={sessionSummaryBoundaryRowid} isLoading={loading} />
+      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} initialSummaryBoundaryRowid={sessionSummaryBoundaryRowid} isLoading={loading} />
     </div>
   );
 }

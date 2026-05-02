@@ -154,6 +154,8 @@ export function WebTerminalPanel({ terminalId }: { terminalId?: string }) {
   const executeCommand = useCallback((cmd: string) => {
     window.dispatchEvent(new CustomEvent("terminal:execute-command", { detail: { command: cmd } }));
     setShowQuickCmds(false);
+    // 桌面端侧边栏关闭后需恢复终端焦点，否则光标会跳到最左边
+    setTimeout(() => window.dispatchEvent(new CustomEvent('action:focus-terminal')), 50);
   }, []);
 
   const addCommand = useCallback(() => {
@@ -529,6 +531,7 @@ function SingleTerminalSession({
       const detail = (e as CustomEvent).detail as { command: string } | undefined;
       if (!detail || !xtermRef.current) return;
       terminal.write(detail.command + "\r");
+      xtermRef.current?.focus();
       pendingExecuteCommand = null;
     };
     window.addEventListener("terminal:execute-command", handler);

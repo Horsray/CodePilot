@@ -19,7 +19,7 @@ import { generateSingleImage, NoImageGeneratedError } from '@/lib/image-generato
  */
 export const MEDIA_RESULT_MARKER = '__MEDIA_RESULT__';
 
-export function createImageGenMcpServer(sessionId?: string, workingDirectory?: string) {
+export function createImageGenMcpServer(sessionId?: string, workingDirectory?: string, imageAgentMode?: boolean) {
   return createSdkMcpServer({
     name: 'codepilot-image-gen',
     version: '1.0.0',
@@ -29,11 +29,18 @@ export function createImageGenMcpServer(sessionId?: string, workingDirectory?: s
         'Generate an image using Gemini. The generated image will automatically appear inline in the chat and be saved to the media library. Use this when the user asks you to create, draw, or generate an image. Write prompts in English for best results.',
         {
           prompt: z.string().describe('Detailed image generation prompt in English'),
-          aspectRatio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).optional().describe('Aspect ratio. One of: 1:1, 16:9, 9:16, 4:3, 3:4. Default: 1:1'),
-          imageSize: z.enum(['1K', '2K']).optional().describe('Output resolution — parameter name is "imageSize" (NOT "resolution"). One of: 1K, 2K. Default: 1K'),
+          aspectRatio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).optional().describe('Aspect ratio. Only pass if user explicitly requests a specific ratio. Do NOT default to 1:1 — omit to let backend decide.'),
+          imageSize: z.enum(['1K', '2K', '4K']).optional().describe('Output resolution — parameter name is "imageSize" (NOT "resolution"). Only pass if user explicitly requests. Do NOT default to 1K.'),
           referenceImagePaths: z.array(z.string()).optional().describe('Paths to reference images for style/content guidance'),
         },
         async ({ prompt, aspectRatio, imageSize, referenceImagePaths }) => {
+          // Double safety: if imageAgentMode is on, reject tool calls
+          if (imageAgentMode) {
+            return {
+              content: [{ type: 'text' as const, text: 'Image Agent mode is active. Use image-gen-request code block instead of calling this tool.' }],
+              isError: true,
+            };
+          }
           try {
             // generateSingleImage saves to disk + DB internally.
             // We return the localPaths as text so Claude can reference them
@@ -41,8 +48,8 @@ export function createImageGenMcpServer(sessionId?: string, workingDirectory?: s
             // MEDIA_RESULT_MARKER to inject media blocks into the SSE event.
             const result = await generateSingleImage({
               prompt,
-              aspectRatio,
-              imageSize,
+              aspectRatio: aspectRatio || undefined,
+              imageSize: imageSize || '4K',
               referenceImagePaths,
               sessionId,
               cwd: workingDirectory,

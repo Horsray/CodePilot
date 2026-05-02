@@ -171,6 +171,19 @@ export function findMatchingPreset(provider: ApiProvider): QuickPreset | undefin
   if (provider.protocol === "multi_head") {
     return QUICK_PRESETS.find(p => p.key === "multi-head-router");
   }
+  // custom-media (通用中转平台) — detect by name OR by _custom_models in env_overrides_json.
+  // Name-based match covers the common case; _custom_models check covers renamed providers.
+  const customMediaPreset = QUICK_PRESETS.find(p => p.key === "custom-media");
+  if (customMediaPreset) {
+    if (provider.name === "通用中转平台" || provider.name === "Custom media relay provider") {
+      return customMediaPreset;
+    }
+    // Fallback: provider has structured custom models → it was created as custom-media
+    try {
+      const envOv = JSON.parse(provider.env_overrides_json || '{}');
+      if (envOv._custom_models) return customMediaPreset;
+    } catch { /* ignore */ }
+  }
   // Exact base_url match (most specific)
   if (provider.base_url) {
     const match = QUICK_PRESETS.find(p => p.base_url && p.base_url === provider.base_url);

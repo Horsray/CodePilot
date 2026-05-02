@@ -25,8 +25,8 @@ You have access to media tools:
 
 ### codepilot_generate_image parameters:
 - prompt (required): Detailed image generation prompt in English
-- aspectRatio (optional): One of "1:1", "16:9", "9:16", "4:3", "3:4". Default: "1:1"
-- imageSize (optional): One of "1K", "2K". Default: "1K". NOTE: the parameter name is "imageSize", NOT "resolution"
+- aspectRatio (optional): One of "1:1", "16:9", "9:16", "4:3", "3:4". Only pass if user explicitly requests. Do NOT default to "1:1".
+- imageSize (optional): One of "1K", "2K", "4K". Only pass if user explicitly requests. Do NOT default to "1K". NOTE: the parameter name is "imageSize", NOT "resolution"
 - referenceImagePaths (optional): Array of file paths to reference images
 
 ### PRIORITY RULE (critical):

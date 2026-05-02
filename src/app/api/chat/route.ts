@@ -82,6 +82,11 @@ export async function POST(request: NextRequest) {
 
     // ── /compact command handler ────────────────────────────────────
     if (content.trim() === '/compact') {
+      console.log('[chat API] /compact handler entered, session:', session_id, 'model:', model || session?.model, 'provider_id:', provider_id || session?.provider_id);
+      // Helper: emit debug log (SSE not available before stream creation, use console only)
+      const writeDebug = (msg: string, data?: Record<string, unknown>) => {
+        console.log(`[chat API] /compact ${msg}`, data ?? '');
+      };
       try {
         const { compressConversation, resetCompressionState, filterHistoryByCompactBoundary } = await import('@/lib/context-compressor');
         const { getMessages: getDbMessages, getSessionSummary: getDbSummary, updateSessionSummary: updateDbSummary } = await import('@/lib/db');
@@ -113,6 +118,7 @@ export async function POST(request: NextRequest) {
           summaryBoundaryRowid: existingSummaryData.boundaryRowid,
         });
 
+        console.log('[chat API] /compact rowsToCompactCandidate:', rowsToCompactCandidate.length, 'existingSummary:', !!existingSummaryData.summary, 'boundaryRowid:', existingSummaryData.boundaryRowid);
         if (rowsToCompactCandidate.length < 4) {
           // Short path: either the whole conversation is short, or it's
           // already compacted and there's not enough NEW material to
@@ -164,6 +170,7 @@ export async function POST(request: NextRequest) {
             })}\n\n`);
           },
         }).then(result => {
+          console.log('[chat API] /compact result:', { messagesCompressed: result.messagesCompressed, estimatedTokensSaved: result.estimatedTokensSaved, summaryLength: result.summary?.length });
           const compactBoundaryRowid =
             rowsToCompactCandidate[rowsToCompactCandidate.length - 1]._rowid
             ?? existingSummaryData.boundaryRowid
@@ -180,7 +187,12 @@ export async function POST(request: NextRequest) {
             const { roughTokenEstimate } = require('@/lib/context-estimator') as typeof import('@/lib/context-estimator');
             const modelForWindow = model || session.model || 'sonnet';
             const maxTokens = (getContextWindow(modelForWindow, { context1m: context_1m }) || 200000);
-            const totalTokens = roughTokenEstimate(result.summary || '');
+            // Estimate post-compression context: summary + system prompt (~4000) + next-turn overhead (~500)
+            const summaryTokens = roughTokenEstimate(result.summary || '');
+            const systemPromptTokens = 4000;
+            const nextTurnOverhead = 500;
+            const totalTokens = summaryTokens + systemPromptTokens + nextTurnOverhead;
+            console.log(`[chat API] /compact context_usage: summaryTokens=${summaryTokens}, systemPrompt=${systemPromptTokens}, overhead=${nextTurnOverhead}, totalTokens=${totalTokens}, maxTokens=${maxTokens}, percentage=${(totalTokens / maxTokens * 100).toFixed(1)}%`);
             contextUsageFrame = `data: ${JSON.stringify({
               type: 'context_usage',
               data: JSON.stringify({
@@ -192,7 +204,7 @@ export async function POST(request: NextRequest) {
                 capturedAt: Date.now(),
               }),
             })}\n\n`;
-          } catch { /* best effort */ }
+          } catch (ctxErr) { console.error('[chat API] /compact context_usage estimation failed:', ctxErr); }
 
           writeSse(contextUsageFrame);
           writeSse(`data: ${JSON.stringify({
@@ -366,6 +378,7 @@ export async function POST(request: NextRequest) {
     // Detect actual image agent mode by checking for the specific design agent prompt,
     // not just any systemPromptAppend (which could come from CLI badges or skills).
     const isImageAgentMode = !!systemPromptAppend && systemPromptAppend.includes('image-gen-request');
+    console.log('[chat API] isImageAgentMode:', isImageAgentMode, 'systemPromptAppend length:', systemPromptAppend?.length || 0);
 
     // OMC / Claude Code CLI owns orchestration now. Do not inject
     // CodePilot-specific Team or search-routing reminders here.
@@ -1076,10 +1089,19 @@ async function collectStreamResponse(
           if (opts?.titleGenerationPromise) {
             try {
               aiTitleSucceeded = await opts.titleGenerationPromise;
-            } catch { /* generation already caught its own errors */ }
+            } catch (err) {
+              console.warn('[chat API] titleGenerationPromise rejected:', err instanceof Error ? err.message : err);
+            }
           }
 
           const session = getSession(sessionId);
+          console.log('[chat API] Title decision point:', {
+            sessionId,
+            aiTitleSucceeded,
+            currentTitle: session?.title || '(no session)',
+            titleGenerationStarted: !!opts?.titleGenerationPromise,
+            fullTextLength: fullText.length,
+          });
           if (session) {
             // Only replace if the AI title generation didn't produce a title
             // AND the title is still in its default state (not set by generator fallback either)
@@ -1087,11 +1109,18 @@ async function collectStreamResponse(
               !session.title
               || session.title === 'New Chat'
             );
+            console.log('[chat API] Title needs replacement:', {
+              needsReplacement,
+              reason: aiTitleSucceeded ? 'AI title succeeded' : (session.title && session.title !== 'New Chat' ? 'title already set by generator fallback' : 'title is empty or default'),
+              currentTitle: session.title,
+            });
             if (needsReplacement) {
               const extracted = extractTitleFromResponse(fullText);
               if (extracted && extracted !== session.title) {
                 updateSessionTitle(sessionId, extracted);
                 console.log('[chat API] Title extracted from response:', { from: session.title, to: extracted });
+              } else {
+                console.log('[chat API] Response extraction produced no new title:', { extracted: extracted || '(null)', currentTitle: session.title });
               }
             }
           }
