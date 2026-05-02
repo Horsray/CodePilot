@@ -390,17 +390,9 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, provider_id: newProviderId }),
     }).catch(() => {});
-    // 中文注释：切换模型/provider 后触发预热，让 WarmQuery Store 中的签名与新模型匹配，
-    // 避免下一轮消息因签名不匹配走冷启动
-    fetch('/api/chat/warmup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: sessionId,
-        model,
-        provider_id: newProviderId,
-      }),
-    }).catch(() => {});
+    // 中文注释：不再在此处触发预热 — 预热由 useEffect([sessionId, currentModel, currentProviderId])
+    // 统一管理，避免双重预热竞争同一进程。useEffect 会正确设置 runtimeWarmupState，
+    // 控制发送按钮和顶部状态提示。
   }, [sessionId]);
 
   // ── Extracted hooks ──
@@ -1196,6 +1188,14 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           </Button>
         </div>
       )}
+
+      {/* Warmup status banner — top center, non-blocking */}
+      {runtimeWarmupState === 'warming' && (
+        <div className="flex items-center justify-center gap-2 py-1.5 bg-muted/40 border-b border-border/30">
+          <SpinnerGap size={12} className="animate-spin text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">正在预热模型...</span>
+        </div>
+      )}
       <MessageList
         messages={messages}
         streamingContent={streamingContent}
@@ -1287,6 +1287,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         isCompressing={isCompressing}
         compressionProgress={compressionProgress}
         isLoading={isLoading}
+        contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
       />
       {workingDirectory && <MemoryPanelPortal workingDirectory={workingDirectory} />}
 
@@ -1342,7 +1343,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onSend={sendMessage}
         onCommand={handleCommand}
         onStop={stopStreaming}
-        disabled={false}
+        disabled={runtimeWarmupState === 'warming'}
         isStreaming={isStreaming}
         sessionId={sessionId}
         modelName={currentModel}

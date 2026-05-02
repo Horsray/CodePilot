@@ -1084,7 +1084,7 @@ if (claudePath) {
           // 中文注释：imageAgentMode 时跳过 MEDIA_MCP_SYSTEM_PROMPT 注入，
           // 因为 IMAGE_AGENT_SYSTEM_PROMPT 指示 AI 输出 image-gen-request 结构化代码块，
           // 与 MEDIA_MCP_SYSTEM_PROMPT 的"使用 MCP 工具直接生成"指令矛盾。
-          // MCP server 注册保持不变，仅跳过系统提示词注入。
+          // MCP server 注册保持不变（保持 mcpSignature 一致），仅跳过系统提示词注入。
           if (!imageAgentMode && queryOptions.systemPrompt && typeof queryOptions.systemPrompt === 'object' && 'append' in queryOptions.systemPrompt) {
             queryOptions.systemPrompt.append = (queryOptions.systemPrompt.append || '') + '\n\n' + MEDIA_MCP_SYSTEM_PROMPT;
           }

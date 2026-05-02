@@ -1020,9 +1020,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     authStyle: 'api_key',
     baseUrl: '',
     defaultEnvOverrides: { GEMINI_API_KEY: '' },
-    defaultModels: [
-      { modelId: 'gemini-3.1-flash-image-preview', displayName: 'Default Model' },
-    ],
+    defaultModels: [],
     fields: ['name', 'api_key', 'base_url', 'model_names'],
     category: 'media',
     iconKey: 'server',

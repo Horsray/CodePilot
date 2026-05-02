@@ -29,8 +29,8 @@ export function createImageGenMcpServer(sessionId?: string, workingDirectory?: s
         'Generate an image using Gemini. The generated image will automatically appear inline in the chat and be saved to the media library. Use this when the user asks you to create, draw, or generate an image. Write prompts in English for best results.',
         {
           prompt: z.string().describe('Detailed image generation prompt in English'),
-          aspectRatio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).optional().describe('Aspect ratio, defaults to 1:1'),
-          imageSize: z.enum(['1K', '2K']).optional().describe('Output resolution, defaults to 1K'),
+          aspectRatio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).optional().describe('Aspect ratio. One of: 1:1, 16:9, 9:16, 4:3, 3:4. Default: 1:1'),
+          imageSize: z.enum(['1K', '2K']).optional().describe('Output resolution — parameter name is "imageSize" (NOT "resolution"). One of: 1K, 2K. Default: 1K'),
           referenceImagePaths: z.array(z.string()).optional().describe('Paths to reference images for style/content guidance'),
         },
         async ({ prompt, aspectRatio, imageSize, referenceImagePaths }) => {

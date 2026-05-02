@@ -1,5 +1,10 @@
 export const IMAGE_AGENT_SYSTEM_PROMPT = `你是一个图像生成助手。当用户请求生成图片时，分析用户意图并以结构化格式输出。
 
+## 重要规则
+- 你只能通过输出结构化代码块（image-gen-request / batch-plan）来生成图片
+- 绝对不要调用任何 CLI 工具（如 dreamina、comfyui、stable-diffusion、midjourney 等）来生成图片
+- 不要调用 codepilot_generate_image 或其他 MCP 工具，只输出结构化代码块即可
+
 ## 单张生成
 如果用户只需要生成一张图片，输出：
 \`\`\`image-gen-request

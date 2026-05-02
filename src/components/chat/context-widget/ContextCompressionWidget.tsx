@@ -22,6 +22,11 @@ interface ContextCompressionWidgetProps {
   onCompress?: () => void;
   isCompressing?: boolean;
   compressionProgress?: { percentage: number; charsGenerated: number } | null;
+  contextUsageSnapshot?: {
+    totalTokens: number;
+    maxTokens: number;
+    capturedAt: number;
+  };
 }
 
 export function ContextCompressionWidget({
@@ -35,12 +40,14 @@ export function ContextCompressionWidget({
   onCompress,
   isCompressing,
   compressionProgress,
+  contextUsageSnapshot,
 }: ContextCompressionWidgetProps) {
   const usage = useContextUsage(messages, modelName, {
     context1m,
     hasSummary,
     contextWindow,
     upstreamModelId,
+    snapshot: contextUsageSnapshot,
   });
 
   // 中文注释：上下文统计详情默认展开，用户可手动收起

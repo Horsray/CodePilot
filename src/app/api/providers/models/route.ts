@@ -84,13 +84,18 @@ function deduplicateModels(models: ModelEntry[]): ModelEntry[] {
 const MEDIA_PROTOCOLS = new Set<string>(['gemini-image', 'openai-image']);
 const MEDIA_PROVIDER_TYPES = new Set(['gemini-image', 'openai-image']);
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const includeMedia = searchParams.get('includeMedia') === 'true';
+
     const providers = getAllProviders();
     const groups: ProviderModelGroup[] = [];
 
     // 中文注释：功能名称「Claude Code 模型组固定展示」，用法是在单一路径产品里
     // 始终返回内置 Claude Code 模型组，不再受历史 cli_enabled 设置或旧回退模式影响。
+    // 当 includeMedia=true 时跳过 env 组（只返回媒体提供商）。
+    if (!includeMedia) {
     const envHasDirectCredentials = !!(
       process.env.ANTHROPIC_API_KEY ||
       process.env.ANTHROPIC_AUTH_TOKEN ||
@@ -138,6 +143,7 @@ export async function GET() {
         // SDK capabilities not available, keep defaults
       }
     }
+    } // end if (!includeMedia)
 
     // Build a group for each configured provider
     for (const provider of providers) {
@@ -148,8 +154,10 @@ export async function GET() {
         provider.base_url,
       );
 
-      // Skip media-only providers in chat model selector
-      if (MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type)) continue;
+      // Filter by provider category
+      const isMediaProvider = MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type);
+      if (includeMedia && !isMediaProvider) continue;   // media request → only media providers
+      if (!includeMedia && isMediaProvider) continue;    // chat request → skip media providers
 
       // Get models: DB provider_models first, then catalog defaults, then env fallback
       let rawModels: ModelEntry[];
@@ -280,7 +288,8 @@ export async function GET() {
       });
     }
 
-    // Add OpenAI OAuth virtual provider when authenticated
+    // Add OpenAI OAuth virtual provider when authenticated (chat only)
+    if (!includeMedia) {
     try {
       const oauthStatus = getOAuthStatus();
       if (oauthStatus.authenticated) {
@@ -292,6 +301,7 @@ export async function GET() {
         });
       }
     } catch { /* OpenAI OAuth module not available */ }
+    } // end if (!includeMedia)
 
     // Determine default provider — auto-heal stale references on read
     let defaultProviderId = getDefaultProviderId();

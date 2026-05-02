@@ -12,6 +12,14 @@ const WARMUP_TIMEOUT_MS = 15_000;
 // 与 IDLE_TIMEOUT_MS 相同为 30 分钟，确保相近对话不需要重新加载
 const WARMUP_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
+// 中文注释：功能名称「会话池空闲超时」，用法是池中非活跃 session 保持存活的时间。
+// 池中的 session 是用户切走后保留的，比活跃 session 更快回收（10 分钟 vs 30 分钟）。
+const POOL_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
+// 中文注释：功能名称「会话池容量上限」，用法是最多保留的非活跃 session 数量。
+// 超出时按 LRU（最久未使用）淘汰，平衡内存占用和切换复用率。
+const POOL_MAX_SIZE = 3;
+
 // 中文注释：功能名称「轮次锁超时」，用法是 acquireTurn() 等待前一轮释放锁的最大时间。
 // 如果前一轮的 SDK 子进程崩溃或超时，release() 永远不会被调用，导致后续请求死锁。
 // 超时后强制释放锁并关闭僵死 session，让新请求可以创建新 session。
@@ -25,6 +33,7 @@ const ITERATOR_TIMEOUT_MS = 120_000;
 const GLOBAL_KEY = '__persistentClaudeSessions__' as const;
 const WARM_QUERY_GLOBAL_KEY = '__warmClaudeQueries__' as const;
 const PENDING_WARMUP_GLOBAL_KEY = '__pendingWarmupPromises__' as const;
+const SIGNATURE_POOL_KEY = '__persistentClaudeSignaturePool__' as const;
 
 class AsyncUserMessageQueue implements AsyncIterable<SDKUserMessage> {
   private readonly items: SDKUserMessage[] = [];
@@ -185,6 +194,127 @@ function getPendingWarmupStore(): Map<string, Promise<boolean>> {
     g[PENDING_WARMUP_GLOBAL_KEY] = new Map<string, Promise<boolean>>();
   }
   return g[PENDING_WARMUP_GLOBAL_KEY] as Map<string, Promise<boolean>>;
+}
+
+// ── Signature Pool ────────────────────────────────────────────────
+// 中文注释：功能名称「签名会话池」，用法是按签名哈希索引非活跃 session，
+// 切换模型时旧 session 不销毁而是移入池中，切回时直接复用，实现零冷启动切换。
+// 池内 session 受 POOL_IDLE_TIMEOUT_MS（10 分钟）控制，超出自动回收。
+// 池容量上限 POOL_MAX_SIZE（3 个），超出时按 LRU 淘汰最久未使用的。
+
+interface PoolEntry {
+  entry: PersistentClaudeEntry;
+  signature: string;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  lastUsedAt: number;
+}
+
+function getSignaturePool(): Map<string, PoolEntry> {
+  const g = globalThis as Record<string, unknown>;
+  if (!g[SIGNATURE_POOL_KEY]) {
+    g[SIGNATURE_POOL_KEY] = new Map<string, PoolEntry>();
+  }
+  return g[SIGNATURE_POOL_KEY] as Map<string, PoolEntry>;
+}
+
+function signatureHash(signature: string): string {
+  return hashValue(signature);
+}
+
+function clearPoolIdleTimer(poolEntry: PoolEntry): void {
+  if (poolEntry.idleTimer) {
+    clearTimeout(poolEntry.idleTimer);
+    poolEntry.idleTimer = null;
+  }
+}
+
+function schedulePoolIdleClose(hash: string, poolEntry: PoolEntry): void {
+  clearPoolIdleTimer(poolEntry);
+  poolEntry.idleTimer = setTimeout(() => {
+    const pool = getSignaturePool();
+    const current = pool.get(hash);
+    if (current === poolEntry && Date.now() - poolEntry.lastUsedAt >= POOL_IDLE_TIMEOUT_MS) {
+      console.log('[signature-pool] Idle timeout, evicting:', hash);
+      pool.delete(hash);
+      closeEntry(poolEntry.entry);
+    }
+  }, POOL_IDLE_TIMEOUT_MS);
+}
+
+/**
+ * Move an entry from the main store to the signature pool.
+ * The entry keeps its process alive; it's just indexed differently.
+ */
+function moveToPool(codepilotSessionId: string, entry: PersistentClaudeEntry): void {
+  const pool = getSignaturePool();
+  const hash = signatureHash(entry.signature);
+
+  // LRU eviction: if pool is full, remove the least recently used
+  if (pool.size >= POOL_MAX_SIZE && !pool.has(hash)) {
+    let oldestKey: string | null = null;
+    let oldestTime = Infinity;
+    for (const [k, v] of pool.entries()) {
+      if (v.lastUsedAt < oldestTime) {
+        oldestTime = v.lastUsedAt;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) {
+      const evicted = pool.get(oldestKey);
+      if (evicted) {
+        console.log('[signature-pool] LRU evicting:', oldestKey);
+        clearPoolIdleTimer(evicted);
+        closeEntry(evicted.entry);
+        pool.delete(oldestKey);
+      }
+    }
+  }
+
+  // Remove from main store (without closing the entry)
+  const store = getStore();
+  store.delete(codepilotSessionId);
+  clearIdleTimer(entry);
+
+  const poolEntry: PoolEntry = { entry, signature: entry.signature, idleTimer: null, lastUsedAt: Date.now() };
+  pool.set(hash, poolEntry);
+  schedulePoolIdleClose(hash, poolEntry);
+
+  console.log('[signature-pool] Moved to pool:', {
+    hash,
+    model: (() => { try { return JSON.parse(entry.signature).model; } catch { return '?'; } })(),
+    poolSize: pool.size,
+  });
+}
+
+/**
+ * Try to claim a compatible entry from the pool.
+ * Returns the entry if found, or null.
+ * The caller is responsible for setting it in the main store.
+ */
+function claimFromPool(signature: string): PersistentClaudeEntry | null {
+  const pool = getSignaturePool();
+
+  // First try exact hash match
+  const hash = signatureHash(signature);
+  const exact = pool.get(hash);
+  if (exact && isSignatureCompatible(exact.signature, signature)) {
+    pool.delete(hash);
+    clearPoolIdleTimer(exact);
+    console.log('[signature-pool] Claimed (exact match):', hash);
+    return exact.entry;
+  }
+
+  // Then try fuzzy match across all pool entries
+  for (const [k, v] of pool.entries()) {
+    if (isSignatureCompatible(v.signature, signature)) {
+      pool.delete(k);
+      clearPoolIdleTimer(v);
+      console.log('[signature-pool] Claimed (fuzzy match):', k);
+      return v.entry;
+    }
+  }
+
+  return null;
 }
 
 function stableStringify(value: unknown): string {
@@ -531,17 +661,30 @@ export function getPersistentClaudeTurn(params: {
   });
 
   if (entry && !reused) {
-    // 关键配置变化（provider/model/cwd），需要重建 session
-    console.log('[getPersistentClaudeTurn] Signature incompatible, destroying old entry and creating new one');
-    closeEntry(entry);
-    store.delete(params.codepilotSessionId);
+    // 关键配置变化（provider/model/cwd），移入池中保留而非销毁
+    console.log('[getPersistentClaudeTurn] Signature incompatible, moving old entry to pool');
+    moveToPool(params.codepilotSessionId, entry);
     entry = undefined;
   }
 
   if (!entry) {
-    entry = createEntry(params.codepilotSessionId, params.signature, params.options, params.shadowHandle);
-    store.set(params.codepilotSessionId, entry);
-    reused = false;
+    // 中文注释：在创建新 entry 之前，先检查签名池是否有兼容的 session 可复用
+    const pooled = claimFromPool(params.signature);
+    if (pooled) {
+      pooled.codepilotSessionId = params.codepilotSessionId;
+      pooled.currentOptions = params.options;
+      store.set(params.codepilotSessionId, pooled);
+      entry = pooled;
+      reused = true;
+      console.log('[getPersistentClaudeTurn] Reclaimed from pool:', {
+        model: (() => { try { return JSON.parse(params.signature).model; } catch { return '?'; } })(),
+        warmedUp: pooled.warmedUp,
+      });
+    } else {
+      entry = createEntry(params.codepilotSessionId, params.signature, params.options, params.shadowHandle);
+      store.set(params.codepilotSessionId, entry);
+      reused = false;
+    }
   } else if (reused) {
     // 中文注释：功能名称「动态回调委托更新」，用法是在复用预热或旧 session 时，
     // 将当前请求最新的 options（包含新的 canUseTool 和 stderr 等回调）赋值给 entry，
@@ -805,14 +948,37 @@ export async function warmupPersistentClaudeSession(params: {
     };
   }
 
-  // 中文注释：关键配置不兼容（provider/model/cwd/env 变化），销毁旧 session 重新预热
+  // 中文注释：关键配置不兼容（provider/model/cwd/env 变化），移入池中保留而非销毁
   const hadExistingEntry = !!entry;
   if (entry && !isSignatureCompatible(entry.signature, params.signature)) {
-    closeEntry(entry);
-    store.delete(params.codepilotSessionId);
+    moveToPool(params.codepilotSessionId, entry);
     entry = undefined;
   }
   const wasSwitched = hadExistingEntry && !entry;
+
+  // 中文注释：在创建新 entry 之前，先检查签名池是否有兼容的 session 可复用。
+  // 这是模型切换零冷启动的关键：切走时旧 session 移入池中，切回时直接取出。
+  if (!entry) {
+    const pooled = claimFromPool(params.signature);
+    if (pooled) {
+      pooled.codepilotSessionId = params.codepilotSessionId;
+      pooled.currentOptions = params.options;
+      store.set(params.codepilotSessionId, pooled);
+      console.log('[warmupPersistentClaudeSession] Reclaimed from pool:', {
+        model: (() => { try { return JSON.parse(params.signature).model; } catch { return '?'; } })(),
+        warmedUp: pooled.warmedUp,
+      });
+      if (pooled.warmedUp && pooled.initData) {
+        return pooled.initData;
+      }
+      // Entry exists but not warmed up yet (was mid-warmup when moved to pool)
+      // Return a fast response — init will happen naturally on first turn
+      return {
+        model: typeof params.options.model === 'string' ? params.options.model : '',
+        session_id: '',
+      };
+    }
+  }
 
   if (!entry) {
     entry = createEntry(
@@ -912,6 +1078,47 @@ export function isSessionWarmedUp(sessionId: string): boolean {
   return !!(entry?.warmedUp);
 }
 
+// 中文注释：功能名称「预热状态查询」，用法是返回指定 session 的完整预热状态，
+// 包括是否在主 store 中、是否已预热、是否有预热进行中、是否在池中有兼容 session。
+// 供前端轮询或一次性查询，用于控制 UI 状态（发送按钮、状态提示等）。
+export function getWarmupStatus(sessionId: string, signature?: string): {
+  inStore: boolean;
+  warmedUp: boolean;
+  warmingUp: boolean;
+  inPool: boolean;
+  model?: string;
+} {
+  const store = getStore();
+  const entry = store.get(sessionId);
+  if (entry) {
+    return {
+      inStore: true,
+      warmedUp: entry.warmedUp,
+      warmingUp: !!entry.warmupPromise,
+      inPool: false,
+      model: entry.initData?.model || ((): string | undefined => { try { return JSON.parse(entry.signature).model; } catch { return undefined; } })(),
+    };
+  }
+
+  // Check pool
+  if (signature) {
+    const pool = getSignaturePool();
+    for (const v of pool.values()) {
+      if (isSignatureCompatible(v.signature, signature)) {
+        return {
+          inStore: false,
+          warmedUp: v.entry.warmedUp,
+          warmingUp: !!v.entry.warmupPromise,
+          inPool: true,
+          model: v.entry.initData?.model || ((): string | undefined => { try { return JSON.parse(v.signature).model; } catch { return undefined; } })(),
+        };
+      }
+    }
+  }
+
+  return { inStore: false, warmedUp: false, warmingUp: false, inPool: false };
+}
+
 // 中文注释：获取预热缓存的 init 数据
 export function getWarmedUpInitData(sessionId: string): PersistentClaudeInitData | null {
   const entry = getStore().get(sessionId);
@@ -961,6 +1168,14 @@ export function closeAllPersistentClaudeSessions(): void {
     closeEntry(entry);
   }
   store.clear();
+
+  // Also clear the signature pool
+  const pool = getSignaturePool();
+  for (const poolEntry of pool.values()) {
+    clearPoolIdleTimer(poolEntry);
+    closeEntry(poolEntry.entry);
+  }
+  pool.clear();
 }
 
 export function closeWarmedNativeClaudeQuery(sessionId: string): void {
@@ -1079,6 +1294,18 @@ export function adoptPersistentClaudeSessionBySignature(signature: string, targe
 
 export function getPersistentClaudeSessionCount(): number {
   return getStore().size;
+}
+
+// 中文注释：签名池诊断信息，用于排查池中 session 状态
+export function getSignaturePoolDiagnostics(): { poolSize: number; entries: Array<{ hash: string; model: string; warmedUp: boolean; lastUsedAt: number }> } {
+  const pool = getSignaturePool();
+  const entries = Array.from(pool.entries()).map(([hash, v]) => ({
+    hash,
+    model: (() => { try { return JSON.parse(v.signature).model; } catch { return '?'; } })(),
+    warmedUp: v.entry.warmedUp,
+    lastUsedAt: v.lastUsedAt,
+  }));
+  return { poolSize: pool.size, entries };
 }
 
 // 中文注释：功能名称「WarmQuery 诊断信息」，用法是返回 WarmQuery Store 的摘要信息，

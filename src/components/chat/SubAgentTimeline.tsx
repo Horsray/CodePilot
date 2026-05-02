@@ -386,7 +386,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
 
                 {/* 任务摘要 + 当前工具调用（运行中） */}
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <span className="text-xs text-muted-foreground/70 truncate max-w-[300px]" title={agent.prompt}>
+                  <span className="text-xs text-muted-foreground/70 truncate" title={agent.prompt}>
                     {agent.prompt}
                   </span>
                   {currentTool && (
@@ -417,18 +417,14 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
               {/* agent.status === 'running' && recentLogs.length > 0 && !isExpanded && ... 被移除 */}
 
               {/* 展开详情 */}
-              <div
-                className={cn("grid transition-all duration-300 ease-in-out", isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}
-              >
-                <div className="overflow-hidden">
-                  <div className="px-3 py-2 border-t border-border/30 bg-muted/20 space-y-2">
-                  {/* 任务提示 */}
-                  <div className="text-[11px] text-muted-foreground/80 break-all whitespace-pre-wrap leading-relaxed">
-                    <span className="font-medium text-muted-foreground/60 mr-1">任务：</span>
+              {isExpanded && (
+                <div className="border-t border-border/30 bg-muted/20 space-y-2 px-3 py-2">
+                  {/* 任务详情 */}
+                  <div className="text-xs text-foreground/85 break-all whitespace-pre-wrap leading-relaxed">
                     {agent.prompt}
                   </div>
 
-                  {/* 当前工具调用高亮（运行中） */}
+                  {/* 运行中：当前工具调用高亮 */}
                   {agent.status === 'running' && currentTool && (
                     <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-blue-500/8 border border-blue-500/15">
                       <Gear size={11} className="text-blue-500 animate-spin shrink-0" />
@@ -437,7 +433,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                     </div>
                   )}
 
-                  {/* 运行进度 */}
+                  {/* 运行中：详细进度 */}
                   {agent.status === 'running' && currentProgress && (
                     <SubAgentProgress progress={currentProgress} />
                   )}
@@ -447,7 +443,7 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                     <SubAgentToolCalls toolCalls={agent.toolCalls} />
                   )}
 
-                  {/* 报告输出 */}
+                  {/* 已完成/异常：报告输出 */}
                   {(agent.status === 'completed' || agent.status === 'error') && terminalReport && (
                     <div className="text-[11px] text-muted-foreground/80 p-3 rounded-md bg-muted/30 border border-border/40 max-h-96 overflow-y-auto">
                       <div className="whitespace-pre-wrap break-words leading-relaxed">
@@ -455,9 +451,8 @@ export function SubAgentTimeline({ subAgents }: { subAgents: SubAgentInfo[] }) {
                       </div>
                     </div>
                   )}
-                  </div>
                 </div>
-              </div>
+              )}
             </div>
           );
         })}

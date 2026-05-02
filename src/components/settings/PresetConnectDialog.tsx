@@ -99,6 +99,8 @@ export function PresetConnectDialog({
   const [mediaEndpoint, setMediaEndpoint] = useState("");
   const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // Structured model rows for custom-media: [{modelId, displayName}]
+  const [customModels, setCustomModels] = useState<Array<{modelId: string; displayName: string}>>([{modelId: '', displayName: ''}]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -256,6 +258,33 @@ export function PresetConnectDialog({
         setMediaProtocol("custom-image");
         setMediaEndpoint("");
       }
+      // Parse structured custom models from env_overrides_json._custom_models
+      try {
+        const envOv = JSON.parse(editProvider.env_overrides_json || "{}");
+        if (Array.isArray(envOv._custom_models) && envOv._custom_models.length > 0) {
+          setCustomModels(envOv._custom_models.map((m: {modelId?: string; displayName?: string}) => ({
+            modelId: m.modelId || '',
+            displayName: m.displayName || '',
+          })));
+        } else {
+          // Fallback: try to parse from model_names (comma-separated, "id:displayName" format)
+          const modelNames = typeof envOv.model_names === "string" ? envOv.model_names : "";
+          if (modelNames) {
+            const parsed = modelNames.split(",").map((v: string) => v.trim()).filter(Boolean).map((entry: string) => {
+              const colonIdx = entry.indexOf(':');
+              if (colonIdx > 0) {
+                return { modelId: entry.slice(0, colonIdx).trim(), displayName: entry.slice(colonIdx + 1).trim() };
+              }
+              return { modelId: entry, displayName: '' };
+            });
+            setCustomModels(parsed.length > 0 ? parsed : [{modelId: '', displayName: ''}]);
+          } else {
+            setCustomModels([{modelId: '', displayName: ''}]);
+          }
+        }
+      } catch {
+        setCustomModels([{modelId: '', displayName: ''}]);
+      }
       // Pre-fill model name from role_models_json
       try {
         const rm = JSON.parse(editProvider.role_models_json || "{}");
@@ -324,6 +353,7 @@ export function PresetConnectDialog({
       if (preset.key === "custom-media") {
         setName("通用中转平台");
         setMediaProtocol("custom-image");
+        setCustomModels([{modelId: '', displayName: ''}]);
       }
       setShowAdvanced(preset.key.startsWith("minimax"));
     }
@@ -452,7 +482,21 @@ export function PresetConnectDialog({
       }
     }
 
-    if (preset.fields.includes("model_names")) {
+    if (preset.key === "custom-media") {
+      // Serialize structured custom models into env_overrides_json
+      const validModels = customModels.filter(m => m.modelId.trim());
+      if (validModels.length > 0) {
+        envOverridesObj._custom_models = validModels.map(m => ({
+          modelId: m.modelId.trim(),
+          displayName: m.displayName.trim(),
+        }));
+        // Also populate model_names for backward compatibility
+        envOverridesObj.model_names = validModels.map(m => m.modelId.trim()).join(",");
+      } else {
+        delete envOverridesObj._custom_models;
+        delete envOverridesObj.model_names;
+      }
+    } else if (preset.fields.includes("model_names")) {
       const parsedModelNames = modelNamesText
         .split(/[\n,]/)
         .map(v => v.trim())
@@ -727,7 +771,7 @@ export function PresetConnectDialog({
                   </Select>
                 )}
                 <Input
-                  type="password"
+                  type={preset.key === "custom-media" ? "text" : "password"}
                   value={apiKey}
                   onChange={(e) => {
                     setApiKey(e.target.value);
@@ -806,8 +850,8 @@ export function PresetConnectDialog({
             </div>
           )}
 
-          {/* Model name — for providers that need user-specified model */}
-          {preset.fields.includes("model_names") && (
+          {/* Model name — for providers that need user-specified model (hidden for custom-media, uses structured rows) */}
+          {preset.fields.includes("model_names") && preset.key !== "custom-media" && (
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">{t('provider.modelName' as TranslationKey)}</Label>
               <Input
@@ -824,7 +868,7 @@ export function PresetConnectDialog({
             </div>
           )}
 
-          {preset.fields.includes("model_names") && (
+          {preset.fields.includes("model_names") && preset.key !== "custom-media" && (
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">{isZh ? '可用模型列表（每行一个）' : 'Available Models (one per line)'}</Label>
               <Textarea
@@ -864,6 +908,58 @@ export function PresetConnectDialog({
                   className="text-sm font-mono"
                 />
               </div>
+              {/* Structured model rows */}
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">{isZh ? '模型列表' : 'Models'}</Label>
+                <div className="space-y-2">
+                  {customModels.map((m, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <Input
+                        value={m.modelId}
+                        onChange={(e) => {
+                          const next = [...customModels];
+                          next[idx] = { ...next[idx], modelId: e.target.value };
+                          setCustomModels(next);
+                        }}
+                        placeholder={isZh ? "模型 ID" : "Model ID"}
+                        className="text-sm font-mono flex-1 h-8"
+                      />
+                      <Input
+                        value={m.displayName}
+                        onChange={(e) => {
+                          const next = [...customModels];
+                          next[idx] = { ...next[idx], displayName: e.target.value };
+                          setCustomModels(next);
+                        }}
+                        placeholder={isZh ? "显示名称（可选）" : "Display name (optional)"}
+                        className="text-sm flex-1 h-8"
+                      />
+                      {customModels.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => {
+                            setCustomModels(customModels.filter((_, i) => i !== idx));
+                          }}
+                        >
+                          ×
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-primary hover:text-primary h-auto px-0 py-0.5"
+                  onClick={() => setCustomModels([...customModels, {modelId: '', displayName: ''}])}
+                >
+                  + {isZh ? '继续添加' : 'Add model'}
+                </Button>
+              </div>
             </>
           )}
 
@@ -880,8 +976,8 @@ export function PresetConnectDialog({
             </div>
           )}
 
-          {/* Advanced options — for presets that don't normally show extra_env */}
-          {!preset.fields.includes("extra_env") && (
+          {/* Advanced options — for presets that don't normally show extra_env (hidden for custom-media) */}
+          {!preset.fields.includes("extra_env") && preset.key !== "custom-media" && (
             <>
               <Button
                 type="button"

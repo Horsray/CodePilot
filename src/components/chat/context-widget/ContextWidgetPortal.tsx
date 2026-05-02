@@ -15,6 +15,11 @@ interface ContextWidgetPortalProps {
   isCompressing?: boolean;
   compressionProgress?: { percentage: number; charsGenerated: number } | null;
   isLoading?: boolean;
+  contextUsageSnapshot?: {
+    totalTokens: number;
+    maxTokens: number;
+    capturedAt: number;
+  };
 }
 
 export function ContextWidgetPortal(props: ContextWidgetPortalProps) {
@@ -39,5 +44,5 @@ export function ContextWidgetPortal(props: ContextWidgetPortalProps) {
 
   if (!container || props.isLoading) return null;
 
-  return createPortal(<ContextCompressionWidget {...props} compressionProgress={props.compressionProgress} />, container);
+  return createPortal(<ContextCompressionWidget {...props} compressionProgress={props.compressionProgress} contextUsageSnapshot={props.contextUsageSnapshot} />, container);
 }

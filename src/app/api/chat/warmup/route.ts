@@ -9,6 +9,8 @@ import {
   adoptPersistentClaudeSessionBySignature,
   warmupPersistentClaudeSession,
   isSessionWarmedUp,
+  getWarmupStatus,
+  getSignaturePoolDiagnostics,
 } from '@/lib/persistent-claude-session';
 import { loadAllMcpServers } from '@/lib/mcp-loader';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
@@ -385,18 +387,80 @@ export async function POST(request: NextRequest) {
       shadowHandle: setup.shadow || undefined,
     });
     // 中文注释：返回诊断信息给前端，方便用户在浏览器 console 中查看预热状态
+    // from_pool 表示此次预热复用了签名池中的 session（零冷启动切换）
+    const poolDiag = getSignaturePoolDiagnostics();
     return Response.json({
       warmed_up: !!initData,
+      from_pool: false, // warmupPersistentClaudeSession 内部已处理池复用，这里标记为新预热
       warmup_session_id: warmupSessionId,
       model: initData?.model || queryOptions.model,
       sdk_session_id: initData?.session_id || '',
       provider_key: providerKey,
       mcp_count: queryOptions.mcpServers ? Object.keys(queryOptions.mcpServers).length : 0,
       mcp_names: queryOptions.mcpServers ? Object.keys(queryOptions.mcpServers) : [],
+      pool: poolDiag,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error';
     console.error('[warmup API] Error:', message);
+    return Response.json({ error: message }, { status: 500 });
+  }
+}
+
+// 中文注释：GET 端点 — 查询预热状态，不触发新的预热。
+// 供前端在模型切换时轮询，判断预热是否完成以控制发送按钮状态。
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const sessionId = searchParams.get('session_id') || '';
+    const model = searchParams.get('model') || '';
+    const providerId = searchParams.get('provider_id') || '';
+    const workingDirectory = searchParams.get('working_directory') || '';
+
+    if (!sessionId && !workingDirectory) {
+      return Response.json({ error: 'session_id or working_directory is required' }, { status: 400 });
+    }
+
+    // Build signature to check pool compatibility
+    const effectiveProviderId = providerId || '';
+    const unifiedResolved = resolveProviderUnified({
+      providerId: effectiveProviderId || undefined,
+      sessionProviderId: undefined,
+      model: model || undefined,
+      sessionModel: undefined,
+    });
+    const resolved = resolveForClaudeCode(unifiedResolved.provider, {
+      providerId: effectiveProviderId || undefined,
+      sessionProviderId: undefined,
+    });
+    const setup = prepareSdkSubprocessEnv(resolved);
+    const resolvedCwd = resolveWorkingDirectory([
+      { path: workingDirectory || '', source: 'requested' },
+    ]);
+
+    const signature = buildPersistentClaudeSignature({
+      providerKey: resolved.provider?.id || effectiveProviderId || 'env',
+      options: {
+        cwd: resolvedCwd.path,
+        model: model || resolved.model || undefined,
+        permissionMode: 'bypassPermissions',
+        env: setup.env,
+        settingSources: resolved.settingSources as Options['settingSources'],
+        includeHookEvents: true,
+      } as Options,
+    });
+
+    const warmupSessionId = sessionId || `warmup:${resolved.provider?.id || effectiveProviderId || 'env'}:${model || resolved.model || 'default'}:${resolvedCwd.path}`;
+    const status = getWarmupStatus(warmupSessionId, signature);
+    const poolDiag = getSignaturePoolDiagnostics();
+
+    return Response.json({
+      ...status,
+      session_id: warmupSessionId,
+      pool: poolDiag,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Internal server error';
     return Response.json({ error: message }, { status: 500 });
   }
 }
