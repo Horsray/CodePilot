@@ -232,7 +232,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     const controller = new AbortController();
     warmupAbortRef.current = controller;
 
-    console.log('[ChatView] triggerWarmup:', { sessionId, model, providerId: providerId || '(empty)' });
+    console.log('[ChatView] triggerWarmup:', { sessionId, model, providerId: providerId || '(empty)', imageAgentMode });
     setRuntimeWarmupState('warming');
 
     fetch('/api/chat/warmup', {
@@ -242,6 +242,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         session_id: sessionId,
         model,
         provider_id: providerId,
+        imageAgentMode: !!imageAgentMode,
       }),
       signal: controller.signal,
     })
@@ -267,7 +268,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           setRuntimeWarmupState('failed');
         }
       });
-  }, [sessionId]);
+  }, [sessionId, imageAgentMode]);
 
   // Sync model/provider when session data loads, and trigger warmup for the resolved values.
   // 中文注释：当 session 信息加载完成（resolveSessionModel 解析出真实 model/provider），
@@ -287,6 +288,13 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       triggerWarmup(modelName, providerId || '');
     }
   }, [modelName, providerId, sessionId, triggerWarmup]);
+
+  // 中文注释：imageAgentMode 切换时触发新预热，确保 session 的 MCP 配置与模式匹配。
+  // imageAgentMode=true 时 warmup 会销毁旧 session 并创建不含 codepilot-image-gen 的新 session。
+  useEffect(() => {
+    if (!sessionId || !currentModel) return;
+    triggerWarmup(currentModel, currentProviderId || '');
+  }, [imageAgentMode ? 1 : 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 中文注释：预热失败后 5 秒自动隐藏 banner
   useEffect(() => {
@@ -444,7 +452,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
 
   const handleStreamCompleted = useCallback((phase: string) => {
     // Clear compressing state when any stream completes (success or error)
-    console.log('[ChatView] handleStreamCompleted phase:', phase, 'isCompressing was:', isCompressing);
     setIsCompressing(false);
     // Only reconcile on normal completion — both messages are persisted.
     // Error/stopped/idle-timeout paths emit 'completed' before the server
@@ -499,7 +506,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   // 2. Manual /compact: response message contains the compression marker
   useEffect(() => {
     if (!hasSummary && messages.some(m => m.role === 'assistant' && m.content.includes('上下文已压缩'))) {
-      console.log('[ChatView] Detected "上下文已压缩" in assistant message — setting hasSummary=true, isCompressing=false');
       setHasSummary(true);
       setIsCompressing(false);
     }
@@ -508,7 +514,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      console.log('[ChatView] context-compressed window event:', detail);
       if (detail?.sessionId === sessionId) {
         setHasSummary(true);
         setIsCompressing(false);
@@ -558,7 +563,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
-        console.log('[ChatView] context-compressing progress:', detail.percentage, 'charsGenerated:', detail.charsGenerated);
         setCompressionProgress({ percentage: detail.percentage ?? 0, charsGenerated: detail.charsGenerated ?? 0 });
       }
     };
@@ -920,7 +924,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onInitMeta: (meta) => {
           initMetaRef.current = meta;
           setSdkInitMeta(meta);
-          console.log('[ChatView] SDK init meta received:', meta);
         },
       });
     },
@@ -1336,7 +1339,6 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         upstreamModelId={currentModelMeta.upstreamModelId}
         toolFiles={toolFiles}
         onCompress={() => {
-          console.log('[ChatView] onCompress triggered — starting /compact stream (no user message)');
           setIsCompressing(true);
           setCompressionProgress({ percentage: 0, charsGenerated: 0 });
           doStartStream('/compact');

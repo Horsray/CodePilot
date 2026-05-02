@@ -380,3 +380,111 @@ pickImageProvider() 用 provider_type('gemini-image') 判定 SDK family 为 gemi
 
 ### Suggested Action
 1. 遇到 API 响应格式不匹配时，立即打印完整响应（包括 content 类型和预览），而非猜测格式 2. 中转平台 API 文档通常不可靠，优先通过日志确认实际响应结构 3. 对未知 API 响应，提取逻辑应覆盖更多格式变体（Markdown、JSON 字符串、嵌套对象等）
+
+## LRN-20260502-016 api-behavior
+**Category**: api-behavior
+**Priority**: high
+**Status**: pending
+**Area**: AI模型与工具集成架构
+**Pattern-Key**: ai.model.tool-call-concurrency
+**Recurrence-Count**: 1
+**Last-Seen**: 2026-05-02T13:11:59.331Z
+
+### Summary
+AI模型在调用独立工具时，即使任务无依赖，也倾向于串行执行而非自动并行，因此并发能力需要在客户端或工具端显式实现。
+
+### Details
+用户发现AI模型（如Claude）在调用`codepilot_generate_image`等独立工具时，不会自动将多个调用并行化。即使用户明确要求生成多张图片，模型也倾向于在一次回复中只输出一个`tool_use` block，导致任务串行执行。查看代码发现，虽然Claude Code SDK在技术上支持处理同一轮中的多个`tool_use` block并行执行，但模型的实际输出行为决定了这很少发生。因此，不能依赖模型的“智能”来自动编排并行任务。
+
+### Suggested Action
+放弃依赖AI模型自动并行编排的设计。对于批量生图需求，并行能力应显式实现在以下两个位置之一：1) MCP工具内部：为`codepilot_generate_image`添加`count`参数，由工具handler内部使用`Promise.allSettled`实现并行调用。2) 前端交互式卡片：由前端根据用户的“数量”选择，直接并行发起多个`/api/media/generate`请求。
+
+## LRN-20260502-017 failure
+**Category**: failure
+**Priority**: high
+**Status**: pending
+**Area**: credentials
+**Pattern-Key**: credentials.provided-but-ignored
+**Recurrence-Count**: 1
+**Last-Seen**: 2026-05-02T14:12:10.119Z
+
+### Summary
+助手忽略用户直接提供的敏感凭证，反而去搜索不存在的记忆系统。
+
+### Details
+用户在对话开头已明确提供了完整的SMTP邮件服务器配置信息（地址、端口、用户名、密码），但助手没有将这些信息作为当前可用的上下文，而是花费大量步骤去尝试从多个记忆系统（MEMORY.md、知识图谱、共享记忆）中查找本就不存在的配置，最终才向用户索要信息。
+
+### Suggested Action
+当用户直接提供具体的配置信息（尤其是敏感凭证）时，助手应首先将其视为当前会话的有效信息进行处理和使用，而不是假设其已被存储在外部记忆系统中。应建立“用户直接输入优先于检索”的处理流程。
+
+## LRN-20260502-018 correction
+**Category**: correction
+**Priority**: medium
+**Status**: pending
+**Area**: memory management
+**Pattern-Key**: memory.user-config.save
+**Recurrence-Count**: 1
+**Last-Seen**: 2026-05-02T14:16:50.276Z
+
+### Summary
+用户提供了邮箱配置，助手将其保存到项目记忆中以实现跨会话访问。
+
+### Details
+助手在用户请求增加邮件收发能力时，先尝试查找记忆系统中的邮箱配置（通过记忆文件和知识图谱）但未找到；用户提供SMTP服务器、端口、用户名、密码和个人邮箱后，助手创建了记忆文件（user_email_config.md）并更新了MEMORY.md索引，使得配置信息在后续会话中能自动加载和共享。
+
+### Suggested Action
+建议改进记忆系统的默认搜索流程或建立配置模板，以更高效地处理用户提供的敏感配置信息。
+
+## LRN-20260502-019 failure
+**Category**: failure
+**Priority**: medium
+**Status**: pending
+**Area**: 构建依赖管理
+**Pattern-Key**: build.dependency.missing
+**Recurrence-Count**: 1
+**Last-Seen**: 2026-05-02T14:18:31.949Z
+
+### Summary
+项目依赖不完整导致构建失败，需要安装缺失的xterm相关包。
+
+### Details
+用户报告预览失败，错误信息显示模块 '@xterm/addon-fit' 未找到。助手通过npm安装了 @xterm/xterm、@xterm/addon-fit 和 @xterm/addon-webgl 来解决。
+
+### Suggested Action
+在项目的package.json中确保包含所有必需的依赖，或在开发流程中加入依赖检查步骤。
+
+## LRN-20260502-020 workflow
+**Category**: workflow
+**Priority**: high
+**Status**: pending
+**Area**: dependency-management
+**Pattern-Key**: dependency-management.batch-install
+**Recurrence-Count**: 1
+**Last-Seen**: 2026-05-02T14:31:09.727Z
+
+### Summary
+在处理项目依赖问题时，一次性全面检查并安装所有缺失包可以避免多次错误和用户不满。
+
+### Details
+在增加邮件发送功能的过程中，助手多次遇到构建错误（如缺少@xterm/addon-fit、react-virtuoso、zustand等），需要逐个安装缺失包，导致用户多次刷新和反馈，最终要求一次性解决。这表明依赖检查和安装应该作为系统性的步骤，而不是零散的修复。
+
+### Suggested Action
+在项目开发中，当遇到构建错误或依赖问题时，应先运行一个全面的依赖检查脚本（例如检查package.json中所有依赖是否安装，或使用工具如depcheck），然后一次性安装所有缺失包，避免多次往返操作。
+
+## LRN-20260502-021 failure
+**Category**: failure
+**Priority**: medium
+**Status**: pending
+**Area**: build
+**Pattern-Key**: build.dependency-install-loop
+**Recurrence-Count**: 1
+**Last-Seen**: 2026-05-02T14:39:26.102Z
+
+### Summary
+修复构建错误时陷入‘安装一个缺失依赖 -> 发现另一个缺失’的循环，未一次性识别所有缺失包
+
+### Details
+用户报告项目预览失败，我逐个处理报错的缺失依赖（@xterm/addon-fit、react-virtuoso、zustand、@tailwindcss/postcss等），但每次修复后立即暴露新的缺失依赖，导致至少4轮来回沟通。根本原因是项目的 node_modules 状态不一致（部分包声明但未安装），而我的修复策略是‘看到什么报错就修什么’，没有预判性扫描。
+
+### Suggested Action
+在修复构建错误时，先运行一个脚本扫描项目源码中所有第三方 import，对比 node_modules 状态，一次性列出并安装所有缺失的包，避免逐个修复的循环。

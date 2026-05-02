@@ -1085,9 +1085,15 @@ function scheduleWarmupIdleClose(sessionId: string, entry: PersistentClaudeEntry
 }
 
 // 中文注释：检查指定 session 是否已完成预热
-export function isSessionWarmedUp(sessionId: string): boolean {
+// 当传入 signature 时，额外验证现有 session 的签名是否与请求的签名兼容。
+// 切换模型/Provider 后签名变化，旧 session 不应被视为"已预热"。
+export function isSessionWarmedUp(sessionId: string, signature?: string): boolean {
   const entry = getStore().get(sessionId);
-  return !!(entry?.warmedUp);
+  if (!entry?.warmedUp) return false;
+  if (signature && !isSignatureCompatible(entry.signature, signature)) {
+    return false;
+  }
+  return true;
 }
 
 // 中文注释：功能名称「预热状态查询」，用法是返回指定 session 的完整预热状态，

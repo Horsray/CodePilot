@@ -26,6 +26,7 @@ import {
   updateTimelineStatus,
   createTimelineAccumulator,
 } from '@/lib/agent-timeline';
+import { SubAgentTimeline } from './SubAgentTimeline';
 import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
 import { PENDING_KEY, buildReferenceImages } from '@/lib/image-ref-store';
 import type { PlannerOutput, MediaBlock, TimelineStep } from '@/types';
@@ -326,6 +327,7 @@ export function StreamingMessage({
   statusText,
   statusPayload,
   onForceStop,
+  subAgents = [],
 }: StreamingMessageProps) {
   const { t } = useTranslation();
   const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
@@ -542,11 +544,6 @@ export function StreamingMessage({
   const renderedContent = useMemo(() => {
     if (!cleanContent) return null;
 
-    // 中文注释：功能名称「防止thinking内容双重渲染」，用法是当时间线已包含thinking步骤时，
-    // 跳过MessageContent区域的渲染，避免thinking文本在时间线（12px约束容器）和消息区域
-    // （text-sm/14px Streamdown）同时渲染导致的字体闪现bug。
-    if (liveTimelineSteps.some(step => step.reasoning.trim())) return null;
-
     const contentToRender = cleanContent;
 
     const hasWidgetFence = /`{1,3}show-widget/.test(contentToRender);
@@ -731,7 +728,7 @@ export function StreamingMessage({
       .trim();
 
     return stripped ? <MessageResponse>{stripped}</MessageResponse> : null;
-  }, [bufferedContent, cleanContent, isStreaming, sessionId, t, liveTimelineSteps]);
+  }, [bufferedContent, cleanContent, isStreaming, sessionId, t]);
 
   return (
     <AIMessage from="assistant">
@@ -766,6 +763,11 @@ export function StreamingMessage({
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
         {mediaPreview}
+
+        {/* Sub-agent timeline cards — rendered during streaming for real-time progress */}
+        {subAgents && subAgents.length > 0 && (
+          <SubAgentTimeline subAgents={subAgents} />
+        )}
 
         {/* Streaming text content rendered via Streamdown */}
         {renderedContent}

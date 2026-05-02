@@ -32,8 +32,9 @@ export function createImageGenMcpServer(sessionId?: string, workingDirectory?: s
           aspectRatio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).optional().describe('Aspect ratio. Only pass if user explicitly requests a specific ratio. Do NOT default to 1:1 — omit to let backend decide.'),
           imageSize: z.enum(['1K', '2K', '4K']).optional().describe('Output resolution — parameter name is "imageSize" (NOT "resolution"). Only pass if user explicitly requests. Do NOT default to 1K.'),
           referenceImagePaths: z.array(z.string()).optional().describe('Paths to reference images for style/content guidance'),
+          count: z.number().min(1).max(4).optional().describe('Number of images to generate in parallel (1-4). Default 1. Use when user requests multiple images.'),
         },
-        async ({ prompt, aspectRatio, imageSize, referenceImagePaths }) => {
+        async ({ prompt, aspectRatio, imageSize, referenceImagePaths, count }) => {
           // Double safety: if imageAgentMode is on, reject tool calls
           if (imageAgentMode) {
             return {
@@ -42,30 +43,74 @@ export function createImageGenMcpServer(sessionId?: string, workingDirectory?: s
             };
           }
           try {
-            // generateSingleImage saves to disk + DB internally.
-            // We return the localPaths as text so Claude can reference them
-            // for continuous editing, and claude-client.ts detects the
-            // MEDIA_RESULT_MARKER to inject media blocks into the SSE event.
-            const result = await generateSingleImage({
+            const numImages = Math.min(Math.max(count || 1, 1), 4);
+            const genParams = {
               prompt,
               aspectRatio: aspectRatio || undefined,
               imageSize: imageSize || '4K',
               referenceImagePaths,
               sessionId,
               cwd: workingDirectory,
-            });
+            };
 
-            const mediaInfo = result.images.map(img => ({
-              type: 'image' as const,
-              mimeType: img.mimeType,
-              localPath: img.localPath,
-              mediaId: result.mediaGenerationId,
-            }));
+            if (numImages === 1) {
+              // Single image — original logic
+              const result = await generateSingleImage(genParams);
+
+              const mediaInfo = result.images.map(img => ({
+                type: 'image' as const,
+                mimeType: img.mimeType,
+                localPath: img.localPath,
+                mediaId: result.mediaGenerationId,
+              }));
+
+              const textResult = [
+                `Image generated successfully (${result.elapsedMs}ms).`,
+                `Local paths: ${result.images.map(img => img.localPath).join(', ')}`,
+                `${MEDIA_RESULT_MARKER}${JSON.stringify(mediaInfo)}`,
+              ].join('\n');
+
+              return {
+                content: [{ type: 'text' as const, text: textResult }],
+              };
+            }
+
+            // Multiple images — parallel execution
+            const results = await Promise.allSettled(
+              Array.from({ length: numImages }, () => generateSingleImage(genParams))
+            );
+
+            const allMediaInfo: Array<{ type: 'image'; mimeType: string; localPath: string; mediaId: string }> = [];
+            const allPaths: string[] = [];
+            const errors: string[] = [];
+
+            for (const r of results) {
+              if (r.status === 'fulfilled') {
+                for (const img of r.value.images) {
+                  allMediaInfo.push({
+                    type: 'image',
+                    mimeType: img.mimeType,
+                    localPath: img.localPath,
+                    mediaId: r.value.mediaGenerationId,
+                  });
+                  allPaths.push(img.localPath);
+                }
+              } else {
+                errors.push(r.reason?.message || 'Generation failed');
+              }
+            }
+
+            if (allMediaInfo.length === 0) {
+              return {
+                content: [{ type: 'text' as const, text: JSON.stringify({ success: false, error: errors.join('; ') || 'No images generated' }) }],
+                isError: true,
+              };
+            }
 
             const textResult = [
-              `Image generated successfully (${result.elapsedMs}ms).`,
-              `Local paths: ${result.images.map(img => img.localPath).join(', ')}`,
-              `${MEDIA_RESULT_MARKER}${JSON.stringify(mediaInfo)}`,
+              `${allMediaInfo.length}/${numImages} images generated successfully.`,
+              `Local paths: ${allPaths.join(', ')}`,
+              `${MEDIA_RESULT_MARKER}${JSON.stringify(allMediaInfo)}`,
             ].join('\n');
 
             return {

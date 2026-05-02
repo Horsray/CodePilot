@@ -576,6 +576,7 @@ const zh: Record<TranslationKey, string> = {
   'imageGen.generate': '生成',
   'imageGen.regenerate': '重新生成',
   'imageGen.download': '下载',
+  'imageGen.copy': '复制图片',
   'imageGen.prompt': '提示词',
   'imageGen.model': '模型',
   'imageGen.noApiKey': '请先在设置 > 服务商中配置 Gemini API Key',

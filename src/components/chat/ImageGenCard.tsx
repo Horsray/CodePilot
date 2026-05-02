@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { DownloadSimple, ArrowsCounterClockwise, PaintBrush } from '@/components/ui/icon';
+import { PaintBrush, Copy, DownloadSimple, ArrowsCounterClockwise } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { ImageLightbox } from './ImageLightbox';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
@@ -55,6 +56,18 @@ export function ImageGenCard({
     setLightboxOpen(true);
   }, []);
 
+  const handleCopy = useCallback(async (img: ImageGenImage) => {
+    const url = imageUrl(img);
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+    } catch {
+      // Fallback: copy URL
+      await navigator.clipboard.writeText(url);
+    }
+  }, []);
+
   const handleDownload = useCallback(async (img: ImageGenImage, index: number) => {
     const url = imageUrl(img);
     const ext = img.mimeType.split('/')[1] || 'png';
@@ -72,7 +85,6 @@ export function ImageGenCard({
       document.body.removeChild(link);
       URL.revokeObjectURL(blobUrl);
     } catch {
-      // Fallback: open in new tab
       window.open(url, '_blank');
     }
   }, []);
@@ -91,20 +103,33 @@ export function ImageGenCard({
       {/* Image grid */}
       <div className={cn('grid gap-2', gridCols)}>
         {images.map((img, i) => (
-          <Button
-            key={i}
-            variant="ghost"
-            onClick={() => handlePreview(i)}
-            className="relative group overflow-hidden rounded-md border border-border/30 bg-muted/30 p-0 h-auto"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imageUrl(img)}
-              alt={`${t('imageGen.generated' as TranslationKey)} ${i + 1}`}
-              className="w-full h-auto object-cover transition-transform group-hover:scale-[1.02]"
-            />
-            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
-          </Button>
+          <ContextMenu key={i}>
+            <ContextMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                onClick={() => handlePreview(i)}
+                className="relative group overflow-hidden rounded-md border border-border/30 bg-muted/30 p-0 h-auto"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={imageUrl(img)}
+                  alt={`${t('imageGen.generated' as TranslationKey)} ${i + 1}`}
+                  className="w-full h-auto object-cover transition-transform group-hover:scale-[1.02]"
+                />
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
+              </Button>
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem onClick={() => handleCopy(img)}>
+                <Copy size={14} className="mr-2" />
+                {t('imageGen.copy' as TranslationKey)}
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => handleDownload(img, i)}>
+                <DownloadSimple size={14} className="mr-2" />
+                {t('imageGen.download' as TranslationKey)}
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
         ))}
       </div>
 
@@ -157,26 +182,16 @@ export function ImageGenCard({
           )}
         </div>
 
-        <div className="flex items-center gap-1">
+        {onRegenerate && (
           <Button
             variant="ghost"
             size="icon-xs"
-            onClick={() => handleDownload(images[0], 0)}
-            title={t('imageGen.download' as TranslationKey)}
+            onClick={onRegenerate}
+            title={t('imageGen.regenerate' as TranslationKey)}
           >
-            <DownloadSimple size={14} />
+            <ArrowsCounterClockwise size={14} />
           </Button>
-          {onRegenerate && (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={onRegenerate}
-              title={t('imageGen.regenerate' as TranslationKey)}
-            >
-              <ArrowsCounterClockwise size={14} />
-            </Button>
-          )}
-        </div>
+        )}
       </div>
 
       <ImageLightbox

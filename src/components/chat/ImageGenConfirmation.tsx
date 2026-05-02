@@ -27,6 +27,7 @@ const ASPECT_RATIOS = [
 ] as const;
 
 const RESOLUTIONS = ['1K', '2K', '4K'] as const;
+const COUNTS = [1, 2, 3, 4] as const;
 
 interface ImageGenConfirmationProps {
   messageId?: string;
@@ -93,6 +94,13 @@ export function ImageGenConfirmation({
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<ImageGenResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Count: how many images to generate in parallel
+  // 0 or 1 reference images → user chooses (1-4)
+  // Multiple reference images → locked to reference count (1:1 mapping)
+  const refCount = referenceImages?.length || 0;
+  const countLocked = refCount > 1;
+  const [count, setCount] = useState(() => (countLocked ? refCount : 1));
   // Which provider + model the backend will use. We surface this in the card
   // header so the user can see whether Gemini / GPT Image (official or
   // third-party) is about to run before clicking Generate. Populated from
@@ -173,6 +181,7 @@ export function ImageGenConfirmation({
           prompt,
           ...(resolvedAspectRatio ? { aspectRatio: resolvedAspectRatio } : {}),
           imageSize: resolution,
+          count,
           sessionId,
           providerId: selectedModel?.providerId,
           model: selectedModel?.modelId,
@@ -272,7 +281,7 @@ export function ImageGenConfirmation({
     } finally {
       abortRef.current = null;
     }
-  }, [prompt, aspectRatio, resolution, initialPrompt, sessionId, messageId, referenceImages, selectedModel, rawRequestBlock]);
+  }, [prompt, aspectRatio, resolution, count, initialPrompt, sessionId, messageId, referenceImages, selectedModel, rawRequestBlock]);
 
   const handleRegenerate = useCallback(() => {
     setResult(null);
@@ -465,6 +474,33 @@ export function ImageGenConfirmation({
           </div>
         </div>
 
+        {/* Count selector — hidden when multiple reference images (locked to 1:1 mapping) */}
+        {!countLocked && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
+              {isZh ? '数量' : 'Count'}
+            </label>
+            <div className="flex items-center gap-1.5">
+              {COUNTS.map((n) => (
+                <Button
+                  key={n}
+                  variant="outline"
+                  size="xs"
+                  disabled={status === 'generating'}
+                  onClick={() => setCount(n)}
+                  className={cn(
+                    count === n
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                  )}
+                >
+                  {n}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Generate button */}
         {status === 'idle' && (
           <div className="pt-1">
@@ -474,7 +510,10 @@ export function ImageGenConfirmation({
               size="sm"
               className="gap-1.5"
             >
-              {t('imageGen.generateButton' as TranslationKey)}
+              {count > 1
+                ? (isZh ? `生成 ${count} 张图` : `Generate ${count} Images`)
+                : t('imageGen.generateButton' as TranslationKey)
+              }
             </Button>
           </div>
         )}
@@ -486,7 +525,10 @@ export function ImageGenConfirmation({
               <div className="flex items-center gap-2">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                 <span className="text-sm text-muted-foreground">
-                  {t('imageGen.generatingStatus' as TranslationKey)}
+                  {count > 1
+                    ? (isZh ? `生成中 (${count} 张)` : `Generating (${count} images)`)
+                    : t('imageGen.generatingStatus' as TranslationKey)
+                  }
                 </span>
               </div>
               <Button onClick={handleStop} variant="outline" size="sm">

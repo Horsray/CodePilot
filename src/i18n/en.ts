@@ -579,6 +579,7 @@ const en = {
   'imageGen.generate': 'Generate',
   'imageGen.regenerate': 'Regenerate',
   'imageGen.download': 'Download',
+  'imageGen.copy': 'Copy Image',
   'imageGen.prompt': 'Prompt',
   'imageGen.model': 'Model',
   'imageGen.noApiKey': 'Please configure Gemini API Key in Settings > Providers',

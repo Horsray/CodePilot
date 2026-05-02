@@ -28,6 +28,7 @@ You have access to media tools:
 - aspectRatio (optional): One of "1:1", "16:9", "9:16", "4:3", "3:4". Only pass if user explicitly requests. Do NOT default to "1:1".
 - imageSize (optional): One of "1K", "2K", "4K". Only pass if user explicitly requests. Do NOT default to "1K". NOTE: the parameter name is "imageSize", NOT "resolution"
 - referenceImagePaths (optional): Array of file paths to reference images
+- count (optional): Number 1-4. How many images to generate in parallel. Default 1. Use when user requests multiple images (e.g. "生成4张", "batch generate").
 
 ### PRIORITY RULE (critical):
 When the user asks to generate/create/draw an image, you MUST use codepilot_generate_image. Do NOT use CLI tools like dreamina, comfyui, stable-diffusion, midjourney, or any other CLI tool for image generation. The built-in tool handles provider selection, media library integration, and inline display automatically. CLI tools should ONLY be used when the user explicitly requests a specific CLI tool by name.

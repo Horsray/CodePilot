@@ -83,10 +83,6 @@ export async function POST(request: NextRequest) {
     // ── /compact command handler ────────────────────────────────────
     if (content.trim() === '/compact') {
       console.log('[chat API] /compact handler entered, session:', session_id, 'model:', model || session?.model, 'provider_id:', provider_id || session?.provider_id);
-      // Helper: emit debug log (SSE not available before stream creation, use console only)
-      const writeDebug = (msg: string, data?: Record<string, unknown>) => {
-        console.log(`[chat API] /compact ${msg}`, data ?? '');
-      };
       try {
         const { compressConversation, resetCompressionState, filterHistoryByCompactBoundary } = await import('@/lib/context-compressor');
         const { getMessages: getDbMessages, getSessionSummary: getDbSummary, updateSessionSummary: updateDbSummary } = await import('@/lib/db');

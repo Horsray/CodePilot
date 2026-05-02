@@ -1198,20 +1198,11 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
         );
       }
       if (result.status === 'completed' && result.images && result.images.length > 0) {
+        // 不在这里渲染 ImageGenCard — ImageGenConfirmation 已在流式阶段渲染了正确的预览图。
+        // DB 中只存了 mimeType + localPath（无 base64），在这里重新渲染会导致缩略图裂开。
         return (
           <>
             {genResult.beforeText && <MessageResponse>{genResult.beforeText}</MessageResponse>}
-            <ImageGenCard
-              images={result.images.map(img => ({
-                data: img.data || '',
-                mimeType: img.mimeType,
-                localPath: img.localPath,
-              }))}
-              prompt={result.prompt}
-              aspectRatio={result.aspectRatio}
-              imageSize={result.resolution}
-              model={result.model}
-            />
             {genResult.afterText && <MessageResponse>{genResult.afterText}</MessageResponse>}
           </>
         );
