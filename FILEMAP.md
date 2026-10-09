@@ -37,6 +37,7 @@
 | 模式切换 | `src/components/chat/ModeIndicator.tsx` | `src/app/api/chat/mode/route.ts` | — |
 | 模型选择 | `src/components/chat/ModelSelectorDropdown.tsx` | `src/app/api/chat/model/route.ts` | `src/lib/resolve-session-model.ts`（下拉 UI 对齐 cc-haha：搜索 + 服务商分组 + 管理服务商入口） |
 | 会话列表(侧栏) | `src/components/layout/ChatListPanel.tsx` | `src/app/api/chat/sessions/route.ts` | `src/lib/db.ts` getAllSessions |
+| 收藏会话(图钉) | `src/components/layout/ChatListPanel.tsx`（`pinned_at` 过滤 + 位置编排）、`SessionListItem.tsx`（行右侧图钉）、`PinnedSessionsSection.tsx`（收藏模块） | `src/app/api/chat/sessions/[id]/route.ts` (PATCH `pinned`) | `src/lib/db.ts` updateSessionPinned（`pinned_at` 空串=未收藏） |
 | 回退/重播 | — | `src/app/api/chat/rewind/route.ts` | `src/lib/file-checkpoint.ts` |
 | 代码审查 | — | `src/app/api/chat/review/route.ts` | `src/lib/diff-utils.ts` |
 | 后台任务 | — | `src/app/api/chat/background/route.ts` | `src/lib/background-job-manager.ts` |
@@ -213,8 +214,9 @@ src/app/settings/page.tsx                   # /settings 设置
 
 src/components/layout/AppShell.tsx          # 根布局壳（停靠侧栏 + 聊天卡片 + 右侧面板卡片）
   ├─ ChatListPanel                          # 左侧会话列表（停靠式，透明/深灰底）
-  │   ├─ SessionListItem                    # 单个会话行
-  │   └─ ProjectGroupHeader                 # 项目分组头
+  │   ├─ SessionListItem                    # 单个会话行（右侧图钉=收藏/取消收藏）
+  │   ├─ ProjectGroupHeader                 # 项目分组头
+  │   └─ PinnedSessionsSection              # 收藏会话模块（位于工作区分组「绘影智能体」下方；收藏的会话从原项目分组隐藏）
   ├─ UnifiedTopBar                          # 顶部导航栏（52px TabBar；右侧面板关闭时承载面板切换按钮）
   ├─ PanelZone                              # 右侧面板卡片（常驻挂载：52px 工具栏 + 内容区，cc-haha 布局）
   │   ├─ PanelToolbar                       # 面板切换按钮组（终端/浏览器/Git/文件树/看板，互斥打开；顺序与 cc-haha 一致）
@@ -241,7 +243,7 @@ src/components/layout/AppShell.tsx          # 根布局壳（停靠侧栏 + 聊�
 | 界面区域 | 组件文件 | 说明 |
 |---------|---------|------|
 | 顶部导航栏 | `src/components/layout/UnifiedTopBar.tsx` | 包含导航、搜索（更新提示已停用） |
-| 左侧会话栏 | `src/components/layout/ChatListPanel.tsx` | 会话列表、搜索、新建 |
+| 左侧会话栏 | `src/components/layout/ChatListPanel.tsx` | 会话列表、搜索、新建；收藏会话模块（`PinnedSessionsSection.tsx`）固定在工作区分组之下 |
 | 聊天输入区 | `src/components/chat/MessageInput.tsx` | 文本输入、附件、斜杠命令、快捷脚本、提示词优化、上下文统计；输入框上方独立文件待审查卡片（`FileReviewBar.tsx`，对齐 cc-haha） |
 | 快捷脚本菜单 | `src/components/chat/QuickScriptMenu.tsx` | ▶ 按钮 + 弹窗，终端执行本地脚本（`src/store/useQuickScriptStore.ts`） |
 | 提示音 | `src/lib/notificationSound.ts` | 三档合成音效（设置→外观可选），任务完成时播放 |

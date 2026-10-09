@@ -54,6 +54,53 @@ test('manual stop retains partial output even if the reader rejects with an ordi
   }
 });
 
+test('a connection drop without a local stop reason is not reported as a user interruption', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  Object.assign(globalThis, { window: new EventTarget() });
+  let rejectRead: (error: DOMException) => void = () => {};
+  let readStarted: () => void = () => {};
+  const pendingRead = new Promise<void>((resolve) => { readStarted = resolve; });
+  let index = 0;
+  const reader = {
+    read: async () => {
+      if (index++ === 0) return { done: false, value: new TextEncoder().encode('data: {"type":"text","data":"Long task output"}\n') };
+      readStarted();
+      return new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => { rejectRead = reject; });
+    },
+    cancel: async () => {},
+  };
+  globalThis.fetch = (async (url: string | URL | Request) => url === '/api/chat'
+    ? { ok: true, body: { getReader: () => reader } }
+    : { ok: true }) as typeof fetch;
+  const sessionId = `connection-drop-${Date.now()}`;
+  let finish: () => void = () => {};
+  const completion = new Promise<void>((resolve) => { finish = resolve; });
+  const unsubscribe = subscribe(sessionId, (event) => { if (event.type === 'completed') finish(); });
+  try {
+    startStream({ sessionId, content: 'hello', mode: 'code', model: 'test', providerId: 'test' });
+    await pendingRead;
+    // 模拟浏览器连接断开：没有任何本地中止原因（非 manual_stop / stream_replaced / 空闲超时）
+    const globals = globalThis as unknown as { __streamSessionManager__?: Map<string, { abortController: AbortController }> };
+    globals.__streamSessionManager__?.get(sessionId)?.abortController.abort();
+    rejectRead(new DOMException('Stream cancelled', 'AbortError'));
+    await completion;
+    const snapshot = getSnapshot(sessionId)!;
+    assert.equal(snapshot.terminalReason, 'connection_lost');
+    assert.notEqual(snapshot.terminalReason, 'user_cancel');
+    assert.ok(!snapshot.finalMessageContent?.includes('任务已由用户手动中断'));
+    assert.ok(snapshot.finalMessageContent?.includes('Long task output'));
+  } finally {
+    unsubscribe();
+    const globals = globalThis as unknown as { __streamSessionManager__?: Map<string, { gcTimer: ReturnType<typeof setTimeout> | null }> };
+    const stream = globals.__streamSessionManager__?.get(sessionId);
+    if (stream?.gcTimer) clearTimeout(stream.gcTimer);
+    globals.__streamSessionManager__?.delete(sessionId);
+    globalThis.fetch = originalFetch;
+    Object.assign(globalThis, { window: originalWindow });
+  }
+});
+
 test('DB reconciliation retains optimistic assistants until a persisted counterpart exists', () => {
   const message = (id: string, role: 'user' | 'assistant', content: string): Message => ({ id, session_id: 's', role, content, created_at: '2026-10-09T00:00:00Z', token_usage: null });
   const partial = message('temp-assistant-cancel', 'assistant', 'Visible output\n\n*(任务已由用户手动中断)*');
@@ -96,12 +143,20 @@ test('SDK forwards original error arrays on both result paths and assistant bill
   assert.match(read('src/components/chat/ChatView.tsx'), /getUnpersistedAssistantMessages\(current, dbMessages\)/);
 });
 
-test('a client-aborted SDK stream is classified as a user cancellation', () => {
+test('only an explicit user_cancel reason classifies an aborted SDK stream as user cancellation', () => {
   const claudeClient = read('src/lib/claude-client.ts');
 
+  // 手动中断经 interrupt 路由 → abortSessionRequest 下发 reason='user_cancel'，
+  // 这是「任务已由用户手动中断」的唯一依据。
   assert.match(
     claudeClient,
-    /abortController\?\.signal\.aborted[\s\S]*reason: 'user_cancel'/,
+    /abortController\?\.signal\.reason === 'user_cancel'/,
+  );
+  // 看门狗/空闲超时/连接断开等内部 abort（reason 为 AbortError 或 undefined）
+  // 不得再归类为用户中断，否则长任务被超时中止会误报「用户手动中断」。
+  assert.doesNotMatch(
+    claudeClient,
+    /abortController\?\.signal\.aborted\s*&&\s*!watchdogAborted/,
   );
 });
 

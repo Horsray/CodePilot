@@ -652,6 +652,12 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
               status = 'interrupted';
               break;
             }
+            // 中文注释：后台 Bash 任务（上传/构建/dev server）超过 15 分钟等待上限
+            // 优雅收尾——任务仍在后台运行，不能标成绿色「任务完成」误导用户。
+            if ((block.text as string).includes('后台任务仍在运行，本轮已结束等待')) {
+              status = 'interrupted';
+              break;
+            }
             const chatErrorMatch = (block.text as string).match(/```chat-error\n(\{.*?\})\n```/s);
             if (chatErrorMatch) {
               try {

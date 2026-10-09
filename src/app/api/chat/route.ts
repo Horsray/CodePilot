@@ -360,11 +360,10 @@ export async function POST(request: NextRequest) {
     const abortController = new AbortController();
     unregisterRequestController = registerRequestController(session_id, abortController);
 
-    // Handle client disconnect
-    request.signal.addEventListener('abort', () => {
-      abortController.abort('user_cancel');
-    });
-    if (request.signal.aborted) abortController.abort('user_cancel');
+    // 浏览器连接断开 ≠ 用户中断。真正的「用户中断」只由 POST /api/chat/interrupt
+    // 经 abortSessionRequest 产生（reason='user_cancel'）。这里不再借 request.signal
+    // 传导 user_cancel —— 前端连接抖动/页面刷新/系统休眠断开时，服务端任务继续
+    // 跑完并入库，避免长任务被误标为「任务已由用户手动中断」。
 
     // Convert file attachments to the format expected by streamClaude.
     // Include filePath from the already-saved files so claude-client can

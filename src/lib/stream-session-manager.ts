@@ -346,8 +346,14 @@ export function startStream(params: StartStreamParams): void {
 async function runStream(stream: ActiveStream, params: StartStreamParams): Promise<void> {
   const markActive = () => { stream.lastEventTime = Date.now(); };
 
-  // 中文注释：空闲超时检测器 — 深度思考阶段使用更长的超时值
+  // 中文注释：空闲超时检测器 — 深度思考阶段使用更长的超时值。
+  // 窗口隐藏（用户切到虚拟机/浏览器测试）时暂停计时：系统节流下事件可能
+  // 延迟到达，恢复可见后重置计时基准，避免把还活着的长任务误杀成中断。
   stream.idleCheckTimer = setInterval(() => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      stream.lastEventTime = Date.now();
+      return;
+    }
     const isThinking = !stream.thinkingPhaseEnded && stream.accumulatedThinking.length > 0;
     const timeoutMs = isThinking ? STREAM_THINKING_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
     if (Date.now() - stream.lastEventTime >= timeoutMs) {
@@ -1012,6 +1018,14 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       const note = '*(后台任务已返回，但主任务未能接收结果；正在自动继续原任务)*';
       finalAnswerText = finalAnswerText ? `${finalAnswerText}\n\n${note}` : note;
     }
+    // 中文注释：功能名称「后台任务等待超时收尾」，用法是后台 Bash 任务（上传/构建/
+    // dev server）超过 15 分钟仍未结束时，本轮优雅收尾——保留已产出内容，并写明
+    // 任务仍在后台运行、结果会保留，避免用户以为任务被终止了。phase 仍是 completed
+    // （不是 abort），用户可直接继续对话。
+    if (stream.snapshot.terminalReason === 'background_wait_timeout') {
+      const note = '*(后台任务仍在运行，本轮已结束等待；任务完成后的结果会保留在会话中，可直接继续对话)*';
+      finalAnswerText = finalAnswerText ? `${finalAnswerText}\n\n${note}` : note;
+    }
     if (stream.snapshot.terminalReason === 'user_cancel') {
       finalAnswerText = accumulated.trim() + '\n\n*(任务已由用户手动中断)*';
     }
@@ -1237,9 +1251,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolOutputAccumulated = '';
         emit(stream, 'completed');
         scheduleGC(stream);
-      } else {
-        // User manually stopped — preserve the visible partial turn and mark
-        // it as an intentional interruption rather than a failure.
+      } else if (stream.abortReason === 'manual_stop') {
+        // 用户手动停止（点停止按钮）—— 保留可见的部分轮次并标记为有意中断。
+        // 这是「任务已由用户手动中断」的唯一合法来源。
         const textPart = stream.accumulatedText.trim()
           ? stream.accumulatedText.trim() + '\n\n*(任务已由用户手动中断)*'
           : '*(任务已由用户手动中断)*';
@@ -1251,6 +1265,34 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
           terminalReason: 'user_cancel',
           error: null,
           finalMessageContent: buildFinalContent(textPart),
+          statusText: undefined,
+          statusPayload: undefined,
+          pendingPermission: null,
+          permissionResolved: null,
+        };
+        stream.accumulatedText = '';
+        stream.activityTextLength = 0;
+        stream.accumulatedThinking = '';
+        stream.fullThinking = '';
+        stream.toolUsesArray = [];
+        stream.toolResultsArray = [];
+        stream.toolOutputAccumulated = '';
+        emit(stream, 'completed');
+        scheduleGC(stream);
+      } else {
+        // 连接断开（AbortError 但无本地中止原因）—— 不是用户中断。
+        // 服务端任务继续跑完并入库，这里保留已产出内容并提示可刷新查看结果。
+        const textPart = stream.accumulatedText.trim()
+          ? stream.accumulatedText.trim() + '\n\n*(连接已中断，任务仍在后台继续；稍后刷新可查看最终结果)*'
+          : null;
+
+        stream.snapshot = {
+          ...buildSnapshot(stream),
+          phase: 'completed',
+          completedAt: Date.now(),
+          terminalReason: 'connection_lost',
+          error: null,
+          finalMessageContent: textPart ? buildFinalContent(textPart) : null,
           statusText: undefined,
           statusPayload: undefined,
           pendingPermission: null,

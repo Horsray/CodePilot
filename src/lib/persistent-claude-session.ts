@@ -39,6 +39,12 @@ const ITERATOR_TIMEOUT_MS = 600_000;
 // 后台 Agent 可能长时间静默运行，普通 10 分钟超时会把会话误判为挂起。
 const WAIT_ITERATOR_TIMEOUT_MS = 45 * 60_000;
 const SUBAGENT_WAIT_TIMEOUT_MS = 40 * 60_000;
+// 中文注释：功能名称「后台 Bash 任务等待上限」，用法是当等待的对象里含后台 Bash
+// 任务（run_in_background 的上传/构建/dev server）时使用的会话侧总时长上限。
+// 上限须明显大于 claude-client 的 BACKGROUND_BASH_WAIT_TIMEOUT_MS（15 分钟，到点后
+// 客户端对用户优雅收尾、进入排空模式继续消费注入帧），让会话侧晚于客户端收尾，
+// 排空随本生成器的自然结束而终止，避免残留帧滞留在 iterator 里污染下一轮。
+const BACKGROUND_TASK_WAIT_TIMEOUT_MS = 60 * 60_000;
 
 const GLOBAL_KEY = '__persistentClaudeSessions__' as const;
 const WARM_QUERY_GLOBAL_KEY = '__warmClaudeQueries__' as const;
@@ -805,7 +811,7 @@ export function getPersistentClaudeTurn(params: {
 
   clearIdleTimer(entry);
 
-  // 中文注释：判断该工具调用是否为「后台派发的子 Agent」。
+  // 中文注释：判断该工具调用是否为「后台派发的任务」。
   // 只有这些派发需要让本轮在收到 result 后继续挂住，等 SDK 的
   // task_notification 全部到达、内部汇总轮结束，才算真正收尾——
   // 否则对话会提前完成、追问还会读到上一轮的残留通知（答非所问）。
@@ -820,20 +826,29 @@ export function getPersistentClaudeTurn(params: {
     'mcp__codepilot-agent__Agent',
     'mcp__codepilot-team__Team',
   ]);
+  // 中文注释：run_in_background 的 Bash 任务（大文件上传、构建、dev server 等）
+  // 与后台子 Agent 同语义：result 到达后任务仍在运行，完成时由 SDK 注入
+  // <task-notification> 轮次。登记进等待表，否则会话会提前结束本轮，UI 在任务
+  // 仍在传输时就标记「任务完成」，残留帧还会污染下一条用户消息。
+  // Keep in sync with claude-client.ts (BASH_TOOL_PATTERN) — duplicated here to
+  // avoid a circular import (claude-client imports this module).
+  const BASH_TOOL_PATTERN = /^Bash$|^mcp__.*bash$/i;
+  function isBackgroundDispatchTool(name: string, input: unknown): boolean {
+    if ((input as { run_in_background?: boolean } | undefined)?.run_in_background !== true) return false;
+    return AGENT_TOOL_NAMES.has(name) || BASH_TOOL_PATTERN.test(name);
+  }
   function isBackgroundAgentDispatch(msg: SDKMessage): boolean {
     if (msg.type !== 'assistant') return false;
     const content = msg.message?.content;
     if (!Array.isArray(content)) return false;
     return content.some(
       (b: { type?: string; name?: string; input?: unknown }) =>
-        b.type === 'tool_use'
-        && AGENT_TOOL_NAMES.has(b.name || '')
-        && (b.input as { run_in_background?: boolean } | undefined)?.run_in_background === true
+        b.type === 'tool_use' && isBackgroundDispatchTool(b.name || '', b.input)
     );
   }
   // 中文注释：在 task_notification / task_updated 里按 task_id 或 tool_use_id 命中挂起的后台派发
   function resolveBgDispatch(
-    pending: Map<string, { taskId?: string }>,
+    pending: Map<string, { taskId?: string; kind?: 'agent' | 'bash' }>,
     toolUseId?: string,
     taskId?: string
   ): string | null {
@@ -863,7 +878,7 @@ export function getPersistentClaudeTurn(params: {
       // 收到首个 result 时若还有后台派发未回报（或已有 task_notification 触发
       // 的内部轮未走完），本轮继续消费 iterator（SDK 会注入
       // <task-notification> 轮次），直到全部完成后的汇总轮 result 才收尾。
-      const pendingBgAgents = new Map<string, { taskId?: string }>();
+      const pendingBgAgents = new Map<string, { taskId?: string; kind: 'agent' | 'bash' }>();
       // 中文注释：task_notification 会触发 SDK 内部再跑一轮模型，
       // 用计数器跟踪这些内部轮，等它们的 result 走完才能收尾，避免残留到下一轮。
       let pendingInternalTurns = 0;
@@ -898,11 +913,13 @@ export function getPersistentClaudeTurn(params: {
 
         // ── 后台派发跟踪 ──
         if (msg.type === 'assistant' && !waitingForAgents && isBackgroundAgentDispatch(msg)) {
-          const content = msg.message!.content as Array<{ type?: string; id?: string; name?: string }>;
+          const content = msg.message!.content as Array<{ type?: string; id?: string; name?: string; input?: unknown }>;
           for (const b of content) {
-            if (b.type === 'tool_use' && AGENT_TOOL_NAMES.has(b.name || '')) {
-              pendingBgAgents.set(b.id || `agent-${pendingBgAgents.size}`, {});
-            }
+            const toolName = b.name || '';
+            if (b.type !== 'tool_use' || !isBackgroundDispatchTool(toolName, b.input)) continue;
+            pendingBgAgents.set(b.id || `bg-task-${pendingBgAgents.size}`, {
+              kind: BASH_TOOL_PATTERN.test(toolName) ? 'bash' : 'agent',
+            });
           }
         } else if (msg.type === 'system') {
           const sys = msg as SDKSystemMessage & {
@@ -948,8 +965,12 @@ export function getPersistentClaudeTurn(params: {
           // 首个 result（用户轮结束）：还有后台派发或已触发的内部轮未走完 → 挂住
           if (pendingBgAgents.size > 0 || pendingInternalTurns > 0) {
             waitingForAgents = true;
-            waitDeadline = Date.now() + SUBAGENT_WAIT_TIMEOUT_MS;
-            console.log(`[persistent-claude-session] Waiting for ${pendingBgAgents.size} background agent(s) / ${pendingInternalTurns} internal turn(s) to finish`);
+            // 中文注释：含后台 Bash 任务的等待用更长的会话侧上限——客户端 15 分钟
+            // 已对用户优雅收尾并进入排空模式，会话侧要晚于它收尾，让排空随本生成器
+            // 的自然结束而终止。纯子 Agent 等待沿用原 40 分钟上限。
+            const bashPending = Array.from(pendingBgAgents.values()).filter((v) => v.kind === 'bash').length;
+            waitDeadline = Date.now() + (bashPending > 0 ? BACKGROUND_TASK_WAIT_TIMEOUT_MS : SUBAGENT_WAIT_TIMEOUT_MS);
+            console.log(`[persistent-claude-session] Waiting for ${pendingBgAgents.size} background task(s) (${bashPending} bash) / ${pendingInternalTurns} internal turn(s) to finish`);
             continue;
           }
           entry!.lastUsedAt = Date.now();
@@ -958,7 +979,7 @@ export function getPersistentClaudeTurn(params: {
         }
         // 等待期间兜底：超过上限仍未收尾 → 强制结束，避免死锁
         if (waitingForAgents && Date.now() > waitDeadline) {
-          console.warn('[persistent-claude-session] Subagent wait deadline exceeded — ending turn');
+          console.warn(`[persistent-claude-session] Background task wait deadline exceeded (${pendingBgAgents.size} task(s) still pending) — ending turn`);
           entry!.lastUsedAt = Date.now();
           scheduleIdleClose(params.codepilotSessionId, entry!);
           return;

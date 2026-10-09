@@ -113,6 +113,19 @@ type SyntheticSubagentInfo = {
 // stale query instead of leaving the chat stream active until its watchdog.
 const BACKGROUND_FINALIZATION_GRACE_MS = 30_000;
 
+// 中文注释：功能名称「后台 Bash 等待上限」，用法是限定本轮为后台 Bash 任务
+// （run_in_background 的文件上传、构建、dev server 等）最多挂住多久。超过后本轮
+// 优雅收尾——保留已产出内容并提示任务仍在后台运行——而不是让用户对着「生成中」
+// 无限等待。
+const BACKGROUND_BASH_WAIT_TIMEOUT_MS = 15 * 60_000;
+
+// 中文注释：功能名称「后台排空上限」，用法是限定「排空模式」最长存活时间：本轮已
+// 对用户收尾，但仍继续消费 SDK 注入的通知/汇总帧并丢弃，避免它们残留到下一次用户
+// 请求（旧回复会被当成新问题的答案）。超时后放弃排空，由持久会话的空闲回收兜底。
+// 时间须 ≥ persistent-claude-session 的 BACKGROUND_TASK_WAIT_TIMEOUT_MS，
+// 保证会话侧先自然收尾、排空随 for-await 结束而终止。
+const BACKGROUND_DRAIN_TIMEOUT_MS = 60 * 60_000;
+
 function isTodoWriteToolName(name: string): boolean {
   return name === 'TodoWrite' || name === 'mcp__codepilot-todo__TodoWrite' || name === 'mcp__codepilot-todo__codepilot_todo_write';
 }
@@ -124,6 +137,20 @@ export function isSyntheticSubagentToolName(name: string): boolean {
     || name === 'Task'
     || name === 'mcp__codepilot-agent__Agent'
     || name === 'mcp__codepilot-team__Team';
+}
+
+// 中文注释：功能名称「Bash 工具名匹配」，用法与终端镜像共用同一模式。
+// 注意：persistent-claude-session.ts 里有一份等价拷贝（避免循环导入），修改需同步。
+export const BASH_TOOL_PATTERN = /^Bash$|^mcp__.*bash$/i;
+
+// 中文注释：功能名称「后台 Bash 任务识别」，用法是识别 run_in_background 的
+// Bash 工具调用（大文件上传、构建、dev server 等）。它们与后台子 Agent 同语义：
+// SDK 的 result 到达之后任务仍可能在运行，完成时由 SDK 注入 <task-notification>
+// 轮次。若不在 result 处挂住本轮，UI 会在任务仍在传输时错误标记「任务完成」，
+// 且残留的通知帧会污染下一条用户消息（答非所问）。
+export function isBackgroundBashToolUse(name: string, input: unknown): boolean {
+  if (!BASH_TOOL_PATTERN.test(name)) return false;
+  return (input as { run_in_background?: boolean } | undefined)?.run_in_background === true;
 }
 
 function getSyntheticSubagentInfo(params: {
@@ -978,6 +1005,10 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
         if (waitingPermissionDepth > 0) return; // 等待人工输入中，不算工具卡死
         const now = Date.now();
         for (const [toolUseId, info] of toolProgressAt) {
+          // 中文注释：后台任务（run_in_background 的 Bash）在等待表里时不算「卡死」：
+          // 传输/构建类任务可能长时间没有进度上报但进程仍在运行，误杀会中止用户
+          // 正在进行的后台工作。它们的完成信号由 task_notification 负责。
+          if (pendingBackgroundBashTasks.has(toolUseId)) continue;
           if (now - info.at >= toolTimeoutSeconds * 1000) {
             toolWatchdogFired = true;
             toolProgressAt.delete(toolUseId);
@@ -1074,6 +1105,20 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       // 中文注释：等待后台子 Agent 期间的保活心跳（在 try 外声明，供成功/失败两条路径清理）
       let agentWaitKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
       let backgroundFinalizationTimer: ReturnType<typeof setTimeout> | null = null;
+      // 中文注释：功能名称「后台 Bash 任务登记表」，用法是登记 run_in_background 的
+      // Bash 工具调用（tool_use_id → taskId），与后台子 Agent 同语义地挂住本轮。
+      // 声明在 try 之外：工具看门狗（忽略等待中的后台任务）、catch 与 finally
+      // （清理等待计时器）都要访问。
+      const pendingBackgroundBashTasks = new Map<string, { taskId?: string }>();
+      // 中文注释：15 分钟等待上限到点（本轮已优雅收尾，进入排空模式）。
+      let backgroundWaitExpired = false;
+      let backgroundWaitTimer: ReturnType<typeof setTimeout> | null = null;
+      const clearBackgroundWaitTimer = () => {
+        if (backgroundWaitTimer) {
+          clearTimeout(backgroundWaitTimer);
+          backgroundWaitTimer = null;
+        }
+      };
 
       try {
         const resolvedWorkingDirectory = resolveWorkingDirectory([
@@ -2285,6 +2330,29 @@ if (claudePath) {
         // 中文注释：功能名称「Bash命令追踪」，用法是追踪SDK runtime中Bash工具的调用，
         // 在tool_result时发射terminal_mirror事件，将命令输出镜像到终端面板
         const pendingBashCommands = new Map<string, string>();
+        // 中文注释：功能名称「后台 Bash 任务追踪」，用法是追踪 run_in_background 的
+        // Bash 工具调用（tool_use_id → taskId）。与后台子 Agent 共用一套等待语义：
+        // 首个 result 到达时若仍有未回报的后台任务，本轮继续挂住等待
+        // task_notification，等 SDK 注入的汇总轮结束才收尾。
+        // （map 本体在 try 外声明——工具看门狗需要忽略等待中的后台任务。）
+        // 被挂住的用户轮 result：15 分钟上限到点时用它补齐 usage/耗时并发出终态。
+        let heldBackgroundResult: SDKResultMessage | null = null;
+        // 首次因后台任务挂起本轮的墙钟时间——超时收尾时用它给出真实的「本轮耗时」。
+        let backgroundHoldStartedAt = 0;
+        // 15 分钟等待上限到点后：本轮已优雅收尾，之后的帧只排空、不再外发。
+        let drainingBackground = false;
+        let backgroundDrainDeadline = 0;
+        const totalPendingBackgroundWork = (): number =>
+          pendingAgentToolUse.size + pendingBackgroundBashTasks.size;
+        const resolvePendingBackgroundBash = (toolUseId?: string, taskId?: string): string | null => {
+          if (toolUseId && pendingBackgroundBashTasks.has(toolUseId)) return toolUseId;
+          if (taskId) {
+            for (const [key, value] of pendingBackgroundBashTasks.entries()) {
+              if (value.taskId === taskId) return key;
+            }
+          }
+          return null;
+        };
         // 中文注释：功能名称「SDK 内部轮次抑制」，用法是标记当前是否处于 SDK 自己注入的
         // 轮次（如后台 Bash 任务的 <task-notification>）中。处于抑制态时其 assistant 输出
         // 与工具结果都不再向上游发射，避免被当作用户问题的回答；该轮次的 result 只用来
@@ -2316,16 +2384,65 @@ if (claudePath) {
             abortController?.abort();
           }, BACKGROUND_FINALIZATION_GRACE_MS);
         };
-        // 中文注释：等待后台子 Agent 期间的保活心跳——每 30s 一条 keep_alive，
-        // 只有存在未回报的后台子 Agent 时才发送，正常对话不受影响。
+        // 中文注释：功能名称「后台任务的等待上限」，用法是给「等待后台 Bash 任务」
+        // 加 15 分钟上限。到点后本轮优雅结束（不再让用户对着「生成中」干等），
+        // 同时保留后台任务继续运行，流切换为排空模式。
+        const scheduleBackgroundWaitExpiry = () => {
+          if (backgroundWaitTimer || backgroundWaitExpired) return;
+          backgroundWaitTimer = setTimeout(() => {
+            backgroundWaitTimer = null;
+            if (controller.closed || abortController?.signal.aborted) return;
+            if (totalPendingBackgroundWork() === 0) return;
+            backgroundWaitExpired = true;
+            drainingBackground = true;
+            backgroundDrainDeadline = Date.now() + BACKGROUND_DRAIN_TIMEOUT_MS;
+            console.warn('[claude-client] Background task wait exceeded 15 minutes; ending the turn gracefully and draining remaining frames');
+            const held = heldBackgroundResult;
+            // 超时收尾时给真实的挂起时长，而不是被挂起 result 里的早期耗时。
+            const expiryDurationMs = backgroundHoldStartedAt
+              ? Date.now() - backgroundHoldStartedAt
+              : (held?.duration_ms ?? 0);
+            if (held) {
+              tokenUsage = extractTokenUsage(held, expiryDurationMs, lastAssistantUsage);
+            }
+            controller.enqueue(formatSSE({
+              type: 'status',
+              data: JSON.stringify({
+                subtype: 'background_wait_timeout',
+                message: '后台任务仍在运行，本轮先结束等待；任务完成后的结果会保留在会话中。',
+              }),
+            }));
+            // 用被挂起的用户轮 result 发出终态：terminal_reason 让前端追加可见说明，
+            // 同时保留 usage/耗时统计（不走 aborted，避免被归类为中断/失败）。
+            controller.enqueue(formatSSE({
+              type: 'result',
+              data: JSON.stringify({
+                subtype: held?.subtype ?? 'success',
+                is_error: false,
+                num_turns: held?.num_turns ?? 0,
+                duration_ms: expiryDurationMs,
+                usage: tokenUsage,
+                session_id: held?.session_id ?? sessionId,
+                terminal_reason: 'background_wait_timeout',
+              }),
+            }));
+            controller.enqueue(formatSSE({ type: 'done', data: '' }));
+            controller.close();
+          }, BACKGROUND_BASH_WAIT_TIMEOUT_MS);
+        };
+        // 中文注释：等待后台子 Agent / 后台 Bash 任务期间的保活心跳——每 30s 一条
+        // keep_alive，只有存在未回报的后台任务时才发送，正常对话不受影响。
         agentWaitKeepAliveTimer = setInterval(() => {
-          if (pendingAgentToolUse.size > 0 && !controller.closed) {
+          if (totalPendingBackgroundWork() > 0) {
             // A background child is an expected silent phase.  This is real
             // server-side progress, not merely a browser keep-alive: refresh
             // the same clock used by the global watchdog so it cannot abort
             // a child that is still within the persistent-session deadline.
             lastStreamActivityAt = Date.now();
-            controller.enqueue(formatSSE({ type: 'keep_alive', data: '' }));
+            // 排空模式下 SSE 已关闭：只需要刷新看门狗时钟，不再向上游发帧。
+            if (!controller.closed) {
+              controller.enqueue(formatSSE({ type: 'keep_alive', data: '' }));
+            }
           }
         }, 30_000);
         streamMessages: for await (const message of conversation) {
@@ -2344,6 +2461,15 @@ if (claudePath) {
             }
             console.log('[claude-client] Stream aborted for session', sessionId, '— discarded persistent session to prevent cross-turn events');
             break;
+          }
+
+          // 中文注释：功能名称「后台任务排空模式」，用法是 15 分钟等待上限到点后，
+          // 本轮已对用户收尾（发出终态并关闭 SSE），但后台任务可能还要一段时间才结束。
+          // 这里继续消费 SDK 注入的通知/汇总帧并丢弃，确保下一条用户消息从一个干净的
+          // 边界开始；超过排空上限仍未结束则放弃，由持久会话的空闲回收兜底。
+          if (drainingBackground) {
+            if (Date.now() > backgroundDrainDeadline) break;
+            continue;
           }
 
           // 中文注释：功能名称「SDK 内部轮次抑制」，用法是在检测到 SDK 注入轮次（如后台任务
@@ -2444,9 +2570,15 @@ if (claudePath) {
 
                   // 中文注释：功能名称「Bash工具终端镜像」，用法是检测SDK runtime中的Bash工具调用，
                   // 发射 terminal_mirror SSE事件，将命令和输出镜像到终端面板
-                  const bashToolPattern = /^Bash$|^mcp__.*bash$/i;
+                  const bashToolPattern = BASH_TOOL_PATTERN;
                   if (bashToolPattern.test(block.name)) {
                     try {
+                      // 中文注释：run_in_background 的 Bash 任务（上传/构建/dev server）
+                      // 登记进后台任务表，让本轮在 result 处挂住等待真正完成。
+                      if (isBackgroundBashToolUse(block.name, block.input)) {
+                        pendingBackgroundBashTasks.set(block.id, {});
+                        console.log('[claude-client] Background Bash task registered:', block.id, block.name);
+                      }
                       const toolInput = block.input as { command?: string; cmd?: string };
                       const cmd = toolInput?.command || toolInput?.cmd || '';
                       console.log('[claude-client] Bash tool detected:', { id: block.id, name: block.name, cmd: cmd.slice(0, 100) });
@@ -2675,6 +2807,12 @@ if (claudePath) {
                         }));
                       } catch { /* best effort */ }
                     }
+                    // 中文注释：后台 Bash 派发本身失败的 tool_result 不会再收到
+                    // task_notification；从等待表中移除，避免本轮被一个永远不会
+                    // 回报的任务挂住。（成功派发时保留等待 task_notification。）
+                    if (block.is_error) {
+                      pendingBackgroundBashTasks.delete(block.tool_use_id);
+                    }
 
                     // 中文注释：功能名称「Agent工具完成检测」，用法是检测SDK runtime中Agent/Team工具的
                     // tool_result，发射合成的subagent_complete SSE事件，使子Agent卡片能正确显示完成状态。
@@ -2883,6 +3021,12 @@ if (claudePath) {
                     tool_use_id?: string;
                     description?: string;
                   };
+                  // 中文注释：后台 Bash 任务也要绑定 task_id，供后续
+                  // task_notification 按 task_id 命中。
+                  const bashKey = resolvePendingBackgroundBash(taskStarted.tool_use_id, taskStarted.task_id);
+                  if (bashKey) {
+                    pendingBackgroundBashTasks.get(bashKey)!.taskId = taskStarted.task_id;
+                  }
                   const pending = resolvePendingSubagent(taskStarted.tool_use_id, taskStarted.task_id);
                   if (pending) {
                     const [toolUseId, agentInfo] = pending;
@@ -2925,6 +3069,18 @@ if (claudePath) {
                     task_id: string;
                     patch?: { status?: string; error?: string };
                   };
+                  // 中文注释：后台 Bash 任务失败/被杀 → 从等待表移除。若本轮已在等待中
+                  // （用户轮 result 已被挂起），放行接下来的注入轮，让模型的失败汇报
+                  // 也能送达用户。
+                  const bashKey = resolvePendingBackgroundBash(undefined, taskUpdated.task_id);
+                  if (bashKey && (taskUpdated.patch?.status === 'failed' || taskUpdated.patch?.status === 'killed')) {
+                    pendingBackgroundBashTasks.delete(bashKey);
+                    if (totalPendingBackgroundWork() === 0 && heldBackgroundResult) {
+                      sdkInjectedTurn.forwardFinalTurn = true;
+                      scheduleBackgroundFinalization();
+                      clearBackgroundWaitTimer();
+                    }
+                  }
                   const pending = resolvePendingSubagent(undefined, taskUpdated.task_id);
                   if (pending && (taskUpdated.patch?.status === 'failed' || taskUpdated.patch?.status === 'killed')) {
                     const [toolUseId, agentInfo] = pending;
@@ -2961,10 +3117,23 @@ if (claudePath) {
                       }),
                     }));
                     // 中文注释：最后一个后台子 Agent 结束——下一个注入轮就是最终汇总轮，
-                    // 放行它的输出作为「全部完成后的统一回复」
-                    if (shouldGracefullyFinalizeBackgroundTask(taskMsg.status, pendingAgentToolUse.size)) {
+                    // 放行它的输出作为「全部完成后的统一回复」。（后台 Bash 任务也计入
+                    // 未完成工作：它还没回报时不能认定这是最后一批任务。）
+                    if (shouldGracefullyFinalizeBackgroundTask(taskMsg.status, totalPendingBackgroundWork())) {
                       sdkInjectedTurn.forwardFinalTurn = true;
                       scheduleBackgroundFinalization();
+                    }
+                  }
+                  // 中文注释：后台 Bash 任务回报（成功/失败/停止）——从等待表移除；
+                  // 若这是最后一个未回报的后台任务，放行注入的汇报轮，让用户看到
+                  // 「上传完成/失败」的最终说明，并撤销 15 分钟等待上限。
+                  const bashTaskKey = resolvePendingBackgroundBash(taskMsg.tool_use_id, taskMsg.task_id);
+                  if (bashTaskKey) {
+                    pendingBackgroundBashTasks.delete(bashTaskKey);
+                    if (totalPendingBackgroundWork() === 0) {
+                      sdkInjectedTurn.forwardFinalTurn = true;
+                      scheduleBackgroundFinalization();
+                      clearBackgroundWaitTimer();
                     }
                   }
                   const title = taskMsg.status === 'completed' ? 'Task completed' : `Task ${taskMsg.status}`;
@@ -3063,11 +3232,29 @@ if (claudePath) {
               // still pending.  Do not publish it: consumers treat `result`
               // as task completion, which previously closed the UI while the
               // child was still running.
+              // 后台 Bash 任务（上传/构建/dev server）与后台子 Agent 同语义，
+              // 一并计入未完成工作。
               if (!isFinalUserTurnResult(
                 turnTransition,
-                pendingAgentToolUse.size,
+                totalPendingBackgroundWork(),
                 sdkInjectedTurn.hasPendingFinalSummary,
               )) {
+                // 中文注释：用户轮已答完，但仍有后台任务未回报——挂起本轮、暂不发
+                // 终态（UI 保持「生成中」），等 task_notification 与注入的汇总轮
+                // 走完再收尾。后台 Bash 超过 15 分钟仍未结束则优雅收尾，
+                // 见 scheduleBackgroundWaitExpiry。
+                if (turnTransition === 'turn_completed' && pendingBackgroundBashTasks.size > 0) {
+                  heldBackgroundResult = resultMsg;
+                  if (!backgroundHoldStartedAt) backgroundHoldStartedAt = Date.now();
+                  scheduleBackgroundWaitExpiry();
+                  controller.enqueue(formatSSE({
+                    type: 'status',
+                    data: JSON.stringify({
+                      subtype: 'background_task_wait',
+                      message: '后台任务仍在运行，等待完成后汇总…',
+                    }),
+                  }));
+                }
                 break;
               }
               tokenUsage = extractTokenUsage(resultMsg, resultMsg.duration_ms, lastAssistantUsage);
@@ -3141,6 +3328,7 @@ if (claudePath) {
               // remain iterable afterwards, so stop here instead of waiting
               // for iterator EOF and risking the 600s stall watchdog.
               clearBackgroundFinalizationTimer();
+              clearBackgroundWaitTimer();
               receivedTerminalResult = true;
               break streamMessages;
             }
@@ -3180,11 +3368,15 @@ if (claudePath) {
           }
         }
 
-        if (!receivedTerminalResult && !backgroundFinalizationExpired) {
-          // A user stop aborts the HTTP request's controller. The SDK then
-          // ends its iterator without a terminal result, which must not be
-          // mistaken for a provider-side interruption.
-          if (abortController?.signal.aborted) {
+        // 看门狗已发过终态（stalled/tool_timeout）时跳过补发，
+        // 避免「已中止」提示被无 result 的 EOF 覆盖成其他归类。
+        // backgroundWaitExpired：15 分钟等待上限已发过终态（优雅收尾），同样跳过。
+        if (!receivedTerminalResult && !backgroundWaitExpired && !backgroundFinalizationExpired && !streamWatchdogFired && !toolWatchdogFired) {
+          // 只有用户手动中断（interrupt 路由经 abortSessionRequest，
+          // reason='user_cancel'）才发「用户中断」。看门狗/内部中止（reason 为
+          // AbortError 或 stalled 等）不得归类为用户中断，否则长任务被
+          // 超时中止时用户会看到「任务已由用户手动中断」的错误提示。
+          if (abortController?.signal.reason === 'user_cancel') {
             controller.enqueue(formatSSE({
               type: 'aborted',
               data: JSON.stringify({
@@ -3344,19 +3536,23 @@ if (claudePath) {
           })();
         }
 
-        // 中文注释：等待后台子 Agent 期间主动发 keep_alive，防止客户端
-        // 5.5 分钟空闲看门狗把这条还活着的流误杀。
+        // 中文注释：等待后台子 Agent / 后台 Bash 任务期间主动发 keep_alive，
+        // 防止客户端空闲看门狗把这条还活着的流误杀。
+        clearBackgroundWaitTimer();
         if (agentWaitKeepAliveTimer) clearInterval(agentWaitKeepAliveTimer);
         controller.enqueue(formatSSE({ type: 'done', data: '' }));
         controller.close();
       } catch (error) {
+        clearBackgroundWaitTimer();
         if (agentWaitKeepAliveTimer) clearInterval(agentWaitKeepAliveTimer);
         // `conversation.interrupt()` commonly rejects the SDK iterator with a
         // generic error instead of yielding an abort frame.  The browser has
         // already marked this request as user-cancelled; do not run it through
         // error classification or persist a second “task failed” terminal.
         const watchdogAborted = streamWatchdogFired || toolWatchdogFired || backgroundFinalizationExpired;
-        if (abortController?.signal.aborted && !watchdogAborted) {
+        // 只认 interrupt 路由下发的 reason='user_cancel'（真正的用户手动中断）；
+        // 其他内部 abort（看门狗、连接断开）走错误分类，不再误报「用户中断」。
+        if (abortController?.signal.reason === 'user_cancel' && !watchdogAborted) {
           if (usingPersistentSession && persistentQueryForStream) {
             closePersistentClaudeSession(sessionId, persistentQueryForStream);
           }
@@ -3364,6 +3560,14 @@ if (claudePath) {
             type: 'aborted',
             data: JSON.stringify({ reason: 'user_cancel', message: '任务已由用户手动中断。' }),
           }));
+          controller.close();
+          return;
+        }
+        // backgroundWaitExpired：15 分钟上限的优雅收尾已经发给用户了。此后排空期间
+        // 的流错误（如 iterator 抛错）不该再发第二个终态，更不能销毁仍在跑后台任务的
+        // 持久会话——静默收束，让任务继续在后台运行。
+        if (backgroundWaitExpired) {
+          console.warn('[claude-client] Stream error after background wait expiry; keeping session for the running background task');
           controller.close();
           return;
         }
@@ -3735,6 +3939,7 @@ if (claudePath) {
         controller.close();
       } finally {
         if (backgroundFinalizationTimer) clearTimeout(backgroundFinalizationTimer);
+        clearBackgroundWaitTimer();
         clearInterval(sdkKeepAliveTimer);
         if (toolWatchdogTimer) clearInterval(toolWatchdogTimer);
         if (streamWatchdogTimer) clearInterval(streamWatchdogTimer);
@@ -3745,7 +3950,9 @@ if (claudePath) {
         }
         // Tear down shadow ~/.claude/ if we built one. Best-effort — the OS
         // will eventually GC tmpdir even if this fails.
-        if (usingPersistentSession && !receivedTerminalResult) {
+        // backgroundWaitExpired：15 分钟等待上限后的优雅收尾——后台任务仍在运行，
+        // 必须保留持久会话（关掉会杀掉后台任务、并丢掉上下文），因此跳过销毁兜底。
+        if (usingPersistentSession && !receivedTerminalResult && !backgroundWaitExpired) {
           // Defensive backstop for iterator EOF / cancellation paths that
           // leave the try block without an SDK result event.
           if (persistentQueryForStream) {

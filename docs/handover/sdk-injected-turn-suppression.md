@@ -1,6 +1,7 @@
 # SDK 内部轮次抑制（后台任务通知不再被当成回答）
 
 > 产品思考见 [docs/insights/sdk-injected-turn-suppression.md](../insights/sdk-injected-turn-suppression.md)
+> 相关：[后台任务等待收尾](./background-task-hold.md)——本文是"来了的不该收"，那份是"没来的不该结"
 
 ## 问题现象
 

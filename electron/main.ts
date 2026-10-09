@@ -26,6 +26,13 @@ import net from 'net';
 import os from 'os';
 import { TerminalManager } from './terminal-manager';
 
+// 中文注释：功能名称「后台防节流」，用法是禁用 Chromium 对后台渲染进程的
+// 定时器节流与页面后台化。长任务（构建/测试/SSE 流式会话）期间用户切到
+// 虚拟机/浏览器测试时，macOS App Nap 会节流渲染进程、掐断 SSE 长连接，
+// 服务端把断连误判成「用户中断」。必须在 app ready 前设置才生效。
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+
 /**
  * Return a copy of process.env without __NEXT_PRIVATE_* variables.
  *
@@ -777,6 +784,9 @@ function createWindow(url?: string) {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
+      // 后台防节流：窗口失焦/最小化时不节流渲染进程，保证 SSE 流式会话
+      // 与 keep_alive 心跳持续处理，防止长任务连接被系统掐断误判中断。
+      backgroundThrottling: false,
     },
   };
 

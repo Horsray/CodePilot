@@ -110,10 +110,10 @@ describe('subagent stream resilience', () => {
 
   it('treats an SDK interrupt as user cancellation before error classification', () => {
     const claudeClient = read('src/lib/claude-client.ts');
-    const catchStart = claudeClient.indexOf('} catch (error) {\n        if (agentWaitKeepAliveTimer) clearInterval(agentWaitKeepAliveTimer);');
+    const catchStart = claudeClient.indexOf('} catch (error) {\n        clearBackgroundWaitTimer();\n        if (agentWaitKeepAliveTimer) clearInterval(agentWaitKeepAliveTimer);');
     const rawMessage = claudeClient.indexOf("const rawMessage = error instanceof Error ? error.message : 'Unknown error';", catchStart);
     const classifier = claudeClient.indexOf('const classified = classifyError({', rawMessage);
-    const cancellationGuard = claudeClient.indexOf('if (abortController?.signal.aborted && !watchdogAborted)', catchStart);
+    const cancellationGuard = claudeClient.indexOf("if (abortController?.signal.reason === 'user_cancel' && !watchdogAborted)", catchStart);
 
     assert.ok(catchStart >= 0 && rawMessage > catchStart && classifier > rawMessage, 'SDK stream error handler should classify real errors');
     assert.ok(

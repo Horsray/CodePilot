@@ -24,6 +24,8 @@ export interface ChatSession {
   updated_at: string;
   /** Last explicit user visit, used for stale history retention. */
   last_opened_at?: string;
+  /** 收藏时间（空/未定义 = 未收藏）。收藏的会话显示在侧栏顶部「收藏会话」模块。 */
+  pinned_at?: string;
   model: string;
   system_prompt: string;
   working_directory: string;

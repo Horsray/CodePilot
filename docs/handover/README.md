@@ -35,5 +35,7 @@
 | fork-sync-playbook.md | Fork 与官方同步维护手册：差异清单、冲突热点、AI 自动读取记忆方式、上游合并流程与验收清单 |
 | fork-sync-mechanism.md | Fork 长期追官方的同步机制：ownership map、patch manifest、sync report、bootstrap 工作流与边界检查 |
 | sdk-injected-turn-suppression.md | SDK 内部轮次抑制：后台任务 `<task-notification>` 注入轮次的识别、状态机（挂起→接管→退出）、下游影响核对、已知边界；附带 MCP 徽标 pending 语义修正 |
+| background-task-hold.md | 后台任务等待收尾：后台 Bash 纳入回合保持、首个 result 挂起与汇总轮收尾、15 分钟等待上限 + 排空模式、会话侧 60 分钟截止的大小关系约束 |
 | bridge-final-response.md | 桥接只发最终结论 + 未完成自动续跑：过程叙述被整轮拼接的根因、`extractFinalResponseText` / `detectIncompleteTurn` 纯函数、续跑上限与不落库策略、错误提示不再被文本吞掉、thinking 落库剔除 |
 | interactive-permission-ux.md | 交互式权限/提问卡片生命周期：三把「铡刀」超时根因、`isAlwaysAskTool` 分流、`waitingPermissionDepth` 暂停看门狗、`adoptPendingPermission` 卡片恢复、SDK 与 Native 双路径 |
+| pinned-sessions.md | 收藏会话（图钉）：`pinned_at` 时间戳数据模型、客户端过滤从原分组隐藏、模块位置编排（工作区分组下方 + 空工作区兜底）、状态继承（共用 `renderSessionItem`）、按钮让位规则 |

@@ -10,6 +10,7 @@ import {
   DotsThree,
   Copy,
   PencilSimple,
+  PushPin,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +41,8 @@ interface SessionListItemProps {
   isSelected?: boolean;
   /** Whether batch selection mode is active */
   isSelectionMode?: boolean;
+  /** 中文注释：是否已收藏（固定在顶部「收藏会话」模块中）—— 图钉常驻高亮，时间戳让位。 */
+  isPinned?: boolean;
   formatRelativeTime: (dateStr: string, t: (key: TranslationKey, params?: Record<string, string | number>) => string) => string;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
   onMouseEnter: () => void;
@@ -48,6 +51,8 @@ interface SessionListItemProps {
   onRename: (sessionId: string, newTitle: string) => void;
   onAddToSplit: (session: ChatSession) => void;
   onToggleSelection?: (sessionId: string) => void;
+  /** 中文注释：切换收藏状态（点击行右侧图钉按钮）——不传则不渲染图钉按钮。 */
+  onTogglePin?: (e: React.MouseEvent, sessionId: string) => void;
 }
 
 export function SessionListItem({
@@ -62,6 +67,7 @@ export function SessionListItem({
   isWorkspace,
   isSelected = false,
   isSelectionMode = false,
+  isPinned = false,
   formatRelativeTime,
   t,
   onMouseEnter,
@@ -70,12 +76,16 @@ export function SessionListItem({
   onRename,
   onAddToSplit,
   onToggleSelection,
+  onTogglePin,
 }: SessionListItemProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
   const showActions = isHovered || menuOpen || isDeleting;
+  /** 中文注释：已收藏且不在运行时，图钉常驻显示（运行中转圈占位优先，hover 时图钉仍可操作）。 */
+  const showPinnedPin = isPinned && !isSessionStreaming;
+  const showPin = showPinnedPin || showActions;
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -186,13 +196,37 @@ export function SessionListItem({
           ) : (
             <span className={cn(
               "text-[11px] text-muted-foreground/40 truncate transition-opacity",
-              showActions ? "opacity-0" : "opacity-100"
+              (showActions || showPinnedPin) ? "opacity-0" : "opacity-100"
             )}>
               {formatRelativeTime(session.updated_at, t)}
             </span>
           )}
         </span>
       </div>
+      {/* Pin button — 已收藏常驻（高亮），未收藏 hover 显示；位于三点菜单左侧 */}
+      {onTogglePin && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "absolute right-[26px] top-1/2 -translate-y-1/2 z-10 flex items-center justify-center transition-opacity h-5 w-5 p-0",
+            isPinned
+              ? "text-primary hover:text-primary"
+              : "text-muted-foreground/60 hover:text-foreground",
+            showPin ? "opacity-100" : "opacity-0 pointer-events-none"
+          )}
+          title={isPinned ? t('chatList.unpinSession' as TranslationKey) : t('chatList.pinSession' as TranslationKey)}
+          aria-label={isPinned ? t('chatList.unpinSession' as TranslationKey) : t('chatList.pinSession' as TranslationKey)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onTogglePin(e, session.id);
+          }}
+        >
+          <PushPin size={14} weight={isPinned ? "fill" : "regular"} />
+        </Button>
+      )}
       {/* Three-dot menu — absolute over the right area */}
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
@@ -200,7 +234,7 @@ export function SessionListItem({
             variant="ghost"
             size="icon"
             className={cn(
-              "absolute right-2 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-opacity h-5 w-5 p-0",
+              "absolute right-1 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-opacity h-5 w-5 p-0",
               showActions ? "opacity-100" : "opacity-0 pointer-events-none"
             )}
             onPointerDown={(e) => e.stopPropagation()}

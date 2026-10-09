@@ -5,6 +5,25 @@ import type { TranslationKey } from "@/i18n";
 const COLLAPSED_PROJECTS_KEY = "codepilot:collapsed-projects";
 export const COLLAPSED_INITIALIZED_KEY = "codepilot:collapsed-initialized";
 const UNREAD_COMPLETIONS_KEY = "codepilot:unread-completions";
+const PINNED_COLLAPSED_KEY = "codepilot:pinned-collapsed";
+
+/** 中文注释：收藏会话模块的折叠状态 —— 与项目分组一样按本地偏好记忆（默认展开）。 */
+export function loadPinnedCollapsed(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(PINNED_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function savePinnedCollapsed(collapsed: boolean) {
+  try {
+    localStorage.setItem(PINNED_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    // ignore
+  }
+}
 
 /** 中文注释：任务完成但用户尚未查看的会话 id 集合 —— 驱动左侧列表的蓝色指示灯。 */
 export function loadUnreadCompletions(): Set<string> {

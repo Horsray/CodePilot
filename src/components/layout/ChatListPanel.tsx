@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -34,6 +34,7 @@ import { showToast } from '@/hooks/useToast';
 // ImportSessionDialog moved to Settings page
 import { SessionListItem, SplitGroupSection } from "./SessionListItem";
 import { ProjectGroupHeader } from "./ProjectGroupHeader";
+import { PinnedSessionsSection } from "./PinnedSessionsSection";
 import { FolderPicker } from "@/components/chat/FolderPicker";
 import { useAssistantWorkspace } from "@/hooks/useAssistantWorkspace";
 import { AssistantPromoCard } from "@/components/chat/ChatEmptyState";
@@ -44,6 +45,8 @@ import {
   saveCollapsedProjects,
   loadUnreadCompletions,
   saveUnreadCompletions,
+  loadPinnedCollapsed,
+  savePinnedCollapsed,
   COLLAPSED_INITIALIZED_KEY,
 } from "./chat-list-utils";
 import type { ChatSession } from "@/types";
@@ -130,6 +133,8 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
   const [unreadCompletions, setUnreadCompletions] = useState<Set<string>>(
     () => loadUnreadCompletions()
   );
+  /** 中文注释：收藏会话模块的折叠状态（本地偏好，默认展开）。 */
+  const [pinnedCollapsed, setPinnedCollapsed] = useState<boolean>(() => loadPinnedCollapsed());
   /** 上一轮仍在运行的会话 id，用于识别「运行 → 结束」这一瞬间。 */
   const prevRunningSessionIdsRef = useRef<Set<string> | null>(null);
 
@@ -488,6 +493,60 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
     }
   };
 
+  const togglePinnedCollapsed = useCallback(() => {
+    setPinnedCollapsed((prev) => {
+      const next = !prev;
+      savePinnedCollapsed(next);
+      return next;
+    });
+  }, []);
+
+  /**
+   * 中文注释：收藏 / 取消收藏会话（行右侧图钉）。
+   * 采用乐观更新：先本地切换让 UI 立即响应（收藏的会话马上从原项目分组消失、
+   * 出现在顶部收藏区），请求失败则回滚并提示。
+   */
+  const handleTogglePin = useCallback(async (e: React.MouseEvent, sessionId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const target = sessions.find((s) => s.id === sessionId);
+    if (!target) return;
+
+    const nextPinned = !target.pinned_at;
+    const previousPinnedAt = target.pinned_at || '';
+    const optimisticPinnedAt = nextPinned
+      ? new Date().toISOString().replace('T', ' ').split('.')[0]
+      : '';
+
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, pinned_at: optimisticPinnedAt } : s))
+    );
+
+    try {
+      const res = await fetch(`/api/chat/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned: nextPinned }),
+      });
+      if (!res.ok) throw new Error('pin request failed');
+      // 用服务端返回校准（pinned_at 以服务端时间戳为准，保证收藏区排序稳定）
+      const data = await res.json().catch(() => ({}));
+      if (data?.session) {
+        setSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, ...data.session } : s))
+        );
+      }
+    } catch {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, pinned_at: previousPinnedAt } : s))
+      );
+      showToast({
+        type: 'error',
+        message: t('error.pinSessionFailed' as TranslationKey) || 'Failed to update pinned session',
+      });
+    }
+  }, [sessions, t]);
+
   const handleRemoveProject = async (workingDirectory: string) => {
     const projectName = workingDirectory.split('/').pop() || workingDirectory;
     if (!confirm(t('chatList.confirmRemoveProject' as TranslationKey, { projectName }))) return;
@@ -661,11 +720,22 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
   );
 
   const filteredSessions = useMemo(() => {
+    // 中文注释：收藏的会话从原项目分组隐藏 —— 它们统一显示在顶部「收藏会话」模块中。
+    let base = sessions.filter((s) => !s.pinned_at);
     // Exclude sessions in split group (they are shown in the split section)
     if (isSplitActive) {
-      return sessions.filter((s) => !splitSessionIds.has(s.id));
+      base = base.filter((s) => !splitSessionIds.has(s.id));
     }
-    return sessions;
+    return base;
+  }, [sessions, isSplitActive, splitSessionIds]);
+
+  /** 中文注释：收藏会话 —— 跨项目汇总，最近收藏的排最前（split 组内会话仍由 split 区展示）。 */
+  const pinnedSessions = useMemo(() => {
+    let base = sessions.filter((s) => !!s.pinned_at);
+    if (isSplitActive) {
+      base = base.filter((s) => !splitSessionIds.has(s.id));
+    }
+    return base.sort((a, b) => (b.pinned_at || '').localeCompare(a.pinned_at || ''));
   }, [sessions, isSplitActive, splitSessionIds]);
 
   // Handle select all sessions
@@ -709,10 +779,19 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
       if (wsIdx > 0) {
         const [wsGroup] = groups.splice(wsIdx, 1);
         groups.unshift(wsGroup);
+      } else if (wsIdx === -1 && sessions.some(s => s.working_directory === workspacePath)) {
+        // 中文注释：工作区（绘影智能体）的会话全部被收藏时，仍保留其分组头 ——
+        // 它承载助手入口（记忆数/心跳），会话本体已移到紧随其后的收藏模块中。
+        groups.unshift({
+          workingDirectory: workspacePath,
+          displayName: workspacePath.split('/').filter(Boolean).pop() || workspacePath,
+          sessions: [],
+          latestUpdatedAt: 0,
+        });
       }
     }
     return groups;
-  }, [filteredSessions, workspacePath]);
+  }, [filteredSessions, workspacePath, sessions]);
 
   // Auto-collapse: only expand the project with the most recent session activity.
   // Runs on first use AND whenever the project list changes (new projects added).
@@ -737,6 +816,63 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
       localStorage.setItem(initKey, "1");
     }
   }, [projectGroups, collapsedProjects]);
+
+  /**
+   * 中文注释：单行会话渲染 —— 项目分组内与收藏模块共用同一实现，
+   * 保证图钉状态、运行态（转圈）、完成未读（蓝点）、待批准（铃铛）在两处完全一致。
+   */
+  const renderSessionItem = (session: ChatSession, isWorkspaceGroup: boolean) => {
+    const isActive = pathname === `/chat/${session.id}`;
+    const canSplit = !isActive && !isInSplit(session.id);
+
+    return (
+      <SessionListItem
+        key={session.id}
+        session={session}
+        isActive={isActive}
+        isHovered={hoveredSession === session.id}
+        isDeleting={deletingSession === session.id}
+        isSessionStreaming={isSessionRunning(session, activeStreamingSessions, streamingSessionId)}
+        needsApproval={pendingApprovalSessionIds.has(session.id) || pendingApprovalSessionId === session.id}
+        hasUnreadCompletion={unreadCompletions.has(session.id)}
+        canSplit={canSplit}
+        isWorkspace={isWorkspaceGroup}
+        isSelected={selectedSessions.has(session.id)}
+        isSelectionMode={isSelectionMode}
+        isPinned={!!session.pinned_at}
+        formatRelativeTime={formatRelativeTime}
+        t={t}
+        onMouseEnter={() => setHoveredSession(session.id)}
+        onMouseLeave={() => setHoveredSession(null)}
+        onDelete={handleDeleteSession}
+        onRename={handleRenameSession}
+        onAddToSplit={(s) => addToSplit({
+          sessionId: s.id,
+          title: s.title,
+          workingDirectory: s.working_directory || "",
+          projectName: s.project_name || "",
+          mode: s.mode,
+        })}
+        onToggleSelection={handleToggleSessionSelection}
+        onTogglePin={handleTogglePin}
+      />
+    );
+  };
+
+  /** 中文注释：收藏会话模块 —— 渲染在「绘影智能体」（助手工作区分组）下方；
+   *  不存在工作区分组时退化为列表顶部。无收藏时不渲染（图钉按钮即入口）。 */
+  const pinnedSection = pinnedSessions.length > 0 ? (
+    <PinnedSessionsSection
+      count={pinnedSessions.length}
+      collapsed={pinnedCollapsed}
+      onToggleCollapse={togglePinnedCollapsed}
+      t={t}
+    >
+      {pinnedSessions.map((session) =>
+        renderSessionItem(session, !!(workspacePath && session.working_directory === workspacePath))
+      )}
+    </PinnedSessionsSection>
+  ) : null;
 
   const navItems = [
     { href: "/skills", label: t('nav.skills' as TranslationKey), icon: Lightning },
@@ -956,12 +1092,15 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
             />
           )}
 
-          {filteredSessions.length === 0 && (!isSplitActive || splitSessions.length === 0) ? (
+          {filteredSessions.length === 0 && pinnedSessions.length === 0 && (!isSplitActive || splitSessions.length === 0) ? (
             <p className="px-2.5 py-3 text-[11px] text-muted-foreground/60">
               {t('chatList.noSessions')}
             </p>
           ) : (
-            projectGroups.map((group) => {
+            <>
+            {/* 中文注释：所有会话都被收藏（无项目分组可显示）时，收藏模块单独占据列表首部 */}
+            {projectGroups.length === 0 && pinnedSection}
+            {projectGroups.map((group, groupIndex) => {
               const isCollapsed =
                 collapsedProjects.has(group.workingDirectory);
               const isFolderHovered =
@@ -989,7 +1128,11 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
               const hasUnreadCompletion = group.sessions.some((s) => unreadCompletions.has(s.id));
 
               return (
-                <div key={group.workingDirectory || "__no_project"} className="mt-1 first:mt-0">
+                <Fragment key={group.workingDirectory || "__no_project"}>
+                  {/* 中文注释：收藏模块的位置 —— 工作区分组（绘影智能体）之后；
+                      若工作区分组不存在，则插在列表最前（groupIndex 0 的非工作区分组之前） */}
+                  {pinnedSection && groupIndex === 0 && !groupIsWorkspace ? pinnedSection : null}
+                  <div className="mt-1 first:mt-0">
                   {/* Folder header */}
                   <ProjectGroupHeader
                     workingDirectory={group.workingDirectory}
@@ -1024,41 +1167,9 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
                         style={{ overflow: 'hidden' }}
                       >
                         <div className="mt-0.5 flex flex-col gap-0.5">
-                          {visibleSessions.map((session) => {
-                            const isActive = pathname === `/chat/${session.id}`;
-                            const canSplit = !isActive && !isInSplit(session.id);
-
-                            return (
-                              <SessionListItem
-                                key={session.id}
-                                session={session}
-                                isActive={isActive}
-                                isHovered={hoveredSession === session.id}
-                                isDeleting={deletingSession === session.id}
-                                isSessionStreaming={isSessionRunning(session, activeStreamingSessions, streamingSessionId)}
-                                needsApproval={pendingApprovalSessionIds.has(session.id) || pendingApprovalSessionId === session.id}
-                                hasUnreadCompletion={unreadCompletions.has(session.id)}
-                                canSplit={canSplit}
-                                isWorkspace={groupIsWorkspace}
-                                isSelected={selectedSessions.has(session.id)}
-                                isSelectionMode={isSelectionMode}
-                                formatRelativeTime={formatRelativeTime}
-                                t={t}
-                                onMouseEnter={() => setHoveredSession(session.id)}
-                                onMouseLeave={() => setHoveredSession(null)}
-                                onDelete={handleDeleteSession}
-                                onRename={handleRenameSession}
-                                onAddToSplit={(s) => addToSplit({
-                                  sessionId: s.id,
-                                  title: s.title,
-                                  workingDirectory: s.working_directory || "",
-                                  projectName: s.project_name || "",
-                                  mode: s.mode,
-                                })}
-                                onToggleSelection={handleToggleSessionSelection}
-                              />
-                            );
-                          })}
+                          {visibleSessions.map((session) =>
+                            renderSessionItem(session, groupIsWorkspace)
+                          )}
 
                           {/* Show more / Show less toggle */}
                           {shouldTruncate && (
@@ -1084,9 +1195,13 @@ export function ChatListPanel({ open, width, onToggle }: ChatListPanelProps) {
                       </motion.div>
                     )}
                   </AnimatePresence>
-                </div>
+                  </div>
+                  {/* 中文注释：工作区分组之后紧跟收藏模块（「绘影智能体下面」） */}
+                  {pinnedSection && groupIsWorkspace ? pinnedSection : null}
+                </Fragment>
               );
-            })
+            })}
+            </>
           )}
         </div>
       </div>

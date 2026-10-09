@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { deleteSession, getSession, updateSessionWorkingDirectory, updateSessionTitle, updateSessionMode, updateSessionModel, updateSessionProviderId, clearSessionMessages, updateSdkSessionId, updateSessionPermissionProfile, updateSessionTeamMode, updateSessionOrchestrationTier, updateSessionOrchestrationProfileId } from '@/lib/db';
+import { deleteSession, getSession, updateSessionWorkingDirectory, updateSessionTitle, updateSessionMode, updateSessionModel, updateSessionProviderId, clearSessionMessages, updateSdkSessionId, updateSessionPermissionProfile, updateSessionTeamMode, updateSessionOrchestrationTier, updateSessionOrchestrationProfileId, updateSessionPinned } from '@/lib/db';
 import { autoApprovePendingForSession } from '@/lib/bridge/permission-broker';
 
 export async function GET(
@@ -37,6 +37,10 @@ export async function PATCH(
     }
     if (body.title) {
       updateSessionTitle(id, body.title);
+    }
+    // 中文注释：会话收藏（图钉）—— true 固定到顶部收藏会话区，false 还原回原项目列表。
+    if (body.pinned !== undefined) {
+      updateSessionPinned(id, !!body.pinned);
     }
     if (body.mode) {
       updateSessionMode(id, body.mode);

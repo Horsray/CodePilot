@@ -1,6 +1,7 @@
 # 为什么助手会"答非所问"——一次把 SDK 行为当作产品缺陷来修的思考
 
 > 技术实现见 [docs/handover/sdk-injected-turn-suppression.md](../handover/sdk-injected-turn-suppression.md)
+> 相关：[后台任务等待收尾](./background-task-hold.md)——本文管注入轮不被误收，那份管父轮不被过早结算
 
 ## 用户看到的是什么
 

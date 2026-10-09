@@ -20,5 +20,7 @@
 | [decouple-native-runtime.md](./decouple-native-runtime.md) | [handover/decouple-native-runtime.md](../handover/decouple-native-runtime.md) | 脱离 Claude Code：用户痛点（安装门槛/单一锁定）、双 Runtime 设计理由、OpenAI 集成、参考项目对比 |
 | [fork-sync-mechanism.md](./fork-sync-mechanism.md) | [handover/fork-sync-mechanism.md](../handover/fork-sync-mechanism.md) | Fork 长期追官方的产品策略：为什么不能继续手工同步、为什么要 ownership map/patch manifest/bootstrap |
 | [sdk-injected-turn-suppression.md](./sdk-injected-turn-suppression.md) | [handover/sdk-injected-turn-suppression.md](../handover/sdk-injected-turn-suppression.md) | 助手"答非所问"：为什么不是丢上下文、SDK 后台任务注入轮次的机制与自循环、拦在源头而非各消费者的取舍、MCP 指标为何不该默认报"大部分坏了" |
+| [background-task-hold.md](./background-task-hold.md) | [handover/background-task-hold.md](../handover/background-task-hold.md) | 后台任务等待收尾：过早标记完成的三重伤害、为何与后台子 Agent 语义对齐而非发明第三种、15 分钟上限与"收尾 ≠ 取消"、排空模式的账要算干净 |
 | [bridge-final-response.md](./bridge-final-response.md) | [handover/bridge-final-response.md](../handover/bridge-final-response.md) | 手机端要的是结论不是过程：IM 是"完成态"媒介而桌面是"进行态"媒介、为什么选只发结论而非发进展、模型"说了没做"与消息发早了为何是两件事、静默期偏长的代价与未来方向 |
 | [interactive-permission-ux.md](./interactive-permission-ux.md) | [handover/interactive-permission-ux.md](../handover/interactive-permission-ux.md) | 等人工不该等于卡死：超时兜底的善意与错配、桌面端是"进行态"媒介故状态须跨窗口恢复、为何按请求性质分流而非调阈值 |
+| [pinned-sessions.md](./pinned-sessions.md) | [handover/pinned-sessions.md](../handover/pinned-sessions.md) | 收藏会话（图钉）：置顶粒度从目录下沉到单个会话、图钉入口 vs 右键菜单、"固定"而非"快捷方式"的语义取舍、位置为何在绘影智能体下方、状态须完整继承 |

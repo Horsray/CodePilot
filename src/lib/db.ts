@@ -464,6 +464,11 @@ function migrateDb(db: Database.Database): void {
     // Give existing history seven full days before it can become eligible.
     db.exec("UPDATE chat_sessions SET last_opened_at = datetime('now') WHERE last_opened_at = ''");
   }
+  // 中文注释：会话收藏（图钉）。空字符串 = 未收藏；非空 = 收藏时间（YYYY-MM-DD HH:MM:SS）。
+  // 收藏的会话从原项目分组隐藏，统一显示在左侧列表顶部的「收藏会话」模块中。
+  if (!colNames.includes('pinned_at')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN pinned_at TEXT NOT NULL DEFAULT ''");
+  }
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_last_opened_at ON chat_sessions(last_opened_at)');
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_runtime_status ON chat_sessions(runtime_status)");
 
@@ -1237,6 +1242,16 @@ export function updateSessionTimestamp(id: string): void {
 export function updateSessionTitle(id: string, title: string): void {
   const db = getDb();
   db.prepare('UPDATE chat_sessions SET title = ? WHERE id = ?').run(title, id);
+}
+
+/**
+ * 中文注释：收藏 / 取消收藏会话。收藏时写入当前时间戳（用于收藏区排序），
+ * 取消收藏时写回空字符串 —— 空字符串是「未收藏」的唯一判定，所有读取方共用。
+ */
+export function updateSessionPinned(id: string, pinned: boolean, now: Date = new Date()): void {
+  const db = getDb();
+  const pinnedAt = pinned ? now.toISOString().replace('T', ' ').split('.')[0] : '';
+  db.prepare('UPDATE chat_sessions SET pinned_at = ? WHERE id = ?').run(pinnedAt, id);
 }
 
 export function updateSdkSessionId(id: string, sdkSessionId: string): void {
