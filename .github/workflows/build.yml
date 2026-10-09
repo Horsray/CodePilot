@@ -76,7 +76,10 @@ jobs:
   build-windows:
     needs: [lint-test, smoke-test]
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
-    runs-on: windows-latest
+    # windows-latest has moved to a VS 18 image that the current node-gyp
+    # dependency cannot detect while installing zlib-sync. Pin the supported
+    # VS 17 image so native Windows modules can be compiled during npm ci.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
