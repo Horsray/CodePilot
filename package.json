@@ -58,6 +58,7 @@
     "@google/genai": "^1.43.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@lobehub/icons": "^4.6.0",
+    "@lobehub/ui": "^5.57.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@phosphor-icons/react": "^2.1.10",
     "@radix-ui/react-use-controllable-state": "^1.2.2",
