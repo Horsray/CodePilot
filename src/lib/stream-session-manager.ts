@@ -13,6 +13,7 @@
 import { consumeSSEStream } from '@/hooks/useSSEStream';
 import { transferPendingToMessage } from '@/lib/image-ref-store';
 import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
+import { noteForReason, phaseForReason } from '@/lib/turn-outcome';
 import type {
   ToolUseInfo,
   ToolResultInfo,
@@ -64,6 +65,10 @@ interface ActiveStream {
   toolOutputAccumulated: string;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
   isIdleTimeout: boolean;
+  /** 中文注释：功能名称「后台任务挂起期豁免」，用法是服务端在等待 run_in_background 的
+   * Bash/子代理期间可能数分钟无可见输出，唯一活动是 keep_alive 心跳。挂起期内空闲看门狗
+   * 直接暂停计时（心跳即使因网络抖动丢失也不误杀），收尾 status/result 到达后解除。 */
+  backgroundHold: boolean;
   sendMessageFn: ((content: string, files?: FileAttachment[], options?: { autoTrigger?: boolean }) => void) | null;
   rewindPoints: Array<{ userMessageId: string }>;
   /** Active sub-agents being tracked for nested timeline display */
@@ -330,6 +335,7 @@ export function startStream(params: StartStreamParams): void {
     toolOutputAccumulated: '',
     toolTimeoutInfo: null,
     isIdleTimeout: false,
+    backgroundHold: false,
     sendMessageFn: params.sendMessageFn ?? null,
     rewindPoints: [],
     subAgents: [],
@@ -351,6 +357,15 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
   // 延迟到达，恢复可见后重置计时基准，避免把还活着的长任务误杀成中断。
   stream.idleCheckTimer = setInterval(() => {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      stream.lastEventTime = Date.now();
+      return;
+    }
+    // 中文注释：后台任务挂起期豁免 —— 服务端等待 run_in_background 的 Bash/子代理时
+    // 可能数分钟没有可见输出，唯一活动是 keep_alive 心跳（每 30s 一条）。此前前端
+    // 没实现 onKeepAlive 回调，心跳被静默丢弃，空闲看门狗 5.5 分钟一到就把还活着的
+    // 挂起流误杀成中断，触发报错/自动重发/服务端 retire 杀进程的连锁反应。
+    // 现在双重防护：心跳刷新计时（见 onKeepAlive），挂起期连计时都暂停。
+    if (stream.backgroundHold) {
       stream.lastEventTime = Date.now();
       return;
     }
@@ -753,6 +768,18 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onStatusPayload: (payload) => {
         markActive();
+        // 中文注释：后台任务挂起期标记 —— 服务端 status{background_task_wait} 表示本轮
+        // 已进入「等待 run_in_background 任务回报」的静默期（最长 15 分钟），期间空闲
+        // 看门狗豁免；收尾 status 或 result 到达时解除。
+        if (payload?.subtype === 'background_task_wait') {
+          stream.backgroundHold = true;
+        } else if (payload?.subtype === 'background_wait_timeout'
+          || payload?.subtype === 'background_finalization_graceful'
+          // 注入的最终汇总轮开始 = 后台任务已回报、模型恢复产出 —— 解除豁免，
+          // 让空闲看门狗重新上岗（防止豁免状态泄漏导致真卡死时无人兜底）。
+          || payload?.subtype === 'internal_turn_start') {
+          stream.backgroundHold = false;
+        }
         stream.snapshot = { ...stream.snapshot, statusPayload: payload };
         emit(stream, 'snapshot-updated');
       },
@@ -781,10 +808,18 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onResult: (usage, meta) => {
         markActive();
+        stream.backgroundHold = false;
+        // 统一终止态：工具看门狗场景下服务端已补发 aborted(reason=tool_timeout)，
+        // 但 EOF 兜底（upstream_interrupted）等较弱的信号若在其后到达不得覆盖
+        // 更具体的真实原因——toolTimeoutInfo 存在时锁定为 tool_timeout。
+        let reason = meta?.terminalReason;
+        if (stream.toolTimeoutInfo && (!reason || reason === 'upstream_interrupted')) {
+          reason = 'tool_timeout';
+        }
         stream.snapshot = {
           ...stream.snapshot,
           tokenUsage: usage,
-          ...(meta?.terminalReason ? { terminalReason: meta.terminalReason } : {}),
+          ...(reason ? { terminalReason: reason } : {}),
         };
       },
       onRateLimit: (info) => {
@@ -997,37 +1032,20 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       ? accumulated.slice(stream.activityTextLength).trim()
       : accumulated.trim();
     let finalAnswerText = stripLeakedTransportContent(rawFinalAnswerText);
-    // 中文注释：工具「无进度超时」导致本轮中止时，把原因写进消息正文 —— 服务端是
-    // 主动 abort（不是客户端错误分支），没有这段说明用户只会看到"任务干到一半突然结束"。
-    if (stream.toolTimeoutInfo) {
-      const note = `*(工具「${stream.toolTimeoutInfo.toolName}」超过 ${stream.toolTimeoutInfo.elapsedSeconds} 秒无响应，判定卡死，本轮任务已中止)*`;
-      finalAnswerText = finalAnswerText ? `${finalAnswerText}\n\n${note}` : note;
-      stream.toolTimeoutInfo = null;
-    }
-    // 中文注释：服务端「全流无进度」看门狗中止的轮次（terminalReason=stalled）——
-    // 保留已产出内容并在末尾追加可见原因，把"任务突然消失、毫无提示"变成有明确说明的中止。
-    if (stream.snapshot.terminalReason === 'stalled') {
-      const note = '*(模型上游长时间无响应，本轮任务已中止；可直接重新发送消息重试)*';
-      finalAnswerText = finalAnswerText ? `${finalAnswerText}\n\n${note}` : note;
-    }
-    if (stream.snapshot.terminalReason === 'upstream_interrupted') {
-      const note = '*(模型上游中断，本轮任务未完成；可直接重新发送消息继续)*';
-      finalAnswerText = finalAnswerText ? `${finalAnswerText}\n\n${note}` : note;
-    }
-    if (stream.snapshot.terminalReason === 'background_finalization_timeout') {
-      const note = '*(后台任务已返回，但主任务未能接收结果；正在自动继续原任务)*';
-      finalAnswerText = finalAnswerText ? `${finalAnswerText}\n\n${note}` : note;
-    }
-    // 中文注释：功能名称「后台任务等待超时收尾」，用法是后台 Bash 任务（上传/构建/
-    // dev server）超过 15 分钟仍未结束时，本轮优雅收尾——保留已产出内容，并写明
-    // 任务仍在后台运行、结果会保留，避免用户以为任务被终止了。phase 仍是 completed
-    // （不是 abort），用户可直接继续对话。
-    if (stream.snapshot.terminalReason === 'background_wait_timeout') {
-      const note = '*(后台任务仍在运行，本轮已结束等待；任务完成后的结果会保留在会话中，可直接继续对话)*';
-      finalAnswerText = finalAnswerText ? `${finalAnswerText}\n\n${note}` : note;
-    }
-    if (stream.snapshot.terminalReason === 'user_cancel') {
-      finalAnswerText = accumulated.trim() + '\n\n*(任务已由用户手动中断)*';
+    // 统一终止态：正文说明由 turn-outcome 总表生成（单一维护点）——
+    // 此前这里是按 reason 手写 if 链，新增原因漏加就会「任务干到一半突然结束、
+    // 毫无提示」。说明是给人看的散文，状态判定只读落库的 outcome 字段。
+    const turnToolTimeoutInfo = stream.toolTimeoutInfo;
+    if (stream.toolTimeoutInfo) stream.toolTimeoutInfo = null;
+    const turnReason = turnToolTimeoutInfo ? 'tool_timeout' : stream.snapshot.terminalReason;
+    const turnNote = noteForReason(turnReason, turnToolTimeoutInfo ?? undefined);
+    if (turnNote) {
+      if (turnReason === 'user_cancel') {
+        // 历史行为保留：用户中断时整段替换（含工具前已产出的正文）
+        finalAnswerText = accumulated.trim() + '\n\n' + turnNote;
+      } else {
+        finalAnswerText = finalAnswerText ? `${finalAnswerText}\n\n${turnNote}` : turnNote;
+      }
     }
     let messageContent = finalAnswerText;
     // Combine all thinking phases for persistence
@@ -1073,15 +1091,9 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
     }
 
     // Update snapshot with completion info
-    const isAborted = stream.snapshot.terminalReason === 'aborted' ||
-      stream.snapshot.terminalReason === 'user_cancel' ||
-      stream.snapshot.terminalReason === 'error' ||
-      stream.snapshot.terminalReason === 'stalled' ||
-      stream.snapshot.terminalReason === 'upstream_interrupted' ||
-      stream.snapshot.terminalReason === 'background_finalization_timeout';
-    const finalPhase = stream.snapshot.terminalReason === 'user_cancel' ? 'stopped'
-      : stream.snapshot.terminalReason === 'error' ? 'error'
-      : isAborted ? 'aborted' : 'completed';
+    // 统一终止态：phase 由 turn-outcome 总表推导（此前是硬编码字符串清单，
+    // 新增原因漏进清单就与 MessageItem 的散文解析结论互相打架）。
+    const finalPhase = phaseForReason(turnReason);
     stream.snapshot = {
       ...buildSnapshot(stream),
       phase: finalPhase,
@@ -1559,6 +1571,7 @@ export function seedSnapshotPatch(
     toolOutputAccumulated: '',
     toolTimeoutInfo: null,
     isIdleTimeout: false,
+    backgroundHold: false,
     sendMessageFn: null,
     rewindPoints: [],
     subAgents: [],

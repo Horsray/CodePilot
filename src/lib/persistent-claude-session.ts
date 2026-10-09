@@ -115,6 +115,10 @@ interface PersistentClaudeEntry {
   // wins `iterator.next()` would otherwise receive the other handler's
   // task_notification/result frames.
   turnReserved: boolean;
+  // 中文注释：后台任务排空期标志 —— 本轮主回合 result 已到、正等待
+  // run_in_background 任务回报与注入汇总轮。排空期内新用户请求不 retire
+  // 本 entry（杀进程会连带杀掉后台任务），而是走 acquireTurn 排队等干净边界。
+  backgroundWaitActive: boolean;
   idleTimer: ReturnType<typeof setTimeout> | null;
   lastUsedAt: number;
   // 中文注释：最近一次从 iterator 收到消息的时间戳，供 acquireTurn 判断
@@ -598,6 +602,7 @@ function createEntry(
     turnLock: Promise.resolve(),
     releaseTurn: null,
     turnReserved: false,
+    backgroundWaitActive: false,
     idleTimer: null,
     lastUsedAt: Date.now(),
     lastActivityAt: Date.now(),
@@ -721,7 +726,11 @@ export function getPersistentClaudeTurn(params: {
   // Do this before signature/pool handling.  A new user request supersedes an
   // active turn even when it also changes model/provider/cwd; pooling an
   // in-flight iterator would leave that old request running without an owner.
-  if (entry?.turnReserved) {
+  // 中文注释：唯一例外是后台任务排空期（backgroundWaitActive）——旧 turn 的
+  // 主回合已结束、正在等待 run_in_background 任务回报。此时 retire 杀进程会
+  // 连带杀掉后台任务（用户看到的「任务莫名停止」）。排空期不 retire：新请求
+  // 走 acquireTurn 排队，排空循环收尾后释放锁，新轮从干净边界开始，无帧窜扰。
+  if (entry?.turnReserved && !entry.backgroundWaitActive) {
     console.warn('[persistent-claude-session] Retiring active session before starting a new user turn');
     closePersistentClaudeSession(params.codepilotSessionId);
     entry = undefined;
@@ -739,10 +748,18 @@ export function getPersistentClaudeTurn(params: {
   }
 
   if (entry && !reused) {
-    // 关键配置变化（provider/model/cwd），移入池中保留而非销毁
-    console.log('[getPersistentClaudeTurn] Signature incompatible, moving old entry to pool');
-    moveToPool(params.codepilotSessionId, entry);
-    entry = undefined;
+    if (entry.backgroundWaitActive) {
+      // 中文注释：旧 turn 还在排空后台任务。此时移入池中会被其他会话按签名
+      // 复用，旧帧将窜入其他会话的流（跨会话窜扰）。排空期不池化：新建 entry
+      // 覆盖 store，旧 entry 由 detached drain 收尾后自行关闭。
+      console.log('[getPersistentClaudeTurn] Signature incompatible during background wait — replacing entry, old one drains in place');
+      entry = undefined;
+    } else {
+      // 关键配置变化（provider/model/cwd），移入池中保留而非销毁
+      console.log('[getPersistentClaudeTurn] Signature incompatible, moving old entry to pool');
+      moveToPool(params.codepilotSessionId, entry);
+      entry = undefined;
+    }
   }
 
   if (!entry) {
@@ -789,7 +806,9 @@ export function getPersistentClaudeTurn(params: {
   // process instead of queueing it behind (or, worse, alongside) a background
   // task from the previous request.  This keeps its task notifications and
   // final result out of the new request's SSE stream.
-  if (entry.turnReserved) {
+  // 中文注释：排空期（backgroundWaitActive）除外——同第一个 retire 分支，
+  // 杀进程会连带杀掉还在运行的 run_in_background 任务。排空期新请求排队等锁。
+  if (entry.turnReserved && !entry.backgroundWaitActive) {
     console.warn('[persistent-claude-session] Retiring active session before starting a new user turn');
     closePersistentClaudeSession(params.codepilotSessionId);
     entry = createEntry(
@@ -806,7 +825,12 @@ export function getPersistentClaudeTurn(params: {
   // Update callbacks only after this request owns the entry.  Updating them
   // while an old background turn is still running would route permission and
   // stderr events to the wrong SSE connection.
-  entry.currentOptions = params.options;
+  // 中文注释：排空期（backgroundWaitActive）不立即更新——旧 turn 的排空帧仍会
+  // 触发 stderr/权限回调，提前更新会把它们路由到新请求的 SSE。由新轮在
+  // acquireTurn 拿到锁后（旧帧已消费干净）再更新。
+  if (!entry.backgroundWaitActive) {
+    entry.currentOptions = params.options;
+  }
   entry.turnReserved = true;
 
   clearIdleTimer(entry);
@@ -846,6 +870,33 @@ export function getPersistentClaudeTurn(params: {
         b.type === 'tool_use' && isBackgroundDispatchTool(b.name || '', b.input)
     );
   }
+  // 中文注释：功能名称「常驻服务识别（会话侧拷贝）」，用法与 claude-client.ts 的
+  // isResidentBackgroundBashToolUse 一致：dev server / watch / tail -f 这类永不自行
+  // 退出的命令不产出可汇总的终局结果，不能算「本轮待完成工作」。否则用户轮结束后
+  // 会话侧会为它把 turn 锁占到 60 分钟上限，下一条用户消息只能排队等待——表现为
+  // 「发消息没反应」。
+  // Keep in sync with claude-client.ts (RESIDENT_BACKGROUND_COMMAND_PATTERNS) —
+  // duplicated here to avoid a circular import (claude-client imports this module).
+  const RESIDENT_BACKGROUND_COMMAND_PATTERNS: RegExp[] = [
+    // 常驻服务二进制必须出现在命令位（行首 / &&、;、| 之后 / npx、npm exec 之后），
+    // 否则 URL 路径（…/serve）或正文里的同名单词会被误判成常驻服务。
+    /(?:^|[;&|]\s*|\bnpx\s+|\bnpm\s+exec\s+)(?:next|vite|nuxt|astro|remix|nodemon|pm2|http-server|live-server|serve)\b/i,
+    // 包管理器脚本里语义上就是常驻服务的
+    /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+|exec\s+)?(?:dev|serve|start)\b/i,
+    // 监听模式（只认长参数 --watch：短参数 -w 与 curl -w 写格式化撞名）
+    /(?:^|\s)--watch(?=\s|$)/i,
+    /\btsc\b[^|;&]*\s-w(?=\s|$)/i,
+    // 持续跟随输出
+    /\btail\s+-[a-z]*f\b/i,
+    /\bdocker\s+(?:compose\s+)?(?:up\b|logs\s+-f\b)/i,
+    /\bpython3?\s+-m\s+http\.server\b/i,
+  ];
+  function isResidentBackgroundBashInput(name: string, input: unknown): boolean {
+    if (!BASH_TOOL_PATTERN.test(name)) return false;
+    const cmd = (input as { command?: string } | undefined)?.command;
+    if (!cmd) return false;
+    return RESIDENT_BACKGROUND_COMMAND_PATTERNS.some((re) => re.test(cmd));
+  }
   // 中文注释：在 task_notification / task_updated 里按 task_id 或 tool_use_id 命中挂起的后台派发
   function resolveBgDispatch(
     pending: Map<string, { taskId?: string; kind?: 'agent' | 'bash' }>,
@@ -863,8 +914,136 @@ export function getPersistentClaudeTurn(params: {
 
   const conversation = (async function* (): AsyncGenerator<SDKMessage> {
     let release: (() => void) | null = null;
+    // 中文注释：后台子 Agent 派发挂起表（tool_use_id → taskId）。声明在 try 外，
+    // 供 finally 中的 detached drain（SSE 断开后的排空循环）继续使用。
+    // resident 标记常驻服务（dev server 等）：条目保留（回报时仍要能命中并清理），
+    // 但不计入「会挂住本轮的后台派发」——见 countBlockingBgAgents。
+    const pendingBgAgents = new Map<string, { taskId?: string; kind: 'agent' | 'bash'; resident?: boolean }>();
+    // 中文注释：统计真正会挂住本轮的后台派发（排除常驻服务）。所有收尾判定都必须用它，
+    // 直接用 pendingBgAgents.size 会被永不退出的 dev server 永久卡住。
+    const countBlockingBgAgents = (): number => {
+      let blocking = 0;
+      for (const info of pendingBgAgents.values()) {
+        if (!info.resident) blocking += 1;
+      }
+      return blocking;
+    };
+    // 中文注释：task_notification 会触发 SDK 内部再跑一轮模型，
+    // 用计数器跟踪这些内部轮，等它们的 result 走完才能收尾，避免残留到下一轮。
+    let pendingInternalTurns = 0;
+    let waitingForAgents = false;
+    // 等待子 Agent 的兜底上限：超过即强制收尾，避免某个 Agent 永远不回报导致死锁
+    let waitDeadline = 0;
+    // 中文注释：区分「消息泵自然收尾」与「SSE 断开导致 return() 外部终止」。
+    // 排空期被外部终止时转交 detached drain 继续消费旧帧直到干净边界，锁保持
+    // 到排空结束——新请求的 acquireTurn 排队等待，杜绝旧帧窜入新轮。
+    let completedNormally = false;
+    // 中文注释：主循环进行中的 next() 竞速 promise。generator 被 return() 时
+    // 主循环可能正 await 在 iterator.next() 上；detached drain 接管前必须先
+    // 消费它，否则两个消费者并发 next() 会瓜分帧、收尾帧丢失。
+    let inflightNext: Promise<IteratorResult<SDKMessage>> | null = null;
+    // 中文注释：后台派发帧跟踪 —— 主消费循环与 detached drain 共用，
+    // 保证两种路径下 task_notification/内部轮的计数语义完全一致。
+    // 定义在 try 外：finally 中的 detached drain 需要引用它。
+    const trackBgDispatch = (msg: SDKMessage): void => {
+      if (msg.type === 'assistant' && !waitingForAgents && isBackgroundAgentDispatch(msg)) {
+        const content = msg.message!.content as Array<{ type?: string; id?: string; name?: string; input?: unknown }>;
+        for (const b of content) {
+          const toolName = b.name || '';
+          if (b.type !== 'tool_use' || !isBackgroundDispatchTool(toolName, b.input)) continue;
+          pendingBgAgents.set(b.id || `bg-task-${pendingBgAgents.size}`, {
+            kind: BASH_TOOL_PATTERN.test(toolName) ? 'bash' : 'agent',
+            resident: isResidentBackgroundBashInput(toolName, b.input),
+          });
+        }
+      } else if (msg.type === 'system') {
+        const sys = msg as SDKSystemMessage & {
+          subtype?: string; task_id?: string; tool_use_id?: string;
+          patch?: { status?: string };
+        };
+        if ((sys.subtype as string) === 'task_started') {
+          const key = resolveBgDispatch(pendingBgAgents, sys.tool_use_id, undefined);
+          if (key) pendingBgAgents.get(key)!.taskId = sys.task_id;
+        } else if ((sys.subtype as string) === 'task_notification') {
+          // 每条通知都会触发 SDK 内部轮次，计数等待其 result
+          pendingInternalTurns += 1;
+          const key = resolveBgDispatch(pendingBgAgents, sys.tool_use_id, sys.task_id);
+          if (key) pendingBgAgents.delete(key);
+        } else if ((sys.subtype as string) === 'task_updated' && (sys.patch?.status === 'failed' || sys.patch?.status === 'killed')) {
+          const key = resolveBgDispatch(pendingBgAgents, sys.tool_use_id, sys.task_id);
+          if (key) {
+            pendingBgAgents.delete(key);
+            pendingInternalTurns += 1;
+          }
+        }
+      }
+    };
+
+    // 中文注释：功能名称「SSE 断开后的后台排空循环」（detached drain）。
+    // 客户端在 15 分钟等待上限后优雅收尾并关闭 SSE（或中途切走），消息泵的
+    // return() 被触发。若此时还在等后台任务回报，由本循环接管消费：继续
+    // 读 iterator 直到全部子任务回报、汇总轮结束或到期，期间不释放锁——
+    // 新请求的 acquireTurn 因 lastActivityAt 持续刷新而排队等待，拿到锁时
+    // 旧帧已消费干净，杜绝旧帧窜入新轮（窜会话）。
+    const drainDetached = async (): Promise<void> => {
+      try {
+        console.log('[persistent-claude-session] SSE detached during background wait — draining frames until clean boundary');
+        const deadline = waitDeadline > 0 ? waitDeadline : Date.now() + SUBAGENT_WAIT_TIMEOUT_MS;
+        // 中文注释：先接管主循环未完成的 next()（若有）——generator 被
+        // return() 时主循环可能正 await 在 iterator.next() 上，该帧无人
+        // 消费。先消费它并做同样的派发跟踪/计数，再继续排空循环，
+        // 避免两个消费者并发 next() 瓜分帧。
+        let pending: Promise<IteratorResult<SDKMessage>> | null = inflightNext;
+        inflightNext = null;
+        while (Date.now() < deadline) {
+          let next: IteratorResult<SDKMessage>;
+          if (pending) {
+            next = await pending;
+            pending = null;
+          } else {
+            const nextPromise = entry!.iterator.next();
+            let drainTimeoutId: ReturnType<typeof setTimeout> | undefined;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              drainTimeoutId = setTimeout(() => {
+                reject(new Error('Detached drain iterator timeout — SDK subprocess may be hung'));
+              }, WAIT_ITERATOR_TIMEOUT_MS);
+            });
+            next = await Promise.race([nextPromise, timeoutPromise]);
+            if (drainTimeoutId !== undefined) clearTimeout(drainTimeoutId);
+          }
+          entry!.lastActivityAt = Date.now();
+          if (next.done) break;
+          const msg = next.value as SDKMessage;
+          trackBgDispatch(msg);
+          if (msg.type === 'result') {
+            pendingInternalTurns = Math.max(0, pendingInternalTurns - 1);
+            if (countBlockingBgAgents() === 0 && pendingInternalTurns === 0) break;
+          }
+        }
+        console.log('[persistent-claude-session] Detached drain finished — releasing turn lock');
+      } catch (error) {
+        console.warn('[persistent-claude-session] Detached drain failed:', error);
+        closePersistentClaudeSession(params.codepilotSessionId, entry!.query);
+      } finally {
+        entry!.backgroundWaitActive = false;
+        entry!.turnReserved = false;
+        entry!.lastUsedAt = Date.now();
+        // 排空结束：若 store 已被新请求覆盖（签名不兼容分支新建了 entry），
+        // 直接关闭本进程防泄漏；否则按空闲回收兜底。
+        if (getStore().get(params.codepilotSessionId) === entry) {
+          scheduleIdleClose(params.codepilotSessionId, entry!);
+        } else {
+          closeEntry(entry!);
+        }
+        release?.();
+      }
+    };
     try {
       release = await acquireTurn(entry!);
+      // 中文注释：拿到锁才更新回调。排空期排队的新请求在 acquireTurn 里等到
+      // 旧帧消费干净才拿到锁，此时更新 currentOptions 不会把旧 turn 的
+      // stderr/权限回调路由给新请求的 SSE。
+      entry!.currentOptions = params.options;
       if (entry!.warmupPromise) {
         await entry!.warmupPromise.catch(() => null);
       }
@@ -873,18 +1052,6 @@ export function getPersistentClaudeTurn(params: {
       for (const message of params.messages) {
         entry!.input.enqueue(message);
       }
-
-      // 中文注释：后台子 Agent 派发挂起表（tool_use_id → taskId）。
-      // 收到首个 result 时若还有后台派发未回报（或已有 task_notification 触发
-      // 的内部轮未走完），本轮继续消费 iterator（SDK 会注入
-      // <task-notification> 轮次），直到全部完成后的汇总轮 result 才收尾。
-      const pendingBgAgents = new Map<string, { taskId?: string; kind: 'agent' | 'bash' }>();
-      // 中文注释：task_notification 会触发 SDK 内部再跑一轮模型，
-      // 用计数器跟踪这些内部轮，等它们的 result 走完才能收尾，避免残留到下一轮。
-      let pendingInternalTurns = 0;
-      let waitingForAgents = false;
-      // 等待子 Agent 的兜底上限：超过即强制收尾，避免某个 Agent 永远不回报导致死锁
-      let waitDeadline = 0;
 
       while (true) {
         // 中文注释：为 iterator.next() 添加超时保护。如果 SDK 子进程挂起
@@ -900,11 +1067,17 @@ export function getPersistentClaudeTurn(params: {
           }, timeoutMs);
         });
 
-        const next = await Promise.race([nextPromise, timeoutPromise]);
+        // 中文注释：保存进行中的竞速 promise —— detached drain 接管前先 await
+        // 它，避免与主循环并发消费同一个 async iterator。
+        inflightNext = Promise.race([nextPromise, timeoutPromise]);
+        const next = await inflightNext;
+        inflightNext = null;
         // 中文注释：nextPromise 先返回时清理定时器，避免残留的 setTimeout
         // 在数分钟后触发一个无人处理的 reject（unhandled rejection 噪音）。
         if (timeoutId !== undefined) clearTimeout(timeoutId);
         if (next.done) {
+          entry!.backgroundWaitActive = false;
+          completedNormally = true;
           closePersistentClaudeSession(params.codepilotSessionId, entry!.query);
           return;
         }
@@ -912,36 +1085,7 @@ export function getPersistentClaudeTurn(params: {
         entry!.lastActivityAt = Date.now();
 
         // ── 后台派发跟踪 ──
-        if (msg.type === 'assistant' && !waitingForAgents && isBackgroundAgentDispatch(msg)) {
-          const content = msg.message!.content as Array<{ type?: string; id?: string; name?: string; input?: unknown }>;
-          for (const b of content) {
-            const toolName = b.name || '';
-            if (b.type !== 'tool_use' || !isBackgroundDispatchTool(toolName, b.input)) continue;
-            pendingBgAgents.set(b.id || `bg-task-${pendingBgAgents.size}`, {
-              kind: BASH_TOOL_PATTERN.test(toolName) ? 'bash' : 'agent',
-            });
-          }
-        } else if (msg.type === 'system') {
-          const sys = msg as SDKSystemMessage & {
-            subtype?: string; task_id?: string; tool_use_id?: string;
-            patch?: { status?: string };
-          };
-          if ((sys.subtype as string) === 'task_started') {
-            const key = resolveBgDispatch(pendingBgAgents, sys.tool_use_id, undefined);
-            if (key) pendingBgAgents.get(key)!.taskId = sys.task_id;
-          } else if ((sys.subtype as string) === 'task_notification') {
-            // 每条通知都会触发 SDK 内部轮次，计数等待其 result
-            pendingInternalTurns += 1;
-            const key = resolveBgDispatch(pendingBgAgents, sys.tool_use_id, sys.task_id);
-            if (key) pendingBgAgents.delete(key);
-          } else if ((sys.subtype as string) === 'task_updated' && (sys.patch?.status === 'failed' || sys.patch?.status === 'killed')) {
-            const key = resolveBgDispatch(pendingBgAgents, sys.tool_use_id, sys.task_id);
-            if (key) {
-              pendingBgAgents.delete(key);
-              pendingInternalTurns += 1;
-            }
-          }
-        }
+        trackBgDispatch(msg);
 
         const initData = extractWarmupInitData(msg as SDKSystemMessage);
         if (initData) {
@@ -954,33 +1098,42 @@ export function getPersistentClaudeTurn(params: {
           if (waitingForAgents) {
             // 等待期间的 result = 某个内部轮的结束信号
             pendingInternalTurns = Math.max(0, pendingInternalTurns - 1);
-            if (pendingBgAgents.size === 0 && pendingInternalTurns === 0) {
+            if (countBlockingBgAgents() === 0 && pendingInternalTurns === 0) {
               // 中文注释：全部子 Agent 回报完毕且汇总轮结束——真正收尾
               entry!.lastUsedAt = Date.now();
+              entry!.backgroundWaitActive = false;
+              completedNormally = true;
               scheduleIdleClose(params.codepilotSessionId, entry!);
               return;
             }
             continue;
           }
           // 首个 result（用户轮结束）：还有后台派发或已触发的内部轮未走完 → 挂住
-          if (pendingBgAgents.size > 0 || pendingInternalTurns > 0) {
+          // 中文注释：判据用 countBlockingBgAgents()（排除常驻服务）——否则启动过
+          // dev server 的会话会被它永久挂住，后续每条消息都在 acquireTurn 排队。
+          if (countBlockingBgAgents() > 0 || pendingInternalTurns > 0) {
             waitingForAgents = true;
+            entry!.backgroundWaitActive = true;
             // 中文注释：含后台 Bash 任务的等待用更长的会话侧上限——客户端 15 分钟
             // 已对用户优雅收尾并进入排空模式，会话侧要晚于它收尾，让排空随本生成器
             // 的自然结束而终止。纯子 Agent 等待沿用原 40 分钟上限。
-            const bashPending = Array.from(pendingBgAgents.values()).filter((v) => v.kind === 'bash').length;
+            const bashPending = Array.from(pendingBgAgents.values()).filter((v) => v.kind === 'bash' && !v.resident).length;
             waitDeadline = Date.now() + (bashPending > 0 ? BACKGROUND_TASK_WAIT_TIMEOUT_MS : SUBAGENT_WAIT_TIMEOUT_MS);
-            console.log(`[persistent-claude-session] Waiting for ${pendingBgAgents.size} background task(s) (${bashPending} bash) / ${pendingInternalTurns} internal turn(s) to finish`);
+            console.log(`[persistent-claude-session] Waiting for ${countBlockingBgAgents()} background task(s) (${bashPending} bash) / ${pendingInternalTurns} internal turn(s) to finish`);
             continue;
           }
           entry!.lastUsedAt = Date.now();
+          entry!.backgroundWaitActive = false;
+          completedNormally = true;
           scheduleIdleClose(params.codepilotSessionId, entry!);
           return;
         }
         // 等待期间兜底：超过上限仍未收尾 → 强制结束，避免死锁
         if (waitingForAgents && Date.now() > waitDeadline) {
-          console.warn(`[persistent-claude-session] Background task wait deadline exceeded (${pendingBgAgents.size} task(s) still pending) — ending turn`);
+          console.warn(`[persistent-claude-session] Background task wait deadline exceeded (${countBlockingBgAgents()} task(s) still pending) — ending turn`);
           entry!.lastUsedAt = Date.now();
+          entry!.backgroundWaitActive = false;
+          completedNormally = true;
           scheduleIdleClose(params.codepilotSessionId, entry!);
           return;
         }
@@ -989,8 +1142,18 @@ export function getPersistentClaudeTurn(params: {
       closePersistentClaudeSession(params.codepilotSessionId, entry!.query);
       throw error;
     } finally {
-      entry!.turnReserved = false;
-      release?.();
+      if (!completedNormally && waitingForAgents) {
+        // 中文注释：SSE 断开（客户端超时优雅收尾后关闭 / 中途切走）触发了
+        // return()，而本轮仍在等待后台任务回报。不终止、不释放锁：转交
+        // detached drain 在后台继续消费旧帧，排空结束后才释放锁。期间新请求
+        // 的 acquireTurn 因 lastActivityAt 持续刷新而排队等待，拿到锁时旧帧
+        // 已消费干净——这正是「窜会话」的服务端修复。
+        void drainDetached();
+      } else {
+        entry!.backgroundWaitActive = false;
+        entry!.turnReserved = false;
+        release?.();
+      }
     }
   })();
 

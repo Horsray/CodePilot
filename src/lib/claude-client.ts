@@ -119,6 +119,14 @@ const BACKGROUND_FINALIZATION_GRACE_MS = 30_000;
 // 无限等待。
 const BACKGROUND_BASH_WAIT_TIMEOUT_MS = 15 * 60_000;
 
+// 中文注释：功能名称「常驻后台任务豁免」，用法是把 dev server / watch 这类永远不会
+// 自己结束的常驻服务，从「本轮待完成工作」里摘出去。它们被 run_in_background 启动后
+// 会一直留在等待表里，导致之后每一轮 turn_completed 都命中「后台任务仍在运行」分支：
+// result 被拦下、最多等 15 分钟才优雅收尾——用户观感就是「回复迟迟不落库 / 任务跑到
+// 一半自己停了」。超过这个时长仍未结束的后台 Bash 一律按常驻服务处理，不再阻塞收尾；
+// 任务本身不受影响（该轮走排空模式，后台进程与后续通知都保留）。
+const BACKGROUND_RESIDENT_SERVICE_MS = 10 * 60_000;
+
 // 中文注释：功能名称「后台排空上限」，用法是限定「排空模式」最长存活时间：本轮已
 // 对用户收尾，但仍继续消费 SDK 注入的通知/汇总帧并丢弃，避免它们残留到下一次用户
 // 请求（旧回复会被当成新问题的答案）。超时后放弃排空，由持久会话的空闲回收兜底。
@@ -151,6 +159,34 @@ export const BASH_TOOL_PATTERN = /^Bash$|^mcp__.*bash$/i;
 export function isBackgroundBashToolUse(name: string, input: unknown): boolean {
   if (!BASH_TOOL_PATTERN.test(name)) return false;
   return (input as { run_in_background?: boolean } | undefined)?.run_in_background === true;
+}
+
+// 中文注释：功能名称「常驻服务识别」，用法是识别 dev server / watch / serve / tail -f
+// 这类「启动后不会自行退出」的后台命令。它们和一次性后台任务（上传、构建）有本质差别：
+// 永远不会产出可汇总的终局结果，SDK 只在进程结束时才回报一次。若按普通后台任务计入
+// 「本轮待完成工作」，本轮的 result 会被一直拦下——用户观感就是「回复迟迟不落库」，
+// 最长要等到 15 分钟等待上限才收尾（线上已多次出现）。这里按命令特征把它们摘出去。
+// 注意：persistent-claude-session.ts 里有一份等价拷贝（避免循环导入），修改需同步。
+const RESIDENT_BACKGROUND_COMMAND_PATTERNS: RegExp[] = [
+  // 常驻服务二进制必须出现在命令位（行首 / &&、;、| 之后 / npx、npm exec 之后），
+  // 否则 URL 路径（…/serve）或正文里的同名单词会被误判成常驻服务。
+  /(?:^|[;&|]\s*|\bnpx\s+|\bnpm\s+exec\s+)(?:next|vite|nuxt|astro|remix|nodemon|pm2|http-server|live-server|serve)\b/i,
+  // 包管理器脚本里语义上就是常驻服务的
+  /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+|exec\s+)?(?:dev|serve|start)\b/i,
+  // 监听模式（只认长参数 --watch：短参数 -w 与 curl -w 写格式化撞名）
+  /(?:^|\s)--watch(?=\s|$)/i,
+  /\btsc\b[^|;&]*\s-w(?=\s|$)/i,
+  // 持续跟随输出
+  /\btail\s+-[a-z]*f\b/i,
+  /\bdocker\s+(?:compose\s+)?(?:up\b|logs\s+-f\b)/i,
+  /\bpython3?\s+-m\s+http\.server\b/i,
+];
+
+export function isResidentBackgroundBashToolUse(name: string, input: unknown): boolean {
+  if (!isBackgroundBashToolUse(name, input)) return false;
+  const cmd = (input as { command?: string } | undefined)?.command;
+  if (!cmd) return false;
+  return RESIDENT_BACKGROUND_COMMAND_PATTERNS.some((re) => re.test(cmd));
 }
 
 function getSyntheticSubagentInfo(params: {
@@ -447,6 +483,11 @@ export class SdkInjectedTurnTracker {
   // 误标为父任务完成。
   private finalSummaryTurn = false;
   private finalSummaryHasAssistantOutput = false;
+  // 中文注释：最终汇总轮的输出已被放行转发。它只在「主回合 result 已被拦下之后」
+  // 置位（见 markAssistantMessage 的 mainResultSwallowed 入参）——主回合仍在进行时
+  // 转发的是主回合自己的输出，不能算作汇总，否则宽限逻辑会把主回合 result 误当成
+  // 汇总轮结束信号直接收尾。
+  summaryRelayed = false;
 
   /** A background child has completed, but its injected parent summary is still pending. */
   get hasPendingFinalSummary(): boolean {
@@ -479,11 +520,16 @@ export class SdkInjectedTurnTracker {
     return injected;
   }
 
-  /** 收到 assistant 消息时调用（含被抑制轮次之前的正常轮次）。 */
-  markAssistantMessage(): void {
+  /** 收到 assistant 消息时调用（含被抑制轮次之前的正常轮次）。
+   *  mainResultSwallowed：主回合 result 是否已被拦下——只有此后的 assistant 输出
+   *  才可能属于最终汇总轮，据此置位 summaryRelayed。 */
+  markAssistantMessage(mainResultSwallowed = false): void {
     this.seenAssistantOutput = true;
     if (this.finalSummaryTurn) {
       this.finalSummaryHasAssistantOutput = true;
+    }
+    if ((this.forwardFinalTurn || this.finalSummaryTurn) && mainResultSwallowed) {
+      this.summaryRelayed = true;
     }
   }
 
@@ -972,6 +1018,11 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
   // Kept outside the underlying-source callbacks so `cancel()` can only tear
   // down the Query that this particular HTTP stream actually acquired.
   let persistentQueryForStream: Query | null = null;
+  // 中文注释：排空模式标志 —— 本轮已对用户优雅收尾（发终态并关闭 SSE），
+  // 后台任务仍在运行。声明在 start/cancel 之外：主消费循环的 abort 分支、
+  // finally 兜底与 cancel() 都要据此豁免「杀进程」，否则排空期的后台任务会被
+  // controller.close() 触发的 abort 连带杀掉（任务莫名停止）。
+  let drainingBackground = false;
 
   return new ReadableStream<string>({
     async start(controllerRaw) {
@@ -1023,6 +1074,17 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
               type: 'tool_timeout',
               data: JSON.stringify({ tool_name: info.name, elapsed_seconds: stallSecs }),
             }));
+            // 统一终止态：立即发出终态帧并置位守卫——此前此路径不发终态，
+            // iterator 抛错后经错误分类被归为「模型错误」，与本轮真实原因
+            // （工具卡死）不符。reason=tool_timeout 让前端与落库都能正确分类。
+            controller.enqueue(formatSSE({
+              type: 'aborted',
+              data: JSON.stringify({
+                reason: 'tool_timeout',
+                message: `工具「${info.name}」长时间无响应，本轮任务已中止`,
+              }),
+            }));
+            terminalEmitted = true;
             abortController?.abort();
             if (toolWatchdogTimer) clearInterval(toolWatchdogTimer);
             break;
@@ -1059,6 +1121,8 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
           type: 'aborted',
           data: JSON.stringify({ reason: 'stalled', message: `模型上游 ${silentSecs} 秒无响应` }),
         }));
+        // 统一终止态：置位守卫，错误分类不得再补发第二个终态覆盖 stalled。
+        terminalEmitted = true;
         // 卡死的 SDK 会话不可继续复用 —— 清掉，让下一轮用本地历史 + 摘要重建会话
         if (sessionId) {
           try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
@@ -1091,6 +1155,11 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       // Only an SDK result event proves that this request consumed a complete
       // turn.  The outer finally uses this to reject unsafe session reuse.
       let receivedTerminalResult = false;
+      // 统一终止态守卫：每一轮只允许发出一个终态帧（result 或 aborted）。
+      // 此前 stalled/工具看门狗先发 aborted(stalled) 后，iterator 抛错进入
+      // 错误分类又补发 error + aborted(error)——前端收到的最后一个终态覆盖
+      // 了第一个，分类互相打架。所有终态出口统一先检查/置位此标志。
+      let terminalEmitted = false;
       let assistantErrorMessage = '';
 
       // Resolve provider via the unified resolver. The caller may pass an explicit
@@ -1106,10 +1175,13 @@ export function streamClaudeSdk(options: ClaudeStreamOptions): ReadableStream<st
       let agentWaitKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
       let backgroundFinalizationTimer: ReturnType<typeof setTimeout> | null = null;
       // 中文注释：功能名称「后台 Bash 任务登记表」，用法是登记 run_in_background 的
-      // Bash 工具调用（tool_use_id → taskId），与后台子 Agent 同语义地挂住本轮。
+      // Bash 工具调用（tool_use_id → taskId + 登记时刻 + 是否常驻服务），与后台子 Agent
+      // 同语义地挂住本轮。resident 标记 dev server 这类永不退出的命令——它们不参与
+      // 「本轮待完成工作」计数（见 BACKGROUND_RESIDENT_SERVICE_MS 与
+      // activelyWaitingBackgroundBashTasks），但条目必须保留：任务真正回报时仍要能命中并清理。
       // 声明在 try 之外：工具看门狗（忽略等待中的后台任务）、catch 与 finally
       // （清理等待计时器）都要访问。
-      const pendingBackgroundBashTasks = new Map<string, { taskId?: string }>();
+      const pendingBackgroundBashTasks = new Map<string, { taskId?: string; startedAt: number; resident: boolean }>();
       // 中文注释：15 分钟等待上限到点（本轮已优雅收尾，进入排空模式）。
       let backgroundWaitExpired = false;
       let backgroundWaitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2344,11 +2416,25 @@ if (claudePath) {
         let swallowedFinalResult: SDKResultMessage | null = null;
         // 首次因后台任务挂起本轮的墙钟时间——超时收尾时用它给出真实的「本轮耗时」。
         let backgroundHoldStartedAt = 0;
-        // 15 分钟等待上限到点后：本轮已优雅收尾，之后的帧只排空、不再外发。
-        let drainingBackground = false;
+        // 排空截止时间：超过即放弃排空，由持久会话的消息泵兜底收尾。
         let backgroundDrainDeadline = 0;
+        // 中文注释：常驻服务豁免——只有「非常驻 且 登记后未超过 BACKGROUND_RESIDENT_SERVICE_MS」
+        // 的后台 Bash 才算待完成工作。两道判据缺一不可：
+        //   1) resident（命令特征）：dev server / watch 永不退出，从登记那一刻起就不该挂住本轮；
+        //   2) 时长阀值：兜住「看着像一次性任务、实际卡住不回报」的命令，避免无限期挂起。
+        // 登记时刻缺失时按「刚启动」处理（保守：仍计入，行为与改动前一致）。
+        const activelyWaitingBackgroundBashTasks = (): number => {
+          const now = Date.now();
+          let count = 0;
+          for (const entry of pendingBackgroundBashTasks.values()) {
+            if (entry.resident) continue;
+            const startedAt = entry.startedAt ?? now;
+            if (now - startedAt < BACKGROUND_RESIDENT_SERVICE_MS) count += 1;
+          }
+          return count;
+        };
         const totalPendingBackgroundWork = (): number =>
-          pendingAgentToolUse.size + pendingBackgroundBashTasks.size;
+          pendingAgentToolUse.size + activelyWaitingBackgroundBashTasks();
         const resolvePendingBackgroundBash = (toolUseId?: string, taskId?: string): string | null => {
           if (toolUseId && pendingBackgroundBashTasks.has(toolUseId)) return toolUseId;
           if (taskId) {
@@ -2378,26 +2464,36 @@ if (claudePath) {
         // 到期行为同样是收尾而不是 abort：直接用主回合 result 发终态（phase
         // completed，不发 aborted、不触发前端自动继续），后台任务通知到达时已
         // 实时展示过，不存在信息丢失。
-        const scheduleBackgroundFinalization = () => {
+        // 中文注释：用被拦下的主回合 result 发出终态并优雅关闭 SSE 的公共收尾路径。
+        // 三种触发时机共用同一份实现：宽限定时器到期、汇总轮 result 迟到、迭代器 EOF。
+        // reason 决定前端归类：
+        //   background_finalization_graceful —— 汇总确实没等到 → 显示「未等到汇总」说明；
+        //   background_summary_received —— 汇总输出已转发给用户 → 按正常完成处理，
+        //     绝不误报「未等到」，否则出现「总结明明显示了却提示没等到」的竞态；
+        //   background_wait_timeout —— 后台任务仍在运行（EOF 兜底复用等待上限的语义）。
+        const finishTurnWithHeldResult = (
+          reason: 'background_finalization_graceful' | 'background_summary_received' | 'background_wait_timeout',
+        ) => {
+          const held = swallowedFinalResult ?? heldBackgroundResult;
+          if (!held) {
+            console.warn('[claude-client] Graceful close requested without a held result; deferring to stream watchdogs');
+            return;
+          }
           clearBackgroundFinalizationTimer();
-          backgroundFinalizationTimer = setTimeout(() => {
-            backgroundFinalizationTimer = null;
-            if (controller.closed || abortController?.signal.aborted || drainingBackground) return;
-            const held = swallowedFinalResult ?? heldBackgroundResult;
-            if (!held) {
-              // 无可转发的 result（宽限本应只在 result 到达后武装，理论不可达）——
-              // 交给流看门狗/EOF 分类兜底，不在这里制造 abort。
-              console.warn('[claude-client] Background finalization grace expired without a held result; deferring to stream watchdogs');
-              return;
-            }
-            console.log('[claude-client] Background final summary did not arrive in time; finishing the turn gracefully');
-            const expiryDurationMs = backgroundHoldStartedAt
-              ? Date.now() - backgroundHoldStartedAt
-              : (held.duration_ms ?? 0);
-            tokenUsage = extractTokenUsage(held, expiryDurationMs, lastAssistantUsage);
+          clearBackgroundWaitTimer();
+          const expiryDurationMs = backgroundHoldStartedAt
+            ? Date.now() - backgroundHoldStartedAt
+            : (held.duration_ms ?? 0);
+          tokenUsage = extractTokenUsage(held, expiryDurationMs, lastAssistantUsage);
+          if (reason === 'background_wait_timeout') {
+            backgroundWaitExpired = true;
+          } else {
             backgroundFinalizationExpired = true;
-            drainingBackground = true;
-            backgroundDrainDeadline = Date.now() + BACKGROUND_DRAIN_TIMEOUT_MS;
+          }
+          drainingBackground = true;
+          backgroundDrainDeadline = Date.now() + BACKGROUND_DRAIN_TIMEOUT_MS;
+          if (reason === 'background_finalization_graceful') {
+            console.log('[claude-client] Background final summary did not arrive; finishing the turn gracefully');
             controller.enqueue(formatSSE({
               type: 'status',
               data: JSON.stringify({
@@ -2405,24 +2501,46 @@ if (claudePath) {
                 message: '后台任务已完成，本轮直接收尾。',
               }),
             }));
-            // 用被拦下的主回合 result 发终态：保留 usage/耗时统计，
-            // terminal_reason 用独立值，前端按正常完成处理（不是中断/失败）。
+          } else if (reason === 'background_wait_timeout') {
+            console.log('[claude-client] Background tasks still pending at stream end; ending the wait gracefully');
             controller.enqueue(formatSSE({
-              type: 'result',
+              type: 'status',
               data: JSON.stringify({
-                subtype: held.subtype ?? 'success',
-                is_error: false,
-                num_turns: held.num_turns ?? 0,
-                duration_ms: expiryDurationMs,
-                usage: tokenUsage,
-                session_id: held.session_id ?? sessionId,
-                terminal_reason: 'background_finalization_graceful',
+                subtype: 'background_wait_timeout',
+                message: '后台任务仍在运行，本轮先结束等待；任务完成后的结果会保留在会话中。',
               }),
             }));
-            controller.enqueue(formatSSE({ type: 'done', data: '' }));
-            controller.close();
-            // 注意：不 abort、不销毁持久会话——排空模式继续消费残余帧，
-            // 下一条用户消息从干净边界开始。
+          } else {
+            console.log('[claude-client] Background final summary was relayed; closing the turn normally');
+          }
+          controller.enqueue(formatSSE({
+            type: 'result',
+            data: JSON.stringify({
+              subtype: held.subtype ?? 'success',
+              is_error: false,
+              num_turns: held.num_turns ?? 0,
+              duration_ms: expiryDurationMs,
+              usage: tokenUsage,
+              session_id: held.session_id ?? sessionId,
+              terminal_reason: reason,
+            }),
+          }));
+          terminalEmitted = true;
+          controller.enqueue(formatSSE({ type: 'done', data: '' }));
+          controller.close();
+          // 注意：不 abort、不销毁持久会话——排空模式继续消费残余帧，
+          // 下一条用户消息从干净边界开始。
+        };
+        const scheduleBackgroundFinalization = () => {
+          clearBackgroundFinalizationTimer();
+          backgroundFinalizationTimer = setTimeout(() => {
+            backgroundFinalizationTimer = null;
+            if (controller.closed || abortController?.signal.aborted || drainingBackground) return;
+            // 宽限到点前汇总输出若已转发给用户，按「汇总已收到」正常收尾；
+            // 否则才允许宣称「未等到最终汇总」。
+            finishTurnWithHeldResult(
+              sdkInjectedTurn.summaryRelayed ? 'background_summary_received' : 'background_finalization_graceful',
+            );
           }, BACKGROUND_FINALIZATION_GRACE_MS);
         };
         // 中文注释：功能名称「后台任务的等待上限」，用法是给「等待后台 Bash 任务」
@@ -2433,7 +2551,12 @@ if (claudePath) {
           backgroundWaitTimer = setTimeout(() => {
             backgroundWaitTimer = null;
             if (controller.closed || abortController?.signal.aborted) return;
-            if (totalPendingBackgroundWork() === 0) return;
+            // 中文注释：这里必须用「登记表原始状态」而不是 totalPendingBackgroundWork()——
+            // 该函数会豁免常驻服务（BACKGROUND_RESIDENT_SERVICE_MS），而等待上限到点时
+            // 任何后台 Bash 都已登记满 15 分钟、必然被判为常驻，用它做守卫会让本收尾
+            // 路径永远提前返回、本轮挂到流看门狗。原始表为空才说明正常释放路径已经
+            // 收尾过（那里会 delete 条目），此处无需重复发终态。
+            if (pendingAgentToolUse.size === 0 && pendingBackgroundBashTasks.size === 0) return;
             backgroundWaitExpired = true;
             drainingBackground = true;
             backgroundDrainDeadline = Date.now() + BACKGROUND_DRAIN_TIMEOUT_MS;
@@ -2467,6 +2590,7 @@ if (claudePath) {
                 terminal_reason: 'background_wait_timeout',
               }),
             }));
+            terminalEmitted = true;
             controller.enqueue(formatSSE({ type: 'done', data: '' }));
             controller.close();
           }, BACKGROUND_BASH_WAIT_TIMEOUT_MS);
@@ -2474,7 +2598,10 @@ if (claudePath) {
         // 中文注释：等待后台子 Agent / 后台 Bash 任务期间的保活心跳——每 30s 一条
         // keep_alive，只有存在未回报的后台任务时才发送，正常对话不受影响。
         agentWaitKeepAliveTimer = setInterval(() => {
-          if (totalPendingBackgroundWork() > 0) {
+          // 中文注释：与等待上限同理，这里也用登记表原始状态——心跳的作用是「只要还有
+          // 后台任务可能回报，就别让看门狗把本轮判死」。若改用豁免常驻服务的
+          // totalPendingBackgroundWork()，任务跨过常驻阈值后心跳会停、看门狗提前 abort。
+          if (pendingAgentToolUse.size + pendingBackgroundBashTasks.size > 0) {
             // A background child is an expected silent phase.  This is real
             // server-side progress, not merely a browser keep-alive: refresh
             // the same clock used by the global watchdog so it cannot abort
@@ -2490,6 +2617,14 @@ if (claudePath) {
           // 中文注释：全流无进度看门狗的活动时间戳 —— 收到任何 SDK 消息都算有进度
           lastStreamActivityAt = Date.now();
           if (abortController?.signal.aborted) {
+            // 中文注释：排空模式下 SSE 已对用户优雅收尾（controller.close() 会
+            // 触发本 abort），后台任务仍在运行。此时杀进程会丢弃后台任务与
+            // 上下文；消息泵继续排空旧帧直到干净边界（SSE 断开时由
+            // persistent-claude-session 的 detached drain 接管）。仅断开本流。
+            if (drainingBackground) {
+              console.log('[claude-client] Abort during background drain — detaching stream without discarding persistent session');
+              break;
+            }
             // This request no longer owns the stream.  A persistent SDK Query
             // can continue emitting background task frames after an abort; if
             // reused, the next user message would consume those old frames.
@@ -2523,7 +2658,9 @@ if (claudePath) {
 
           switch (message.type) {
             case 'assistant': {
-              sdkInjectedTurn.markAssistantMessage();
+              // mainResultSwallowed：只有主回合 result 已被拦下之后出现的 assistant
+              // 输出才可能是最终汇总轮的内容（用于置位 summaryRelayed）。
+              sdkInjectedTurn.markAssistantMessage(swallowedFinalResult !== null);
               // Deferred capability capture: trigger after first assistant message
               if (capturePending) {
                 capturePending = false;
@@ -2617,8 +2754,9 @@ if (claudePath) {
                       // 中文注释：run_in_background 的 Bash 任务（上传/构建/dev server）
                       // 登记进后台任务表，让本轮在 result 处挂住等待真正完成。
                       if (isBackgroundBashToolUse(block.name, block.input)) {
-                        pendingBackgroundBashTasks.set(block.id, {});
-                        console.log('[claude-client] Background Bash task registered:', block.id, block.name);
+                        const resident = isResidentBackgroundBashToolUse(block.name, block.input);
+                        pendingBackgroundBashTasks.set(block.id, { startedAt: Date.now(), resident });
+                        console.log('[claude-client] Background Bash task registered:', block.id, block.name, resident ? '(resident service)' : '');
                       }
                       const toolInput = block.input as { command?: string; cmd?: string };
                       const cmd = toolInput?.command || toolInput?.cmd || '';
@@ -2972,6 +3110,17 @@ if (claudePath) {
                 // 使客户端能将子Agent的思考内容路由到子Agent卡片而非主时间线
                 const streamParentId = agentStack.length > 0 ? agentStack[agentStack.length - 1] : undefined;
                 if ('text' in delta && delta.text) {
+                  // 中文注释：竞态兜底——主回合 result 已被拦下（swallowed/held）之后，
+                  // 任何真正转发给用户的主线程正文都意味着「汇总内容已被用户看到」。
+                  // 此前 summaryRelayed 只依赖注入轮识别（forwardFinalTurn/finalSummaryTurn），
+                  // 注入轮 user 消息一旦未被识别，总结明明已展示，宽限到期却误报
+                  // 「未等到最终汇总」。子 Agent 帧（streamParentId）不算汇总。
+                  if ((swallowedFinalResult !== null || heldBackgroundResult !== null)
+                    && !streamParentId
+                    && !sdkInjectedTurn.summaryRelayed) {
+                    sdkInjectedTurn.summaryRelayed = true;
+                    console.log('[claude-client] Main-thread text relayed after main result — marking summaryRelayed (belt-and-braces)');
+                  }
                   controller.enqueue(formatSSE({ type: 'text', data: delta.text, ...(streamParentId ? { parentAgentId: streamParentId } : {}) }));
                 }
                 if ('thinking' in delta && (delta as { thinking?: string }).thinking) {
@@ -3114,13 +3263,17 @@ if (claudePath) {
                     task_id: string;
                     patch?: { status?: string; error?: string };
                   };
-                  // 中文注释：后台 Bash 任务失败/被杀 → 从等待表移除。若本轮已在等待中
-                  // （用户轮 result 已被挂起），放行接下来的注入轮，让模型的失败汇报
-                  // 也能送达用户。
+                  // 中文注释：后台 Bash 任务失败/被杀 → 从等待表移除。failed 由 SDK 主动
+                  // 通报，随后会注入失败汇报轮 → 放行让汇报送达用户；killed 是模型自己
+                  // TaskStop 停掉的——SDK 不会为此注入任何轮，主回合剩余输出就是最终
+                  // 结论。若对 killed 也置位 forwardFinalTurn，主回合 result 会被拦下，
+                  // 30s 宽限等一个永远不会到来的汇总轮，到期误报「未等到最终汇总」
+                  // （实测：结论已完整显示给用户，仍被判「未等到汇总」收尾）。
                   const bashKey = resolvePendingBackgroundBash(undefined, taskUpdated.task_id);
                   if (bashKey && (taskUpdated.patch?.status === 'failed' || taskUpdated.patch?.status === 'killed')) {
                     pendingBackgroundBashTasks.delete(bashKey);
-                    if (totalPendingBackgroundWork() === 0 && swallowedFinalResult) {
+                    if (taskUpdated.patch?.status === 'failed'
+                      && totalPendingBackgroundWork() === 0 && swallowedFinalResult) {
                       sdkInjectedTurn.forwardFinalTurn = true;
                       scheduleBackgroundFinalization();
                       clearBackgroundWaitTimer();
@@ -3174,11 +3327,13 @@ if (claudePath) {
                   }
                   // 中文注释：后台 Bash 任务回报（成功/失败/停止）——从等待表移除；
                   // 若这是最后一个未回报的后台任务，放行注入的汇报轮，让用户看到
-                  // 「上传完成/失败」的最终说明，并撤销 15 分钟等待上限。
+                  // 「上传完成/失败」的最终说明，并撤销 15 分钟等待上限。killed 除外：
+                  // 模型主动 TaskStop 停掉的任务 SDK 不注入任何轮（主回合自身输出即
+                  // 结论），置位会让主回合 result 被拦下、宽限到期误报「未等到汇总」。
                   const bashTaskKey = resolvePendingBackgroundBash(taskMsg.tool_use_id, taskMsg.task_id);
                   if (bashTaskKey) {
                     pendingBackgroundBashTasks.delete(bashTaskKey);
-                    if (totalPendingBackgroundWork() === 0) {
+                    if (totalPendingBackgroundWork() === 0 && taskMsg.status !== 'killed') {
                       sdkInjectedTurn.forwardFinalTurn = true;
                       clearBackgroundWaitTimer();
                       // 中文注释：与子 Agent 分支同理——主回合仍在进行时通知先到，
@@ -3273,6 +3428,14 @@ if (claudePath) {
                   type: 'status',
                   data: JSON.stringify({ _internal: true, subtype: 'internal_turn_end' }),
                 }));
+                // 中文注释：注入轮（通知轮）结束、最终汇总轮仍悬而未决时重新武装宽限。
+                // 此前这里只 break、把主回合「保持打开」，但宽限已在汇总轮 user 消息
+                // 处被清除，主回合从此没有任何东西能再关闭它——只能挂到流看门狗被
+                // 误判成「模型上游中断」。重武装后：汇总轮到来正常收尾，不来则
+                // 30 秒宽限到期优雅收尾。
+                if (swallowedFinalResult && sdkInjectedTurn.hasPendingFinalSummary && !sdkInjectedTurn.summaryRelayed) {
+                  scheduleBackgroundFinalization();
+                }
                 break;
               }
               if (turnTransition === 'suppressed_start') {
@@ -3294,6 +3457,13 @@ if (claudePath) {
                 // 的前提（注入轮只可能在此之后 dispatch），也是宽限到期优雅收尾时
                 // 的终态载体。若此处不保存，注入轮失踪时本轮只能挂到流看门狗。
                 swallowedFinalResult = resultMsg;
+                // 中文注释：suppressed_start（此前有挂起的注入消息）同样会让 result
+                // 被拦下，但旧代码只有 turn_completed 分支武装宽限——若随后的注入轮
+                // 不再产出 result，主回合就挂到看门狗。这里补武装，由
+                // scheduleBackgroundFinalization 的 clearTimeout 保证幂等。
+                if (turnTransition === 'suppressed_start' && sdkInjectedTurn.hasPendingFinalSummary) {
+                  scheduleBackgroundFinalization();
+                }
                 // 中文注释：用户轮已答完，但仍有后台任务未回报——挂起本轮、暂不发
                 // 终态（UI 保持「生成中」），等 task_notification 与注入的汇总轮
                 // 走完再收尾。后台 Bash 超过 15 分钟仍未结束则优雅收尾，
@@ -3315,6 +3485,15 @@ if (claudePath) {
                   // 在此武装宽限；到期仍无汇总则优雅收尾（见
                   // scheduleBackgroundFinalization），绝不 abort 主回合。
                   if (!backgroundHoldStartedAt) backgroundHoldStartedAt = Date.now();
+                  // 竞态修复：若汇总输出已被转发（注入轮 user 消息未被识别，但内容
+                  // 已展示给用户）、且其 result 此刻到达——这就是汇总轮的 result。
+                  // 此时绝不能重新武装宽限，否则 30 秒后必然误报「未等到最终汇总」。
+                  // 用被拦下的主回合 result 正常收尾即可。
+                  if (sdkInjectedTurn.summaryRelayed) {
+                    clearBackgroundFinalizationTimer();
+                    finishTurnWithHeldResult('background_summary_received');
+                    break;
+                  }
                   scheduleBackgroundFinalization();
                 }
                 break;
@@ -3345,6 +3524,7 @@ if (claudePath) {
                   ...(resultMsg.is_error ? { errors: resultErrors, terminal_reason: 'error' } : terminalReason ? { terminal_reason: terminalReason } : {}),
                 }),
               }));
+              terminalEmitted = true;
               // Notify on conversation-level errors (e.g. rate limit, auth failure)
               if (resultMsg.is_error) {
                 const errTitle = 'Conversation error';
@@ -3449,7 +3629,24 @@ if (claudePath) {
                 message: '任务已由用户手动中断。',
               }),
             }));
+            terminalEmitted = true;
             controller.close();
+            return;
+          }
+          // 中文注释：竞态修复——主回合 result 已被拦下（swallowedFinalResult /
+          // heldBackgroundResult 非空）但终态从未发出时，迭代器已到 EOF，注入轮
+          // 不可能再出现。此时必须用被拦下的 result 优雅收尾，而不是落入下方的
+          // 「模型上游中断」——此前正是这个分支把「任务其实完成了、只差汇总轮」
+          // 的轮次误归类成上游中断（完成了却显示中断）。
+          if (swallowedFinalResult || heldBackgroundResult) {
+            const waitReason = pendingBackgroundBashTasks.size > 0 ? 'background_wait_timeout' : null;
+            const reason = waitReason
+              ?? (sdkInjectedTurn.summaryRelayed ? 'background_summary_received' : 'background_finalization_graceful');
+            finishTurnWithHeldResult(reason);
+            if (persistentQueryForStream) {
+              closePersistentClaudeSession(sessionId, persistentQueryForStream);
+            }
+            try { updateSdkSessionId(sessionId, ''); } catch { /* best effort */ }
             return;
           }
           // Do not translate a result-less EOF into a successful `done`.
@@ -3465,6 +3662,7 @@ if (claudePath) {
             type: 'aborted',
             data: JSON.stringify({ reason: 'upstream_interrupted', message }),
           }));
+          terminalEmitted = true;
           if (persistentQueryForStream) {
             closePersistentClaudeSession(sessionId, persistentQueryForStream);
           }
@@ -3625,6 +3823,7 @@ if (claudePath) {
             type: 'aborted',
             data: JSON.stringify({ reason: 'user_cancel', message: '任务已由用户手动中断。' }),
           }));
+          terminalEmitted = true;
           controller.close();
           return;
         }
@@ -3635,6 +3834,14 @@ if (claudePath) {
         // （phase completed），后续流错误同样不得再叠加中断/失败分类。
         if (backgroundWaitExpired || backgroundFinalizationExpired) {
           console.warn('[claude-client] Stream error after background graceful finalization; keeping session');
+          controller.close();
+          return;
+        }
+        // 统一终止态守卫：本轮已发过终态（result / aborted / 看门狗中止），
+        // iterator 抛出的错误只是终态后的残余噪音——不得再走错误分类补发
+        // 第二个终态覆盖真实原因（stalled / tool_timeout 此前就是被这样覆盖的）。
+        if (terminalEmitted) {
+          console.warn('[claude-client] Stream error after terminal already emitted; closing quietly');
           controller.close();
           return;
         }
@@ -3941,6 +4148,7 @@ if (claudePath) {
                       ...(rMsg.is_error ? { errors: retryResultErrors, terminal_reason: 'error' } : {}),
                     }),
                   }));
+                  terminalEmitted = true;
                   // Emit compression notification via the shared builder so
                   // useSSEStream's subtype=context_compressed dispatch fires.
                   const { buildContextCompressedStatus } = await import('./context-compressor');
@@ -3989,6 +4197,7 @@ if (claudePath) {
             message: classified.userMessage || classified.rawMessage || 'Unknown error',
           }),
         }));
+        terminalEmitted = true;
 
         // Always clear sdk_session_id on crash so the next message starts fresh.
         // Even for fresh sessions — the SDK may emit a session_id via status
@@ -4019,7 +4228,8 @@ if (claudePath) {
         // will eventually GC tmpdir even if this fails.
         // backgroundWaitExpired：15 分钟等待上限后的优雅收尾——后台任务仍在运行，
         // 必须保留持久会话（关掉会杀掉后台任务、并丢掉上下文），因此跳过销毁兜底。
-        if (usingPersistentSession && !receivedTerminalResult && !backgroundWaitExpired) {
+        // drainingBackground：排空模式（含宽限到期优雅收尾）同理豁免。
+        if (usingPersistentSession && !receivedTerminalResult && !backgroundWaitExpired && !drainingBackground) {
           // Defensive backstop for iterator EOF / cancellation paths that
           // leave the try block without an SDK result event.
           if (persistentQueryForStream) {
@@ -4037,6 +4247,12 @@ if (claudePath) {
     },
 
     cancel() {
+      // 中文注释：排空模式下本轮已优雅收尾、后台任务仍在运行——取消只断流
+      // 不杀进程，消息泵的 detached drain 会继续排空，下一条消息从干净边界开始。
+      if (drainingBackground) {
+        console.log('[claude-client] Stream cancel during background drain — detaching without discarding persistent session');
+        return;
+      }
       // A cancelled response may leave the SDK producing old background-task
       // frames.  Never hand that iterator to a later user request.
       if (persistentQueryForStream) {

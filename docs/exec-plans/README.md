@@ -75,3 +75,4 @@
 | completed/hermes-inspired-runtime-upgrade.md | Hermes 借鉴的 Runtime 能力升级：6 核心模块 + 12 额外交付（并行安全、辅助模型、子目录 hint、session 搜索、Skill nudge UI、AskUserQuestion、压缩通知） | 2026-04-12 |
 | completed/cc-haha-ui-port.md | cc-haha 界面与流式体验移植（设计令牌/亮暗主题/卡片布局/渐进揭示流式渲染）| 2026-10-06 |
 | completed/engineering-quality-assurance.md | 工程质量保障体系（Harness Engineering）— 验证闭环、AI 文档、CDP、执行计划 | 2026-03-04 |
+| completed/unified-turn-outcome.md | 统一任务终止态模型（TurnOutcome）：单一推导点 + 落库 + 全消费点对齐 + 宽限竞态兜底捕获 | 2026-10-10 |

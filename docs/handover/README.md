@@ -39,3 +39,4 @@
 | bridge-final-response.md | 桥接只发最终结论 + 未完成自动续跑：过程叙述被整轮拼接的根因、`extractFinalResponseText` / `detectIncompleteTurn` 纯函数、续跑上限与不落库策略、错误提示不再被文本吞掉、thinking 落库剔除 |
 | interactive-permission-ux.md | 交互式权限/提问卡片生命周期：三把「铡刀」超时根因、`isAlwaysAskTool` 分流、`waitingPermissionDepth` 暂停看门狗、`adoptPendingPermission` 卡片恢复、SDK 与 Native 双路径 |
 | pinned-sessions.md | 收藏会话（图钉）：`pinned_at` 时间戳数据模型、客户端过滤从原分组隐藏、模块位置编排（工作区分组下方 + 空工作区兜底）、状态继承（共用 `renderSessionItem`）、按钮让位规则 |
+| unified-turn-outcome.md | 统一任务终止态模型：TurnOutcome 8 大类 + terminal_reason 细因两层模型、turn-outcome.ts 单一推导表、messages 落库、服务端单终态守卫、全部消费点改造清单与关键映射速查 |

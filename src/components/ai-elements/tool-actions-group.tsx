@@ -1432,11 +1432,10 @@ function computeSegments(
   return segments;
 }
 
-function ContextGroup({ tools, groupType, timelineIcon }: { tools: ToolAction[]; groupType: ContextGroupKind; timelineIcon?: boolean }) {
+function ContextGroup({ tools, groupType }: { tools: ToolAction[]; groupType: ContextGroupKind }) {
   const [expanded, setExpanded] = useState(false);
   const { openPreviewTab } = usePanel();
   const hasRunning = tools.some((t) => t.result === undefined);
-  const hasError = tools.some((t) => t.isError);
   const readItems = React.useMemo(() => extractReadGroupItems(tools), [tools]);
   const searchSummary = React.useMemo(() => extractSearchGroupSummary(tools), [tools]);
 
@@ -1457,43 +1456,32 @@ function ContextGroup({ tools, groupType, timelineIcon }: { tools: ToolAction[];
       };
   const GroupIcon = meta.icon;
 
+  /* 中文注释：汇总行改为行内 chip，不再因组内个别工具失败整体标红（红色只保留在展开明细里）。
+     返回 Fragment 而非包一层 div：EnterOnce 的 .timeline-card-enter > * 入场动画依赖
+     实际 DOM 子元素，Fragment 让按钮与展开面板直接成为 flex 行的子项。 */
   return (
-    <div className={cn("relative my-1 overflow-hidden", timelineIcon && "pl-8")}>
-      {timelineIcon && (
-        <div className="absolute left-0 top-0 z-10 flex h-5 w-5 items-center justify-center">
-          <GroupIcon size={14} className="text-blue-500" />
-        </div>
-      )}
+    <>
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className={cn(
-          "flex w-full items-center justify-between py-1 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px]",
-          /* 中文注释：与 ContextSingleRow 同一规则 —— 时间线行左侧零内边距，文字对齐 pl-8 边界。 */
-          timelineIcon ? "pr-2" : "px-2"
-        )}
+        className="flex max-w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] hover:bg-muted/40 transition-colors"
       >
-        <div className="flex items-center gap-2 overflow-hidden min-w-0 pr-2">
-          {!timelineIcon && <GroupIcon size={14} className="text-blue-500 shrink-0" />}
-          <span
-            className="text-foreground/80 truncate"
-            title={meta.title}
-          >
-            {meta.title}
-          </span>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {hasRunning && <SpinnerGap size={14} className="animate-spin text-primary" />}
-          {!hasRunning && hasError && <XCircle size={14} className="text-red-500" />}
-          {!hasRunning && !hasError && <CheckCircle size={14} className="text-emerald-500" />}
-          <CaretDown
-            size={14}
-            className={cn(
-              "shrink-0 text-muted-foreground/55 transition-transform duration-200",
-              expanded ? "rotate-0" : "-rotate-90"
-            )}
-          />
-        </div>
+        <GroupIcon size={14} className="shrink-0 text-blue-500" />
+        <span
+          className="truncate text-foreground/80"
+          title={meta.title}
+        >
+          {meta.title}
+        </span>
+        {hasRunning && <SpinnerGap size={14} className="shrink-0 animate-spin text-primary" />}
+        {!hasRunning && <CheckCircle size={14} className="shrink-0 text-emerald-500" />}
+        <CaretDown
+          size={14}
+          className={cn(
+            "shrink-0 text-muted-foreground/55 transition-transform duration-200",
+            expanded ? "rotate-0" : "-rotate-90"
+          )}
+        />
       </button>
       <AnimatePresence initial={false}>
         {expanded && (
@@ -1503,6 +1491,7 @@ function ContextGroup({ tools, groupType, timelineIcon }: { tools: ToolAction[];
             exit={{ height: 0 }}
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
+            className="w-full basis-full pl-8 mt-1"
           >
             <div className="border-t border-border/20 bg-muted/10 p-2">
               {meta.detailItems.length === 0 ? (
@@ -1548,7 +1537,7 @@ function ContextGroup({ tools, groupType, timelineIcon }: { tools: ToolAction[];
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </>
   );
 }
 
@@ -1569,33 +1558,29 @@ function buildStepSummary(tools: ToolAction[]): string {
 
 function StepToolGroup({ tools, sessionId, rewindId }: { tools: ToolAction[]; sessionId?: string; rewindId?: string }) {
   const [expanded, setExpanded] = useState(false);
-  const hasError = tools.some((t) => t.isError);
   const summary = buildStepSummary(tools);
   const allBash = tools.every((t) => toolKind2(t.name) === 'bash');
   const GroupIcon = allBash ? Terminal : Lightning;
 
+  /* 中文注释：摘要行改为行内 chip（与相邻的搜索/读取/思考行共处一行，见 renderSegments），
+     并且不再因组内个别工具失败而整体标红 —— 红色只保留在展开后的单条工具卡上。
+     摘要行本身是"过程记录"而非"错误警报"，整行变红会让用户误以为整轮任务失败。 */
   return (
-    <div className="relative my-1 pl-8">
-      {/* 左侧图标槽 —— 与时间线其它行对齐 */}
-      <div className="absolute left-0 top-0 z-10 flex h-5 w-5 items-center justify-center">
-        <GroupIcon size={14} className={hasError ? 'text-red-500/80' : 'text-emerald-500'} />
-      </div>
-
+    <>
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center justify-between py-1 pr-2 text-[12px] hover:bg-muted/40 transition-colors rounded-[6px]"
+        className="flex max-w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] hover:bg-muted/40 transition-colors"
       >
-        <span className={cn('truncate text-left font-medium', hasError ? 'text-red-500/80' : 'text-foreground/80')} title={summary}>
+        <GroupIcon size={14} className="shrink-0 text-emerald-500" />
+        <span className="truncate text-left font-medium text-foreground/80" title={summary}>
           {summary}
         </span>
-        <div className="flex items-center gap-2 shrink-0">
-          {hasError ? <XCircle size={14} className="text-red-500" /> : <CheckCircle size={14} className="text-emerald-500" />}
-          <CaretDown
-            size={14}
-            className={cn('shrink-0 text-muted-foreground/55 transition-transform duration-200', expanded ? 'rotate-0' : '-rotate-90')}
-          />
-        </div>
+        <CheckCircle size={14} className="shrink-0 text-emerald-500" />
+        <CaretDown
+          size={14}
+          className={cn('shrink-0 text-muted-foreground/55 transition-transform duration-200', expanded ? 'rotate-0' : '-rotate-90')}
+        />
       </button>
 
       <AnimatePresence initial={false}>
@@ -1606,6 +1591,7 @@ function StepToolGroup({ tools, sessionId, rewindId }: { tools: ToolAction[]; se
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
+            className="w-full basis-full pl-8 mt-1"
           >
             {/* 文件树：左侧竖线 + 每个子条目一条小横线连接 */}
             <div className="relative ml-[7px] border-l border-border/60 pl-4">
@@ -1619,7 +1605,7 @@ function StepToolGroup({ tools, sessionId, rewindId }: { tools: ToolAction[]; se
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </>
   );
 }
 
@@ -1650,61 +1636,56 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
   }, [content, expanded, isStreaming]);
 
   return (
-    <div className="group relative my-1 flex items-start justify-start pl-8">
+    <>
       <style>{thinkingCursorStyles}</style>
 
-      {/* 时间线图标绝对定位在标题行顶部，避免展开内容导致图标随行高漂移 */}
-      <div className="absolute left-0 top-0 z-10 flex h-5 w-5 items-center justify-center">
-        <Brain size={14} className="text-[var(--color-text-tertiary)]" />
-      </div>
-
-      <div className="flex min-w-0 flex-1 flex-col items-start">
-        <button
-          type="button"
-          onClick={() => {
-            const willExpand = !expanded;
-            setExpanded(willExpand);
-            if (willExpand) stopScroll();
-          }}
-          className="flex min-h-5 w-full items-center justify-between rounded-[6px] text-left text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-        >
-          <div className="flex min-w-0 items-center gap-2 overflow-hidden pr-2">
-            <span className="shrink-0 font-medium">
-              思考
-              {isStreaming && <span className="thinking-dots" />}
+      {/* 中文注释：思考行改为行内 chip —— 图标与"思考 | 预览"内联，与相邻工具行共处一行；
+          展开后的思考正文以 basis-full 换行显示在整行下方。返回 Fragment 以兼容
+          EnterOnce 的 .timeline-card-enter > * 入场动画（依赖实际 DOM 子元素）。 */}
+      <button
+        type="button"
+        onClick={() => {
+          const willExpand = !expanded;
+          setExpanded(willExpand);
+          if (willExpand) stopScroll();
+        }}
+        className="flex max-w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1 text-left text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+      >
+        <Brain size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="shrink-0 font-medium">
+          思考
+          {isStreaming && <span className="thinking-dots" />}
+        </span>
+        {!expanded && preview && (
+          <>
+            <span className="mx-1 shrink-0 text-[var(--color-border)]">|</span>
+            <span className="min-w-0 max-w-[180px] truncate font-mono text-[11px] text-[var(--color-text-tertiary)] opacity-80">
+              {preview}
+              {isStreaming && <span className="thinking-inline-cursor" />}
             </span>
-            {!expanded && preview && (
-              <>
-                <span className="mx-1 shrink-0 text-[var(--color-border)]">|</span>
-                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)] opacity-80">
-                  {preview}
-                  {isStreaming && <span className="thinking-inline-cursor" />}
-                </span>
-              </>
-            )}
-          </div>
-          <CaretDown
-            size={14}
-            className="shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-200"
-            style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
-          />
-        </button>
-        {expanded && (
-          <div
-            ref={scrollRef}
-            className="mt-1.5 w-full max-h-[300px] overflow-y-auto rounded-lg border border-[var(--color-border)]/30 bg-[var(--color-surface-container-lowest)]/50 p-3 text-[12px] leading-relaxed text-[var(--color-text-secondary)] shadow-sm"
-          >
-            <Streamdown
-              plugins={thinkingPlugins}
-              components={markdownComponents}
-            >
-              {content}
-            </Streamdown>
-            {isStreaming && <span className="thinking-cursor" />}
-          </div>
+          </>
         )}
-      </div>
-    </div>
+        <CaretDown
+          size={14}
+          className="shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-200"
+          style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+        />
+      </button>
+      {expanded && (
+        <div
+          ref={scrollRef}
+          className="mt-1.5 w-full basis-full max-h-[300px] overflow-y-auto rounded-lg border border-[var(--color-border)]/30 bg-[var(--color-surface-container-lowest)]/50 p-3 text-[12px] leading-relaxed text-[var(--color-text-secondary)] shadow-sm"
+        >
+          <Streamdown
+            plugins={thinkingPlugins}
+            components={markdownComponents}
+          >
+            {content}
+          </Streamdown>
+          {isStreaming && <span className="thinking-cursor" />}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1786,155 +1767,188 @@ function ContextSingleRow({ tool, streamingToolOutput, expandedOverride, onToggl
   const hasRawContent = !hasDetail && (tool.result || (tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0));
   const currentOpen = hasRawContent ? showRaw : expanded;
 
-  return (
-    <div className={cn(
-      "relative my-1 overflow-hidden",
-      timelineIcon && "pl-8"
-    )}>
-      {timelineIcon && (
-        <div className="absolute left-0 top-0 z-10 flex h-5 w-5 items-center justify-center">
-          {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-blue-500")) })}
-        </div>
+  /* 中文注释：时间线里的单条工具行改为行内 chip（与相邻的搜索/读取/执行摘要/思考行共处一行，
+     见 renderSegments）；卡片内嵌场景（timelineIcon=false，如 TodoWrite/Agent/通用工具卡）
+     保持原整行布局不变。chip 形态下错误不再把整行染红，只以中性灰 X 提示。 */
+  const compact = !!timelineIcon;
+
+  const handleRowToggle = () => {
+    if (detailVisible || hasRawContent) {
+      if (hasRawContent) setShowRaw(prev => !prev);
+      else if (onToggle) onToggle();
+      else setInternalExpanded((prev) => !prev);
+    }
+  };
+
+  const handleRowKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleRowToggle();
+    }
+  };
+
+  const iconClassName = compact
+    ? (isTeam ? "text-purple-500" : "text-blue-500")
+    : (status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-blue-500")));
+
+  const summaryText = renderer.label ? summary : (tool.name.includes('mcp__filesystem') ? summary : truncatePath(filePath || displayName));
+
+  const rowBody = (
+    <>
+      <div className="flex shrink-0 items-center justify-center">
+        {createElement(renderer.icon, { size: 14, className: iconClassName })}
+      </div>
+
+      <span
+        className={cn(
+          "truncate text-left font-medium text-[12px]",
+          (!compact && status === 'error') ? "text-red-500/80" : (isTeam ? "text-purple-600 dark:text-purple-400" : (isTodoWrite ? "text-blue-600 dark:text-blue-400" : "text-foreground/80"))
+        )}
+        title={renderer.label || (isTeam ? '' : displayName)}
+      >
+        {renderer.label || (isTeam ? '' : displayName)}
+      </span>
+
+      {!(isTeam || isTodoWrite) && (renderer.label ? !!summary : !!filePath || !!displayName) && (
+        <>
+          <span className="mx-1 text-border shrink-0">|</span>
+          <span
+            className={cn("font-mono text-[11px] truncate text-muted-foreground/60 min-w-0", renderer.label && filePath ? "max-w-[200px]" : (compact ? "max-w-[180px]" : "flex-1"))}
+            title={summaryText}
+          >
+            {summaryText}
+          </span>
+          {renderer.label && filePath && !tool.name.includes('mcp__filesystem') && (
+            <>
+              <span className="mx-1 text-border shrink-0">|</span>
+              <span
+                className={cn("font-mono text-[10px] truncate min-w-0 text-muted-foreground/40", compact ? "max-w-[140px]" : "flex-1")}
+                title={filePath}
+              >
+                {filePath}
+              </span>
+            </>
+          )}
+        </>
       )}
+
+      <div className={cn("flex shrink-0 items-center gap-2", compact ? "ml-1" : "ml-auto", isTeam ? "text-purple-500/80" : (isTodoWrite ? "text-blue-500/80" : "text-muted-foreground"))}>
+        {status === 'success' && ['read', 'read_file', 'mcp__filesystem__read_file', 'view_file'].some(n => tool.name.toLowerCase().includes(n)) && filePath && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              openPreviewTab(filePath);
+            }}
+            className="flex items-center justify-center rounded-sm hover:text-primary transition-colors focus-visible:outline-none"
+            title="预览文件"
+          >
+            <Eye size={14} />
+          </button>
+        )}
+        {status === 'running' && <SpinnerGap size={14} className={cn("animate-spin", isTeam ? "text-purple-500" : "text-primary")} />}
+        {status === 'success' && <CheckCircle size={14} className={isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-emerald-500")} />}
+        {status === 'error' && <XCircle size={14} className={compact ? "text-muted-foreground/50" : "text-red-500"} />}
+        {/* 中文注释：展开箭头固定在右侧（对齐 cc-haha 的 ChevronDown 位置），
+            不再出现在图标与文字之间造成文字列错位。 */}
+        {detailVisible || hasRawContent ? (
+          <CaretDown
+            size={14}
+            className={cn(
+              "shrink-0 text-muted-foreground/55 transition-transform duration-200",
+              currentOpen ? "rotate-0" : "-rotate-90"
+            )}
+          />
+        ) : null}
+      </div>
+    </>
+  );
+
+  const rowPanel = (
+    <AnimatePresence initial={false}>
+      {(detailVisible && expanded) || (hasRawContent && showRaw) ? (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.3, ease: 'easeInOut' }}
+          style={{ overflow: 'hidden' }}
+          className={compact ? "w-full basis-full pl-8 mt-1" : undefined}
+        >
+          {detailVisible && expanded && renderer.renderDetail?.(tool, streamingToolOutput)}
+          {hasRawContent && showRaw ? (
+            <div className={cn(
+              "px-3 py-3 border-l-2 ml-3",
+              status === 'error' ? "border-red-500/20" : "border-blue-500/20"
+            )}>
+              {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
+                <div className="mb-3">
+                  <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">Input</h5>
+                  <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[400px] overflow-y-auto">
+                    <Linkify>{typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}</Linkify>
+                  </pre>
+                </div>
+              ) : null}
+              {tool.result ? (
+                <div>
+                  <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
+                    {tool.isError ? 'Error' : 'Result'}
+                  </h5>
+                  <pre className={cn(
+                    "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[400px] overflow-y-auto",
+                    tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
+                  )}>
+                    <Linkify>{tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}</Linkify>
+                  </pre>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  );
+
+  if (compact) {
+    /* 中文注释：行内 chip 形态。返回 Fragment（非包裹 div）：
+       EnterOnce 的 .timeline-card-enter > * 入场动画依赖实际 DOM 子元素；
+       展开面板以 basis-full 独占一整行，显示在当前行下方。 */
+    return (
+      <>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={handleRowToggle}
+          onKeyDown={handleRowKeyDown}
+          className={cn(
+            "flex max-w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1 text-[11px] hover:bg-muted/40 transition-colors text-left cursor-pointer",
+            isTeam ? "bg-purple-500/[0.05] hover:bg-purple-500/[0.1] text-purple-500" : "",
+            isTodoWrite ? "bg-blue-500/[0.05] hover:bg-blue-500/[0.1] text-blue-500" : ""
+          )}
+        >
+          {rowBody}
+        </div>
+        {rowPanel}
+      </>
+    );
+  }
+
+  return (
+    <div className="relative my-1 overflow-hidden">
       <div
         role="button"
         tabIndex={0}
-        onClick={() => {
-          if (detailVisible || hasRawContent) {
-            if (hasRawContent) setShowRaw(prev => !prev);
-            else if (onToggle) onToggle();
-            else setInternalExpanded((prev) => !prev);
-          }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            if (detailVisible || hasRawContent) {
-              if (hasRawContent) setShowRaw(prev => !prev);
-              else if (onToggle) onToggle();
-              else setInternalExpanded((prev) => !prev);
-            }
-          }
-        }}
+        onClick={handleRowToggle}
+        onKeyDown={handleRowKeyDown}
         className={cn(
-          "flex w-full items-center gap-2 py-1 text-[11px] hover:bg-muted/40 transition-colors text-left rounded-[6px]",
-          /* 中文注释：对齐 cc-haha —— 时间线行左侧零内边距，文字直接落在 pl-8 边界（与"思考"行同列）；
-             卡片内（非时间线）场景保留左右内边距。展开箭头统一放右侧，不再挤占文字列。 */
-          timelineIcon ? "pr-2" : "px-2",
+          "flex w-full items-center gap-2 py-1 text-[11px] hover:bg-muted/40 transition-colors text-left rounded-[6px] px-2",
           isTeam ? "bg-purple-500/[0.05] hover:bg-purple-500/[0.1] text-purple-500" : "",
           isTodoWrite ? "bg-blue-500/[0.05] hover:bg-blue-500/[0.1] text-blue-500" : ""
         )}
       >
-        {!timelineIcon && (
-          <div className="flex shrink-0 items-center justify-center">
-            {createElement(renderer.icon, { size: 14, className: status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-blue-500")) })}
-          </div>
-        )}
-
-        <span
-          className={cn(
-            "truncate text-left font-medium text-[12px]",
-            status === 'error' ? "text-red-500/80" : (isTeam ? "text-purple-600 dark:text-purple-400" : (isTodoWrite ? "text-blue-600 dark:text-blue-400" : "text-foreground/80"))
-          )}
-          title={renderer.label || (isTeam ? '' : displayName)}
-        >
-          {renderer.label || (isTeam ? '' : displayName)}
-        </span>
-        
-        {!(isTeam || isTodoWrite) && (renderer.label ? !!summary : !!filePath || !!displayName) && (
-          <>
-            <span className="mx-1 text-border shrink-0">|</span>
-            <span 
-              className={cn("font-mono text-[11px] truncate text-muted-foreground/60 min-w-0", renderer.label && filePath ? "max-w-[200px]" : "flex-1")}
-              title={renderer.label ? summary : (tool.name.includes('mcp__filesystem') ? summary : truncatePath(filePath || displayName))}
-            >
-              {renderer.label ? summary : (tool.name.includes('mcp__filesystem') ? summary : truncatePath(filePath || displayName))}
-            </span>
-            {renderer.label && filePath && !tool.name.includes('mcp__filesystem') && (
-              <>
-                <span className="mx-1 text-border shrink-0">|</span>
-                <span 
-                  className="font-mono text-[10px] truncate flex-1 text-muted-foreground/40 min-w-0"
-                  title={filePath}
-                >
-                  {filePath}
-                </span>
-              </>
-            )}
-          </>
-        )}
-
-        <div className={cn("ml-auto flex shrink-0 items-center gap-2", isTeam ? "text-purple-500/80" : (isTodoWrite ? "text-blue-500/80" : "text-muted-foreground"))}>
-          {status === 'success' && ['read', 'read_file', 'mcp__filesystem__read_file', 'view_file'].some(n => tool.name.toLowerCase().includes(n)) && filePath && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                openPreviewTab(filePath);
-              }}
-              className="flex items-center justify-center rounded-sm hover:text-primary transition-colors focus-visible:outline-none"
-              title="预览文件"
-            >
-              <Eye size={14} />
-            </button>
-          )}
-          {status === 'running' && <SpinnerGap size={14} className={cn("animate-spin", isTeam ? "text-purple-500" : "text-primary")} />}
-          {status === 'success' && <CheckCircle size={14} className={isTeam ? "text-purple-500" : (isTodoWrite ? "text-blue-500" : "text-emerald-500")} />}
-          {status === 'error' && <XCircle size={14} className="text-red-500" />}
-          {/* 中文注释：展开箭头固定在右侧（对齐 cc-haha 的 ChevronDown 位置），
-              不再出现在图标与文字之间造成文字列错位。 */}
-          {detailVisible || hasRawContent ? (
-            <CaretDown
-              size={14}
-              className={cn(
-                "shrink-0 text-muted-foreground/55 transition-transform duration-200",
-                currentOpen ? "rotate-0" : "-rotate-90"
-              )}
-            />
-          ) : null}
-        </div>
+        {rowBody}
       </div>
-      <AnimatePresence initial={false}>
-        {(detailVisible && expanded) || (hasRawContent && showRaw) ? (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3, ease: 'easeInOut' }}
-            style={{ overflow: 'hidden' }}
-          >
-            {detailVisible && expanded && renderer.renderDetail?.(tool, streamingToolOutput)}
-            {hasRawContent && showRaw ? (
-              <div className={cn(
-                "px-3 py-3 border-l-2 ml-3",
-                status === 'error' ? "border-red-500/20" : "border-blue-500/20"
-              )}>
-                {tool.input && Object.keys(tool.input as Record<string, unknown>).length > 0 ? (
-                  <div className="mb-3">
-                    <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">Input</h5>
-                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground/70 max-h-[400px] overflow-y-auto">
-                      <Linkify>{typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input, null, 2)}</Linkify>
-                    </pre>
-                  </div>
-                ) : null}
-                {tool.result ? (
-                  <div>
-                    <h5 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50 mb-1">
-                      {tool.isError ? 'Error' : 'Result'}
-                    </h5>
-                    <pre className={cn(
-                      "whitespace-pre-wrap break-all font-mono text-[11px] max-h-[400px] overflow-y-auto",
-                      tool.isError ? "text-red-500/80 font-medium" : "text-foreground/80",
-                    )}>
-                      <Linkify>{tool.result.length > 5000 ? tool.result.slice(0, 5000) + `\n… (truncated, ${tool.result.length} chars total)` : tool.result}</Linkify>
-                    </pre>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
+      {rowPanel}
     </div>
   );
 }
@@ -2540,8 +2554,11 @@ export const ToolActionsGroup = React.memo(function ToolActionsGroup({
     
     const flushLineGroup = () => {
       if (currentLineGroup.length > 0) {
+        /* 中文注释：连续的过程行（思考 / 搜索 / 读取 / 执行摘要）合并进同一个 flex-wrap 行，
+           每项渲染为行内 chip —— 不再各占一整行，长内容自动折行。
+           展开的明细面板以 basis-full 独占一整行，显示在本行下方。 */
         blocks.push(
-          <div key={`line-${blocks.length}`} className="my-1 flex flex-col">
+          <div key={`line-${blocks.length}`} className="my-1 flex flex-wrap items-center gap-x-1 gap-y-1">
             {currentLineGroup}
           </div>
         );
@@ -2564,9 +2581,8 @@ export const ToolActionsGroup = React.memo(function ToolActionsGroup({
           </EnterOnce>
         );
       } else if (segment.kind === 'thinking') {
-        flushLineGroup();
         const isSegmentStreaming = isStreaming && idx === segments.length - 1;
-        blocks.push(
+        currentLineGroup.push(
           <EnterOnce key={segment.key} active={isSegmentStreaming}>
             <ThinkingRow content={segment.content} isStreaming={isSegmentStreaming} />
           </EnterOnce>
@@ -2596,7 +2612,7 @@ export const ToolActionsGroup = React.memo(function ToolActionsGroup({
       } else if (segment.kind === 'context_group') {
         currentLineGroup.push(
           <EnterOnce key={segment.key} active={isStreaming && segment.tools.some((t) => t.result === undefined)}>
-            <ContextGroup tools={segment.tools} groupType={segment.groupType} timelineIcon />
+            <ContextGroup tools={segment.tools} groupType={segment.groupType} />
           </EnterOnce>
         );
       } else if (segment.kind === 'context_single') {
@@ -2606,8 +2622,7 @@ export const ToolActionsGroup = React.memo(function ToolActionsGroup({
           </EnterOnce>
         );
       } else if (segment.kind === 'step_group') {
-        flushLineGroup();
-        blocks.push(
+        currentLineGroup.push(
           <EnterOnce key={segment.key} active={false}>
             <StepToolGroup tools={segment.tools} sessionId={sessionId} rewindId={rewindUserMessageId} />
           </EnterOnce>

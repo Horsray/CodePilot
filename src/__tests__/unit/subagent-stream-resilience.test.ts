@@ -55,17 +55,21 @@ describe('subagent stream resilience', () => {
     // 到期行为是优雅收尾（用被拦下的主回合 result 发终态），不是 abort 整轮——
     // 2026-10-09 回归修复：原实现到期即 abort，通知在主回合进行中到达时会精准
     // 误杀主回合并触发自动继续死循环。详见 background-bash-hold.test.ts。
-    assert.match(claudeClient, /Background final summary did not arrive in time; finishing the turn gracefully/);
+    // 收尾归类按 summaryRelayed 二选一，日志文案在公共收尾函数 finishTurnWithHeldResult 内。
+    assert.match(claudeClient, /Background final summary did not arrive; finishing the turn gracefully/);
   });
 
   it('continues a background-finalization timeout without creating a user-visible retry message', () => {
     const manager = read('src/lib/stream-session-manager.ts');
+    const turnOutcome = read('src/lib/turn-outcome.ts');
     const chatView = read('src/components/chat/ChatView.tsx');
     const route = read('src/app/api/chat/route.ts');
 
     assert.match(manager, /background_finalization_timeout/);
     assert.match(manager, /autoTrigger\?: boolean/);
-    assert.match(manager, /正在自动继续原任务/);
+    // 正文说明散文已迁入统一总表（turn-outcome.ts），manager 经 noteForReason 表驱动生成
+    assert.match(manager, /noteForReason/);
+    assert.match(turnOutcome, /正在自动继续原任务/);
     assert.match(manager, /getStreamsMap\(\)\.get\(stream\.sessionId\) !== stream/);
     assert.match(chatView, /options\?\.autoTrigger/);
     assert.match(chatView, /doStartStream\(retryContent[\s\S]*true\)/);
@@ -107,7 +111,9 @@ describe('subagent stream resilience', () => {
     assert.match(claudeClient, /const willConsumeWarmQuery = canReuseWarmup && sessionId && !willReusePersistentSession/);
     assert.match(claudeClient, /Stream cancelled for session[\s\S]*discarded persistent session to prevent cross-turn events/);
     assert.match(claudeClient, /closePersistentClaudeSession\(sessionId, persistentQueryForStream\)/);
-    assert.match(persistentSession, /if \(entry\.turnReserved\)[\s\S]*Retiring active session before starting a new user turn/);
+    // 中文注释：retire 仅在不处于后台任务排空期时执行——排空期杀进程会连带
+    // 杀掉还在运行的 run_in_background 任务（窜会话根因修复的一部分）。
+    assert.match(persistentSession, /turnReserved && !entry\.backgroundWaitActive\)[\s\S]*Retiring active session before starting a new user turn/);
     assert.doesNotMatch(persistentSession, /force-resetting lock chain/);
   });
 

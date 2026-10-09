@@ -19,6 +19,7 @@ import { generateConversationTitle, extractTitleFromResponse } from '@/lib/title
 import { resolveImageInputRoute } from '@/lib/image-input-routing';
 import { extractTextFromImages } from '@/lib/ocr-service';
 import { registerRequestController } from '@/lib/conversation-registry';
+import { deriveServerOutcome, notificationForReason } from '@/lib/turn-outcome';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
@@ -764,6 +765,9 @@ async function collectStreamResponse(
   let hasError = false;
   let errorMessage = '';
   let abortReason: string | null = null;
+  // 统一终止态：result 事件携带的 terminal_reason（SDK 原生或 fork 扩展），
+  // 与 abortReason 一起在落库时经 deriveServerOutcome 推导 outcome。
+  let lastTerminalReason: string | null = null;
   let lastSavedAssistantMsgId: string | null = null;
   // 中文注释：功能名称「工具文件收集」，用法是收集AI实际读取/写入的文件路径和网页URL，
   // 从SSE tool_files事件中获取，持久化到DB的tool_files列
@@ -909,6 +913,10 @@ async function collectStreamResponse(
                 abortReason = abortData?.reason || null;
                 if (abortData?.reason === 'stalled') {
                   errorMessage = abortData.message || '模型上游长时间无响应，本轮任务已中止';
+                } else if (abortData?.reason === 'tool_timeout') {
+                  // 统一终止态：工具看门狗中止（工具长时间无进度）。落库 outcome=tool_timeout，
+                  // 消息底部显示「工具卡死，任务已中止」而非「任务异常」。
+                  errorMessage = abortData.message || '工具长时间无响应，本轮任务已中止';
                 }
               } catch { /* keep raw */ }
               if (abortReason !== 'user_cancel') {
@@ -975,6 +983,12 @@ async function collectStreamResponse(
                     ? resultData.errors.filter((message: unknown) => typeof message === 'string' && message.trim())
                     : [];
                   errorMessage = resultErrors.join('\n') || errorMessage || `模型服务返回错误：${resultData.subtype || '未知上游错误'}`;
+                }
+                // 统一终止态：记录 result 携带的 terminal_reason（含 fork 的
+                // background_wait_timeout / background_finalization_graceful），
+                // 落库时经 deriveServerOutcome 推导 outcome。
+                if (typeof resultData.terminal_reason === 'string' && resultData.terminal_reason) {
+                  lastTerminalReason = resultData.terminal_reason;
                 }
                 // Also capture session_id from result if we missed it from init
                 if (resultData.session_id) {
@@ -1078,6 +1092,15 @@ async function collectStreamResponse(
         const durationSec = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
         const finalTokenUsage = tokenUsage ? { ...tokenUsage, duration_sec: durationSec } : { input_tokens: 0, output_tokens: 0, duration_sec: durationSec };
 
+        // 统一任务终止态：在唯一入口推导 outcome（大类）+ 细因，随消息落库。
+        // 此后所有 UI 面（消息底部徽标、通知、徽章）都读这两个字段，
+        // 不再反向解析正文散文——消除「中断/完成」互相矛盾的根源。
+        const { outcome, effectiveReason } = deriveServerOutcome({
+          abortReason,
+          hasError,
+          terminalReason: lastTerminalReason,
+        });
+
         const savedMsg = addMessage(
           sessionId,
           'assistant',
@@ -1086,22 +1109,28 @@ async function collectStreamResponse(
           opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined,
           // 中文注释：功能名称「工具文件持久化」，用法是将AI访问的文件/网页列表保存到DB，
           // 使会话切换后上下文统计仍能显示完整的文件和网页信息
-          collectedToolFiles.length > 0 ? JSON.stringify(collectedToolFiles) : undefined
+          collectedToolFiles.length > 0 ? JSON.stringify(collectedToolFiles) : undefined,
+          outcome,
+          effectiveReason,
         );
         lastSavedAssistantMsgId = savedMsg.id;
 
-        // Restore task completion notification
-        // 中文注释：对齐 cc-haha —— 标题「任务已完成」+ 耗时正文，notificationType=task_complete
-        // （前端走系统通知而非 toast），sound=true 触发提示音。
-        if (!opts?.suppressNotifications && !hasError && abortReason !== 'user_cancel') {
-          import('@/lib/notification-manager').then(({ enqueueNotification }) => {
+        // 完成通知按 outcome 分类投递：正常完成 →「任务已完成」+ 耗时；
+        // 优雅收尾/看门狗中止/上游中断 → 各自明确的标题与正文（此前一律误报
+        // 「任务已完成」）；用户手动中断与上游错误不发任务完成类通知。
+        if (!opts?.suppressNotifications) {
+          const notif = notificationForReason(effectiveReason, { isError: hasError });
+          if (notif) {
             const mins = Math.floor(durationSec / 60);
             const secs = durationSec % 60;
             const elapsedText = durationSec > 0
               ? `耗时 ${mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`}`
               : undefined;
-            enqueueNotification('任务已完成', elapsedText || '模型回复已就绪', 'normal', true, 'task_complete');
-          }).catch(e => console.warn('[chat API] Failed to enqueue completion notification:', e));
+            const body = outcome === 'completed' && elapsedText ? elapsedText : notif.body;
+            import('@/lib/notification-manager').then(({ enqueueNotification }) => {
+              enqueueNotification(notif.title, body, 'normal', true, 'task_complete');
+            }).catch(e => console.warn('[chat API] Failed to enqueue completion notification:', e));
+          }
         }
       }
     }
@@ -1173,13 +1202,22 @@ async function collectStreamResponse(
             .join('')
             .trim();
       if (content) {
+        // 统一终止态：错误路径的落库同样经唯一入口推导（user_cancel → cancelled，
+        // 其余流错误 → upstream_error）。
+        const { outcome: errOutcome, effectiveReason: errReason } = deriveServerOutcome({
+          abortReason,
+          hasError,
+          terminalReason: lastTerminalReason,
+        });
         addMessage(
           sessionId,
           'assistant',
           content,
           tokenUsage ? JSON.stringify(tokenUsage) : null,
           opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined,
-          collectedToolFiles.length > 0 ? JSON.stringify(collectedToolFiles) : undefined
+          collectedToolFiles.length > 0 ? JSON.stringify(collectedToolFiles) : undefined,
+          errOutcome,
+          errReason,
         );
       }
     }

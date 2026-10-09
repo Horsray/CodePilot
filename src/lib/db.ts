@@ -519,6 +519,16 @@ function migrateDb(db: Database.Database): void {
     safeAddColumn(db, "ALTER TABLE messages ADD COLUMN tool_files TEXT");
   }
 
+  // 统一任务终止态（见 src/lib/turn-outcome.ts）：终止态是数据而非散文。
+  // outcome 为所有 UI 面的一致判定标准；terminal_reason 为细因（徽章文案/动作）。
+  // 旧消息两列均为 NULL，渲染走 legacy 文本解析降级。
+  if (!msgColNames.includes('outcome')) {
+    safeAddColumn(db, "ALTER TABLE messages ADD COLUMN outcome TEXT");
+  }
+  if (!msgColNames.includes('terminal_reason')) {
+    safeAddColumn(db, "ALTER TABLE messages ADD COLUMN terminal_reason TEXT");
+  }
+
   // Ensure tasks table exists for databases created before this migration
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
@@ -1402,14 +1412,18 @@ export function addMessage(
   // 中文注释：功能名称「工具文件持久化」，用法是保存AI实际读取/写入的文件路径和网页URL，
   // JSON字符串数组格式，使会话切换后上下文统计仍能显示文件/网页信息
   toolFiles?: string | null,
+  // 统一任务终止态（turn-outcome.ts）：新消息由服务端落库时写入；
+  // 缺省为 null = 旧消息语义，渲染走 legacy 文本解析降级。
+  outcome?: string | null,
+  terminalReason?: string | null,
 ): Message {
   const db = getDb();
   const id = crypto.randomBytes(16).toString('hex');
   const now = new Date().toISOString().replace('T', ' ').split('.')[0];
 
   db.prepare(
-    'INSERT INTO messages (id, session_id, role, content, created_at, token_usage, referenced_contexts, tool_files) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, sessionId, role, content, now, tokenUsage || null, referencedContexts || null, toolFiles || null);
+    'INSERT INTO messages (id, session_id, role, content, created_at, token_usage, referenced_contexts, tool_files, outcome, terminal_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, sessionId, role, content, now, tokenUsage || null, referencedContexts || null, toolFiles || null, outcome || null, terminalReason || null);
 
   updateSessionTimestamp(sessionId);
 

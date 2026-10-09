@@ -78,3 +78,36 @@ test('agent timeline status does not synthesize Thinking as reasoning content', 
   assert.equal(state.steps[0].reasoning, '');
   assert.equal(state.steps[0].events?.length, 0);
 });
+
+test('agent timeline folds ALL text blocks into steps when foldAllText is set (interrupted-turn residue)', () => {
+  // 手动中断轮次的真实形态：服务端把全部 currentText 塞进一个尾部 text 块，
+  // 渲染层若不整体折叠，「一开始的思考」会以纯文本残留在时间线卡片下方。
+  const blocks = [
+    { type: 'thinking', thinking: 'Initial reasoning before the first tool.' },
+    { type: 'text', text: 'Leading prose the model emitted before calling tools.' },
+    { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/tmp/a.ts' } },
+    { type: 'tool_result', tool_use_id: 'read-1', content: 'a.ts content' },
+    { type: 'text', text: 'Tail prose that used to leak into the message body.' },
+  ] satisfies MessageContentBlock[];
+
+  const steps = extractTimelineStepsFromBlocks(blocks, { foldAllText: true });
+
+  const allText = steps.map((step) => step.output).join('\n');
+  assert.ok(allText.includes('Leading prose'), '头部纯文本应折叠进时间线卡片');
+  assert.ok(allText.includes('Tail prose'), '尾部纯文本也应折叠进时间线卡片');
+});
+
+test('agent timeline without foldAllText still keeps final text out of steps (unchanged)', () => {
+  const blocks = [
+    { type: 'thinking', thinking: 'Need to inspect the file first.' },
+    { type: 'text', text: 'Leading prose.' },
+    { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/tmp/a.ts' } },
+    { type: 'tool_result', tool_use_id: 'read-1', content: 'a.ts content' },
+    { type: 'text', text: 'Final answer should render below the timeline.' },
+  ] satisfies MessageContentBlock[];
+
+  const steps = extractTimelineStepsFromBlocks(blocks);
+
+  assert.ok(steps.some((step) => step.output.includes('Leading prose')));
+  assert.equal(steps.some((step) => step.output.includes('Final answer')), false);
+});

@@ -512,7 +512,10 @@ export function finalizeTimelineSteps(
   });
 }
 
-export function extractTimelineStepsFromBlocks(blocks: MessageContentBlock[]): TimelineStep[] {
+export function extractTimelineStepsFromBlocks(
+  blocks: MessageContentBlock[],
+  options: { foldAllText?: boolean } = {},
+): TimelineStep[] {
   const embedded = blocks.find((block) => block.type === 'timeline');
   if (embedded && embedded.type === 'timeline') return embedded.steps;
 
@@ -527,12 +530,19 @@ export function extractTimelineStepsFromBlocks(blocks: MessageContentBlock[]): T
         appendTimelineReasoning(state, block.thinking, 0);
         break;
       case 'text': {
+        // 中文注释：终态折叠——本轮以非完成态结束（如用户手动中断）时，
+        // 全部文本都是过程片段而非最终结论，一律折叠进时间线卡片，
+        // 不再以纯文本形式铺在卡片下方（见 MessageItem 的 foldAllText 接线）。
+        if (options.foldAllText) {
+          appendTimelineOutput(state, block.text, 0);
+          break;
+        }
         // If there is no agent activity at all, we don't need to put text in the timeline.
         // But if there IS agent activity, we should include intermediate text in the timeline.
-        // We only exclude the FINAL text block (which appears after all tools), 
+        // We only exclude the FINAL text block (which appears after all tools),
         // as that should be rendered as the main message body, not inside a timeline step.
         const hasSubsequentTool = blocks.slice(i + 1).some(b => b.type === 'tool_use' || b.type === 'tool_result');
-        
+
         if (hasAgentActivity && hasSubsequentTool) {
           appendTimelineOutput(state, block.text, 0);
         } else if (!hasAgentActivity) {

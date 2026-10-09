@@ -431,6 +431,7 @@ src/components/layout/AppShell.tsx          # 根布局壳（停靠侧栏 + 聊�
 | `src/lib/agent-timeline.ts` | 时间线步骤解析 | `extractTimelineStepsFromBlocks()` |
 | `src/lib/agent-tools.ts` | Agent 工具集构建 | Tool definitions |
 | `src/lib/stream-session-manager.ts` | 流式会话状态管理 | `startStream()`, `stopStream()`, `subscribe()`, `getSnapshot()` |
+| `src/lib/turn-outcome.ts` | **任务终止态唯一推导点（Single Source of Truth）**：reason→outcome/phase/徽章/动作/正文说明/通知的总表；落库 `messages.outcome`/`terminal_reason` 列驱动消息底部徽标、系统通知、徽章 | `outcomeFromReason()`, `phaseForReason()`, `chipForReason()`, `actionsForReason()`, `noteForReason()`, `notificationForReason()`, `deriveServerOutcome()`, `isKnownOutcome()` |
 | `src/lib/streaming-text-split.ts` | 流式正文「定型前缀」切分（前缀走 Markdown 渲染，尾段纯文本），消除收尾瞬间的整块变形 | `splitStablePrefix()` |
 | `src/lib/pending-session-message.ts` | 首轮消息暂存与会话跳转交接 | `stagePendingSessionMessage()`, `consumePendingSessionMessage()` |
 | `src/lib/panel-visibility.ts` | 右侧面板可见性唯一判定（UnifiedTopBar 顶栏按钮让位 与 PanelZone 卡片显隐共用，防止两处标志列表漂移） | `isRightPanelOpen()` |

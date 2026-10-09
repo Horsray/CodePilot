@@ -1317,6 +1317,24 @@ const zh: Record<TranslationKey, string> = {
   'terminal.tool_deferred': '有工具等待响应',
   'terminal.length': '输出被截断',
   'terminal.unknown': '本轮已结束',
+  // ── 统一终止态：fork 扩展与看门狗原因 ──
+  'terminal.background_wait_timeout': '后台任务仍在运行',
+  'terminal.background_finalization_graceful': '本轮直接收尾',
+  'terminal.background_finalization_timeout': '后台任务结果未接收',
+  'terminal.stalled': '模型上游长时间无响应',
+  'terminal.upstream_interrupted': '模型上游中断',
+  'terminal.connection_lost': '连接已中断，任务仍在后台运行',
+  'terminal.tool_timeout': '工具卡死',
+
+  // ── 统一终止态：消息底部状态文案 ──
+  'turnOutcome.completed': '任务完成',
+  'turnOutcome.cancelled': '已手动中断',
+  'turnOutcome.upstreamError': '任务异常',
+  'turnOutcome.upstreamInterrupted': '上游中断，任务未完成',
+  'turnOutcome.stalled': '上游无响应，任务已中止',
+  'turnOutcome.gracefulStopped': '本轮已收尾（后台任务继续）',
+  'turnOutcome.toolTimeout': '工具卡死，任务已中止',
+  'turnOutcome.stopped': '本轮已停止',
 
   // ── TerminalReason action buttons (Phase 1b) ──
   'terminalAction.compressAndRetry': '压缩并重试',

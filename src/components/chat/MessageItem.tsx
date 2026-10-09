@@ -3,6 +3,9 @@
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
 import { cn } from '@/lib/utils';
 import type { Message, TokenUsage, FileAttachment, MediaBlock, SubAgentInfo } from '@/types';
+import { isKnownOutcome, TURN_OUTCOME_META, type TurnStatus } from '@/lib/turn-outcome';
+import { useTranslation } from '@/hooks/useTranslation';
+import type { TranslationKey } from '@/i18n';
 import {
   Message as AIMessage,
   MessageContent,
@@ -548,6 +551,7 @@ function formatDuration(seconds: number): string {
 
 export const MessageItem = memo(function MessageItem({ message, sessionId, rewindUserMessageId, isAssistantProject, assistantName }: MessageItemProps) {
   const isUser = message.role === 'user';
+  const { t } = useTranslation();
 
   // Collapse/expand state for long user messages (hooks must be called unconditionally)
   const [isExpanded, setIsExpanded] = useState(false);
@@ -590,9 +594,15 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
     return blocks;
   }, [message.content]);
 
+  // 中文注释：终态折叠——用户手动中断（cancelled）的轮次没有最终结论，全部文本块
+  // 都是过程片段：时间线全量折叠（含一开始的思考/叙述文本），正文不再以纯文本形式
+  // 铺在卡片下方。中断状态由底部状态徽标 + 时间线卡片呈现。判定只读落库的 outcome
+  // 字段（统一终止态），不再反向解析正文散文。
+  const foldAllText = isKnownOutcome(message.outcome) && message.outcome === 'cancelled';
+
   const timelineSteps = useMemo(() => {
-    return isUser ? [] : extractTimelineStepsFromBlocks(contentBlocks);
-  }, [contentBlocks, isUser]);
+    return isUser ? [] : extractTimelineStepsFromBlocks(contentBlocks, { foldAllText });
+  }, [contentBlocks, isUser, foldAllText]);
 
   const timelineCompletionInfo = useMemo(() => {
     if (isUser || timelineSteps.length === 0) return null;
@@ -638,44 +648,96 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
   const taskCompletionInfo = useMemo(() => {
     if (isUser || timelineSteps.length === 0) return null;
     try {
-      // Determine task status by checking for chat-error text blocks in message content
-      let status: 'completed' | 'interrupted' | 'failed' = 'completed';
-      try {
-        const blocks = JSON.parse(message.content) as MessageContentBlock[];
-        for (const block of blocks) {
-          if (block.type === 'text' && 'text' in block) {
-            if ((block.text as string).includes('模型上游中断，本轮任务未完成')) {
-              status = 'interrupted';
-              break;
-            }
-            if ((block.text as string).includes('任务已由用户手动中断')) {
-              status = 'interrupted';
-              break;
-            }
-            // 中文注释：后台 Bash 任务（上传/构建/dev server）超过 15 分钟等待上限
-            // 优雅收尾——任务仍在后台运行，不能标成绿色「任务完成」误导用户。
-            if ((block.text as string).includes('后台任务仍在运行，本轮已结束等待')) {
-              status = 'interrupted';
-              break;
-            }
-            const chatErrorMatch = (block.text as string).match(/```chat-error\n(\{.*?\})\n```/s);
-            if (chatErrorMatch) {
-              try {
-                const errPayload = JSON.parse(chatErrorMatch[1]);
-                if (errPayload.raw === 'Task stopped by user') {
-                  status = 'interrupted';
-                } else {
+      // 统一终止态：优先读落库的 outcome 字段（turn-outcome 总表推导）——
+      // 新消息的状态判定绝不依赖正文文本。只有旧消息（无 outcome 值）或
+      // 临时消息才走下面的 legacy 散文解析降级。
+      const outcomeMeta = message.outcome && isKnownOutcome(message.outcome)
+        ? TURN_OUTCOME_META[message.outcome]
+        : undefined;
+
+      let status: TurnStatus;
+      let labelKey: string | undefined;
+      if (outcomeMeta) {
+        status = outcomeMeta.status;
+        labelKey = outcomeMeta.labelKey;
+      } else {
+        // ── legacy 降级（旧消息 / 临时消息，无 outcome 字段）──
+        // 保留历史判定：悬空工具调用 + 正文散文匹配 + chat-error 块解析。
+        // Determine task status by checking for chat-error text blocks in message content
+        status = 'completed';
+
+        // 中文注释：判据 A —— 「发起后没有结果的工具调用」。这种轮次在界面上就是工具
+        // 卡片一直转圈，但消息末尾照样渲染绿色「任务完成」：服务端可能已按「优雅收尾」
+        // 发出 is_error:false 的终态并关闭 SSE（最终汇总轮宽限 / 15 分钟等待上限到期），
+        // 在途的工具结果随排空被丢弃。用户看到的就是「任务跑到一半自己停了、没报错、
+        // 没提示」。因此不能靠「正文里没有错误标记」就默认判完成——有悬空工具调用
+        // 必须先降级为「任务中断」，再交由下方的文本判据细化原因。
+        try {
+          const { tools } = parseToolBlocks(message.content);
+          const resultIds = new Set(
+            tools.filter((t) => t.type === 'tool_result' && t.id).map((t) => t.id),
+          );
+          const hasDanglingToolUse = tools.some(
+            (t) => t.type === 'tool_use' && !!t.id && !resultIds.has(t.id),
+          );
+          if (hasDanglingToolUse) status = 'interrupted';
+        } catch {
+          // 解析失败时退回纯文本判定
+        }
+
+        try {
+          const blocks = JSON.parse(message.content) as MessageContentBlock[];
+          for (const block of blocks) {
+            if (block.type === 'text' && 'text' in block) {
+              if ((block.text as string).includes('模型上游中断，本轮任务未完成')) {
+                status = 'interrupted';
+                break;
+              }
+              if ((block.text as string).includes('任务已由用户手动中断')) {
+                status = 'interrupted';
+                break;
+              }
+              // 中文注释：后台 Bash 任务（上传/构建/dev server）超过 15 分钟等待上限
+              // 优雅收尾——任务仍在后台运行，不能标成绿色「任务完成」误导用户。
+              if ((block.text as string).includes('后台任务仍在运行，本轮已结束等待')) {
+                status = 'interrupted';
+                break;
+              }
+              // 中文注释：这几类收尾同样会往正文追加说明（见 stream-session-manager 的
+              // terminalReason 分支），此前漏判导致一律显示绿色「任务完成」：
+              //   - 工具「无进度超时」判定卡死
+              //   - 服务端全流无进度看门狗（stalled）
+              //   - 后台任务已返回但主任务未接收结果
+              //   - 最终汇总轮宽限到期（background_finalization_graceful）：本轮直接收尾，
+              //     后台任务的汇总没等到，界面不该显示成干干净净的绿色「任务完成」
+              if (
+                (block.text as string).includes('判定卡死，本轮任务已中止') ||
+                (block.text as string).includes('模型上游长时间无响应，本轮任务已中止') ||
+                (block.text as string).includes('后台任务已返回，但主任务未能接收结果') ||
+                (block.text as string).includes('未等到后台任务的最终汇总')
+              ) {
+                status = 'interrupted';
+                break;
+              }
+              const chatErrorMatch = (block.text as string).match(/```chat-error\n(\{.*?\})\n```/s);
+              if (chatErrorMatch) {
+                try {
+                  const errPayload = JSON.parse(chatErrorMatch[1]);
+                  if (errPayload.raw === 'Task stopped by user') {
+                    status = 'interrupted';
+                  } else {
+                    status = 'failed';
+                  }
+                } catch {
                   status = 'failed';
                 }
-              } catch {
-                status = 'failed';
+                break;
               }
-              break;
             }
           }
+        } catch {
+          // content parse failed, assume completed
         }
-      } catch {
-        // content parse failed, assume completed
       }
 
       // If the backend has recorded duration_sec in token_usage, use it
@@ -683,7 +745,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       if (usageStr) {
         const usageObj = JSON.parse(usageStr);
         if (typeof usageObj.duration_sec === 'number' && usageObj.duration_sec >= 0) {
-          return { durationSec: usageObj.duration_sec, status };
+          return { durationSec: usageObj.duration_sec, status, labelKey };
         }
       }
 
@@ -692,7 +754,7 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       const start = parseDBDate(message.created_at).getTime();
       const end = parseDBDate(endStr).getTime();
       const durationSec = Math.max(0, Math.floor((end - start) / 1000));
-      return { durationSec, status };
+      return { durationSec, status, labelKey };
     } catch {
       return null;
     }
@@ -745,7 +807,13 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       const { files, text: textWithoutFiles } = parseMessageFiles(firstText);
       return { files, displayText: textWithoutFiles };
     }
-    
+
+    // 终态折叠：cancelled 轮次的文本全部归属时间线，正文留空
+    // （时间线卡片与底部状态徽标已完整呈现中断状态）。
+    if (foldAllText) {
+      return { files: [] as FileAttachment[], displayText: '' };
+    }
+
     const textBlocks = contentBlocks.filter((block, i): block is Extract<MessageContentBlock, { type: 'text' }> => {
       if (block.type !== 'text') return false;
       // 仅保留后续没有工具调用（tool_use 或 tool_result）的文本作为最终结论
@@ -753,12 +821,12 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
       return !hasSubsequentTool;
     });
     let finalOutputText = textBlocks.map(b => b.text).join('\n');
-    
+
     // Always strip soft-heartbeat marker before rendering text blocks
     finalOutputText = finalOutputText.replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '').trim();
-    
+
     return { files: [] as FileAttachment[], displayText: finalOutputText };
-  }, [contentBlocks, isUser]);
+  }, [contentBlocks, isUser, foldAllText]);
 
   useEffect(() => {
     if (isUser && contentRef.current) {
@@ -780,9 +848,11 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
   const processCollapseConfig = useMemo(() => {
     if (!processCollapseEnabled) return undefined;
     return {
-      delivered: displayText.trim().length > 0,
+      // 中文注释：cancelled 轮次虽无正文结论，但过程已全量折叠进卡片——
+      // 按「已交付」收起，用户点开卡片仍可回看跑到哪一步被中断。
+      delivered: displayText.trim().length > 0 || foldAllText,
     };
-  }, [processCollapseEnabled, displayText]);
+  }, [processCollapseEnabled, displayText, foldAllText]);
 
   // Memoize token usage JSON parsing
   const tokenUsage = useMemo<TokenUsage | null>(() => {
@@ -1009,19 +1079,19 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, rewin
             {taskCompletionInfo.status === 'completed' && (
               <div className="flex items-center gap-1.5 text-emerald-500 font-medium">
                 <CheckCircle size={14} weight="fill" />
-                <span>任务完成</span>
+                <span>{taskCompletionInfo.labelKey ? t(taskCompletionInfo.labelKey as TranslationKey) : '任务完成'}</span>
               </div>
             )}
             {taskCompletionInfo.status === 'interrupted' && (
               <div className="flex items-center gap-1.5 text-amber-500 font-medium">
                 <PauseCircle size={14} weight="fill" />
-                <span>任务中断</span>
+                <span>{taskCompletionInfo.labelKey ? t(taskCompletionInfo.labelKey as TranslationKey) : '任务中断'}</span>
               </div>
             )}
             {taskCompletionInfo.status === 'failed' && (
               <div className="flex items-center gap-1.5 text-red-500 font-medium">
                 <XCircle size={14} weight="fill" />
-                <span>任务异常</span>
+                <span>{taskCompletionInfo.labelKey ? t(taskCompletionInfo.labelKey as TranslationKey) : '任务异常'}</span>
               </div>
             )}
             <span className="text-border">|</span>

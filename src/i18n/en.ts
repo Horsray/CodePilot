@@ -1320,6 +1320,24 @@ const en = {
   'terminal.tool_deferred': 'Tool awaiting response',
   'terminal.length': 'Output truncated',
   'terminal.unknown': 'Turn ended',
+  // ── Unified turn outcome: fork extension & watchdog reasons ──
+  'terminal.background_wait_timeout': 'Background task still running',
+  'terminal.background_finalization_graceful': 'Turn closed directly',
+  'terminal.background_finalization_timeout': 'Background result not received',
+  'terminal.stalled': 'Model upstream unresponsive',
+  'terminal.upstream_interrupted': 'Model upstream interrupted',
+  'terminal.connection_lost': 'Connection lost; task continues in background',
+  'terminal.tool_timeout': 'Tool stalled',
+
+  // ── Unified turn outcome: message footer status labels ──
+  'turnOutcome.completed': 'Task completed',
+  'turnOutcome.cancelled': 'Cancelled by user',
+  'turnOutcome.upstreamError': 'Task error',
+  'turnOutcome.upstreamInterrupted': 'Upstream interrupted, task incomplete',
+  'turnOutcome.stalled': 'Upstream unresponsive, task aborted',
+  'turnOutcome.gracefulStopped': 'Turn closed (background task continues)',
+  'turnOutcome.toolTimeout': 'Tool stalled, task aborted',
+  'turnOutcome.stopped': 'Turn stopped',
 
   // ── TerminalReason action buttons (Phase 1b) ──
   'terminalAction.compressAndRetry': 'Compress & retry',

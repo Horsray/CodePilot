@@ -6,6 +6,27 @@ import {
   clearSnapshot,
 } from '@/lib/stream-session-manager';
 import { transferPendingToMessage } from '@/lib/image-ref-store';
+import { outcomeFromReason } from '@/lib/turn-outcome';
+
+/**
+ * 用流快照构造临时 assistant 消息。统一终止态：临时消息也携带 outcome
+ * （由快照 terminalReason 经总表推导），保证服务端落库 reconcile 前后
+ * 消息底部状态显示一致。
+ */
+function buildTempAssistantMessage(sessionId: string, snapshot: SessionStreamSnapshot): Message {
+  return {
+    id: `temp-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    session_id: sessionId,
+    role: 'assistant',
+    content: snapshot.finalMessageContent!,
+    created_at: new Date().toISOString(),
+    token_usage: snapshot.tokenUsage ? JSON.stringify(snapshot.tokenUsage) : null,
+    referenced_contexts: snapshot.referencedContexts && snapshot.referencedContexts.length > 0 ? JSON.stringify(snapshot.referencedContexts) : undefined,
+    tool_files: snapshot.toolFiles && snapshot.toolFiles.length > 0 ? JSON.stringify(snapshot.toolFiles) : undefined,
+    outcome: outcomeFromReason(snapshot.terminalReason),
+    terminal_reason: snapshot.terminalReason ?? null,
+  };
+}
 
 interface UseStreamSubscriptionOpts {
   sessionId: string;
@@ -52,16 +73,7 @@ export function useStreamSubscription({
         // Append the final assistant message to the messages list
         const finalContent = event.snapshot.finalMessageContent;
         if (finalContent) {
-          const assistantMessage: Message = {
-            id: `temp-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            session_id: sessionId,
-            role: 'assistant',
-            content: finalContent,
-            created_at: new Date().toISOString(),
-            token_usage: event.snapshot.tokenUsage ? JSON.stringify(event.snapshot.tokenUsage) : null,
-            referenced_contexts: event.snapshot.referencedContexts && event.snapshot.referencedContexts.length > 0 ? JSON.stringify(event.snapshot.referencedContexts) : undefined,
-            tool_files: event.snapshot.toolFiles && event.snapshot.toolFiles.length > 0 ? JSON.stringify(event.snapshot.toolFiles) : undefined,
-          };
+          const assistantMessage = buildTempAssistantMessage(sessionId, event.snapshot);
           transferPendingToMessage(assistantMessage.id);
           setMessages((prev) => {
             if (prev.some((m) => m.id === assistantMessage.id)) return prev;
@@ -100,16 +112,7 @@ export function useStreamSubscription({
               }
             })
             .catch(() => {
-              const assistantMessage: Message = {
-                id: `temp-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                session_id: sessionId,
-                role: 'assistant',
-                content: existing.finalMessageContent!,
-                created_at: new Date().toISOString(),
-                token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
-                referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
-                tool_files: existing.toolFiles && existing.toolFiles.length > 0 ? JSON.stringify(existing.toolFiles) : undefined,
-              };
+              const assistantMessage = buildTempAssistantMessage(sessionId, existing);
               transferPendingToMessage(assistantMessage.id);
               setMessages((prev) => {
                 if (prev.some((m) => m.id === assistantMessage.id)) return prev;
@@ -117,16 +120,7 @@ export function useStreamSubscription({
               });
             });
         } else {
-          const assistantMessage: Message = {
-            id: `temp-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            session_id: sessionId,
-            role: 'assistant',
-            content: existing.finalMessageContent!,
-            created_at: new Date().toISOString(),
-            token_usage: existing.tokenUsage ? JSON.stringify(existing.tokenUsage) : null,
-            referenced_contexts: existing.referencedContexts && existing.referencedContexts.length > 0 ? JSON.stringify(existing.referencedContexts) : undefined,
-            tool_files: existing.toolFiles && existing.toolFiles.length > 0 ? JSON.stringify(existing.toolFiles) : undefined,
-          };
+          const assistantMessage = buildTempAssistantMessage(sessionId, existing);
           transferPendingToMessage(assistantMessage.id);
           setMessages((prev) => {
             if (prev.some((m) => m.id === assistantMessage.id)) return prev;

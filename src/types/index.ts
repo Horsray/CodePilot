@@ -184,6 +184,13 @@ export interface Message {
   _rowid?: number;
   referenced_contexts?: string; // JSON string of string[]
   tool_files?: string; // JSON string of string[]
+  /**
+   * 统一终止态（见 TurnOutcome）。新消息由服务端落库时写入；
+   * null/undefined 表示旧消息或未写入的路径，渲染时走 legacy 文本解析降级。
+   */
+  outcome?: string | null;
+  /** 终止细因（SDK 原生或 fork 扩展的 terminal_reason），驱动徽章文案与动作。 */
+  terminal_reason?: string | null;
 }
 
 // Media content block (MCP-compatible: image/audio/video in tool results)
@@ -1187,6 +1194,21 @@ export interface ToolResultInfo {
 }
 
 export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped' | 'aborted';
+
+/**
+ * 统一任务终止态（大类）——所有 UI 面（消息底部徽标、系统通知、徽章、phase）
+ * 的一致判定标准。细因保留在 terminalReason 上，驱动徽章文案与动作按钮。
+ * 唯一推导点：src/lib/turn-outcome.ts 的 outcomeFromReason()。
+ */
+export type TurnOutcome =
+  | 'completed'              // 正常完成
+  | 'cancelled'              // 用户手动中断（含 SDK aborted_streaming/aborted_tools）
+  | 'upstream_error'         // 模型上游报错（is_error / 限流 / 额度 / 上下文满）
+  | 'upstream_interrupted'   // 上游连接中断（EOF 无终态 / 连接丢失）
+  | 'stalled'                // 上游长时间无响应（看门狗）
+  | 'graceful_stopped'       // 优雅收尾（宽限到期 / 等待上限 / 汇总未接收）
+  | 'tool_timeout'           // 工具无进度超时
+  | 'stopped';               // 其他原因导致本轮未完成（如 Hook 中断）
 
 export interface SessionStreamSnapshot {
   sessionId: string;

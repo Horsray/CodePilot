@@ -24,3 +24,4 @@
 | [bridge-final-response.md](./bridge-final-response.md) | [handover/bridge-final-response.md](../handover/bridge-final-response.md) | 手机端要的是结论不是过程：IM 是"完成态"媒介而桌面是"进行态"媒介、为什么选只发结论而非发进展、模型"说了没做"与消息发早了为何是两件事、静默期偏长的代价与未来方向 |
 | [interactive-permission-ux.md](./interactive-permission-ux.md) | [handover/interactive-permission-ux.md](../handover/interactive-permission-ux.md) | 等人工不该等于卡死：超时兜底的善意与错配、桌面端是"进行态"媒介故状态须跨窗口恢复、为何按请求性质分流而非调阈值 |
 | [pinned-sessions.md](./pinned-sessions.md) | [handover/pinned-sessions.md](../handover/pinned-sessions.md) | 收藏会话（图钉）：置顶粒度从目录下沉到单个会话、图钉入口 vs 右键菜单、"固定"而非"快捷方式"的语义取舍、位置为何在绘影智能体下方、状态须完整继承 |
+| [unified-turn-outcome.md](./unified-turn-outcome.md) | [handover/unified-turn-outcome.md](../handover/unified-turn-outcome.md) | 统一任务终止态：为什么「完成/中断」会互相矛盾（终止态从未被建模为数据）、两层模型 + 单一总表的取舍、未知 reason 静默而非误报的理由、顺手修复的双重终态帧 |
