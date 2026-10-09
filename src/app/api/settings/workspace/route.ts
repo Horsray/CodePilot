@@ -11,12 +11,14 @@ export async function GET() {
       return NextResponse.json({ path: null, valid: false, reason: 'no_path_configured', files: {}, state: null });
     }
 
-    // Check if the path is actually valid before proceeding
+    // Check if the path is actually valid before proceeding.
+    // 中文注释：用异步 stat/access —— 助手工作区可能位于受保护目录（如 ~/Documents），
+    // 同步调用会在系统权限弹窗期间挂起整个事件循环，卡死同期的首屏请求。
     let pathExists = false;
     let isDirectory = false;
     let readable = false;
     try {
-      const stat = fs.statSync(workspacePath);
+      const stat = await fs.promises.stat(workspacePath);
       pathExists = true;
       isDirectory = stat.isDirectory();
     } catch { /* path doesn't exist */ }
@@ -24,11 +26,11 @@ export async function GET() {
     let writable = false;
     if (pathExists && isDirectory) {
       try {
-        fs.accessSync(workspacePath, fs.constants.R_OK);
+        await fs.promises.access(workspacePath, fs.constants.R_OK);
         readable = true;
       } catch { /* not readable */ }
       try {
-        fs.accessSync(workspacePath, fs.constants.W_OK);
+        await fs.promises.access(workspacePath, fs.constants.W_OK);
         writable = true;
       } catch { /* not writable */ }
     }
@@ -109,11 +111,11 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid workspace path' }, { status: 400 });
     }
 
-    // Validate the path before saving
+    // Validate the path before saving (async stat — see GET for rationale)
     let pathExists = false;
     let isDirectory = false;
     try {
-      const stat = fs.statSync(workspacePath);
+      const stat = await fs.promises.stat(workspacePath);
       pathExists = true;
       isDirectory = stat.isDirectory();
     } catch { /* path doesn't exist */ }
@@ -128,7 +130,7 @@ export async function PUT(request: NextRequest) {
       }
       // Create the directory for initialization
       try {
-        fs.mkdirSync(workspacePath, { recursive: true });
+        await fs.promises.mkdir(workspacePath, { recursive: true });
       } catch (mkdirErr) {
         return NextResponse.json(
           { error: `Failed to create directory: ${mkdirErr instanceof Error ? mkdirErr.message : 'unknown error'}`, code: 'mkdir_failed' },
@@ -144,7 +146,7 @@ export async function PUT(request: NextRequest) {
 
     // Check read/write permissions (on existing or newly created directory)
     try {
-      fs.accessSync(workspacePath, fs.constants.R_OK | fs.constants.W_OK);
+      await fs.promises.access(workspacePath, fs.constants.R_OK | fs.constants.W_OK);
     } catch {
       return NextResponse.json(
         { error: 'Directory is not readable/writable.', code: 'permission_denied' },

@@ -253,7 +253,9 @@
   --sidebar-foreground: var(--on-surface);
   --sidebar-primary: var(--present-primary);
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: var(--surface-variant);
+  /* 中文注释：会话列表选中态底色 —— 原为 var(--surface-variant) (#E5E7EB)，
+     与页面底色 #e7ecf4 过于接近导致选中项难以辨认，加深为中灰 #C8CDD4。 */
+  --sidebar-accent: #C8CDD4;
   --sidebar-accent-foreground: var(--on-surface);
   --sidebar-border: var(--outline-variant);
   --sidebar-ring: var(--present-primary);
@@ -402,7 +404,8 @@
   --sidebar-foreground: var(--on-surface);
   --sidebar-primary: var(--present-primary);
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: rgba(255, 255, 255, 0.08);
+  /* 中文注释：会话列表选中态底色 —— 原为 8% 白，在深色底上过于微弱，提到 16% 让选中项清晰可辨。 */
+  --sidebar-accent: rgba(255, 255, 255, 0.16);
   --sidebar-accent-foreground: var(--on-surface);
   --sidebar-border: rgba(255, 255, 255, 0.10);
   --sidebar-ring: var(--present-primary);

@@ -63,6 +63,12 @@ interface ActiveStream {
   toolUsesArray: ToolUseInfo[];
   toolResultsArray: ToolResultInfo[];
   toolOutputAccumulated: string;
+  /** 中文注释：各在跑工具最近一次的「Running 工具… (Ns)」进度文案（toolUseId → 文案，
+   * Map 插入序即上报顺序）。tool_result 到达时删除对应项：还有别的工具在跑就回退显示
+   * 最新的那条，全跑完则清空。此前只设不清，长工具（尤其等待人工作答的
+   * AskUserQuestion）完成后状态栏会一直停在「Running …(Ns)」，并因 statusText 优先级
+   * 最高而盖住后续的「生成中/总结中」，看起来像界面卡死。 */
+  toolProgressTexts: Map<string, string>;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
   isIdleTimeout: boolean;
   /** 中文注释：功能名称「后台任务挂起期豁免」，用法是服务端在等待 run_in_background 的
@@ -333,6 +339,7 @@ export function startStream(params: StartStreamParams): void {
     toolUsesArray: [],
     toolResultsArray: [],
     toolOutputAccumulated: '',
+    toolProgressTexts: new Map(),
     toolTimeoutInfo: null,
     isIdleTimeout: false,
     backgroundHold: false,
@@ -680,6 +687,15 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       onToolResult: (res) => {
         markActive();
         stream.toolOutputAccumulated = '';
+        // 中文注释：工具完成 → 从进度表中移除。若状态栏当前展示的就是这条「Running …」，
+        // 回退到仍在跑的工具的最新进度，都没有则清空 —— 让状态栏接着显示
+        // 「生成中/总结中」，而不是把工具进度文案残留到本轮结束。
+        if (stream.toolProgressTexts.delete(res.tool_use_id)) {
+          const fallback = [...stream.toolProgressTexts.values()].pop();
+          if (stream.snapshot.statusText?.startsWith('Running ') && stream.snapshot.statusText !== fallback) {
+            stream.snapshot = { ...stream.snapshot, statusText: fallback };
+          }
+        }
         const existingIdx = stream.toolResultsArray.findIndex(r => r.tool_use_id === res.tool_use_id);
         if (existingIdx >= 0) {
           const next = [...stream.toolResultsArray];
@@ -698,9 +714,15 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         stream.toolOutputAccumulated = next.length > 5000 ? next.slice(-5000) : next;
         emit(stream, 'snapshot-updated');
       },
-      onToolProgress: (toolName, elapsed) => {
+      onToolProgress: (toolName, elapsed, toolUseId) => {
         markActive();
-        stream.snapshot = { ...stream.snapshot, statusText: `Running ${toolName}... (${elapsed}s)` };
+        const statusText = `Running ${toolName}... (${elapsed}s)`;
+        if (toolUseId) {
+          // 中文注释：重新 set 让该项排到 Map 末尾 —— 最近上报的工具就是此刻该展示的。
+          stream.toolProgressTexts.delete(toolUseId);
+          stream.toolProgressTexts.set(toolUseId, statusText);
+        }
+        stream.snapshot = { ...stream.snapshot, statusText };
         emit(stream, 'snapshot-updated');
       },
       onSkillNudge: (data) => {
@@ -1569,6 +1591,7 @@ export function seedSnapshotPatch(
     toolUsesArray: [],
     toolResultsArray: [],
     toolOutputAccumulated: '',
+    toolProgressTexts: new Map(),
     toolTimeoutInfo: null,
     isIdleTimeout: false,
     backgroundHold: false,

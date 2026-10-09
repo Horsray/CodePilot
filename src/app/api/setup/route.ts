@@ -46,10 +46,12 @@ export async function GET() {
     if (projectSkipped === 'true') {
       project = 'skipped';
     } else if (defaultProject) {
-      // Validate path exists
-      const fs = await import('fs');
+      // Validate path exists — async stat so a permission prompt on a protected
+      // folder (e.g. ~/Documents) can't block the event loop for every other
+      // request in flight during startup.
+      const fs = await import('fs/promises');
       try {
-        const stat = fs.statSync(defaultProject);
+        const stat = await fs.stat(defaultProject);
         project = stat.isDirectory() ? 'completed' : 'needs-fix';
       } catch {
         project = 'needs-fix';

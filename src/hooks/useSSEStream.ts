@@ -29,7 +29,8 @@ export interface SSECallbacks {
   onToolUse: (tool: ToolUseInfo) => void;
   onToolResult: (result: ToolResultInfo) => void;
   onToolOutput: (data: string) => void;
-  onToolProgress: (toolName: string, elapsedSeconds: number) => void;
+  /** 中文注释：toolUseId 用于在对应 tool_result 到达时清除「Running …」进度状态 —— 没有它，长工具（含等待人工作答的 AskUserQuestion）完成后状态会残留到本轮结束。 */
+  onToolProgress: (toolName: string, elapsedSeconds: number, toolUseId?: string) => void;
   onStatus: (text: string | undefined) => void;
   onStatusPayload?: (payload: Record<string, unknown>) => void;
   onResult: (usage: TokenUsage | null, meta?: { terminalReason?: string }) => void;
@@ -207,7 +208,11 @@ function handleSSEEvent(
       try {
         const parsed = JSON.parse(event.data);
         if (parsed._progress) {
-          callbacks.onToolProgress(parsed.tool_name, Math.round(parsed.elapsed_time_seconds));
+          callbacks.onToolProgress(
+            parsed.tool_name,
+            Math.round(parsed.elapsed_time_seconds),
+            typeof parsed.tool_use_id === 'string' && parsed.tool_use_id ? parsed.tool_use_id : undefined,
+          );
           // 中文注释：功能名称「工具进度触发占位卡片」，用法是在 SDK runtime 只推送 tool_progress
           // 而 tool_use 可能延迟到 tool_result 的情况下，先合成 tool_use 让前端立刻出现卡片
           if (typeof parsed.tool_use_id === 'string' && parsed.tool_use_id) {
@@ -627,7 +632,7 @@ export function useSSEStream() {
         onToolUse: (t) => callbacksRef.current?.onToolUse(t),
         onToolResult: (r) => callbacksRef.current?.onToolResult(r),
         onToolOutput: (d) => callbacksRef.current?.onToolOutput(d),
-        onToolProgress: (n, s) => callbacksRef.current?.onToolProgress(n, s),
+        onToolProgress: (n, s, id) => callbacksRef.current?.onToolProgress(n, s, id),
         onStatus: (t) => callbacksRef.current?.onStatus(t),
         onStatusPayload: (p) => callbacksRef.current?.onStatusPayload?.(p),
         onResult: (u, meta) => callbacksRef.current?.onResult(u, meta),

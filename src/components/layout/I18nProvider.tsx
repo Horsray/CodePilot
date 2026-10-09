@@ -15,19 +15,36 @@ export const I18nContext = createContext<I18nContextValue>({
   t: (key) => key,
 });
 
-export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>('en');
+export function I18nProvider({
+  children,
+  initialLocale = 'en',
+}: {
+  children: ReactNode;
+  /**
+   * Locale resolved by RootLayout on the server (DB setting, or Accept-Language
+   * on first run). Seeding state with it keeps the SSR first paint in the right
+   * language — otherwise every cold start flashes English until the settings
+   * fetch resolves.
+   */
+  initialLocale?: Locale;
+}) {
+  const [locale, setLocaleState] = useState<Locale>(initialLocale);
 
-  // Load persisted locale on mount; auto-detect system language if never set
+  // The first paint already carries the right language via initialLocale; on
+  // mount we only reconcile edge cases:
+  // 1) A persisted setting the server didn't see (keeps other clients' edits in sync).
+  // 2) First run with no persisted locale — detect from navigator and persist it.
   useEffect(() => {
-    async function loadLocale() {
+    let cancelled = false;
+
+    async function syncLocale() {
       try {
         const res = await fetch('/api/settings/app');
         if (res.ok) {
           const data = await res.json();
           const saved = data.settings?.locale;
           if (saved === 'en' || saved === 'zh') {
-            setLocaleState(saved);
+            if (!cancelled) setLocaleState(saved);
             return;
           }
         }
@@ -41,8 +58,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
           navigator.language,               // primary browser/OS language
         ].filter(Boolean);
         const isZh = candidates.some(lang => lang.startsWith('zh'));
+        if (!cancelled) setLocaleState(isZh ? 'zh' : 'en');
         if (isZh) {
-          setLocaleState('zh');
           fetch('/api/settings/app', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -51,8 +68,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-    loadLocale();
+
+    syncLocale();
+    return () => { cancelled = true; };
   }, []);
+
+  // Keep <html lang> aligned with the active locale (the server sets it for the
+  // first paint; later switches flow through here).
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
+    }
+  }, [locale]);
 
   const setLocale = useCallback((newLocale: Locale) => {
     setLocaleState(newLocale);
