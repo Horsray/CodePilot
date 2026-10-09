@@ -208,6 +208,110 @@ test('persistent-claude-session 把后台 Bash 派发纳入轮次保持', () => 
   );
 });
 
+// ── 回归：主回合进行中收到后台任务通知，不得武装最终化宽限（enqueue+30s 误杀） ──
+
+test('后台任务通知在主回合进行中到达时不武装宽限，等主回合 result 被拦下后才武装', () => {
+  const claudeClient = read('src/lib/claude-client.ts');
+
+  // 通知分支（Bash）：只有已持有被拦下的主回合 result 才允许开始 30s 倒计时
+  const bashNotify = claudeClient.slice(
+    claudeClient.indexOf('const bashTaskKey = resolvePendingBackgroundBash(taskMsg.tool_use_id'),
+    claudeClient.indexOf("const title = taskMsg.status === 'completed'"),
+  );
+  assert.ok(bashNotify.length > 0, '应能定位后台 Bash 通知分支');
+  assert.match(bashNotify, /if \(swallowedFinalResult\) scheduleBackgroundFinalization\(\);/);
+  // 回归写法：totalPendingBackgroundWork()===0 就无条件武装——主回合仍在干活时
+  // 30 秒后会把整轮 abort 成 background_finalization_timeout（实测 enqueue+30s 精确误杀）
+  assert.ok(
+    !/if \(totalPendingBackgroundWork\(\) === 0\) \{\s*sdkInjectedTurn\.forwardFinalTurn = true;\s*scheduleBackgroundFinalization\(\);/.test(bashNotify),
+    '主回合仍在进行时不得武装最终化宽限',
+  );
+
+  // 子 Agent 通知分支同样以「已持有被拦 result」为前提
+  const subagentNotify = claudeClient.slice(
+    claudeClient.indexOf('shouldGracefullyFinalizeBackgroundTask(taskMsg.status'),
+    claudeClient.indexOf('const bashTaskKey = resolvePendingBackgroundBash'),
+  );
+  assert.match(subagentNotify, /if \(swallowedFinalResult\) scheduleBackgroundFinalization\(\);/);
+
+  // task_updated 失败/被杀分支同样以「已持有被拦 result」为前提
+  assert.match(claudeClient, /totalPendingBackgroundWork\(\) === 0 && swallowedFinalResult/);
+
+  // 结果门：被拦下的主回合 result 统一保存（宽限的武装前提 + 兜底终态载体），
+  // 并在「主回合答完、只差注入汇总轮」时武装宽限
+  assert.match(claudeClient, /swallowedFinalResult = resultMsg;/);
+  assert.match(
+    claudeClient,
+    /else if \(turnTransition === 'turn_completed' && sdkInjectedTurn\.hasPendingFinalSummary\) \{/,
+  );
+});
+
+test('最终汇总宽限到期是优雅收尾（result 终态）而不是 abort 主回合', () => {
+  const claudeClient = read('src/lib/claude-client.ts');
+  const grace = claudeClient.slice(
+    claudeClient.indexOf('const scheduleBackgroundFinalization = () => {'),
+    claudeClient.indexOf('const scheduleBackgroundWaitExpiry = () => {'),
+  );
+  assert.ok(grace.includes('BACKGROUND_FINALIZATION_GRACE_MS'), '应能定位宽限函数');
+  // 到期后用被拦下的主回合 result 发终态（保留 usage/耗时），绝不 abort
+  assert.match(grace, /terminal_reason: 'background_finalization_graceful'/);
+  assert.ok(!grace.includes('.abort()'), '宽限到期不得 abort 整轮查询');
+  assert.ok(!grace.includes("'background_finalization_timeout'"), '旧 abort 路径不得复现');
+  // 收尾后进入排空模式，不销毁持久会话
+  assert.match(grace, /drainingBackground = true/);
+  assert.match(grace, /controller\.close\(\)/);
+  // 无可转发 result 时不制造 abort，交给流看门狗兜底
+  assert.match(grace, /if \(!held\) \{/);
+});
+
+test('注入的最终汇总轮一开始，宽限倒计时立刻解除', () => {
+  const claudeClient = read('src/lib/claude-client.ts');
+  assert.match(claudeClient, /const wasForwardingFinalSummary = sdkInjectedTurn\.forwardFinalTurn;/);
+  assert.match(claudeClient, /if \(wasForwardingFinalSummary\) clearBackgroundFinalizationTimer\(\);/);
+});
+
+test('最终汇总宽限的优雅收尾：phase completed、无中断文案、不触发自动继续', async () => {
+  const reader = scriptedReader([
+    sse('text', '构建已完成，改动都在预期内。'),
+    sse('status', { subtype: 'background_finalization_graceful', message: '后台任务已完成，本轮直接收尾。' }),
+    sse('result', {
+      subtype: 'success', is_error: false, num_turns: 1, duration_ms: 300000,
+      usage: { input_tokens: 10, output_tokens: 20, duration_sec: 300 }, session_id: 's-bg',
+      terminal_reason: 'background_finalization_graceful',
+    }),
+    sse('done', ''),
+  ]);
+  const restore = installGlobals(reader);
+  const sessionId = `bg-finalize-graceful-${Date.now()}`;
+  let completed = false;
+  let autoContinueCalled = false;
+  const unsubscribe = subscribe(sessionId, (event) => {
+    if (event.type === 'completed') completed = true;
+  });
+  try {
+    startStream({
+      sessionId,
+      content: '继续',
+      mode: 'code',
+      model: 'test',
+      providerId: 'test',
+      sendMessageFn: () => { autoContinueCalled = true; },
+    } as Parameters<typeof startStream>[0]);
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(completed, true);
+    const snapshot = getSnapshot(sessionId)!;
+    assert.equal(snapshot.phase, 'completed', '宽限优雅收尾应归为正常完成，不得标成中断/失败');
+    assert.equal(snapshot.terminalReason, 'background_finalization_graceful');
+    assert.ok(!snapshot.finalMessageContent?.includes('未能接收结果'), '不得再注入「未能接收结果」文案');
+    assert.ok(snapshot.finalMessageContent?.includes('构建已完成'), '已产出内容应保留');
+    assert.equal(autoContinueCalled, false, '优雅收尾不得触发自动继续循环');
+  } finally {
+    unsubscribe();
+    cleanStream(sessionId);
+    restore();
+  }
+});
+
 test('前端把等待超时收尾渲染成非「任务完成」状态并附带说明', () => {
   const streamManager = read('src/lib/stream-session-manager.ts');
   const messageItem = read('src/components/chat/MessageItem.tsx');

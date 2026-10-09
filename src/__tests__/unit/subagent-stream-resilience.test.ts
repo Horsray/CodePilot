@@ -51,8 +51,11 @@ describe('subagent stream resilience', () => {
   it('gives a completed background task a bounded final-summary wait', () => {
     const claudeClient = read('src/lib/claude-client.ts');
 
-    assert.match(claudeClient, /BACKGROUND_FINALIZATION_GRACE_MS/);
-    assert.match(claudeClient, /Background tasks finished, but the final summary did not arrive/);
+    assert.match(claudeClient, /const BACKGROUND_FINALIZATION_GRACE_MS = 30_000;/);
+    // 到期行为是优雅收尾（用被拦下的主回合 result 发终态），不是 abort 整轮——
+    // 2026-10-09 回归修复：原实现到期即 abort，通知在主回合进行中到达时会精准
+    // 误杀主回合并触发自动继续死循环。详见 background-bash-hold.test.ts。
+    assert.match(claudeClient, /Background final summary did not arrive in time; finishing the turn gracefully/);
   });
 
   it('continues a background-finalization timeout without creating a user-visible retry message', () => {

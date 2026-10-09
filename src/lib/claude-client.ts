@@ -2337,6 +2337,11 @@ if (claudePath) {
         // （map 本体在 try 外声明——工具看门狗需要忽略等待中的后台任务。）
         // 被挂住的用户轮 result：15 分钟上限到点时用它补齐 usage/耗时并发出终态。
         let heldBackgroundResult: SDKResultMessage | null = null;
+        // 中文注释：被「等待后台任务/等待注入汇总轮」拦下的主回合 result。与
+        // heldBackgroundResult 的差别是它覆盖所有拦截场景（含 hasPendingFinalSummary
+        // 拦下的纯等待注入轮场景）。宽限到期优雅收尾时用它发终态；它同时充当
+        // 「主回合 result 已到达」的标记——宽限只允许在此之后武装。
+        let swallowedFinalResult: SDKResultMessage | null = null;
         // 首次因后台任务挂起本轮的墙钟时间——超时收尾时用它给出真实的「本轮耗时」。
         let backgroundHoldStartedAt = 0;
         // 15 分钟等待上限到点后：本轮已优雅收尾，之后的帧只排空、不再外发。
@@ -2364,24 +2369,60 @@ if (claudePath) {
             backgroundFinalizationTimer = null;
           }
         };
+        // 中文注释：功能名称「最终汇总轮宽限」，用法是后台任务全部完成后，给 SDK
+        // 注入的「最终汇总轮」一段短暂宽限。注意武装时机——注入轮只可能在主回合
+        // result 之后被 dispatch，因此只有已持有被拦下的主回合 result
+        // （swallowedFinalResult）时才允许武装；主回合仍在进行时武装会在主回合
+        // 干到一半时一刀 abort（enqueue+30s 精确误杀），实测会把正常长任务判成
+        // 「后台任务已返回但主任务未能接收结果」并触发自动继续循环。
+        // 到期行为同样是收尾而不是 abort：直接用主回合 result 发终态（phase
+        // completed，不发 aborted、不触发前端自动继续），后台任务通知到达时已
+        // 实时展示过，不存在信息丢失。
         const scheduleBackgroundFinalization = () => {
           clearBackgroundFinalizationTimer();
           backgroundFinalizationTimer = setTimeout(() => {
-            if (controller.closed || abortController?.signal.aborted) return;
-            console.warn('[claude-client] Background tasks finished, but the final summary did not arrive; ending stale query');
+            backgroundFinalizationTimer = null;
+            if (controller.closed || abortController?.signal.aborted || drainingBackground) return;
+            const held = swallowedFinalResult ?? heldBackgroundResult;
+            if (!held) {
+              // 无可转发的 result（宽限本应只在 result 到达后武装，理论不可达）——
+              // 交给流看门狗/EOF 分类兜底，不在这里制造 abort。
+              console.warn('[claude-client] Background finalization grace expired without a held result; deferring to stream watchdogs');
+              return;
+            }
+            console.log('[claude-client] Background final summary did not arrive in time; finishing the turn gracefully');
+            const expiryDurationMs = backgroundHoldStartedAt
+              ? Date.now() - backgroundHoldStartedAt
+              : (held.duration_ms ?? 0);
+            tokenUsage = extractTokenUsage(held, expiryDurationMs, lastAssistantUsage);
+            backgroundFinalizationExpired = true;
+            drainingBackground = true;
+            backgroundDrainDeadline = Date.now() + BACKGROUND_DRAIN_TIMEOUT_MS;
             controller.enqueue(formatSSE({
               type: 'status',
               data: JSON.stringify({
-                notification: true,
-                message: '后台任务已完成，但未收到最终汇总，已结束本轮。任务结果已保留。',
+                subtype: 'background_finalization_graceful',
+                message: '后台任务已完成，本轮直接收尾。',
               }),
             }));
+            // 用被拦下的主回合 result 发终态：保留 usage/耗时统计，
+            // terminal_reason 用独立值，前端按正常完成处理（不是中断/失败）。
             controller.enqueue(formatSSE({
-              type: 'aborted',
-              data: JSON.stringify({ reason: 'background_finalization_timeout' }),
+              type: 'result',
+              data: JSON.stringify({
+                subtype: held.subtype ?? 'success',
+                is_error: false,
+                num_turns: held.num_turns ?? 0,
+                duration_ms: expiryDurationMs,
+                usage: tokenUsage,
+                session_id: held.session_id ?? sessionId,
+                terminal_reason: 'background_finalization_graceful',
+              }),
             }));
-            backgroundFinalizationExpired = true;
-            abortController?.abort();
+            controller.enqueue(formatSSE({ type: 'done', data: '' }));
+            controller.close();
+            // 注意：不 abort、不销毁持久会话——排空模式继续消费残余帧，
+            // 下一条用户消息从干净边界开始。
           }, BACKGROUND_FINALIZATION_GRACE_MS);
         };
         // 中文注释：功能名称「后台任务的等待上限」，用法是给「等待后台 Bash 任务」
@@ -2884,8 +2925,12 @@ if (claudePath) {
                 // 中文注释：字符串型 user 消息不是工具结果，正常用户输入也不会以 user 消息
                 // 形式回流（只在本函数的入参里）。所以能走到这里的基本都是 SDK 注入的合成
                 // 轮次，例如后台 Bash 任务结束时的 <task-notification>。
+                const wasForwardingFinalSummary = sdkInjectedTurn.forwardFinalTurn;
                 const injected = sdkInjectedTurn.markUserMessage(content);
                 if (injected) {
+                  // 中文注释：最终汇总轮已开始——宽限的使命（等它出现）完成，
+                  // 立刻解除倒计时；后续由该轮自身与流看门狗负责收尾。
+                  if (wasForwardingFinalSummary) clearBackgroundFinalizationTimer();
                   console.log('[claude-client] SDK injected user turn detected:', injected);
                   controller.enqueue(formatSSE({
                     type: 'status',
@@ -3075,7 +3120,7 @@ if (claudePath) {
                   const bashKey = resolvePendingBackgroundBash(undefined, taskUpdated.task_id);
                   if (bashKey && (taskUpdated.patch?.status === 'failed' || taskUpdated.patch?.status === 'killed')) {
                     pendingBackgroundBashTasks.delete(bashKey);
-                    if (totalPendingBackgroundWork() === 0 && heldBackgroundResult) {
+                    if (totalPendingBackgroundWork() === 0 && swallowedFinalResult) {
                       sdkInjectedTurn.forwardFinalTurn = true;
                       scheduleBackgroundFinalization();
                       clearBackgroundWaitTimer();
@@ -3121,7 +3166,10 @@ if (claudePath) {
                     // 未完成工作：它还没回报时不能认定这是最后一批任务。）
                     if (shouldGracefullyFinalizeBackgroundTask(taskMsg.status, totalPendingBackgroundWork())) {
                       sdkInjectedTurn.forwardFinalTurn = true;
-                      scheduleBackgroundFinalization();
+                      // 中文注释：只有主回合 result 已被拦下（swallowedFinalResult 非空）
+                      // 才代表注入轮即将被 dispatch，可以开始宽限倒计时。主回合仍在
+                      // 进行时 SDK 还没轮到注入轮，武装宽限会在 30s 后误杀主回合。
+                      if (swallowedFinalResult) scheduleBackgroundFinalization();
                     }
                   }
                   // 中文注释：后台 Bash 任务回报（成功/失败/停止）——从等待表移除；
@@ -3132,8 +3180,11 @@ if (claudePath) {
                     pendingBackgroundBashTasks.delete(bashTaskKey);
                     if (totalPendingBackgroundWork() === 0) {
                       sdkInjectedTurn.forwardFinalTurn = true;
-                      scheduleBackgroundFinalization();
                       clearBackgroundWaitTimer();
+                      // 中文注释：与子 Agent 分支同理——主回合仍在进行时通知先到，
+                      // 此时武装宽限会在主回合干到一半时误杀（实测 enqueue+30s
+                      // 精确被杀）。等主回合 result 到达后再由结果门武装。
+                      if (swallowedFinalResult) scheduleBackgroundFinalization();
                     }
                   }
                   const title = taskMsg.status === 'completed' ? 'Task completed' : `Task ${taskMsg.status}`;
@@ -3239,6 +3290,10 @@ if (claudePath) {
                 totalPendingBackgroundWork(),
                 sdkInjectedTurn.hasPendingFinalSummary,
               )) {
+                // 中文注释：任何被拦下的主回合 result 都先保存——它既是宽限武装
+                // 的前提（注入轮只可能在此之后 dispatch），也是宽限到期优雅收尾时
+                // 的终态载体。若此处不保存，注入轮失踪时本轮只能挂到流看门狗。
+                swallowedFinalResult = resultMsg;
                 // 中文注释：用户轮已答完，但仍有后台任务未回报——挂起本轮、暂不发
                 // 终态（UI 保持「生成中」），等 task_notification 与注入的汇总轮
                 // 走完再收尾。后台 Bash 超过 15 分钟仍未结束则优雅收尾，
@@ -3254,9 +3309,19 @@ if (claudePath) {
                       message: '后台任务仍在运行，等待完成后汇总…',
                     }),
                   }));
+                } else if (turnTransition === 'turn_completed' && sdkInjectedTurn.hasPendingFinalSummary) {
+                  // 中文注释：主回合答完，后台通知也早已到达（forwardFinalTurn 已置位），
+                  // 只差 SDK 注入的最终汇总轮。注入轮从这一刻起才可能被 dispatch——
+                  // 在此武装宽限；到期仍无汇总则优雅收尾（见
+                  // scheduleBackgroundFinalization），绝不 abort 主回合。
+                  if (!backgroundHoldStartedAt) backgroundHoldStartedAt = Date.now();
+                  scheduleBackgroundFinalization();
                 }
                 break;
               }
+              // 中文注释：真正走到终态（isFinalUserTurnResult 放行）时，被拦下的
+              // result 已无兜底价值，清掉引用避免后续误用。
+              swallowedFinalResult = null;
               tokenUsage = extractTokenUsage(resultMsg, resultMsg.duration_ms, lastAssistantUsage);
               // terminal_reason is an optional field added in SDK 0.2.111.
               // When present, it enriches the end-of-turn UI chip (Phase 1 of
@@ -3566,8 +3631,10 @@ if (claudePath) {
         // backgroundWaitExpired：15 分钟上限的优雅收尾已经发给用户了。此后排空期间
         // 的流错误（如 iterator 抛错）不该再发第二个终态，更不能销毁仍在跑后台任务的
         // 持久会话——静默收束，让任务继续在后台运行。
-        if (backgroundWaitExpired) {
-          console.warn('[claude-client] Stream error after background wait expiry; keeping session for the running background task');
+        // backgroundFinalizationExpired 同理：最终汇总轮宽限到期的优雅收尾已发过终态
+        // （phase completed），后续流错误同样不得再叠加中断/失败分类。
+        if (backgroundWaitExpired || backgroundFinalizationExpired) {
+          console.warn('[claude-client] Stream error after background graceful finalization; keeping session');
           controller.close();
           return;
         }
