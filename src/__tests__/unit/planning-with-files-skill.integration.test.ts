@@ -48,7 +48,14 @@ describe('planning-with-files skill module (integration)', () => {
     const resp = await GET(req);
     const data = await resp.json();
     const all = Array.isArray(data?.skills) ? data.skills : [];
-    assert.ok(all.some((s: any) => s?.name === 'planning-with-files'), 'planning-with-files should be returned by skills API');
+    assert.ok(
+      all.some((skill: unknown) => (
+        typeof skill === 'object'
+        && skill !== null
+        && 'name' in skill
+        && skill.name === 'planning-with-files'
+      )),
+      'planning-with-files should be returned by skills API',
+    );
   });
 });
-
