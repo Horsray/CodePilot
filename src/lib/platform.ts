@@ -291,17 +291,45 @@ export function findClaudeBinary(): string | undefined {
 }
 
 function _findClaudeBinaryUncached(): string | undefined {
-  // Try known candidate paths first
-  for (const p of getClaudeCandidatePaths()) {
+  // Two-pass strategy:
+  // Pass 1: file existence (cheap, won't timeout). If found, validate with --version.
+  // Pass 2 (fallback): if --version times out (slow VPN / WSL2), still return the path
+  //   so the SDK can try to spawn it — the user likely has a working binary, just slow.
+  //
+  // Bumped the timeout from 3s → 5s in 2026-04-15: the 3s threshold was tight
+  // for users on slow filesystems (WSL2, network-mounted homes) and contributed
+  // to "Claude Code native binary not found" Sentry events even though the
+  // binary was actually present.
+  const TIMEOUT_MS = 5000;
+  const candidates = getClaudeCandidatePaths();
+
+  // Pass 1: cheap fs.existsSync to find candidates that actually exist on disk
+  const existing: string[] = [];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) existing.push(p);
+    } catch { /* permission denied — skip */ }
+  }
+
+  // Validate each existing candidate. Return the first that responds to --version.
+  // If a candidate exists but --version times out, remember it as a fallback.
+  let timedOutFallback: string | undefined;
+  for (const p of existing) {
     try {
       execFileSync(p, ['--version'], {
-        timeout: 3000,
+        timeout: TIMEOUT_MS,
         stdio: 'pipe',
         shell: needsShell(p),
       });
       return p;
-    } catch {
-      // not found, try next
+    } catch (err) {
+      // Distinguish "file doesn't behave like a CLI" from "validation timed out".
+      // Spawn timeout in execFileSync surfaces as ETIMEDOUT or err.signal === 'SIGTERM'.
+      const e = err as { code?: string; signal?: string };
+      if ((e.code === 'ETIMEDOUT' || e.signal === 'SIGTERM') && !timedOutFallback) {
+        timedOutFallback = p;
+      }
+      // Otherwise keep trying other candidates.
     }
   }
 
@@ -310,7 +338,7 @@ function _findClaudeBinaryUncached(): string | undefined {
     const cmd = isWindows ? 'where' : '/usr/bin/which';
     const args = isWindows ? ['claude'] : ['claude'];
     const result = execFileSync(cmd, args, {
-      timeout: 3000,
+      timeout: TIMEOUT_MS,
       stdio: 'pipe',
       env: { ...process.env, PATH: getExpandedPath() },
       shell: isWindows,
@@ -322,7 +350,7 @@ function _findClaudeBinaryUncached(): string | undefined {
       if (!candidate) continue;
       try {
         execFileSync(candidate, ['--version'], {
-          timeout: 3000,
+          timeout: TIMEOUT_MS,
           stdio: 'pipe',
           shell: needsShell(candidate),
         });
@@ -335,7 +363,11 @@ function _findClaudeBinaryUncached(): string | undefined {
     // not found
   }
 
-  return undefined;
+  // Last resort: a candidate exists on disk but timed out validating. Return
+  // it anyway — the SDK gets a real path to try, instead of silently falling
+  // back to its own hardcoded default which generates the most-useless
+  // "Claude Code native binary not found at <some path>" Sentry error.
+  return timedOutFallback;
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   ListMagnifyingGlass,
   Brain,
   Terminal,
+  UsersThree,
 } from "@/components/ui/icon";
 import type { IconComponent } from '@/types';
 
@@ -29,4 +30,5 @@ export const COMMAND_ICONS: Record<string, IconComponent> = {
   '/review': ListMagnifyingGlass,
   '/terminal-setup': Terminal,
   '/memory': Brain,
+  '/team': UsersThree,
 };

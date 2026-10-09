@@ -1,3 +1,5 @@
+import type React from "react";
+
 /**
  * Global type declarations for the Electron preload API.
  * Exposed via contextBridge.exposeInMainWorld('electronAPI', ...) in electron/preload.ts.
@@ -51,15 +53,6 @@ interface ElectronUpdaterAPI {
   onStatus: (callback: (data: UpdateStatusEvent) => void) => () => void;
 }
 
-interface ElectronTerminalAPI {
-  create: (opts: { id: string; cwd: string; cols: number; rows: number }) => Promise<void>;
-  write: (id: string, data: string) => void;
-  resize: (id: string, cols: number, rows: number) => Promise<void>;
-  kill: (id: string) => Promise<void>;
-  onData: (callback: (data: { id: string; data: string }) => void) => () => void;
-  onExit: (callback: (data: { id: string; code: number }) => void) => () => void;
-}
-
 interface ElectronAPI {
   versions: {
     electron: string;
@@ -69,6 +62,12 @@ interface ElectronAPI {
   };
   shell: {
     openPath: (path: string) => Promise<string>;
+    /** 在系统默认浏览器中打开 URL（OAuth 授权页必须走系统浏览器） */
+    openExternal: (url: string) => Promise<void>;
+  };
+  fs: {
+    /** Resolve a File's absolute filesystem path (via Electron webUtils). Empty string if unavailable. */
+    getPathForFile: (file: File) => string;
   };
   dialog: {
     openFolder: (options?: {
@@ -84,7 +83,6 @@ interface ElectronAPI {
   proxy?: {
     resolve: (url: string) => Promise<string>;
   };
-  terminal?: ElectronTerminalAPI;
   notification?: {
     show: (options: { title: string; body?: string; onClick?: string }) => Promise<void>;
     onClick: (listener: (action: string) => void) => () => void;
@@ -92,6 +90,16 @@ interface ElectronAPI {
 }
 
 declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
+        src?: string;
+        partition?: string;
+        allowpopups?: boolean;
+      };
+    }
+  }
+
   interface Window {
     electronAPI?: ElectronAPI;
   }

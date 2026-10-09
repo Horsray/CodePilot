@@ -70,7 +70,7 @@ export function isConsoleEntryMatched(entry: SearchableConsoleEntry, keywords: s
 
 export function formatConsoleTimestamp(ts: number): string {
   const d = new Date(ts);
-  return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}.${d.getMilliseconds().toString().padStart(3, "0")}`;
+  return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
 }
 
 export function formatConsoleEntryForCopy(entry: SearchableConsoleEntry): string {

@@ -1,60 +1,53 @@
-import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { NextRequest, NextResponse } from "next/server";
+import fs from "fs/promises";
+import path from "path";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { path: filePath, type } = body;
 
-    if (!filePath) {
+    if (!filePath || !type) {
       return NextResponse.json(
-        { error: 'Path is required' },
+        { error: "Missing required fields: path and type" },
         { status: 400 }
       );
     }
 
-    // 安全检查：确保路径在允许的范围内
-    const resolvedPath = path.resolve(filePath);
-    const homeDir = process.env.HOME || process.env.USERPROFILE || '/';
-    
-    // 禁止访问敏感目录
-    const forbiddenPaths = ['/System', '/usr', '/bin', '/sbin', '/etc', '/dev', '/var'];
-    if (forbiddenPaths.some(fp => resolvedPath.startsWith(fp))) {
+    if (type !== "file" && type !== "directory") {
       return NextResponse.json(
-        { error: 'Access to system directories is not allowed' },
-        { status: 403 }
-      );
-    }
-
-    // 检查文件/文件夹是否已存在
-    if (fs.existsSync(resolvedPath)) {
-      return NextResponse.json(
-        { error: 'File or directory already exists' },
+        { error: "Invalid type. Must be 'file' or 'directory'" },
         { status: 400 }
       );
     }
 
-    // 创建父目录（如果不存在）
-    const parentDir = path.dirname(resolvedPath);
-    if (!fs.existsSync(parentDir)) {
-      fs.mkdirSync(parentDir, { recursive: true });
+    // Security: prevent path traversal
+    const normalizedPath = path.normalize(filePath);
+    if (normalizedPath.includes("..")) {
+      return NextResponse.json({ error: "Invalid path" }, { status: 400 });
     }
 
-    if (type === 'folder') {
-      // 创建文件夹
-      fs.mkdirSync(resolvedPath, { recursive: true });
-      return NextResponse.json({ success: true, type: 'folder', path: resolvedPath });
+    const parentDir = path.dirname(normalizedPath);
+    await fs.mkdir(parentDir, { recursive: true });
+
+    if (type === "directory") {
+      await fs.mkdir(normalizedPath, { recursive: true });
     } else {
-      // 创建文件
-      fs.writeFileSync(resolvedPath, '', 'utf-8');
-      return NextResponse.json({ success: true, type: 'file', path: resolvedPath });
+      // Check if file exists
+      try {
+        await fs.access(normalizedPath);
+        return NextResponse.json({ error: "File already exists" }, { status: 409 });
+      } catch {
+        // File doesn't exist, which is what we want
+      }
+      await fs.writeFile(normalizedPath, "", "utf-8");
     }
+
+    return NextResponse.json({ success: true, path: normalizedPath });
   } catch (error) {
-    console.error('Create file/folder error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to create';
+    console.error("Create file error:", error);
     return NextResponse.json(
-      { error: errorMessage },
+      { error: "Failed to create file or directory" },
       { status: 500 }
     );
   }

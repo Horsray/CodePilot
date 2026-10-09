@@ -12,7 +12,6 @@ import {
   Folder,
   FolderOpen,
   File,
-  CaretRight,
   Plus,
 } from "@phosphor-icons/react";
 import {
@@ -29,7 +28,19 @@ interface FileTreeContextType {
   selectedPath?: string;
   onSelect?: (path: string) => void;
   onAdd?: (path: string) => void;
+  /**
+   * Separate selected-folder channel from selectedPath so folder and file
+   * selection can coexist without one stomping the other. Folder
+   * selection is what drives the "create in this folder" default target.
+   */
+  selectedFolderPath?: string;
+  onSelectFolder?: (folderPath: string) => void;
 }
+
+// Module-scope immutable empty Set. Inlining `new Set()` as a destructuring
+// default parameter (e.g. `defaultExpanded = new Set()`) triggered a production
+// ReferenceError under Next.js 16 + Turbopack in v0.50.2 (Sentry NEXT-PA).
+const EMPTY_EXPANDED: Set<string> = new Set();
 
 // Default noop for context default value
 // oxlint-disable-next-line eslint(no-empty-function)
@@ -47,15 +58,19 @@ export type FileTreeProps = HTMLAttributes<HTMLDivElement> & {
   selectedPath?: string;
   onSelect?: (path: string) => void;
   onAdd?: (path: string) => void;
+  selectedFolderPath?: string;
+  onSelectFolder?: (folderPath: string) => void;
   onExpandedChange?: (expanded: Set<string>) => void;
 };
 
 export const FileTree = ({
   expanded: controlledExpanded,
-  defaultExpanded = new Set(),
+  defaultExpanded = EMPTY_EXPANDED,
   selectedPath,
   onSelect,
   onAdd,
+  selectedFolderPath,
+  onSelectFolder,
   onExpandedChange,
   className,
   children,
@@ -79,8 +94,8 @@ export const FileTree = ({
   );
 
   const contextValue = useMemo(
-    () => ({ expandedPaths, onAdd, onSelect, selectedPath, togglePath }),
-    [expandedPaths, onAdd, onSelect, selectedPath, togglePath]
+    () => ({ expandedPaths, onAdd, onSelect, selectedPath, togglePath, selectedFolderPath, onSelectFolder }),
+    [expandedPaths, onAdd, onSelect, selectedPath, togglePath, selectedFolderPath, onSelectFolder]
   );
 
   return (
@@ -123,13 +138,19 @@ export const FileTreeFolder = ({
   children,
   ...props
 }: FileTreeFolderProps) => {
-  const { expandedPaths, togglePath } =
+  const { expandedPaths, togglePath, selectedFolderPath, onSelectFolder } =
     useContext(FileTreeContext);
   const isExpanded = expandedPaths.has(path);
+  const isSelected = selectedFolderPath === path;
 
   const handleToggle = useCallback(() => {
     togglePath(path);
-  }, [togglePath, path]);
+    // Clicking a folder row both toggles expand/collapse and marks it
+    // selected — matches VS Code's Explorer behavior. Selection drives
+    // the "create inside this folder" default target in the panel's
+    // new-item flow.
+    onSelectFolder?.(path);
+  }, [togglePath, onSelectFolder, path]);
 
   const folderContextValue = useMemo(
     () => ({ isExpanded, name, path }),
@@ -146,7 +167,10 @@ export const FileTreeFolder = ({
         >
           <CollapsibleTrigger asChild>
             <div
-              className="flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left transition-colors hover:bg-muted/50"
+              className={cn(
+                "flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left transition-colors hover:bg-muted/50",
+                isSelected && "bg-muted",
+              )}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => {
@@ -156,20 +180,12 @@ export const FileTreeFolder = ({
                 }
               }}
             >
-              <span className="shrink-0 rounded p-0.5">
-                <CaretRight
-                  size={16}
-                  className={cn(
-                    "text-muted-foreground transition-transform",
-                    isExpanded && "rotate-90"
-                  )}
-                />
-              </span>
+              {/* 文件夹图标同时作为展开/折叠按钮 */}
               <FileTreeIcon>
                 {isExpanded ? (
-                  <FolderOpen size={16} className="text-muted-foreground" />
+                  <FolderOpen size={16} className="text-blue-400" weight="fill" />
                 ) : (
-                  <Folder size={16} className="text-muted-foreground" />
+                  <Folder size={16} className="text-blue-400" weight="fill" />
                 )}
               </FileTreeIcon>
               <FileTreeName>{name}</FileTreeName>

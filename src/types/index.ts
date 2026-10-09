@@ -2,11 +2,28 @@
 // Database Models
 // ==========================================
 
+export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'timeout';
+
+export interface BackgroundJob {
+  id: string;
+  session_id: string;
+  tool_name: string;
+  tool_input: string;
+  status: BackgroundJobStatus;
+  output?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
   created_at: string;
   updated_at: string;
+  /** Last explicit user visit, used for stale history retention. */
+  last_opened_at?: string;
   model: string;
   system_prompt: string;
   working_directory: string;
@@ -24,6 +41,10 @@ export interface ChatSession {
   permission_profile?: 'default' | 'full_access';
   context_summary?: string;
   context_summary_updated_at?: string;
+  context_summary_boundary_rowid?: number;
+  team_mode?: 'off' | 'on' | 'auto';
+  orchestration_tier?: 'single' | 'multi';
+  orchestration_profile_id?: string;
 }
 
 // ==========================================
@@ -53,6 +74,12 @@ export interface FilePreview {
   line_count: number;
   /** When true, line_count is exact; when false it is a best-effort estimate. */
   line_count_exact: boolean;
+  /** When true, content is only the first N lines/bytes of a larger file. */
+  truncated: boolean;
+  /** Actual bytes read into content (UTF-8 byte length). */
+  bytes_read: number;
+  /** Total file size in bytes (from fs.stat). */
+  bytes_total: number;
 }
 
 // ==========================================
@@ -73,10 +100,13 @@ export type IconComponent = ComponentType<
   SVGAttributes<SVGSVGElement> & RefAttributes<SVGSVGElement> & { size?: number | string; className?: string }
 >;
 
+export type MentionNodeType = 'file' | 'directory';
+
 /** Shared model for popover items (slash commands, file mentions, skills). */
 export interface PopoverItem {
   label: string;
   value: string;
+  display?: string;
   description?: string;
   descriptionKey?: TranslationKey;
   builtIn?: boolean;
@@ -85,6 +115,9 @@ export interface PopoverItem {
   source?: 'global' | 'project' | 'plugin' | 'installed' | 'sdk';
   kind?: SkillKind;
   icon?: IconComponent;
+  nodeType?: MentionNodeType;
+  /** Skill body content for agent_skill kind — used to inject into system prompt */
+  content?: string;
 }
 
 /** Which popover is currently active in the command input. */
@@ -97,6 +130,8 @@ export interface CommandBadge {
   description: string;
   kind: SkillKind;
   installedSource?: 'agents' | 'claude';
+  /** Skill body content — used to inject into system prompt when dispatched */
+  content?: string;
 }
 
 /** Active CLI tool badge shown above the textarea. */
@@ -138,6 +173,15 @@ export interface Message {
   created_at: string;
   token_usage: string | null; // JSON string of TokenUsage
   is_heartbeat_ack?: number; // 1 = heartbeat ack (prunable from transcript), 0 = normal
+  /**
+   * SQLite rowid, monotonically increasing per insert — used as the compact
+   * coverage boundary (see `context_summary_boundary_rowid`). Populated by
+   * `getMessages()` which does `SELECT *, rowid as _rowid`. Optional here
+   * because some code paths synthesize Message-like objects without DB origin.
+   */
+  _rowid?: number;
+  referenced_contexts?: string; // JSON string of string[]
+  tool_files?: string; // JSON string of string[]
 }
 
 // Media content block (MCP-compatible: image/audio/video in tool results)
@@ -149,13 +193,82 @@ export interface MediaBlock {
   mediaId?: string;     // media_generations.id (after DB save)
 }
 
+export type TimelineStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'retrying' | 'stopped';
+
+export interface TimelineToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt: number | null;
+  result?: string;
+  isError: boolean;
+}
+
+export interface TimelineFileChange {
+  path: string;
+  fileName: string;
+  operation: 'create' | 'edit';
+  addedLines: number;
+  removedLines: number;
+  beforeText: string;
+  afterText: string;
+  diffText: string;
+}
+
+export type TimelineEvent =
+  | { type: 'reasoning'; content: string; timestamp: number }
+  | { type: 'text'; content: string; timestamp: number }
+  | { type: 'tool'; toolCallId: string; timestamp: number };
+
+export interface SubAgentState {
+  id: string;
+  name: string;
+  displayName: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  report?: string;
+  steps?: TimelineStep[];
+  error?: string;
+}
+
+export interface TimelineStep {
+  id: string;
+  index: number;
+  title: string;
+  status: TimelineStepStatus;
+  startedAt: number;
+  completedAt: number | null;
+  reasoning: string;
+  output: string;
+  summary: string;
+  dependencies: string[];
+  toolCalls: TimelineToolCall[];
+  fileChanges: TimelineFileChange[];
+  events?: TimelineEvent[];
+  usage: TokenUsage | null;
+  error: string | null;
+  retryCount: number;
+  model?: string;
+  agent?: string;
+  providerId?: string;
+  providerName?: string;
+  requestedAgent?: string;
+  orchestrationProfileName?: string;
+  subAgents?: SubAgentState[];
+}
+
 // Structured message content blocks (stored as JSON in messages.content)
 export type MessageContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'thinking'; thinking: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'thinking'; thinking: string; model?: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown; model?: string }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; media?: MediaBlock[] }
-  | { type: 'code'; language: string; code: string };
+  | { type: 'timeline'; steps: TimelineStep[] }
+  | { type: 'code'; language: string; code: string }
+  | { type: 'sub_agents'; subAgents: any[] };
 
 // Helper to parse message content - returns blocks or wraps plain text
 export function parseMessageContent(content: string): MessageContentBlock[] {
@@ -183,7 +296,7 @@ export interface ApiProvider {
   name: string;
   provider_type: string; // legacy: 'anthropic' | 'openrouter' | 'bedrock' | 'vertex' | 'custom'
   /** Wire protocol — new field, takes precedence over provider_type for dispatch */
-  protocol: string; // 'anthropic' | 'openai-compatible' | 'openrouter' | 'bedrock' | 'vertex' | 'google' | 'gemini-image'
+  protocol: string; // 'anthropic' | 'openai-compatible' | 'openrouter' | 'bedrock' | 'vertex' | 'google' | 'gemini-image' | 'openai-image'
   base_url: string;
   api_key: string;
   is_active: number; // SQLite boolean: 0 or 1
@@ -206,6 +319,7 @@ export interface ProviderModelGroup {
   provider_id: string;       // provider DB id, or 'env' for environment variables
   provider_name: string;
   provider_type: string;
+  protocol?: string;
   /** True if this provider only supports Claude Code SDK wire protocol, not standard Messages API */
   sdkProxyOnly?: boolean;
   models: Array<{
@@ -267,15 +381,20 @@ export interface UpdateProviderRequest {
 /** Provider options stored in options_json (per-provider) or settings (global) */
 export interface ProviderOptions {
   thinking_mode?: 'adaptive' | 'enabled' | 'disabled';
+  reasoning_effort?: 'min' | 'low' | 'medium' | 'high' | 'max';
   context_1m?: boolean;
+  media_protocol?: "custom-image" | "openai-images";
+  media_endpoint?: string;
+  /** How this provider's models accept image input when no model-level catalog entry applies. */
+  image_input_support?: 'auto' | 'supported' | 'unsupported';
+  /** A vision-capable provider used to transcribe images for text-only models. */
+  ocr_provider_id?: string;
+  /** The vision-capable model to use with ocr_provider_id. */
+  ocr_model?: string;
   /** Global default model ID — used for new sessions */
   default_model?: string;
   /** Global default model's provider ID — which provider the default model belongs to */
   default_model_provider?: string;
-  /** Image relay request protocol for generic media providers */
-  media_protocol?: 'custom-image' | 'openai-images';
-  /** Image relay endpoint path or absolute URL */
-  media_endpoint?: string;
 }
 
 export interface ProvidersResponse {
@@ -295,10 +414,17 @@ export interface TokenUsage {
   output_tokens: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  context_input_tokens?: number;
+  /** Cache read/write of the LAST request only — display-scale companion to
+   *  context_input_tokens. The cumulative cache_read_input_tokens /
+   *  cache_creation_input_tokens above stay cumulative for cost accounting. */
+  context_cache_read_tokens?: number;
+  context_cache_creation_tokens?: number;
+  /** SDK-authoritative context window (SDKResultMessage.modelUsage[model].contextWindow).
+   *  Absent when the SDK omits modelUsage or the provider doesn't report one. */
+  context_window?: number;
   cost_usd?: number;
 }
-
-export type ReplyMode = 'fast' | 'smart' | 'deep';
 
 // ==========================================
 // API Request Types
@@ -312,6 +438,9 @@ export interface CreateSessionRequest {
   mode?: string;
   provider_id?: string;
   permission_profile?: string;
+  team_mode?: 'off' | 'on' | 'auto';
+  orchestration_tier?: 'single' | 'multi';
+  orchestration_profile_id?: string;
 }
 
 export interface SendMessageRequest {
@@ -320,7 +449,8 @@ export interface SendMessageRequest {
   model?: string;
   mode?: string;
   provider_id?: string;
-  reply_mode?: ReplyMode;
+  client_message_id?: string;
+  mentions?: MentionRef[];
 }
 
 export interface UpdateMCPConfigRequest {
@@ -377,13 +507,10 @@ export interface MarketplaceSkill {
   id: string;
   skillId: string;      // e.g. "git-commit"
   name: string;
-  description?: string;
   installs: number;
   source: string;       // e.g. "owner/repo"
   isInstalled?: boolean;
   installedAt?: string;
-  rating?: number;
-  tags?: string[];
 }
 
 export interface SkillLockFile {
@@ -436,6 +563,10 @@ export interface SuccessResponse {
 
 export interface ErrorResponse {
   error: string;
+  /** Machine-readable error code for client-side branching */
+  code?: string;
+  /** Extra recovery hints surfaced in UI */
+  initialCard?: string;
 }
 
 export interface SettingsResponse {
@@ -481,17 +612,45 @@ export interface SkillResponse {
   skill: SkillDefinition;
 }
 
+export type SubAgentSource =
+  | 'omc_plugin'
+  | 'sdk_agent_tool'
+  | 'native_agent_tool'
+  | 'native_team_runner'
+  | 'unknown';
+
+export interface SubAgentInfo {
+  id: string;
+  name: string;
+  displayName: string;
+  prompt: string;
+  status: 'running' | 'completed' | 'error';
+  report?: string;
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+  progress?: string;
+  model?: string;
+  source?: SubAgentSource;
+  // 中文注释：功能名称「子Agent工具调用归属」，用法是存储归属于该子Agent的工具调用，
+  // 用于在子Agent卡片内渲染独立的子时间线，避免污染主时间线。
+  toolCalls?: Array<{ id: string; name: string; input: unknown; result?: string; isError?: boolean }>;
+  timelineSteps?: TimelineStep[];
+}
+
 // ==========================================
 // SSE Event Types (streaming chat response)
 // ==========================================
 
 export type SSEEventType =
   | 'text'               // text content delta
+  | 'user_message_ack'   // persisted user message acknowledgment
   | 'thinking'           // extended thinking content delta
   | 'tool_use'           // tool invocation info
   | 'tool_result'        // tool execution result
   | 'tool_output'        // streaming tool output (stderr from SDK process)
   | 'tool_timeout'       // tool execution timed out
+  | 'tool_files'         // files referenced by tool calls
   | 'status'             // status update (compacting, etc.)
   | 'result'             // final result with usage stats
   | 'error'              // error occurred
@@ -500,11 +659,48 @@ export type SSEEventType =
   | 'task_update'        // SDK TodoWrite task sync
   | 'keep_alive'         // SDK keep-alive heartbeat (resets idle timer)
   | 'rewind_point'       // SDK user message with rewind checkpoint
+  | 'rate_limit'         // SDK 0.2.111 subscription rate-limit telemetry
+  | 'context_usage'      // SDK 0.2.111 post-turn context usage snapshot
+  | 'referenced_contexts' // files referenced in system prompt
+  | 'subagent_start'     // sub-agent started
+  | 'subagent_complete'  // sub-agent completed
+  | 'subagent_progress'  // sub-agent progress update
+  | 'terminal_mirror'    // terminal output mirror
+  | 'open-browser-panel' // 中文注释：功能名称「浏览器面板打开事件」，用法是通知前端打开内置浏览器面板
+  | 'timeline'           // agent timeline update
+  | 'aborted'            // stream aborted
   | 'done';              // stream complete
 
 export interface SSEEvent {
   type: SSEEventType;
   data: string;
+  /** 当此事件属于子Agent时，标记父Agent的ID */
+  parentAgentId?: string;
+}
+
+// 中文注释：功能名称「提示词规则来源元数据」，用法是标记本轮系统提示里实际注入的规则/索引/技能目录来源，
+// 供前端状态栏和诊断界面区分“已发现”和“本轮已注入”。
+export type PromptInstructionLevel = 'global' | 'personal' | 'user' | 'project' | 'workspace' | 'parent';
+export type PromptInstructionCategory = 'hard_rule' | 'repo_instruction' | 'index_doc' | 'skill_catalog' | 'workspace_hint' | 'environment' | 'knowledge_base' | 'widget_prompt' | 'session_prompt' | 'workspace_identity' | 'memory';
+
+export interface PromptInstructionSourceMeta {
+  filename: string;
+  level: PromptInstructionLevel;
+  category: PromptInstructionCategory;
+  filePath?: string;
+}
+
+// 中文注释：功能名称「Claude Code 初始化元数据」，用法是承接 system/init 返回的
+// tools、skills、plugins、MCP 等能力快照，供输入框、状态栏与诊断界面共用。
+export interface ClaudeInitMeta {
+  tools?: unknown;
+  slash_commands?: unknown;
+  skills?: unknown;
+  agents?: unknown;
+  plugins?: Array<{ name: string; path: string }>;
+  mcp_servers?: unknown;
+  output_style?: string;
+  instruction_sources?: PromptInstructionSourceMeta[];
 }
 
 // ==========================================
@@ -634,6 +830,11 @@ export interface AssistantWorkspaceState {
     hatchedAt: string;
     buddyName?: string;
   };
+  includeAgentsMd?: boolean;
+  includeClaudeMd?: boolean;
+  enableAgentsSkills?: boolean;
+  syncProjectRules?: boolean;
+  knowledgeBaseEnabled?: boolean;
 }
 
 export interface AssistantWorkspaceFiles {
@@ -766,6 +967,16 @@ export interface ReferenceImage {
   mimeType: string;
   data?: string;       // base64 (user upload)
   localPath?: string;  // file path (generated result)
+}
+
+export interface MentionRef {
+  path: string;
+  nodeType: MentionNodeType;
+  display: string;
+  sourceRange: {
+    start: number;
+    end: number;
+  };
 }
 
 // ==========================================
@@ -960,6 +1171,8 @@ export interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  /** 当此工具调用属于子Agent时，标记父Agent的ID */
+  parentAgentId?: string;
 }
 
 export interface ToolResultInfo {
@@ -967,9 +1180,11 @@ export interface ToolResultInfo {
   content: string;
   is_error?: boolean;
   media?: MediaBlock[];
+  /** 当此工具结果属于子Agent时，标记父Agent的ID */
+  parentAgentId?: string;
 }
 
-export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped';
+export type StreamPhase = 'active' | 'completed' | 'error' | 'stopped' | 'aborted';
 
 export interface SessionStreamSnapshot {
   sessionId: string;
@@ -980,6 +1195,7 @@ export interface SessionStreamSnapshot {
   toolResults: ToolResultInfo[];
   streamingToolOutput: string;
   statusText: string | undefined;
+  statusPayload?: Record<string, any>;
   pendingPermission: PermissionRequestEvent | null;
   permissionResolved: 'allow' | 'deny' | null;
   tokenUsage: TokenUsage | null;
@@ -988,6 +1204,51 @@ export interface SessionStreamSnapshot {
   error: string | null;
   /** Final message content built at stream completion for ChatView to consume */
   finalMessageContent: string | null;
+  /**
+   * Optional terminal reason emitted by SDK 0.2.111 on SDKResultMessage.
+   * Used by ChatView to render a contextual end-of-turn chip (Phase 1 of
+   * agent-sdk-0-2-111-adoption). Absent for error paths without a result
+   * message — those continue to flow through error-classifier.ts.
+   */
+  terminalReason?: string;
+  /** Files referenced in the system prompt for this turn */
+  referencedContexts?: string[];
+  /** Structured rule/index sources actually injected into this turn's system prompt */
+  instructionSources?: PromptInstructionSourceMeta[];
+  /** Files read/written by tool calls during this session (for context stats) */
+  toolFiles?: string[];
+  /** Active sub-agents being tracked for nested timeline display */
+  subAgents?: SubAgentInfo[];
+  /**
+   * SDK 0.2.111 subscription rate-limit telemetry (Phase 2 of
+   * agent-sdk-0-2-111-adoption). Populated from rate_limit_event
+   * stream messages; only present on claude.ai subscription paths.
+   * ChatView consumes this to render warning / rejected UIs.
+   */
+  rateLimitInfo?: {
+    status: 'allowed' | 'allowed_warning' | 'rejected';
+    resetsAt?: number;
+    rateLimitType?: 'five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet' | 'overage';
+    utilization?: number;
+    overageStatus?: 'allowed' | 'allowed_warning' | 'rejected';
+    overageResetsAt?: number;
+    overageDisabledReason?: string;
+    isUsingOverage?: boolean;
+  };
+  /**
+   * Post-turn context-usage snapshot captured via Query.getContextUsage()
+   * (SDK 0.2.111 Phase 5). Consumers should treat this as authoritative
+   * for ~60s after capturedAt, then fall back to the char-based estimator.
+   */
+  contextUsageSnapshot?: {
+    totalTokens: number;
+    maxTokens: number;
+    rawMaxTokens: number;
+    percentage: number;
+    model: string;
+    /** Epoch ms at which the snapshot was taken */
+    capturedAt: number;
+  };
 }
 
 export interface StreamEvent {
@@ -997,6 +1258,22 @@ export interface StreamEvent {
 }
 
 export type StreamEventListener = (event: StreamEvent) => void;
+
+/**
+ * One history row passed via ClaudeStreamOptions.conversationHistory.
+ *
+ * `_rowid` is the SQLite rowid of the original DB row, propagated so that
+ * reactive compact (claude-client.ts) can write a correct
+ * context_summary_boundary_rowid on CONTEXT_TOO_LONG retry. Synthesized /
+ * non-DB-origin rows may omit it — callers that only have {role, content}
+ * pairs (e.g. bridge transports, fallback paths) don't need to fabricate a
+ * rowid; the boundary helper falls back to the existing session boundary.
+ */
+export type ConversationHistoryItem = {
+  role: 'user' | 'assistant';
+  content: string;
+  _rowid?: number;
+};
 
 export interface ClaudeStreamOptions {
   prompt: string;
@@ -1017,9 +1294,13 @@ export interface ClaudeStreamOptions {
   /** Session's stored provider ID — passed to resolveForClaudeCode */
   sessionProviderId?: string;
   /** Recent conversation history from DB — used as fallback context when SDK resume is unavailable or fails */
-  conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  conversationHistory?: ConversationHistoryItem[];
   /** Compressed session summary — used as context skeleton in fallback mode */
   sessionSummary?: string;
+  /** Existing compact coverage boundary (rowid). Reactive compact preserves this
+   *  rather than resetting to 0 when it cannot derive a new boundary from _rowid
+   *  metadata in conversationHistory. */
+  sessionSummaryBoundaryRowid?: number;
   /** Token budget for fallback history — messages beyond this budget are truncated */
   fallbackTokenBudget?: number;
   onRuntimeStatusChange?: (status: string) => void;
@@ -1027,8 +1308,8 @@ export interface ClaudeStreamOptions {
   bypassPermissions?: boolean;
   /** Thinking configuration for the query */
   thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
-  /** Effort level for the query */
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  /** Effort level for the query (Opus 4.7 adds 'xhigh') */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Output format for structured responses */
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
   /** Custom agent definitions */
@@ -1043,6 +1324,10 @@ export interface ClaudeStreamOptions {
   context1m?: boolean;
   /** Enable generative UI widget guidelines MCP server (default: true) */
   generativeUI?: boolean;
+  /** Files referenced in the system prompt for this turn */
+  referencedContexts?: string[];
+  /** Structured instruction sources actually injected into this turn */
+  instructionSources?: PromptInstructionSourceMeta[];
 }
 
 // ==========================================
@@ -1158,6 +1443,8 @@ export interface GitChangedFile {
   path: string;
   status: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked';
   staged: boolean;
+  additions?: number;
+  deletions?: number;
 }
 
 export interface GitBranch {
@@ -1165,6 +1452,15 @@ export interface GitBranch {
   isRemote: boolean;
   upstream: string;
   worktreePath: string;
+  lastCommitDate: string;
+  commitSha: string;
+}
+
+export interface GitStashEntry {
+  index: number;
+  message: string;
+  branch: string;
+  timestamp: string;
 }
 
 export interface GitLogEntry {
@@ -1212,9 +1508,41 @@ export interface WeixinContextTokenRecord {
   updatedAt: string;
 }
 
+export interface CustomRule {
+  id: string;
+  type: 'personal' | 'project';
+  name: string;
+  content: string;
+  enabled: boolean;
+  project_ids: string; // JSON string of string[]
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InstructionSource {
+  filename: string;
+  content: string;
+  level: 'global' | 'personal' | 'user' | 'project' | 'workspace' | 'parent';
+}
+
 // ==========================================
 // Scheduled Tasks
 // ==========================================
+
+// 通知渠道类型
+export type NotificationChannel = 'toast' | 'system' | 'telegram' | 'email' | 'session';
+
+// 工具授权类型
+export interface ToolAuthorization {
+  type: 'full_access' | 'web_search' | 'cli_tools' | 'mcp';
+  tool_ids?: string[];
+}
+
+// 会话绑定信息
+export interface SessionBinding {
+  session_id: string;
+  project_name?: string;
+}
 
 export interface ScheduledTask {
   id: string;
@@ -1232,8 +1560,15 @@ export interface ScheduledTask {
   priority: 'low' | 'normal' | 'urgent';
   notify_on_complete: number;
   session_id?: string;
+  notification_channels?: NotificationChannel[];
+  session_binding?: SessionBinding;
+  tool_authorization?: ToolAuthorization;
   working_directory?: string;
   permanent: number;
+  group_id?: string;
+  group_name?: string;
+  active_hours_start?: string;
+  active_hours_end?: string;
   created_at: string;
   updated_at: string;
 }

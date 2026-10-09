@@ -6,6 +6,8 @@ import { loadConfig, shouldIgnore } from '@/lib/workspace-config';
 import { loadTaxonomy, classifyPath } from '@/lib/workspace-taxonomy';
 
 export const INDEX_DIR = '.assistant/index';
+const BACKGROUND_INDEX_MIN_INTERVAL_MS = 30_000;
+const backgroundIndexState = new Map<string, { pending: boolean; lastScheduledAt: number }>();
 
 export function computeFileHash(content: string): string {
   return crypto.createHash('md5').update(content).digest('hex');
@@ -368,6 +370,35 @@ export function indexWorkspace(dir: string, options?: { force?: boolean }): { fi
   }
 
   return { fileCount: manifests.length, chunkCount: allChunks.length };
+}
+
+export function scheduleWorkspaceIndex(dir: string): void {
+  const existing = backgroundIndexState.get(dir);
+  const now = Date.now();
+
+  // 中文注释：功能名称「工作区索引后台调度」，用法是在对话请求中只登记异步索引任务，
+  // 避免当前请求同步等待 indexWorkspace 完成，减少首轮 connected 与首字前的阻塞。
+  if (existing?.pending) return;
+  if (existing && now - existing.lastScheduledAt < BACKGROUND_INDEX_MIN_INTERVAL_MS) return;
+
+  backgroundIndexState.set(dir, { pending: true, lastScheduledAt: now });
+
+  const timer = setTimeout(() => {
+    const startedAt = Date.now();
+    try {
+      indexWorkspace(dir);
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs > 3000) {
+        console.warn(`[workspace-indexer] Background indexing took ${elapsedMs}ms for ${dir}`);
+      }
+    } catch (error) {
+      console.warn('[workspace-indexer] Background indexing failed:', error);
+    } finally {
+      backgroundIndexState.set(dir, { pending: false, lastScheduledAt: Date.now() });
+    }
+  }, 0);
+
+  timer.unref?.();
 }
 
 export function loadManifest(dir: string): ManifestEntry[] {

@@ -98,6 +98,8 @@ export interface ChannelBinding {
   model: string;
   /** Chat mode */
   mode: 'code' | 'plan' | 'ask';
+  /** Per-binding provider override (empty = use global default) */
+  providerId?: string;
   /** Whether this binding is currently active */
   active: boolean;
   createdAt: string;

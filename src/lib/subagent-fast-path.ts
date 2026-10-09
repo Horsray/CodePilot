@@ -1,0 +1,675 @@
+import type { ToolSet } from 'ai';
+import type { MCPServerConfig } from '@/types';
+
+type FastPathKind = 'local_code_search' | 'web_fetch' | 'web_search';
+
+export interface SubAgentFastPathResult {
+  kind: FastPathKind;
+  report: string;
+  cacheHit: boolean;
+}
+
+interface FastPathRequest {
+  kind: FastPathKind;
+  prompt: string;
+  query?: string;
+  url?: string;
+  keywords?: string[];
+  filePatterns?: string[];
+}
+
+interface ExecuteSubAgentFastPathOptions {
+  agentId: string;
+  prompt: string;
+  workingDirectory: string;
+  tools: ToolSet;
+  abortSignal?: AbortSignal;
+  onStage?: (stage: string, detail?: string) => void;
+  onProgress?: (detail: string) => void;
+}
+
+const FAST_PATH_AGENT_IDS = new Set(['explore', 'search', 'document-specialist']);
+const LOCAL_CODE_SIGNALS = [
+  '代码库',
+  '项目中搜索',
+  '在 /',
+  'working directory',
+  'repo',
+  'repository',
+  '文件路径',
+  '代码片段',
+  '关键字',
+  '关键词',
+  '出现在哪些文件',
+  '在哪个文件',
+  '哪个文件',
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+];
+const LOCAL_LOOKUP_INTENT_SIGNALS = [
+  '搜索',
+  '查找',
+  '找出',
+  '搜',
+  'grep',
+  'glob',
+  'find',
+  'search',
+  'lookup',
+  '出现在哪些文件',
+  '在哪些文件',
+  '在哪个文件',
+  '哪个文件',
+  '文件路径',
+  '代码片段',
+  '关键字',
+  '关键词',
+  '匹配',
+  '列出',
+];
+const LOCAL_ANALYSIS_BLOCKING_SIGNALS = [
+  '分析',
+  '测试',
+  '验证',
+  'schema',
+  '表结构',
+  '表定义',
+  '数据库',
+  '设计',
+  '架构',
+  '原因',
+  '根因',
+  '报告',
+  '总结',
+  '可用性',
+  '响应时间',
+  '性能基准',
+  'benchmark',
+  'available',
+  'availability',
+  'analyze',
+  'analysis',
+  'design',
+  'architecture',
+  'database',
+  'report',
+  'summarize',
+  'verify',
+];
+const EXTERNAL_RESEARCH_SIGNALS = [
+  '联网',
+  '互联网',
+  'web',
+  '官网',
+  '官方文档',
+  '最新',
+  'news',
+  'google',
+  'bing',
+  'openai',
+  'anthropic',
+];
+const WEB_QUERY_SIGNALS = [
+  '联网',
+  '网页',
+  '网站',
+  '官网',
+  '官方文档',
+  'web',
+  'url',
+  'http://',
+  'https://',
+  'latest',
+  '最新',
+  '查一下',
+  '搜一下',
+  '搜索',
+];
+const COMPLEXITY_SIGNALS = [
+  '对比',
+  '比较',
+  '分析',
+  '架构',
+  '设计',
+  '方案',
+  '调研',
+  '写代码',
+  '实现',
+  '修复',
+  '多步骤',
+  '多个步骤',
+  '总结',
+];
+const FILE_PATTERN_RE = /\b(?:[\w.-]+\/)*[\w.*-]+\.[A-Za-z0-9*]{1,8}\b/g;
+const URL_RE = /https?:\/\/[^\s"'`<>]+/i;
+const FAST_PATH_CACHE_TTL_MS = 15_000;
+
+const fastPathCache = new Map<string, { expiresAt: number; result: SubAgentFastPathResult }>();
+const inFlightFastPaths = new Map<string, Promise<SubAgentFastPathResult | null>>();
+
+export function isSimpleWebLookupTask(prompt: string): boolean {
+  if (isLocalCodeSearchTask(prompt)) return false;
+  if (URL_RE.test(prompt)) return true;
+
+  const normalized = prompt.toLowerCase();
+  const webHits = WEB_QUERY_SIGNALS.filter((signal) => normalized.includes(signal.toLowerCase())).length;
+  const complexHits = COMPLEXITY_SIGNALS.filter((signal) => normalized.includes(signal.toLowerCase())).length;
+
+  return webHits > 0 && complexHits <= 1 && prompt.length <= 220;
+}
+
+function isLocalCodeSearchTask(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const localHits = LOCAL_CODE_SIGNALS.filter((signal) => normalized.includes(signal.toLowerCase())).length;
+  const externalHits = EXTERNAL_RESEARCH_SIGNALS.filter((signal) => normalized.includes(signal.toLowerCase())).length;
+  return localHits > 0 && externalHits === 0;
+}
+
+export function isSimpleLocalLookupTask(prompt: string): boolean {
+  if (!isLocalCodeSearchTask(prompt)) return false;
+
+  const normalized = prompt.toLowerCase();
+  const hasLookupIntent = LOCAL_LOOKUP_INTENT_SIGNALS.some((signal) =>
+    normalized.includes(signal.toLowerCase()),
+  );
+  if (!hasLookupIntent) return false;
+
+  const hasAnalysisIntent = LOCAL_ANALYSIS_BLOCKING_SIGNALS.some((signal) =>
+    normalized.includes(signal.toLowerCase()),
+  );
+  return !hasAnalysisIntent;
+}
+
+export async function tryExecuteSubAgentFastPath(
+  options: ExecuteSubAgentFastPathOptions,
+): Promise<SubAgentFastPathResult | null> {
+  const request = detectFastPathRequest(options.agentId, options.prompt);
+  if (!request) return null;
+
+  const cacheKey = `${request.kind}:${options.workingDirectory}:${request.query || request.url || options.prompt}`;
+  const now = Date.now();
+  const cached = fastPathCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    options.onStage?.('命中快速缓存', `复用最近一次 ${describeFastPath(request.kind)} 结果`);
+    return { ...cached.result, cacheHit: true };
+  }
+
+  const existing = inFlightFastPaths.get(cacheKey);
+  if (existing) {
+    options.onStage?.('等待同类检索结果', '复用并发中的相同子任务');
+    const shared = await existing;
+    if (!shared) return null;
+    return { ...shared, cacheHit: true };
+  }
+
+  const promise = executeFastPathRequest(options, request)
+    .then((result) => {
+      if (result) {
+        fastPathCache.set(cacheKey, {
+          expiresAt: Date.now() + FAST_PATH_CACHE_TTL_MS,
+          result,
+        });
+      }
+      return result;
+    })
+    .finally(() => {
+      inFlightFastPaths.delete(cacheKey);
+    });
+
+  inFlightFastPaths.set(cacheKey, promise);
+  return promise;
+}
+
+function detectFastPathRequest(agentId: string, prompt: string): FastPathRequest | null {
+  if (!FAST_PATH_AGENT_IDS.has(agentId)) return null;
+
+  if (isSimpleLocalLookupTask(prompt)) {
+    const keywords = extractKeywords(prompt);
+    const filePatterns = extractFilePatterns(prompt);
+    if (keywords.length === 0 && filePatterns.length === 0) {
+      return null;
+    }
+    return {
+      kind: 'local_code_search',
+      prompt,
+      keywords,
+      filePatterns,
+    };
+  }
+
+  if (!isSimpleWebLookupTask(prompt)) return null;
+
+  const url = extractUrl(prompt);
+  if (url) {
+    return { kind: 'web_fetch', prompt, url };
+  }
+
+  const query = normalizeWebQuery(prompt);
+  if (!query) return null;
+
+  return {
+    kind: 'web_search',
+    prompt,
+    query,
+  };
+}
+
+async function executeFastPathRequest(
+  options: ExecuteSubAgentFastPathOptions,
+  request: FastPathRequest,
+): Promise<SubAgentFastPathResult | null> {
+  switch (request.kind) {
+    case 'local_code_search':
+      return executeLocalCodeSearch(options, request);
+    case 'web_fetch':
+      return executeWebFetch(options, request);
+    case 'web_search':
+      return executeWebSearch(options, request);
+    default:
+      return null;
+  }
+}
+
+async function executeLocalCodeSearch(
+  options: ExecuteSubAgentFastPathOptions,
+  request: FastPathRequest,
+): Promise<SubAgentFastPathResult | null> {
+  const grepTool = getTool(options.tools, ['Grep']);
+  const globTool = getTool(options.tools, ['Glob']);
+  const readTool = getTool(options.tools, ['Read']);
+
+  if (!grepTool && !globTool) return null;
+
+  const keywordReports: string[] = [];
+  const snippetReports: string[] = [];
+  const seenSnippetKeys = new Set<string>();
+  const fileReports: string[] = [];
+
+  if (request.filePatterns && request.filePatterns.length > 0 && globTool) {
+    options.onStage?.('执行快速文件检索', request.filePatterns.join(', '));
+    options.onProgress?.(`工具调用: Glob\n输入: ${request.filePatterns.slice(0, 3).join(', ')}\n`);
+    for (const rawPattern of request.filePatterns.slice(0, 3)) {
+      const pattern = toGlobPattern(rawPattern);
+      const output = await invokeTool(globTool, { pattern }, options.abortSignal);
+      const files = normalizeLines(output).slice(0, 12);
+      if (files.length > 0) {
+        fileReports.push(`- ${rawPattern}: ${files.join(', ')}`);
+      }
+    }
+  }
+
+  if (request.keywords && request.keywords.length > 0 && grepTool) {
+    for (const keyword of request.keywords.slice(0, 3)) {
+      options.onStage?.('执行快速关键词检索', keyword);
+      options.onProgress?.(`工具调用: Grep\n输入: ${keyword}\n`);
+      const output = await invokeTool(
+        grepTool,
+        {
+          pattern: escapeRegex(keyword),
+          path: options.workingDirectory,
+          max_results: 12,
+        },
+        options.abortSignal,
+      );
+      const matches = parseGrepMatches(output).slice(0, 8);
+      if (matches.length === 0) continue;
+
+      const uniqueFiles = [...new Set(matches.map((match) => match.file))];
+      keywordReports.push(`- "${keyword}": ${uniqueFiles.join(', ')}`);
+
+      if (readTool) {
+        for (const match of matches.slice(0, 4)) {
+          const snippetKey = `${match.file}:${match.line}`;
+          if (seenSnippetKeys.has(snippetKey)) continue;
+          seenSnippetKeys.add(snippetKey);
+          const snippet = await invokeTool(
+            readTool,
+            {
+              file_path: normalizeToolFilePath(match.file, options.workingDirectory),
+              offset: Math.max(match.line - 3, 0),
+              limit: 6,
+            },
+            options.abortSignal,
+          );
+          if (typeof snippet === 'string' && !snippet.startsWith('Error:')) {
+            options.onProgress?.(`工具调用: Read\n输入: ${match.file}:${match.line}\n`);
+            snippetReports.push(`- ${match.file}:${match.line}\n${snippet}`);
+          }
+        }
+      }
+    }
+  }
+
+  if (fileReports.length === 0 && keywordReports.length === 0 && snippetReports.length === 0) {
+    return {
+      kind: 'local_code_search',
+      cacheHit: false,
+      report: [
+        `任务目标:\n${request.prompt}`,
+        '思考过程:\n识别为简单本地代码检索任务，直接调用本地检索工具，跳过模型循环。',
+        '工具调用:\nGrep / Glob / Read',
+        '结论:\n未找到与该检索任务相关的结果。',
+      ].join('\n\n'),
+    };
+  }
+
+  const sections: string[] = [
+    `任务目标:\n${request.prompt}`,
+    '思考过程:\n识别为简单本地代码检索任务，直接调用本地检索工具，跳过模型循环。',
+    '工具调用:\nGrep / Glob / Read',
+  ];
+  if (fileReports.length > 0) {
+    sections.push(`文件命中:\n${fileReports.join('\n')}`);
+  }
+  if (keywordReports.length > 0) {
+    sections.push(`关键词命中:\n${keywordReports.join('\n')}`);
+  }
+  if (snippetReports.length > 0) {
+    sections.push(`关键片段:\n${snippetReports.join('\n\n')}`);
+  }
+  sections.push('结论:\n已完成本地代码检索，以上是命中的文件路径和关键代码片段。');
+
+  return {
+    kind: 'local_code_search',
+    cacheHit: false,
+    report: sections.join('\n\n'),
+  };
+}
+
+async function executeWebFetch(
+  options: ExecuteSubAgentFastPathOptions,
+  request: FastPathRequest,
+): Promise<SubAgentFastPathResult | null> {
+  const url = request.url;
+  if (!url) return null;
+
+  options.onStage?.('抓取网页内容', url);
+  options.onProgress?.(`工具调用: WebFetch\n输入: ${url}\n`);
+
+  const fetchTool = getTool(options.tools, [
+    'webfetch__fetch_fetch_readable',
+    'mcp__fetch__fetch_readable',
+    'mcp__fetch__fetch_html',
+  ]) || await getActivatedMcpTool(
+    options.workingDirectory,
+    [
+      'webfetch__fetch_fetch_readable',
+      'mcp__fetch__fetch_readable',
+      'mcp__fetch__fetch_html',
+    ],
+    ['fetch', 'webfetch'],
+  );
+
+  let output: string | null = null;
+  if (fetchTool) {
+    output = await tryInvokeToolVariants(
+      fetchTool,
+      [
+        { url },
+        { url, max_length: 12000 },
+        { url, maxLength: 12000 },
+      ],
+      options.abortSignal,
+    );
+  }
+
+  if (!output) {
+    output = await fetchUrlDirectly(url, options.abortSignal);
+  }
+
+  if (!output) return null;
+
+  return {
+    kind: 'web_fetch',
+    cacheHit: false,
+    report: [
+      `任务目标:\n${request.prompt}`,
+      '思考过程:\n识别为简单网页抓取任务，直接调用网页抓取工具，跳过模型循环。',
+      `工具调用:\nWebFetch\nURL: ${url}`,
+      `工具结果:\n${trimOutput(output, 6000)}`,
+      '结论:\n已完成网页内容抓取。',
+    ].join('\n\n'),
+  };
+}
+
+async function executeWebSearch(
+  options: ExecuteSubAgentFastPathOptions,
+  request: FastPathRequest,
+): Promise<SubAgentFastPathResult | null> {
+  const query = request.query;
+  if (!query) return null;
+
+  options.onStage?.('执行快速网页搜索', query);
+  options.onProgress?.(`工具调用: WebSearch\n输入: ${query}\n`);
+
+  const searchCandidates = [
+    'web_search',
+    'WebSearch',
+    'mcp__MiniMax__web_search',
+    'mcp__bailian-web-search__bailian_web_search',
+  ];
+  const searchTool = getTool(options.tools, searchCandidates) || await getActivatedMcpTool(
+    options.workingDirectory,
+    searchCandidates,
+    ['WebSearch', 'web-search', 'bailian-web-search', 'MiniMax', 'minimax'],
+  );
+
+  if (!searchTool) return null;
+
+  const output = await tryInvokeToolVariants(
+    searchTool,
+    [
+      { query, max_results: 5 },
+      { query, count: 5 },
+      { query },
+      { q: query, count: 5 },
+      { q: query },
+      { keyword: query },
+    ],
+    options.abortSignal,
+  );
+
+  if (!output) return null;
+
+  return {
+    kind: 'web_search',
+    cacheHit: false,
+    report: [
+      `任务目标:\n${request.prompt}`,
+      '思考过程:\n识别为简单网页搜索任务，直接调用搜索工具，跳过模型循环。',
+      `工具调用:\nWebSearch\nQuery: ${query}`,
+      `工具结果:\n${trimOutput(output, 5000)}`,
+      '结论:\n已完成网页搜索，以上是搜索工具返回的结果。',
+    ].join('\n\n'),
+  };
+}
+
+function getTool(tools: ToolSet, candidates: string[]) {
+  const entries = tools as Record<string, unknown>;
+  for (const name of candidates) {
+    const tool = entries[name];
+    if (tool && typeof tool === 'object' && 'execute' in tool) {
+      return tool as { execute: (input: unknown, options?: { abortSignal?: AbortSignal }) => Promise<unknown> | unknown };
+    }
+  }
+  return null;
+}
+
+async function getActivatedMcpTool(
+  workingDirectory: string,
+  candidates: string[],
+  serverNames: string[],
+) {
+  try {
+    const { loadAllMcpServers } = await import('./mcp-loader');
+    const { syncMcpConnections } = await import('./mcp-connection-manager');
+    const { buildMcpToolSet } = await import('./mcp-tool-adapter');
+    const allServers = loadAllMcpServers(workingDirectory) || {};
+    const requestedServers: Record<string, MCPServerConfig> = {};
+
+    for (const serverName of serverNames) {
+      const config = allServers[serverName];
+      if (config && config.enabled !== false) {
+        requestedServers[serverName] = config;
+      }
+    }
+
+    if (Object.keys(requestedServers).length === 0) return null;
+
+    await syncMcpConnections(requestedServers);
+    return getTool(buildMcpToolSet(candidates), candidates);
+  } catch {
+    return null;
+  }
+}
+
+async function invokeTool(
+  tool: { execute: (input: unknown, options?: { abortSignal?: AbortSignal }) => Promise<unknown> | unknown },
+  input: Record<string, unknown>,
+  abortSignal?: AbortSignal,
+): Promise<string> {
+  const output = await tool.execute(input, { abortSignal });
+  return stringifyToolOutput(output);
+}
+
+async function tryInvokeToolVariants(
+  tool: { execute: (input: unknown, options?: { abortSignal?: AbortSignal }) => Promise<unknown> | unknown },
+  variants: Array<Record<string, unknown>>,
+  abortSignal?: AbortSignal,
+): Promise<string | null> {
+  for (const variant of variants) {
+    try {
+      const output = await invokeTool(tool, variant, abortSignal);
+      if (output && !output.startsWith('Error:')) {
+        return output;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function stringifyToolOutput(output: unknown): string {
+  if (typeof output === 'string') return output;
+  if (output == null) return '[工具执行警告] 工具执行完成但未返回任何内容。可能原因：1) 命令无输出 2) 操作成功但无反馈 3) 工具内部逻辑未返回结果。';
+  try {
+    return JSON.stringify(output);
+  } catch {
+    return String(output);
+  }
+}
+
+function normalizeLines(output: string): string[] {
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('No files found') && !line.startsWith('Error'));
+}
+
+function parseGrepMatches(output: string): Array<{ file: string; line: number; text: string }> {
+  const matches: Array<{ file: string; line: number; text: string }> = [];
+  for (const line of output.split('\n')) {
+    const match = line.match(/^(.+?):(\d+):(.*)$/);
+    if (!match) continue;
+    matches.push({
+      file: match[1],
+      line: Number(match[2]),
+      text: match[3].trim(),
+    });
+  }
+  return matches;
+}
+
+function normalizeToolFilePath(filePath: string, workingDirectory: string): string {
+  if (filePath.startsWith('/')) return filePath;
+  return `${workingDirectory.replace(/\/$/, '')}/${filePath.replace(/^\.\//, '')}`;
+}
+
+function extractKeywords(prompt: string): string[] {
+  const quoted = [...prompt.matchAll(/["“'`](.{1,120}?)["”'`]/g)]
+    .map((match) => match[1].trim())
+    .filter(Boolean);
+  const afterKeywordMatch = prompt.match(/(?:关键字|关键词|keyword)\s*(?:是|为|=|:|：)\s*([^\s，。；,;]+)/i);
+  const beforeKeywordMatch = prompt.match(/([A-Za-z0-9_.$/-]{2,120})\s*(?:关键字|关键词)/i);
+  const inferred = [afterKeywordMatch?.[1], beforeKeywordMatch?.[1]]
+    .map((value) => value?.trim())
+    .filter(Boolean) as string[];
+  return [...new Set([...quoted, ...inferred])].slice(0, 4);
+}
+
+function extractFilePatterns(prompt: string): string[] {
+  return [...new Set((prompt.match(FILE_PATTERN_RE) || []).map((part) => part.trim()))].slice(0, 4);
+}
+
+function toGlobPattern(pattern: string): string {
+  if (pattern.includes('*') || pattern.includes('/')) return pattern;
+  return `**/${pattern}`;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractUrl(prompt: string): string | undefined {
+  return prompt.match(URL_RE)?.[0];
+}
+
+function normalizeWebQuery(prompt: string): string {
+  return prompt
+    .replace(URL_RE, ' ')
+    .replace(/^(请|帮我|麻烦|可以)?\s*(联网)?\s*(查一下|搜一下|搜索|查找|看看|获取)\s*/i, '')
+    .replace(/\s*(并|然后).*/u, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function fetchUrlDirectly(url: string, abortSignal?: AbortSignal): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const linkedSignal = abortSignal;
+
+  const abortForwarder = () => controller.abort();
+  linkedSignal?.addEventListener('abort', abortForwarder, { once: true });
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'user-agent': 'CodePilot-SubAgent-FastPath/1.0',
+      },
+    });
+    const text = await res.text();
+    const normalized = text
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `${res.status} ${res.statusText}\n${normalized}`;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    linkedSignal?.removeEventListener('abort', abortForwarder);
+  }
+}
+
+function trimOutput(output: string, limit: number): string {
+  return output.length > limit ? `${output.slice(0, limit)}...` : output;
+}
+
+function describeFastPath(kind: FastPathKind): string {
+  switch (kind) {
+    case 'local_code_search':
+      return '本地代码检索';
+    case 'web_fetch':
+      return '网页抓取';
+    case 'web_search':
+      return '网页搜索';
+    default:
+      return '快速检索';
+  }
+}

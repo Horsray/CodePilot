@@ -1,54 +1,64 @@
 import { NextResponse } from 'next/server';
 import { getAllProviders, getDefaultProviderId, setDefaultProviderId, getProvider, getModelsForProvider, getSetting } from '@/lib/db';
 import { getContextWindow } from '@/lib/model-context';
-import { getDefaultModelsForProvider, inferProtocolFromLegacy, findPresetForLegacy } from '@/lib/provider-catalog';
-import { readCCSwitchClaudeSettings } from '@/lib/cc-switch';
+import { getDefaultModelsForProvider, getEffectiveProviderProtocol, findPresetForLegacy } from '@/lib/provider-catalog';
 import type { Protocol } from '@/lib/provider-catalog';
 import type { ErrorResponse, ProviderModelGroup } from '@/types';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import { getOAuthStatus } from '@/lib/openai-oauth-manager';
 
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-
-// Default Claude model options (for the built-in 'env' provider)
-const DEFAULT_MODELS = [
-  { value: 'sonnet', label: 'Sonnet 4.6' },
-  { value: 'opus', label: 'Opus 4.6' },
-  { value: 'haiku', label: 'Haiku 4.5' },
+// OpenAI models available through ChatGPT Plus/Pro OAuth (Codex API)
+// Reasoning effort defaults to 'medium' server-side (not user-configurable)
+const OPENAI_OAUTH_MODELS = [
+  { value: 'gpt-5.5', label: 'GPT-5.5' },
+  { value: 'gpt-5.4', label: 'GPT-5.4' },
+  { value: 'gpt-5.4-mini', label: 'GPT-5.4-Mini' },
+  { value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' },
+  { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark' },
 ];
 
-// CC-Switch model mapping
-interface CCSwitchMapping {
-  sonnet?: string;
-  opus?: string;
-  haiku?: string;
-  default?: string;
-}
+// Default Claude model options (for the built-in 'env' provider).
+// Capability metadata ensures `xhigh` appears in the effort dropdown even
+// before SDK capability discovery populates getCachedModels('env').
+// upstreamModelId mirrors provider-resolver.ts's envModels table so the
+// chat-page context indicator can resolve alias-specific windows
+// (env Opus alias = claude-opus-4-7 = 1M, vs Bedrock/Vertex opus = 200K).
+const DEFAULT_MODELS = [
+  {
+    value: 'sonnet',
+    label: 'Sonnet 4.6',
+    description: 'Most efficient for everyday tasks',
+    upstreamModelId: 'claude-sonnet-4-20250514',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+    supportsAdaptiveThinking: true,
+  },
+  {
+    value: 'opus',
+    label: 'Opus 4.7',
+    description: 'Most capable for ambitious work',
+    upstreamModelId: 'claude-opus-4-7',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsAdaptiveThinking: true,
+  },
+  {
+    value: 'haiku',
+    label: 'Haiku 4.5',
+    description: 'Fastest for quick answers',
+    upstreamModelId: 'claude-haiku-4-5-20251001',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high'],
+  },
+];
 
-function getCCSwitchModelMapping(): CCSwitchMapping | null {
-  if (getSetting('cc_switch_enabled') !== 'true') return null;
-  const settings = readCCSwitchClaudeSettings();
-  if (!settings) return null;
-  
-  // Read the raw settings.json to get the actual model names
-  try {
-    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-    const content = fs.readFileSync(settingsPath, 'utf-8');
-    const rawSettings = JSON.parse(content);
-    const env = rawSettings.env || {};
-    
-    return {
-      sonnet: env.ANTHROPIC_DEFAULT_SONNET_MODEL,
-      opus: env.ANTHROPIC_DEFAULT_OPUS_MODEL,
-      haiku: env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
-      default: env.ANTHROPIC_MODEL,
-    };
-  } catch {
-    return null;
-  }
-}
+// Short alias → upstream ID map for cached SDK models that may only
+// return bare aliases (sonnet/opus/haiku). Mirrors the env provider's
+// alias table in provider-resolver.ts.
+const ENV_ALIAS_TO_UPSTREAM: Record<string, string> = {
+  sonnet: 'claude-sonnet-4-20250514',
+  opus: 'claude-opus-4-7',
+  haiku: 'claude-haiku-4-5-20251001',
+};
 
 interface ModelEntry {
   value: string;
@@ -74,104 +84,111 @@ function deduplicateModels(models: ModelEntry[]): ModelEntry[] {
 }
 
 /** Media-only provider protocols — skip in chat model selector */
-const MEDIA_PROTOCOLS = new Set<string>(['gemini-image']);
-const MEDIA_PROVIDER_TYPES = new Set(['gemini-image']);
+const MEDIA_PROTOCOLS = new Set<string>(['gemini-image', 'openai-image']);
+const MEDIA_PROVIDER_TYPES = new Set(['gemini-image', 'openai-image']);
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const includeMedia = searchParams.get('includeMedia') === 'true';
+
     const providers = getAllProviders();
     const groups: ProviderModelGroup[] = [];
 
-    // Always show the built-in Claude Code provider group.
-    // Mark it as sdkProxyOnly if no direct API credentials exist — in that case
-    // the env provider only works through the Claude Code SDK subprocess, not the
-    // Vercel AI SDK text generation path used by features like AI Describe.
+    // 中文注释：功能名称「Claude Code 模型组固定展示」，用法是在单一路径产品里
+    // 始终返回内置 Claude Code 模型组，不再受历史 cli_enabled 设置或旧回退模式影响。
+    // 当 includeMedia=true 时跳过 env 组（只返回媒体提供商）。
+    if (!includeMedia) {
     const envHasDirectCredentials = !!(
       process.env.ANTHROPIC_API_KEY ||
       process.env.ANTHROPIC_AUTH_TOKEN ||
       getSetting('anthropic_auth_token')
     );
-    
-    // Get cc-switch model mapping
-    const ccSwitchMapping = getCCSwitchModelMapping();
-    
     groups.push({
       provider_id: 'env',
       provider_name: 'Claude Code',
       provider_type: 'anthropic',
       ...(!envHasDirectCredentials ? { sdkProxyOnly: true } : {}),
+      // Use upstreamModelId for context-window lookup so the bare `opus`
+      // alias doesn't get clamped to the 200K Bedrock/Vertex value.
       models: DEFAULT_MODELS.map(m => {
-        const cw = getContextWindow(m.value);
-        // Add cc-switch mapping info to label if available
-        let label = m.label;
-        if (ccSwitchMapping) {
-          const mappedModel = ccSwitchMapping[m.value as keyof CCSwitchMapping];
-          if (mappedModel) {
-            label = `${m.label} → ${mappedModel}`;
-          }
-        }
-        const result: ModelEntry = { ...m, label };
-        if (cw != null) {
-          (result as ModelEntry & { contextWindow: number }).contextWindow = cw;
-        }
-        return result;
+        const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
+        return cw != null ? { ...m, contextWindow: cw } : m;
       }),
     });
 
-    // If SDK has discovered models, only use the mapped models from cc-switch
-    // Skip SDK models to avoid duplicates and confusion
-    try {
-      const { getCachedModels } = await import('@/lib/agent-sdk-capabilities');
-      const sdkModels = getCachedModels('env');
-      if (sdkModels.length > 0) {
-        // Create a map of SDK models by value for quick lookup
-        const sdkModelMap = new Map(sdkModels.map(m => [m.value, m]));
-        
-        // Only show DEFAULT_MODELS with cc-switch mapping, skip all SDK-only models
-        groups[0].models = DEFAULT_MODELS.map(m => {
-          const cw = getContextWindow(m.value);
-          const sdkModel = sdkModelMap.get(m.value);
-          
-          // Add cc-switch mapping info to label if available
-          let label = m.label;
-          if (ccSwitchMapping) {
-            const mappedModel = ccSwitchMapping[m.value as keyof CCSwitchMapping];
-            if (mappedModel) {
-              // Shorten the model name for display
-              const shortName = mappedModel.length > 25 ? mappedModel.slice(0, 22) + '...' : mappedModel;
-              label = `${m.label} → ${shortName}`;
-            }
-          }
-          
-          const result: ModelEntry = {
-            value: m.value,
-            label,
-            ...(sdkModel ? {
-              supportsEffort: sdkModel.supportsEffort,
-              supportedEffortLevels: sdkModel.supportedEffortLevels,
-              supportsAdaptiveThinking: sdkModel.supportsAdaptiveThinking,
-            } : {}),
-            ...(cw != null ? { contextWindow: cw } : {}),
-          };
-          return result;
-        });
+    // If SDK has discovered models, use them for the env group
+    const envGroup = groups.find(g => g.provider_id === 'env');
+    if (envGroup) {
+      try {
+        const { getCachedModels } = await import('@/lib/agent-sdk-capabilities');
+        const sdkModels = getCachedModels('env');
+        if (sdkModels.length > 0) {
+          envGroup.models = sdkModels.map(m => {
+            // SDK sometimes returns short aliases (e.g. 'opus') — map to
+            // the concrete upstream so context window and downstream
+            // sanitizer checks agree with the env provider's resolver.
+            const upstream = ENV_ALIAS_TO_UPSTREAM[m.value];
+            const cw = getContextWindow(m.value, { upstream });
+            return {
+              value: m.value,
+              label: m.displayName,
+              description: m.description,
+              supportsEffort: m.supportsEffort,
+              supportedEffortLevels: m.supportedEffortLevels,
+              supportsAdaptiveThinking: m.supportsAdaptiveThinking,
+              ...(upstream ? { upstreamModelId: upstream } : {}),
+              ...(cw != null ? { contextWindow: cw } : {}),
+            };
+          });
+        }
+      } catch {
+        // SDK capabilities not available, keep defaults
       }
-    } catch {
-      // SDK capabilities not available, keep defaults
     }
+    } // end if (!includeMedia)
 
     // Build a group for each configured provider
     for (const provider of providers) {
       // Determine protocol — use new field if present, otherwise infer from legacy
-      const protocol: Protocol = (provider.protocol as Protocol) ||
-        inferProtocolFromLegacy(provider.provider_type, provider.base_url);
+      const protocol: Protocol = getEffectiveProviderProtocol(
+        provider.provider_type,
+        provider.protocol,
+        provider.base_url,
+      );
 
-      // Skip media-only providers in chat model selector
-      if (MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type)) continue;
+      // Filter by provider category
+      const isMediaProvider = MEDIA_PROTOCOLS.has(protocol) || MEDIA_PROVIDER_TYPES.has(provider.provider_type);
+      if (includeMedia && !isMediaProvider) continue;   // media request → only media providers
+      if (!includeMedia && isMediaProvider) continue;    // chat request → skip media providers
 
       // Get models: DB provider_models first, then catalog defaults, then env fallback
       let rawModels: ModelEntry[];
 
+      // Check for _custom_models in env_overrides_json — if present, use ONLY
+      // those models (user-configured custom-media providers). Skip catalog
+      // defaults and role_models injection to avoid showing hardcoded models
+      // that don't exist on the user's relay platform.
+      let hasCustomModels = false;
+      try {
+        const envObj = JSON.parse(provider.env_overrides_json || '{}');
+        const parsedCustom = typeof envObj._custom_models === 'string' ? JSON.parse(envObj._custom_models) : envObj._custom_models;
+        if (Array.isArray(parsedCustom) && parsedCustom.length > 0) {
+          rawModels = parsedCustom
+            .filter((cm: { modelId?: string }) => cm.modelId)
+            .map((cm: { modelId: string; displayName?: string }) => ({
+              value: cm.modelId,
+              label: cm.displayName || cm.modelId,
+            }));
+          hasCustomModels = true;
+        } else {
+          rawModels = [];
+        }
+      } catch {
+        rawModels = [];
+      }
+
+      if (!hasCustomModels) {
       // 1) Check DB provider_models table
       let dbModels: { value: string; label: string; upstreamModelId?: string; capabilities?: Record<string, unknown> }[] = [];
       try {
@@ -194,7 +211,7 @@ export async function GET() {
       } catch { /* table may not exist in old DBs */ }
 
       // 2) Catalog defaults
-      const catalogModels = getDefaultModelsForProvider(protocol, provider.base_url);
+      const catalogModels = getDefaultModelsForProvider(protocol, provider.base_url, provider.provider_type);
       const catalogRaw = catalogModels.map(m => ({
         value: m.modelId,
         label: m.displayName,
@@ -206,8 +223,31 @@ export async function GET() {
       // If both are empty (e.g. Volcengine where user must specify model names),
       // leave rawModels empty — do NOT fall back to DEFAULT_MODELS (Sonnet/Opus/Haiku).
       if (dbModels.length > 0) {
-        const dbIds = new Set(dbModels.map(m => m.value));
-        rawModels = [...dbModels, ...catalogRaw.filter(m => !dbIds.has(m.value))];
+        // 中文注释：过滤 DB 中的过期别名——如果 DB 模型的 upstreamModelId 与 catalog 中某个条目相同，
+        // 说明它是同一底层模型的旧 ID（如 "mimo-v2.5" 是 "MiMo-V2.5-Pro" 的旧别名）。
+        // 这种情况下用 catalog 的 canonical modelId，避免旧别名污染模型列表。
+        const catalogUpstreamSet = new Set(catalogRaw.filter(m => m.upstreamModelId).map(m => m.upstreamModelId));
+        const filteredDbModels = dbModels.filter(m => {
+          if (m.upstreamModelId && catalogUpstreamSet.has(m.upstreamModelId)) {
+            console.log(`[providers/models] Skipping stale DB model "${m.value}" — upstream "${m.upstreamModelId}" already in catalog`);
+            return false;
+          }
+          return true;
+        });
+
+        const dbIds = new Set(filteredDbModels.map(m => m.value));
+        const catalogById = new Map(catalogRaw.map(m => [m.value, m]));
+        // Merge catalog capabilities into DB models — DB capabilities take
+        // priority for existing keys, catalog fills in missing ones (e.g. a
+        // newly added supportsThinkingToggle). Without this, provider
+        // capabilities added to the catalog never reach the frontend when
+        // the provider_models table already has rows.
+        const enhancedDbModels = filteredDbModels.map(m => {
+          const cat = catalogById.get(m.value);
+          if (!cat?.capabilities) return m;
+          return { ...m, capabilities: { ...(cat.capabilities as Record<string, unknown>), ...(m.capabilities || {}) } };
+        });
+        rawModels = [...enhancedDbModels, ...catalogRaw.filter(m => !dbIds.has(m.value))];
       } else {
         rawModels = [...catalogRaw];
       }
@@ -224,17 +264,26 @@ export async function GET() {
           }
         }
         // Add each role model to the list (default role first, so it appears at the top)
-        for (const entry of roleEntries) {
-          if (!rawModels.some(m => m.value === entry.id || m.upstreamModelId === entry.id)) {
-            const label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
-            rawModels.unshift({ value: entry.id, label });
+      for (const entry of roleEntries) {
+        if (!rawModels.some(m => m.value === entry.id || m.upstreamModelId === entry.id)) {
+          let label = entry.id;
+          if (provider.protocol === 'multi_head') {
+            // For multi_head, entry.id is like "providerId:modelId"
+            // We want to show only the "modelId" part
+            const parts = entry.id.split(':');
+            label = parts.length > 1 ? parts.slice(1).join(':') : entry.id;
+            label = entry.role === 'default' ? label : `${label} (${entry.role})`;
+          } else {
+            label = entry.role === 'default' ? entry.id : `${entry.id} (${entry.role})`;
           }
+          rawModels.unshift({ value: entry.id, label });
         }
+      }
       } catch { /* ignore */ }
 
       // Legacy: inject ANTHROPIC_MODEL from env overrides if not already present
       // Also check upstreamModelId to avoid duplicates (e.g. catalog has modelId='sonnet'
-      // with upstreamModelId='mimo-v2-pro', and env has ANTHROPIC_MODEL='mimo-v2-pro')
+      // with upstreamModelId='mimo-v2.5-pro', and env has ANTHROPIC_MODEL='mimo-v2.5-pro')
       try {
         const envOverrides = provider.env_overrides_json || provider.extra_env || '{}';
         const envObj = JSON.parse(envOverrides);
@@ -242,11 +291,26 @@ export async function GET() {
           rawModels.unshift({ value: envObj.ANTHROPIC_MODEL, label: envObj.ANTHROPIC_MODEL });
         }
       } catch { /* ignore */ }
+      } // end if (!hasCustomModels)
 
       const models = deduplicateModels(rawModels).map(m => {
-        const cw = getContextWindow(m.value);
+        // Pass upstream so alias windows resolve per provider:
+        // first-party opus → 1M (Opus 4.7) vs Bedrock/Vertex opus → 200K
+        // (Opus 4.6). The model API is per-provider, so the correct
+        // upstream is whatever catalog declared for this provider group.
+        const cw = getContextWindow(m.value, { upstream: m.upstreamModelId });
+        // Lift effort/thinking capability flags from nested `capabilities` to top-level
+        // so MessageInput / EffortSelectorDropdown can read them without unwrapping.
+        const caps = (m.capabilities || {}) as Record<string, unknown>;
+        const effortLift = {
+          ...(caps.supportsEffort != null ? { supportsEffort: caps.supportsEffort as boolean } : {}),
+          ...(caps.supportedEffortLevels != null ? { supportedEffortLevels: caps.supportedEffortLevels as string[] } : {}),
+          ...(caps.supportsAdaptiveThinking != null ? { supportsAdaptiveThinking: caps.supportsAdaptiveThinking as boolean } : {}),
+          ...(caps.supportsThinkingToggle != null ? { supportsThinkingToggle: caps.supportsThinkingToggle as boolean } : {}),
+        };
         return {
           ...m,
+          ...effortLift,
           ...(cw != null ? { contextWindow: cw } : {}),
         };
       });
@@ -263,6 +327,21 @@ export async function GET() {
         models,
       });
     }
+
+    // Add OpenAI OAuth virtual provider when authenticated (chat only)
+    if (!includeMedia) {
+    try {
+      const oauthStatus = getOAuthStatus();
+      if (oauthStatus.authenticated) {
+        groups.push({
+          provider_id: 'openai-oauth',
+          provider_name: `OpenAI${oauthStatus.plan ? ` (${oauthStatus.plan})` : ''}`,
+          provider_type: 'openai-oauth',
+          models: OPENAI_OAUTH_MODELS,
+        });
+      }
+    } catch { /* OpenAI OAuth module not available */ }
+    } // end if (!includeMedia)
 
     // Determine default provider — auto-heal stale references on read
     let defaultProviderId = getDefaultProviderId();

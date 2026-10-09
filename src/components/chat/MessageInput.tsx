@@ -1,9 +1,9 @@
 'use client';
 
-import { useRef, useState, useCallback, useEffect, type KeyboardEvent, type FormEvent } from 'react';
-import { perf } from '@/lib/performance-logger';
-import { Terminal, Sparkle } from "@/components/ui/icon";
+import { useRef, useState, useCallback, useEffect, useMemo, type KeyboardEvent, type FormEvent } from 'react';
+import { Toolbox, SpinnerGap, Sparkle, ArrowsCounterClockwise } from "@/components/ui/icon";
 import { useTranslation } from '@/hooks/useTranslation';
+import { showToast } from '@/hooks/useToast';
 import type { TranslationKey } from '@/i18n';
 import {
   PromptInput,
@@ -13,13 +13,13 @@ import {
   PromptInputButton,
 } from '@/components/ai-elements/prompt-input';
 import type { ChatStatus } from 'ai';
-import type { FileAttachment, ReplyMode } from '@/types';
+import type { FileAttachment, MentionRef, ClaudeInitMeta } from '@/types';
 import { SlashCommandButton } from './SlashCommandButton';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { CliToolsPopover } from './CliToolsPopover';
 import { ModelSelectorDropdown } from './ModelSelectorDropdown';
-import { EffortSelectorDropdown } from './EffortSelectorDropdown';
-import { FileAwareSubmitButton, AttachFileButton, FileTreeAttachmentBridge, FileAttachmentsCapsules, CommandBadge, CliBadge } from './MessageInputParts';
+import { QuickScriptMenu } from './QuickScriptMenu';
+import { FileAwareSubmitButton, AttachFileButton, FileTreeAttachmentBridge, FileAttachmentsCapsules, CliBadge, ComposerBadgeRow } from './MessageInputParts';
 import {
   Tooltip,
   TooltipContent,
@@ -28,23 +28,29 @@ import {
 import { useImageGen } from '@/hooks/useImageGen';
 import { PENDING_KEY, setRefImages, deleteRefImages } from '@/lib/image-ref-store';
 import { IMAGE_AGENT_SYSTEM_PROMPT } from '@/lib/constants/image-agent-prompt';
-import { dataUrlToFileAttachment } from '@/lib/file-utils';
+import { urlToFileAttachment } from '@/lib/file-utils';
 import { usePopoverState } from '@/hooks/usePopoverState';
 import { useProviderModels } from '@/hooks/useProviderModels';
 import { useCommandBadge } from '@/hooks/useCommandBadge';
 import { useCliToolsFetch } from '@/hooks/useCliToolsFetch';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
-import { resolveKeyAction, cycleIndex, resolveDirectSlash, dispatchBadge, buildCliAppend } from '@/lib/message-input-logic';
+import { resolveKeyAction, cycleIndex, resolveDirectSlash, dispatchBadge, buildCliAppend, parseMentionRefs, dedupeMentionsByPath } from '@/lib/message-input-logic';
 import { QuickActions } from './QuickActions';
-import { usePromptOptimize } from '@/hooks/usePromptOptimize';
-import { Spinner } from '@/components/ui/spinner';
-import { ReplyModeSelectorDropdown } from './ReplyModeSelectorDropdown';
+import { ImageGenToggle } from './ImageGenToggle';
+import { FileReviewBar } from './FileReviewBar';
+
+const MAX_MENTION_FILE_BYTES = 256 * 1024; // 256KB per @file mention
+const MAX_MENTION_FILE_COUNT = 6;
+const MAX_DIRECTORY_MENTION_COUNT = 3;
+const MAX_DIRECTORY_PREVIEW_ITEMS = 30;
 
 interface MessageInputProps {
-  onSend: (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => void;
+  onSend: (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => void;
   onCommand?: (command: string) => void;
   onStop?: () => void;
   disabled?: boolean;
+  /** Disable only the submit button (e.g. during warmup), textarea remains editable */
+  disableSubmit?: boolean;
   isStreaming?: boolean;
   sessionId?: string;
   modelName?: string;
@@ -56,16 +62,56 @@ interface MessageInputProps {
   /** Effort selection lifted to parent for inclusion in the stream chain */
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
-  replyMode?: ReplyMode;
-  onReplyModeChange?: (mode: ReplyMode) => void;
+  /** Thinking mode toggle — on/off for Deepseek-style thinking control */
+  thinkingMode?: 'enabled' | 'disabled';
+  onThinkingModeChange?: (mode: 'enabled' | 'disabled') => void;
   /** SDK init metadata — when available, used to validate command/skill availability */
-  sdkInitMeta?: { tools?: unknown; slash_commands?: unknown; skills?: unknown } | null;
+  sdkInitMeta?: ClaudeInitMeta | null;
   /** Initial value to prefill in the input */
   initialValue?: string;
   /** Whether this session is an assistant workspace project */
   isAssistantProject?: boolean;
   /** Whether the session already has messages */
   hasMessages?: boolean;
+  /** 当前轮次的工具调用列表（用于技能调用指示器） */
+  toolUses?: Array<{ id: string; name: string; input: unknown }>;
+  /** 当前轮次的工具调用结果列表 */
+  toolResults?: Array<{ tool_use_id: string; content: string; is_error?: boolean }>;
+  /** 注入到输入框底行右侧的自定义内容（如上下文统计指示器） */
+  footerExtra?: React.ReactNode;
+}
+
+function joinPath(base: string, rel: string): string {
+  const b = base.replace(/[\\/]+$/, '');
+  const r = rel.replace(/^[\\/]+/, '');
+  return `${b}/${r}`;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+async function fileResponseToAttachment(
+  response: Response,
+  filename: string,
+  idPrefix: string,
+): Promise<FileAttachment> {
+  const mimeType = response.headers.get('content-type') || 'application/octet-stream';
+  const buffer = await response.arrayBuffer();
+  return {
+    id: `${idPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: filename,
+    type: mimeType,
+    size: buffer.byteLength,
+    data: arrayBufferToBase64(buffer),
+  };
 }
 
 export function MessageInput({
@@ -73,6 +119,7 @@ export function MessageInput({
   onCommand,
   onStop,
   disabled,
+  disableSubmit,
   isStreaming,
   sessionId,
   modelName,
@@ -83,25 +130,65 @@ export function MessageInput({
   onAssistantTrigger,
   effort: effortProp,
   onEffortChange,
-  replyMode = 'smart',
-  onReplyModeChange,
+  thinkingMode,
+  onThinkingModeChange,
   sdkInitMeta,
   initialValue,
   isAssistantProject,
   hasMessages,
+  toolUses,
+  toolResults,
+  footerExtra,
 }: MessageInputProps) {
   const { t, locale } = useTranslation();
+  const isZh = t('nav.chats') === '对话';
   const imageGen = useImageGen();
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [optimizedOriginalText, setOptimizedOriginalText] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const cliSearchRef = useRef<HTMLInputElement>(null);
-  // key={initialValue} on the parent would be the canonical React way to reset,
-  // but since this component remounts on navigation, useState(initialValue) is sufficient.
-  const [inputValue, setInputValue] = useState(initialValue || '');
+  // Persist draft per session so switching chats doesn't lose typed text.
+  const draftKey = `codepilot:draft:${sessionId || 'new'}`;
+  const [inputValue, setInputValueRaw] = useState(() => {
+    if (initialValue) return initialValue;
+    try { return sessionStorage.getItem(draftKey) || ''; } catch { return ''; }
+  });
+  const [mentionNodeTypes, setMentionNodeTypes] = useState<Record<string, 'file' | 'directory'>>({});
+  const [badgeOrder, setBadgeOrder] = useState<Record<string, number>>({});
+  const [mentionOrder, setMentionOrder] = useState<Record<string, number>>({});
+  const orderSeqRef = useRef(0);
+  const setInputValue = useCallback((v: string | ((prev: string) => string)) => {
+    setInputValueRaw((prev) => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      try { if (next) sessionStorage.setItem(draftKey, next); else sessionStorage.removeItem(draftKey); } catch { /* quota */ }
+      return next;
+    });
+  }, [draftKey]);
 
-  // Prompt optimizer state
-  const { isOptimizing, optimize } = usePromptOptimize();
-  const [optimizedPrompt, setOptimizedPrompt] = useState<string | null>(null);
+  const mentions = useMemo(() => {
+    // Render chips only for explicitly inserted/known mentions.
+    return parseMentionRefs(inputValue, mentionNodeTypes).filter((m) => !!mentionNodeTypes[m.path]);
+  }, [inputValue, mentionNodeTypes]);
+
+  const nextOrder = useCallback(() => {
+    orderSeqRef.current += 1;
+    return orderSeqRef.current;
+  }, []);
+
+  const ensureBadgeOrder = useCallback((command: string) => {
+    setBadgeOrder((prev) => {
+      if (prev[command]) return prev;
+      return { ...prev, [command]: nextOrder() };
+    });
+  }, [nextOrder]);
+
+  const ensureMentionOrder = useCallback((path: string) => {
+    setMentionOrder((prev) => {
+      if (prev[path]) return prev;
+      return { ...prev, [path]: nextOrder() };
+    });
+  }, [nextOrder]);
 
   // --- Extracted hooks ---
   const popover = usePopoverState(modelName);
@@ -114,15 +201,40 @@ export function MessageInput({
   // Existing sessions must keep their own selected model; if that model becomes
   // invalid (provider changed), fall back to the provider's first model, not the
   // global default, to avoid overwriting the session's model choice.
+  //
+  // 中文注释：跳过 provider 数据尚未加载的场景。切换会话时 providerId 立即变化，
+  // 但 providerGroups（含各 provider 的模型列表）需要等 API 返回。
+  // 在此期间 modelOptions 是 DEFAULT_MODEL_OPTIONS（sonnet/opus/haiku），
+  // 如果误触发 auto-correct 会把正确的模型（如 MiMo-V2.5-Pro）覆写为 'sonnet'。
+  // providerGroups 为空 = API 未返回 = 不具备校验条件，应跳过。
   useEffect(() => {
+    if (providerGroups.length === 0) return; // provider 数据未加载，跳过
     if (modelName && modelOptions.length > 0 && !modelOptions.some(m => m.value === modelName)) {
       const fallback = modelOptions[0].value;
+      console.log('[MessageInput] Auto-correct model:', { from: modelName, to: fallback, providerId: currentProviderIdValue, modelOptionsCount: modelOptions.length });
       onModelChange?.(fallback);
       onProviderModelChange?.(currentProviderIdValue, fallback);
     }
-  }, [modelName, modelOptions, currentProviderIdValue, onModelChange, onProviderModelChange]);
+  }, [modelName, modelOptions, currentProviderIdValue, onModelChange, onProviderModelChange, providerGroups.length]);
 
-  const { badge, setBadge, cliBadge, setCliBadge, removeBadge, removeCliBadge, hasBadge } = useCommandBadge(textareaRef);
+  const { badges, addBadge, removeBadge, clearBadges, cliBadge, setCliBadge, removeCliBadge, hasBadge } = useCommandBadge(textareaRef);
+  const addBadgeWithOrder = useCallback((badge: { command: string; label: string; description: string; kind: 'agent_skill' | 'slash_command' | 'sdk_command' | 'codepilot_command'; installedSource?: 'agents' | 'claude' }) => {
+    ensureBadgeOrder(badge.command);
+    addBadge(badge);
+  }, [addBadge, ensureBadgeOrder]);
+  const removeBadgeWithOrder = useCallback((command: string) => {
+    removeBadge(command);
+    setBadgeOrder((prev) => {
+      if (!prev[command]) return prev;
+      const next = { ...prev };
+      delete next[command];
+      return next;
+    });
+  }, [removeBadge]);
+  const clearBadgesWithOrder = useCallback(() => {
+    clearBadges();
+    setBadgeOrder({});
+  }, [clearBadges]);
 
   const cliToolsFetch = useCliToolsFetch({
     popoverMode: popover.popoverMode,
@@ -154,7 +266,12 @@ export function MessageInput({
     setTriggerPos: popover.setTriggerPos,
     closePopover: popover.closePopover,
     onCommand,
-    setBadge,
+    addBadge: addBadgeWithOrder,
+    onMentionInserted: (mention) => {
+      setMentionNodeTypes((prev) => ({ ...prev, [mention.path]: mention.nodeType }));
+      ensureMentionOrder(mention.path);
+    },
+    isStreaming: !!isStreaming,
   });
 
   // Assistant trigger on first focus
@@ -166,60 +283,122 @@ export function MessageInput({
     }
   }, [onAssistantTrigger]);
 
-  // Prompt optimization handler
-  const handleOptimizePrompt = useCallback(async () => {
-    const content = inputValue.trim();
-    if (!content) return;
-
-    const language = locale === 'zh' ? 'zh' : 'en';
-    const result = await optimize(content, language);
-    if (result) {
-      setOptimizedPrompt(result.optimized);
-    }
-  }, [inputValue, locale, optimize]);
-
-  // Accept optimized prompt
-  const handleUseOptimized = useCallback(() => {
-    if (optimizedPrompt) {
-      setInputValue(optimizedPrompt);
-      setOptimizedPrompt(null);
-      textareaRef.current?.focus();
-    }
-  }, [optimizedPrompt]);
-
-  // Discard optimized prompt
-  const handleKeepOriginal = useCallback(() => {
-    setOptimizedPrompt(null);
-  }, []);
-
-  // Listen for file tree "+" button: insert @filepath into textarea
+  // Listen for file tree "+" button and drop-router: insert @path into the
+  // textarea. `nodeType` defaults to 'file' so older callers still work; when
+  // it's 'directory', the difference is stored in mentionNodeTypes (not in the
+  // text token) to match the picker's convention (see resolveItemSelection).
   useEffect(() => {
     const handler = (e: Event) => {
-      const filePath = (e as CustomEvent<{ path: string }>).detail?.path;
-      if (!filePath) return;
-      const mention = `@${filePath} `;
+      const detail = (e as CustomEvent<{ path: string; nodeType?: 'file' | 'directory' }>).detail;
+      const rawPath = detail?.path;
+      if (!rawPath) return;
+      const normalizedPath = rawPath.replace(/\/+$/, '');
+      if (!normalizedPath) return;
+      const nodeType = detail.nodeType ?? 'file';
+      setMentionNodeTypes((prev) => ({ ...prev, [normalizedPath]: nodeType }));
+      ensureMentionOrder(normalizedPath);
       setInputValue((prev) => {
         const needsSpace = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n');
-        return prev + (needsSpace ? ' ' : '') + mention;
+        return prev + (needsSpace ? ' ' : '') + `@${normalizedPath} `;
+      });
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    };
+    const textHandler = (e: Event) => {
+      const detail = (e as CustomEvent<{ text: string }>).detail;
+      if (!detail?.text) return;
+      setInputValue((prev) => {
+        const needsSpace = prev.length > 0 && !prev.endsWith('\n');
+        return prev + (needsSpace ? '\n' : '') + detail.text + '\n';
       });
       setTimeout(() => textareaRef.current?.focus(), 0);
     };
     window.addEventListener('insert-file-mention', handler);
-    return () => window.removeEventListener('insert-file-mention', handler);
-  }, []);
+    window.addEventListener('append-chat-text', textHandler);
+    return () => {
+      window.removeEventListener('insert-file-mention', handler);
+      window.removeEventListener('append-chat-text', textHandler);
+    };
+  }, [setInputValue, setMentionNodeTypes, ensureMentionOrder]);
+
+  const normalizeMentionPath = useCallback((rawPath: string): string => {
+    const normalizedRaw = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!workingDirectory) return normalizedRaw;
+    const normalizedBase = workingDirectory.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (normalizedRaw.startsWith(normalizedBase + '/')) {
+      return normalizedRaw.slice(normalizedBase.length + 1);
+    }
+    return normalizedRaw;
+  }, [workingDirectory]);
+
+  const fetchMentionFileAttachment = useCallback(async (mentionPath: string): Promise<{ attachment: FileAttachment | null; limitNote?: string }> => {
+    const safePath = normalizeMentionPath(mentionPath);
+    const filename = safePath.split('/').filter(Boolean).pop() || 'file';
+    try {
+      if (sessionId) {
+        const res = await fetch(`/api/files/serve?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(safePath)}`);
+        if (!res.ok) return { attachment: null };
+        const headerSize = Number.parseInt(res.headers.get('content-length') || '', 10);
+        if (Number.isFinite(headerSize) && headerSize > MAX_MENTION_FILE_BYTES) {
+          return { attachment: null, limitNote: `@${safePath}: omitted (file too large > 256KB).` };
+        }
+        const attachment = await fileResponseToAttachment(res, filename, 'mention');
+        if (attachment.size > MAX_MENTION_FILE_BYTES) {
+          return { attachment: null, limitNote: `@${safePath}: omitted (file too large > 256KB).` };
+        }
+        return { attachment };
+      }
+
+      if (!workingDirectory) return { attachment: null };
+      const absolutePath = joinPath(workingDirectory, safePath);
+      const res = await fetch(`/api/files/raw?path=${encodeURIComponent(absolutePath)}`);
+      if (!res.ok) return { attachment: null };
+      const headerSize = Number.parseInt(res.headers.get('content-length') || '', 10);
+      if (Number.isFinite(headerSize) && headerSize > MAX_MENTION_FILE_BYTES) {
+        return { attachment: null, limitNote: `@${safePath}: omitted (file too large > 256KB).` };
+      }
+      const attachment = await fileResponseToAttachment(res, filename, 'mention');
+      if (attachment.size > MAX_MENTION_FILE_BYTES) {
+        return { attachment: null, limitNote: `@${safePath}: omitted (file too large > 256KB).` };
+      }
+      return { attachment };
+    } catch {
+      return { attachment: null };
+    }
+  }, [sessionId, workingDirectory, normalizeMentionPath]);
+
+  const fetchDirectorySummary = useCallback(async (mentionPath: string): Promise<string | null> => {
+    if (!workingDirectory) return null;
+    const safePath = normalizeMentionPath(mentionPath);
+    const dir = joinPath(workingDirectory, safePath);
+    try {
+      const res = await fetch(`/api/files?dir=${encodeURIComponent(dir)}&baseDir=${encodeURIComponent(workingDirectory)}&depth=2`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const tree = Array.isArray(data.tree) ? data.tree : [];
+      const preview = tree.slice(0, MAX_DIRECTORY_PREVIEW_ITEMS).map((node: { name: string; type: 'file' | 'directory' }) => (
+        node.type === 'directory' ? `- ${node.name}/` : `- ${node.name}`
+      ));
+      const extra = tree.length > MAX_DIRECTORY_PREVIEW_ITEMS
+        ? `\n- ... (${tree.length - MAX_DIRECTORY_PREVIEW_ITEMS} more)`
+        : '';
+      return `Directory reference @${safePath}/\n${preview.join('\n')}${extra}`;
+    } catch {
+      return null;
+    }
+  }, [workingDirectory, normalizeMentionPath]);
 
   const handleSubmit = useCallback(async (msg: { text: string; files: Array<{ type: string; url: string; filename?: string; mediaType?: string }> }, e: FormEvent<HTMLFormElement>) => {
-    // 性能追踪开始
-    perf.init('MessageInput.handleSubmit');
-    perf.mark('submit_formEvent');
-
     e.preventDefault();
+    // 中文注释：disabled 或 disableSubmit 时阻止发送（包括 Enter 快捷键），
+    // 确保预热完成前不能发消息。disabled 只控制按钮视觉状态，
+    // 表单 onSubmit 不受按钮 disabled 影响，必须手动检查。
+    if (disabled || disableSubmit) return;
     const content = inputValue.trim();
 
     popover.closePopover();
-    perf.mark('submit_popoverClose');
 
-    // Convert PromptInput FileUIParts (with data URLs) to FileAttachment[]
+    // PromptInput produces blob URLs for file-picker/drop attachments and
+    // data URLs for pasted content. Normalize either form to real bytes.
     const convertFiles = async (): Promise<FileAttachment[]> => {
       if (!msg.files || msg.files.length === 0) return [];
 
@@ -227,7 +406,7 @@ export function MessageInput({
       for (const file of msg.files) {
         if (!file.url) continue;
         try {
-          const attachment = await dataUrlToFileAttachment(
+          const attachment = await urlToFileAttachment(
             file.url,
             file.filename || 'file',
             file.mediaType || 'application/octet-stream',
@@ -240,12 +419,65 @@ export function MessageInput({
       return attachments;
     };
 
-    // If Image Agent toggle is on and no badge, send via normal LLM with systemPromptAppend
-    if (imageGen.state.enabled && !badge && !isStreaming) {
-      perf.mark('imageGen_path_start');
-      const files = await convertFiles();
-      perf.mark('convertFiles_done', { count: files.length });
-      if (!content && files.length === 0) return;
+    const resolveMentionPayload = async () => {
+      // Only treat mentions inserted/confirmed by the picker (or file-tree bridge)
+      // as structured mentions. Plain typed "@foo" should remain plain text.
+      const parsedMentions = parseMentionRefs(inputValue, mentionNodeTypes)
+        .filter((m) => !!mentionNodeTypes[m.path]);
+      const dedupedMentions = dedupeMentionsByPath(parsedMentions);
+      if (dedupedMentions.length === 0) {
+        return {
+          mentions: [] as MentionRef[],
+          files: [] as FileAttachment[],
+          directoryNotes: [] as string[],
+          limitNotes: [] as string[],
+        };
+      }
+
+      const mentionFiles: FileAttachment[] = [];
+      const directoryNotes: string[] = [];
+      const limitNotes: string[] = [];
+      let usedDirectoryMentions = 0;
+      for (const mention of dedupedMentions) {
+        if (mention.nodeType === 'directory') {
+          if (usedDirectoryMentions >= MAX_DIRECTORY_MENTION_COUNT) {
+            limitNotes.push(`@${mention.path}/: omitted (max ${MAX_DIRECTORY_MENTION_COUNT} directories per message).`);
+            continue;
+          }
+          const summary = await fetchDirectorySummary(mention.path);
+          if (summary) directoryNotes.push(summary);
+          usedDirectoryMentions += 1;
+          continue;
+        }
+        if (mentionFiles.length >= MAX_MENTION_FILE_COUNT) {
+          limitNotes.push(`@${mention.path}: omitted (max ${MAX_MENTION_FILE_COUNT} files per message).`);
+          continue;
+        }
+        const { attachment, limitNote } = await fetchMentionFileAttachment(mention.path);
+        if (attachment) mentionFiles.push(attachment);
+        if (limitNote) limitNotes.push(limitNote);
+      }
+      return { mentions: dedupedMentions, files: mentionFiles, directoryNotes, limitNotes };
+    };
+
+    // If Image Agent toggle is on and no badge, send via normal LLM with systemPromptAppend.
+    // PENDING_KEY is a global singleton — queuing would misattach refs, so block entirely
+    // during streaming rather than letting it fall through to the plain queue path.
+    if (imageGen.state.enabled && badges.length === 0) {
+      if (isStreaming) return; // silently block — can't safely queue image-agent prompts
+      const uploadedFiles = await convertFiles();
+      const mentionPayload = await resolveMentionPayload();
+      const files = [...uploadedFiles, ...mentionPayload.files];
+      const mentionSections: string[] = [];
+      if (mentionPayload.directoryNotes.length > 0) {
+        mentionSections.push(`[Referenced Directories]\n${mentionPayload.directoryNotes.join('\n\n')}`);
+      }
+      if (mentionPayload.limitNotes.length > 0) {
+        mentionSections.push(`[Mention Limits]\n${mentionPayload.limitNotes.map((x) => `- ${x}`).join('\n')}`);
+      }
+      const mentionAppend = mentionSections.length > 0 ? `\n\n${mentionSections.join('\n\n')}` : '';
+      const finalContent = `${content}${mentionAppend}`.trim();
+      if (!finalContent && files.length === 0) return;
 
       // Store uploaded images as pending reference images for ImageGenConfirmation
       const imageFiles = files.filter(f => f.type.startsWith('image/'));
@@ -256,69 +488,156 @@ export function MessageInput({
       }
 
       setInputValue('');
-      perf.mark('before_onSend_imageGen');
       if (onSend) {
-        onSend(content, files.length > 0 ? files : undefined, IMAGE_AGENT_SYSTEM_PROMPT);
+        onSend(
+          finalContent,
+          files.length > 0 ? files : undefined,
+          IMAGE_AGENT_SYSTEM_PROMPT,
+          mentionPayload.mentions.length > 0 ? content : undefined,
+          mentionPayload.mentions.length > 0 ? mentionPayload.mentions : undefined,
+        );
       }
-      perf.mark('onSend_complete');
       return;
     }
 
-    // If badge is active, dispatch by kind
-    if (badge && !isStreaming) {
-      perf.mark('badge_path_start');
-      const files = await convertFiles();
-      const { prompt, displayLabel } = dispatchBadge(badge, content);
-      setBadge(null);
+    // If one or more badges are active, dispatch by kind (multi-skill combines).
+    // Block during streaming — badges carry slash/skill semantics, not safe to queue.
+    if (badges.length > 0) {
+      if (isStreaming) return;
+      const uploadedFiles = await convertFiles();
+      const mentionPayload = await resolveMentionPayload();
+      const files = [...uploadedFiles, ...mentionPayload.files];
+      const { prompt, displayLabel, skillContent } = dispatchBadge(badges, content);
+      const mentionSections: string[] = [];
+      if (mentionPayload.directoryNotes.length > 0) {
+        mentionSections.push(`[Referenced Directories]\n${mentionPayload.directoryNotes.join('\n\n')}`);
+      }
+      if (mentionPayload.limitNotes.length > 0) {
+        mentionSections.push(`[Mention Limits]\n${mentionPayload.limitNotes.map((x) => `- ${x}`).join('\n')}`);
+      }
+      const mentionAppend = mentionSections.length > 0 ? `\n\n${mentionSections.join('\n\n')}` : '';
+      const finalPrompt = `${prompt}${mentionAppend}`.trim();
+      clearBadgesWithOrder();
       setInputValue('');
-      perf.mark('before_onSend_badge');
-      onSend(prompt, files.length > 0 ? files : undefined, undefined, displayLabel);
-      perf.mark('onSend_complete');
+      // Inject skill content as systemPromptAppend so the model sees the skill
+      // instructions in the system prompt rather than as a plain user message.
+      const skillAppend = skillContent
+        ? `[Skill Instructions]\n${skillContent}`
+        : undefined;
+      onSend(
+        finalPrompt,
+        files.length > 0 ? files : undefined,
+        skillAppend,
+        displayLabel,
+        mentionPayload.mentions.length > 0 ? mentionPayload.mentions : undefined,
+      );
       return;
     }
 
-    const files = await convertFiles();
-    perf.mark('convertFiles_done', { count: files.length });
+    const uploadedFiles = await convertFiles();
+    const mentionPayload = await resolveMentionPayload();
+    const files = [...uploadedFiles, ...mentionPayload.files];
+    const mentionSections: string[] = [];
+    if (mentionPayload.directoryNotes.length > 0) {
+      mentionSections.push(`[Referenced Directories]\n${mentionPayload.directoryNotes.join('\n\n')}`);
+    }
+    if (mentionPayload.limitNotes.length > 0) {
+      mentionSections.push(`[Mention Limits]\n${mentionPayload.limitNotes.map((x) => `- ${x}`).join('\n')}`);
+    }
+    const mentionAppend = mentionSections.length > 0 ? `\n\n${mentionSections.join('\n\n')}` : '';
+    const finalContent = `${content}${mentionAppend}`.trim();
     const hasFiles = files.length > 0;
 
-    if ((!content && !hasFiles) || disabled || isStreaming) return;
+    if ((!finalContent && !hasFiles) || disabled || disableSubmit) return;
 
-    // Check if it's a direct slash command typed in the input
+    // Check if it's a direct slash command typed in the input.
     if (!hasFiles) {
-      perf.mark('slash_check_start');
-      const slashResult = resolveDirectSlash(content);
-      if (slashResult.action === 'immediate_command') {
+      const slashResult = resolveDirectSlash(finalContent);
+      if (slashResult.action === 'immediate_command' || slashResult.action === 'set_badge' || slashResult.action === 'unknown_slash_badge') {
+        // Slash commands must NOT execute or queue during streaming —
+        // destructive commands (e.g. /clear) would race with the active stream.
+        if (isStreaming) return;
+        if (slashResult.action === 'immediate_command') {
         if (onCommand) {
           setInputValue('');
+          setOptimizedOriginalText(null);
           onCommand(slashResult.commandValue!);
           return;
         }
-      } else if (slashResult.action === 'set_badge' || slashResult.action === 'unknown_slash_badge') {
-        setBadge(slashResult.badge!);
+      } else {
+        addBadgeWithOrder(slashResult.badge!);
         setInputValue('');
+        setOptimizedOriginalText(null);
         return;
       }
     }
+  }
 
-    // If CLI badge is active, inject systemPromptAppend to guide model
-    perf.mark('cliAppend_build');
-    const cliAppend = buildCliAppend(cliBadge);
-    if (cliBadge) setCliBadge(null);
+  // If CLI badge is active, inject systemPromptAppend to guide model
+  const cliAppend = buildCliAppend(cliBadge);
+  if (cliBadge) setCliBadge(null);
 
-    perf.mark('before_onSend_final');
-    onSend(content || 'Please review the attached file(s).', hasFiles ? files : undefined, cliAppend);
-    setInputValue('');
-    perf.mark('handleSubmit_complete');
-    perf.printReport('MessageInput');
-  }, [inputValue, onSend, onCommand, disabled, isStreaming, popover, badge, cliBadge, imageGen, setBadge, setCliBadge]);
+  const displayOverride = mentionPayload.mentions.length > 0 ? content : undefined;
+  onSend(
+    finalContent || 'Please review the attached file(s).',
+    hasFiles ? files : undefined,
+    cliAppend,
+    displayOverride,
+    mentionPayload.mentions.length > 0 ? mentionPayload.mentions : undefined,
+  );
+  setInputValue('');
+  setOptimizedOriginalText(null);
+}, [inputValue, mentionNodeTypes, onSend, onCommand, disabled, disableSubmit, isStreaming, popover, badges, cliBadge, imageGen, addBadgeWithOrder, clearBadgesWithOrder, setCliBadge, setInputValue, setOptimizedOriginalText, fetchDirectorySummary, fetchMentionFileAttachment]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // Mention token behavior: one Backspace removes the whole @path token.
+      if (e.key === 'Backspace') {
+        const ta = textareaRef.current;
+        const start = ta?.selectionStart ?? 0;
+        const end = ta?.selectionEnd ?? 0;
+        if (start === end && start > 0) {
+          const before = inputValue.slice(0, start);
+          const tokenMatch = before.match(/(^|\s)@([^\s@]+)\s$/) || before.match(/(^|\s)@([^\s@]+)$/);
+          if (tokenMatch) {
+            const mentionPath = (tokenMatch[2] || '').replace(/[.,!?;:)\]}]+$/, '');
+            if (mentionPath && mentionNodeTypes[mentionPath]) {
+              e.preventDefault();
+              const boundaryLen = (tokenMatch[1] || '').length;
+              const mentionStart = start - tokenMatch[0].length + boundaryLen;
+              const mentionEnd = start;
+              const next = `${inputValue.slice(0, mentionStart)}${inputValue.slice(mentionEnd)}`.replace(/\s{2,}/g, ' ');
+              const stillHasSamePath = parseMentionRefs(next).some((m) => m.path === mentionPath);
+              setInputValue(next);
+              if (!stillHasSamePath) {
+                setMentionNodeTypes((prev) => {
+                  const updated = { ...prev };
+                  delete updated[mentionPath];
+                  return updated;
+                });
+                setMentionOrder((prev) => {
+                  const updated = { ...prev };
+                  delete updated[mentionPath];
+                  return updated;
+                });
+              }
+              requestAnimationFrame(() => {
+                const el = textareaRef.current;
+                if (!el) return;
+                const pos = Math.max(0, Math.min(mentionStart, next.length));
+                el.setSelectionRange(pos, pos);
+              });
+              return;
+            }
+          }
+        }
+      }
+
       const action = resolveKeyAction(e.key, {
         popoverMode: popover.popoverMode,
         popoverHasItems: popover.popoverItems.length > 0,
         inputValue,
-        hasBadge: !!badge,
+        hasBadge: badges.length > 0,
         hasCliBadge: !!cliBadge,
       });
 
@@ -344,7 +663,9 @@ export function MessageInput({
 
         case 'remove_badge':
           e.preventDefault();
-          removeBadge();
+          // Backspace/Escape pops the most recently added badge; matches the
+          // mental model of "undo my last selection".
+          if (badges.length > 0) removeBadgeWithOrder(badges[badges.length - 1].command);
           return;
 
         case 'remove_cli_badge':
@@ -381,27 +702,123 @@ export function MessageInput({
         }
       }
     },
-    [popover, slashCommands, cliToolsFetch, badge, cliBadge, inputValue, removeBadge, removeCliBadge]
+    [popover, slashCommands, cliToolsFetch, badges, cliBadge, inputValue, mentionNodeTypes, removeBadgeWithOrder, removeCliBadge, setInputValue]
   );
 
+  const uniqueMentions = useMemo(() => dedupeMentionsByPath(mentions), [mentions]);
+  const removeMention = useCallback((targetMention: MentionRef) => {
+    let removedPath = '';
+    let stillHasSamePath = false;
+    setInputValue((prev) => {
+      const parsed = parseMentionRefs(prev, mentionNodeTypes);
+      const exact = parsed.find((m) =>
+        m.path === targetMention.path
+        && m.sourceRange?.start === targetMention.sourceRange?.start
+        && m.sourceRange?.end === targetMention.sourceRange?.end
+      );
+      const target = exact || parsed.find((m) => m.path === targetMention.path);
+      if (!target?.sourceRange) return prev;
+      removedPath = target.path;
+      const { start, end } = target.sourceRange;
+      const before = prev.slice(0, start);
+      let after = prev.slice(end);
+      if (before.endsWith(' ') && after.startsWith(' ')) after = after.slice(1);
+      const next = `${before}${after}`.replace(/\s{2,}/g, ' ').trimStart();
+      stillHasSamePath = parseMentionRefs(next).some((m) => m.path === target.path);
+      return next;
+    });
+    if (!removedPath) return;
+    if (!stillHasSamePath) {
+      setMentionNodeTypes((prev) => {
+        if (!prev[removedPath]) return prev;
+        const next = { ...prev };
+        delete next[removedPath];
+        return next;
+      });
+      setMentionOrder((prev) => {
+        if (!prev[removedPath]) return prev;
+        const next = { ...prev };
+        delete next[removedPath];
+        return next;
+      });
+    }
+  }, [setInputValue, mentionNodeTypes]);
+
+  // Drop-router for folders: browsers hand us directory drops as 0-size File
+  // entries whose mediaType is ''. Default behavior in PromptInput would insert
+  // them as bogus attachments. Route them to the existing @mention pipeline as
+  // directory references instead — matching what the picker produces.
+  const handleDirectoriesDropped = useCallback((dirs: File[]) => {
+    const resolver = typeof window !== 'undefined' ? window.electronAPI?.fs?.getPathForFile : undefined;
+    for (const dir of dirs) {
+      const absolute = resolver ? resolver(dir) : '';
+      // Without an absolute path (non-Electron or resolver missing), fall back
+      // to the folder name — the LLM can still act on the name as a hint.
+      const rawPath = absolute || dir.name;
+      if (!rawPath) continue;
+      const normalized = normalizeMentionPath(rawPath);
+      window.dispatchEvent(new CustomEvent('insert-file-mention', {
+        detail: { path: normalized, nodeType: 'directory' },
+      }));
+    }
+  }, [normalizeMentionPath]);
+
   // Effort selector state — guard against undefined when model not found in current provider's list
-  const currentModelMeta = currentModelOption as (typeof currentModelOption & { supportsEffort?: boolean; supportedEffortLevels?: string[] }) | undefined;
-  const showEffortSelector = currentModelMeta?.supportsEffort === true && replyMode === 'deep';
-  const [localEffort, setLocalEffort] = useState<string>('high');
+  const currentModelMeta = currentModelOption as (typeof currentModelOption & { supportsEffort?: boolean; supportedEffortLevels?: string[]; supportsThinkingToggle?: boolean }) | undefined;
+  // Default label is 'auto' — the UI displays "默认 / Auto" and no explicit
+  // effort value is sent to the backend. This lets Claude Code apply its
+  // per-model default (e.g. xhigh on Opus 4.7). If we initialized to 'high'
+  // instead, the button would say "High" while the request actually carried
+  // undefined, which silently sent a different level than shown.
+  const [localEffort, setLocalEffort] = useState<string>('auto');
   const selectedEffort = effortProp ?? localEffort;
   const setSelectedEffort = useCallback((v: string) => {
     setLocalEffort(v);
+    // Passthrough — including the 'auto' sentinel. The send path in
+    // page.tsx / ChatView.tsx filters 'auto' before building the request
+    // so the backend receives no effort field, letting CLI apply its
+    // per-model default.
     onEffortChange?.(v);
   }, [onEffortChange]);
+
+  const handleOptimizePrompt = useCallback(async () => {
+    if (optimizedOriginalText) {
+      setInputValue(optimizedOriginalText);
+      setOptimizedOriginalText(null);
+      return;
+    }
+
+    if (!inputValue.trim()) return;
+
+    setIsOptimizing(true);
+    try {
+      const res = await fetch('/api/chat/optimize-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: inputValue }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Optimization failed');
+      setOptimizedOriginalText(inputValue);
+      setInputValue(data.result);
+    } catch (err: any) {
+      showToast({ type: 'error', message: err.message || (isZh ? '优化失败' : 'Optimization failed') });
+    } finally {
+      setIsOptimizing(false);
+    }
+  }, [inputValue, optimizedOriginalText, setInputValue, isZh]);
 
   const currentModelValue = modelName || 'sonnet';
   const chatStatus: ChatStatus = isStreaming ? 'streaming' : 'ready';
 
   return (
-    <div className="bg-background/80 backdrop-blur-lg px-4 pt-2 pb-1">
+    /* 中文注释：去掉输入区外层的灰底背景带（bg-background/80）——
+       对齐 cc-haha：composer 直接浮在聊天卡片底色上，只有输入框自身有半透明底。 */
+    <div className="px-4 pt-2 pb-1">
       <div className="mx-auto">
         <div className="relative">
-          {/* Slash Command / File Popover */}
+
+{/* Slash Command / File Popover */}
           <SlashCommandPopover
             popoverMode={popover.popoverMode}
             popoverRef={popover.popoverRef}
@@ -446,70 +863,49 @@ export function MessageInput({
               onSend(text);
               // Clear input after send to avoid stale text
               setInputValue('');
+              setOptimizedOriginalText(null);
             }}
           />
+
+          {/* 中文注释：文件待审查卡片移到提示词输入框上方，作为独立卡片悬浮在输入框之外 */}
+          <FileReviewBar sessionId={sessionId || ''} isStreaming={!!isStreaming} />
 
           {/* PromptInput replaces the old input area */}
           <PromptInput
             onSubmit={handleSubmit}
             accept=""
             multiple
+            onDirectoriesDropped={handleDirectoriesDropped}
           >
             {/* Bridge: listens for file tree "+" button events */}
             <FileTreeAttachmentBridge />
-            {/* Command badge */}
-            {badge && (
-              <CommandBadge
-                command={badge.command}
-                description={badge.description}
-                onRemove={removeBadge}
-              />
-            )}
+            {/* Unified command + mention badges row */}
+            <ComposerBadgeRow
+              badges={badges}
+              mentions={uniqueMentions}
+              badgeOrder={badgeOrder}
+              mentionOrder={mentionOrder}
+              onRemoveBadge={removeBadgeWithOrder}
+              onRemoveMention={removeMention}
+            />
             {/* CLI badge */}
             {cliBadge && (
               <CliBadge name={cliBadge.name} onRemove={removeCliBadge} />
             )}
             {/* File attachment capsules */}
             <FileAttachmentsCapsules />
+
             <PromptInputTextarea
               ref={textareaRef}
-              placeholder={badge ? "Add details (optional), then press Enter..." : cliBadge ? "Describe what you want to do..." : "Message Claude..."}
+              placeholder={badges.length > 0 ? "Add details (optional), then press Enter..." : cliBadge ? "Describe what you want to do..." : t('messageInput.placeholder')}
               value={inputValue}
               onChange={(e) => slashCommands.handleInputChange(e.currentTarget.value)}
               onKeyDown={handleKeyDown}
               onFocus={handleAssistantFocus}
-              disabled={disabled}
-              className="min-h-10"
+              className="min-h-15"
             />
-
-            {/* Optimized prompt preview */}
-            {optimizedPrompt && (
-              <div className="px-3 py-2 bg-muted/50 border border-border rounded-md mx-2 my-1">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {t('promptOptimizer.title' as TranslationKey)}
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleKeepOriginal}
-                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {t('promptOptimizer.keepOriginal' as TranslationKey)}
-                    </button>
-                    <button
-                      onClick={handleUseOptimized}
-                      className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
-                    >
-                      {t('promptOptimizer.useOptimized' as TranslationKey)}
-                    </button>
-                  </div>
-                </div>
-                <p className="text-xs text-foreground/80 whitespace-pre-wrap max-h-32 overflow-y-auto">
-                  {optimizedPrompt}
-                </p>
-              </div>
-            )}
             <PromptInputFooter>
+              {/* 中文注释：左侧图标组对齐 cc-haha：添加文件 / 斜杠命令 / CLI 工具 / 图片生成 */}
               <PromptInputTools>
                 {/* Attach file button */}
                 <AttachFileButton />
@@ -521,7 +917,7 @@ export function MessageInput({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <PromptInputButton onClick={cliToolsFetch.handleOpenCliPopover}>
-                      <Terminal size={16} />
+                      <Toolbox size={16} />
                     </PromptInputButton>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -529,20 +925,39 @@ export function MessageInput({
                   </TooltipContent>
                 </Tooltip>
 
-                {/* Prompt optimizer button */}
+                {/* Design Agent Toggle */}
+                <ImageGenToggle />
+              </PromptInputTools>
+
+              {/* 中文注释：右侧组对齐 cc-haha：快捷脚本 / 优化提示词 / 上下文统计 / 模型选择 / 发送 */}
+              <div className="flex min-w-0 items-center gap-1.5">
+                <QuickScriptMenu />
+
+                {/* Optimize Prompt Button */}
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <PromptInputButton
+                    <button
+                      type="button"
                       onClick={handleOptimizePrompt}
-                      disabled={isOptimizing || !inputValue.trim()}
+                      disabled={isOptimizing || (!inputValue.trim() && !optimizedOriginalText)}
+                      className="flex items-center justify-center rounded-lg p-1.5 text-[var(--text-tertiary)] transition-colors enabled:text-[var(--status-success)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
                     >
-                      {isOptimizing ? <Spinner /> : <Sparkle size={16} />}
-                    </PromptInputButton>
+                      {isOptimizing ? (
+                        <SpinnerGap size={14} className="animate-spin" />
+                      ) : optimizedOriginalText ? (
+                        <ArrowsCounterClockwise size={14} />
+                      ) : (
+                        <Sparkle size={14} />
+                      )}
+                    </button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    {t('promptOptimizer.tooltip' as TranslationKey)}
+                    {optimizedOriginalText ? (isZh ? '撤销优化' : 'Undo optimization') : (isZh ? '优化提示词' : 'Optimize prompt')}
                   </TooltipContent>
                 </Tooltip>
+
+                {/* 上下文统计（由 ChatView 注入，从输入框下方行收进输入框内） */}
+                {footerExtra}
 
                 {/* Model selector */}
                 <ModelSelectorDropdown
@@ -556,29 +971,15 @@ export function MessageInput({
                   globalDefaultProvider={globalDefaultProvider}
                 />
 
-                <ReplyModeSelectorDropdown
-                  replyMode={replyMode}
-                  onReplyModeChange={(mode) => onReplyModeChange?.(mode)}
+                <FileAwareSubmitButton
+                  status={chatStatus}
+                  onStop={onStop}
+                  disabled={disabled || disableSubmit}
+                  inputValue={inputValue}
+                  hasBadge={hasBadge}
+                  isImageAgentOn={imageGen.state.enabled}
                 />
-
-                {/* Effort selector — only visible when model supports effort */}
-                {showEffortSelector && (
-                  <EffortSelectorDropdown
-                    selectedEffort={selectedEffort}
-                    onEffortChange={setSelectedEffort}
-                    supportedEffortLevels={currentModelMeta?.supportedEffortLevels}
-                  />
-                )}
-
-              </PromptInputTools>
-
-              <FileAwareSubmitButton
-                status={chatStatus}
-                onStop={onStop}
-                disabled={disabled}
-                inputValue={inputValue}
-                hasBadge={hasBadge}
-              />
+              </div>
             </PromptInputFooter>
           </PromptInput>
         </div>

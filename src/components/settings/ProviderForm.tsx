@@ -27,6 +27,8 @@ import { useTranslation } from "@/hooks/useTranslation";
 const PROVIDER_PRESETS: Record<string, { base_url: string; extra_env: string; protocol: string }> = {
   anthropic: { base_url: "https://api.anthropic.com", extra_env: "{}", protocol: "anthropic" },
   openrouter: { base_url: "https://openrouter.ai/api", extra_env: '{"ANTHROPIC_API_KEY":""}', protocol: "openrouter" },
+  // 中文注释：OpenAI 兼容中转（bananarouter 等）—— 由本地 /api/proxy 做 Anthropic⇄OpenAI 转换
+  "openai-compatible": { base_url: "", extra_env: "{}", protocol: "openai-compatible" },
   bedrock: { base_url: "", extra_env: '{"CLAUDE_CODE_USE_BEDROCK":"1","AWS_REGION":"us-east-1","CLAUDE_CODE_SKIP_BEDROCK_AUTH":"1"}', protocol: "bedrock" },
   vertex: { base_url: "", extra_env: '{"CLAUDE_CODE_USE_VERTEX":"1","CLOUD_ML_REGION":"us-east5","CLAUDE_CODE_SKIP_VERTEX_AUTH":"1"}', protocol: "vertex" },
   custom: { base_url: "", extra_env: "{}", protocol: "anthropic" },
@@ -54,6 +56,18 @@ export interface ProviderFormData {
   provider_type: string;
   protocol?: string;
   base_url: string;
+  /**
+   * API key.
+   *
+   * - `string` → new value (including empty string for providers that don't
+   *   need a key, e.g. env_only).
+   * - `undefined` → "unchanged" signal for edit mode. The backend PUT route
+   *   (src/app/api/providers/[id]/route.ts) will omit the field so
+   *   updateProvider()'s `data.api_key ?? existing.api_key` preserves the
+   *   stored key. This is how the UI represents "user did not touch the
+   *   masked-key placeholder" without leaking the mask back to the server.
+   *   See docs/exec-plans/active/v0.48-post-release-issues.md §5.5.
+   */
   api_key?: string;
   extra_env: string;
   headers_json?: string;
@@ -75,59 +89,71 @@ export function ProviderForm({
   const [providerType, setProviderType] = useState("anthropic");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  // #449 fix: edit-mode flag indicating DB has a stored key. We never put the
+  // (masked) stored key string into apiKey state; instead the input shows a
+  // "keep existing" placeholder and the save request omits api_key so the
+  // backend preserves the DB value. Same pattern as PresetConnectDialog.
+  // See docs/exec-plans/active/v0.48-post-release-issues.md §5.5.
+  const [hasStoredKey, setHasStoredKey] = useState(false);
+  // Companion flag for explicit "clear the stored key" intent. Without it,
+  // hasStoredKey + empty input is unconditionally interpreted as "keep
+  // existing", leaving users with no way to actually delete a stored key.
+  const [clearStoredKey, setClearStoredKey] = useState(false);
   const [extraEnv, setExtraEnv] = useState("{}");
   const [notes, setNotes] = useState("");
   const [headersJson, setHeadersJson] = useState("{}");
   const [envOverridesJson, setEnvOverridesJson] = useState("");
   const [roleModelsJson, setRoleModelsJson] = useState("{}");
+  const [optionsJson, setOptionsJson] = useState("{}");
+  const [imageInputSupport, setImageInputSupport] = useState<"auto" | "supported" | "unsupported">("auto");
+  const [ocrProviderId, setOcrProviderId] = useState("");
+  const [ocrModel, setOcrModel] = useState("");
+  const [ocrProviders, setOcrProviders] = useState<ApiProvider[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const { t } = useTranslation();
-
-  // Clean bedrock/vertex-specific keys from extra_env
-  const cleanExtraEnv = (extraEnvStr: string, type: string): string => {
-    if (type === 'bedrock' || type === 'vertex') return extraEnvStr;
-    try {
-      const extra = JSON.parse(extraEnvStr || '{}');
-      const toRemove: string[] = [];
-      if (extra.CLAUDE_CODE_USE_BEDROCK) toRemove.push('CLAUDE_CODE_USE_BEDROCK', 'AWS_REGION', 'CLAUDE_CODE_SKIP_BEDROCK_AUTH');
-      if (extra.CLAUDE_CODE_USE_VERTEX) toRemove.push('CLAUDE_CODE_USE_VERTEX', 'CLOUD_ML_REGION', 'CLAUDE_CODE_SKIP_VERTEX_AUTH');
-      if (toRemove.length > 0) {
-        for (const k of toRemove) delete extra[k];
-        return JSON.stringify(extra);
-      }
-    } catch { /* ignore */ }
-    return extraEnvStr;
-  };
 
   // Reset form when dialog opens
   useEffect(() => {
     if (!open) return;
     setError(null);
     setSaving(false);
+    setClearStoredKey(false);
 
     if (mode === "edit" && provider) {
       setName(provider.name);
       setProviderType(provider.provider_type);
       setBaseUrl(provider.base_url);
-      setHasStoredApiKey(!!provider.api_key);
+      // #449 fix: do NOT put (masked) stored key into state. Flag it instead
+      // so the input shows a "keep existing" placeholder and save omits the
+      // field when the user leaves it blank.
       setApiKey("");
-      // Clean bedrock/vertex keys that don't match current provider_type
-      const cleanedExtraEnv = cleanExtraEnv(provider.extra_env || "{}", provider.provider_type);
-      setExtraEnv(cleanedExtraEnv);
+      setHasStoredKey(!!provider.api_key);
+      setExtraEnv(provider.extra_env || "{}");
       setHeadersJson(provider.headers_json || "{}");
       setEnvOverridesJson(provider.env_overrides_json || "");
       setRoleModelsJson(provider.role_models_json || "{}");
+      setOptionsJson(provider.options_json || "{}");
+      try {
+        const options = JSON.parse(provider.options_json || "{}") as Record<string, unknown>;
+        setImageInputSupport(options.image_input_support === "supported" || options.image_input_support === "unsupported" ? options.image_input_support : "auto");
+        setOcrProviderId(typeof options.ocr_provider_id === "string" ? options.ocr_provider_id : "");
+        setOcrModel(typeof options.ocr_model === "string" ? options.ocr_model : "");
+      } catch {
+        setImageInputSupport("auto");
+        setOcrProviderId("");
+        setOcrModel("");
+      }
       setNotes(provider.notes || "");
       // Show advanced if extra_env or new fields have content
       try {
-        const parsed = JSON.parse(cleanedExtraEnv);
+        const parsed = JSON.parse(provider.extra_env || "{}");
         const hasHeaders = provider.headers_json && provider.headers_json !== "{}";
         const hasEnvOverrides = provider.env_overrides_json && provider.env_overrides_json !== "";
         const hasRoleModels = provider.role_models_json && provider.role_models_json !== "{}";
-        setShowAdvanced(Object.keys(parsed).length > 0 || !!hasHeaders || !!hasEnvOverrides || !!hasRoleModels);
+        const hasOptions = provider.options_json && provider.options_json !== "{}";
+        setShowAdvanced(Object.keys(parsed).length > 0 || !!hasHeaders || !!hasEnvOverrides || !!hasRoleModels || !!hasOptions);
       } catch {
         setShowAdvanced(true);
       }
@@ -136,11 +162,14 @@ export function ProviderForm({
       setProviderType(initialPreset.provider_type);
       setBaseUrl(initialPreset.base_url);
       setApiKey("");
-      setHasStoredApiKey(false);
+      setHasStoredKey(false);
       // Use extra_env from preset if provided, otherwise look up by type
       const envStr = initialPreset.extra_env || PROVIDER_PRESETS[initialPreset.provider_type]?.extra_env || "{}";
       setExtraEnv(envStr);
       setNotes("");
+      setImageInputSupport("auto");
+      setOcrProviderId("");
+      setOcrModel("");
       try {
         const parsed = JSON.parse(envStr);
         setShowAdvanced(Object.keys(parsed).length > 0);
@@ -152,15 +181,27 @@ export function ProviderForm({
       setProviderType("anthropic");
       setBaseUrl(PROVIDER_PRESETS.anthropic.base_url);
       setApiKey("");
+      setHasStoredKey(false);
       setExtraEnv("{}");
       setHeadersJson("{}");
       setEnvOverridesJson("");
       setRoleModelsJson("{}");
+      setOptionsJson("{}");
+      setImageInputSupport("auto");
+      setOcrProviderId("");
+      setOcrModel("");
       setNotes("");
       setShowAdvanced(false);
-      setHasStoredApiKey(false);
     }
   }, [open, mode, provider, initialPreset]);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch('/api/providers')
+      .then(response => response.ok ? response.json() : Promise.reject(new Error('Failed to load providers')))
+      .then((data: { providers?: ApiProvider[] }) => setOcrProviders(data.providers || []))
+      .catch(() => setOcrProviders([]));
+  }, [open]);
 
   const handleTypeChange = (type: string) => {
     setProviderType(type);
@@ -189,6 +230,7 @@ export function ProviderForm({
       ["Extra environment variables", extraEnv],
       ["Headers", headersJson],
       ["Role models", roleModelsJson],
+      ["Options", optionsJson],
     ] as const) {
       if (val && val.trim()) {
         try { JSON.parse(val); } catch {
@@ -203,18 +245,39 @@ export function ProviderForm({
     try {
       // Always sync protocol with provider_type to prevent stale protocol after edits
       const derivedProtocol = PROVIDER_PRESETS[providerType]?.protocol || providerType;
-      const apiKeyForSave = mode === "edit" ? (apiKey.trim() ? apiKey : undefined) : apiKey;
+
+      // #449 fix: three distinct save intents for api_key in edit mode.
+      // See PresetConnectDialog handleSubmit for the full rationale.
+      //   new value   → apiKey as-is
+      //   clear       → "" (overwrites DB since `?? existing` only falls
+      //                 back on nullish)
+      //   keep        → undefined (PUT body omits field → DB preserved)
+      //   create/no stored → apiKey as-is
+      const apiKeyForSave: string | undefined = (() => {
+        if (apiKey) return apiKey;
+        if (mode === "edit" && hasStoredKey && clearStoredKey) return "";
+        if (mode === "edit" && hasStoredKey) return undefined;
+        return apiKey;
+      })();
+      const mergedOptions = JSON.parse(optionsJson.trim() || "{}") as Record<string, unknown>;
+      if (imageInputSupport === "auto") delete mergedOptions.image_input_support;
+      else mergedOptions.image_input_support = imageInputSupport;
+      if (ocrProviderId.trim()) mergedOptions.ocr_provider_id = ocrProviderId.trim();
+      else delete mergedOptions.ocr_provider_id;
+      if (ocrModel.trim()) mergedOptions.ocr_model = ocrModel.trim();
+      else delete mergedOptions.ocr_model;
 
       await onSave({
         name: name.trim(),
         provider_type: providerType,
         protocol: derivedProtocol,
         base_url: baseUrl.trim(),
-        ...(apiKeyForSave !== undefined ? { api_key: apiKeyForSave } : {}),
+        api_key: apiKeyForSave,
         extra_env: extraEnv,
         headers_json: headersJson.trim() || "{}",
         env_overrides_json: envOverridesJson.trim() || "",
         role_models_json: roleModelsJson.trim() || "{}",
+        options_json: JSON.stringify(mergedOptions),
         notes: notes.trim(),
       });
       onOpenChange(false);
@@ -225,8 +288,14 @@ export function ProviderForm({
     }
   };
 
-  const isMaskedKey = mode === "edit" && apiKey?.startsWith("***");
-  const showKeepKeyHint = mode === "edit" && hasStoredApiKey && !apiKey.trim();
+  // Show "keep existing" placeholder when the DB has a stored key and the
+  // user hasn't typed anything yet. Replaces the old isMaskedKey derivation
+  // which was based on detecting "***" in apiKey state — we no longer load
+  // masked values into state at all.
+  const showStoredKeyPlaceholder = mode === "edit" && hasStoredKey && !apiKey;
+  // Show the explicit "clear stored key" affordance under the same
+  // conditions.
+  const showClearStoredKeyAction = showStoredKeyPlaceholder;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -294,20 +363,50 @@ export function ProviderForm({
             <Input
               id="provider-api-key"
               type="password"
-              placeholder={showKeepKeyHint ? "Leave empty to keep current key" : "sk-ant-..."}
+              placeholder={
+                clearStoredKey
+                  ? "Stored key will be cleared on save"
+                  : showStoredKeyPlaceholder
+                  ? "Leave empty to keep current key"
+                  : "sk-ant-..."
+              }
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                // Typing a new key overrides any pending "clear" intent
+                if (clearStoredKey) setClearStoredKey(false);
+              }}
               className="font-mono text-sm"
             />
-            {(isMaskedKey || showKeepKeyHint) && (
-              <p className="text-[11px] text-muted-foreground">
-                {t('nav.chats') === '对话'
-                  ? (showKeepKeyHint
-                    ? '该服务商已保存密钥（为安全不显示）。留空保存会保留原值，重新输入才会替换。'
-                    : '当前显示的是掩码。直接保存会保留原 API Key，只有重新输入才会替换。')
-                  : (showKeepKeyHint
-                    ? 'This provider already has a saved key (hidden for security). Leave blank to keep it; enter a new one to replace it.'
-                    : 'This field is masked. Saving without changes keeps the current API key; re-enter it only if you want to replace it.')}
+            {/* Explicit "clear stored key" action — see PresetConnectDialog
+                for the rationale. Without this users cannot actually
+                delete a stored key. */}
+            {showClearStoredKeyAction && (
+              <p className="text-[11px]">
+                {clearStoredKey ? (
+                  <>
+                    <span className="text-amber-500">
+                      The stored key will be cleared on save.{" "}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="h-auto p-0 text-[11px] text-amber-500 underline hover:no-underline"
+                      onClick={() => setClearStoredKey(false)}
+                    >
+                      Undo
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-[11px] text-muted-foreground underline hover:no-underline"
+                    onClick={() => setClearStoredKey(true)}
+                  >
+                    Clear stored key
+                  </Button>
+                )}
               </p>
             )}
           </div>
@@ -377,6 +476,62 @@ export function ProviderForm({
                   placeholder='{"default": "sonnet", "reasoning": "opus", "small": "haiku"}'
                   value={roleModelsJson}
                   onChange={(e) => setRoleModelsJson(e.target.value)}
+                  className="font-mono text-sm min-h-[60px]"
+                  rows={2}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="provider-image-input-support" className="text-xs text-muted-foreground">
+                  {t('provider.imageInputSupport')}
+                </Label>
+                <Select value={imageInputSupport} onValueChange={(value) => setImageInputSupport(value as "auto" | "supported" | "unsupported")}>
+                  <SelectTrigger id="provider-image-input-support" className="w-full text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">{t('provider.imageInputAuto')}</SelectItem>
+                    <SelectItem value="supported">{t('provider.imageInputSupported')}</SelectItem>
+                    <SelectItem value="unsupported">{t('provider.imageInputUnsupported')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">{t('provider.imageInputHint')}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
+                  <Label htmlFor="provider-ocr-provider" className="text-xs text-muted-foreground">
+                    {t('provider.ocrProviderId')}
+                  </Label>
+                  <Select value={ocrProviderId || "__unset__"} onValueChange={(value) => setOcrProviderId(value === "__unset__" ? "" : value)}>
+                    <SelectTrigger id="provider-ocr-provider" className="w-full text-sm">
+                      <SelectValue placeholder={t('provider.ocrProviderId')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__unset__">{t('provider.ocrProviderUnset')}</SelectItem>
+                      {ocrProviders.map(ocrProvider => (
+                        <SelectItem key={ocrProvider.id} value={ocrProvider.id}>{ocrProvider.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="provider-ocr-model" className="text-xs text-muted-foreground">
+                    {t('provider.ocrModel')}
+                  </Label>
+                  <Input id="provider-ocr-model" placeholder="vision-model-id" value={ocrModel} onChange={(e) => setOcrModel(e.target.value)} className="font-mono text-sm" />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="provider-options-json" className="text-xs text-muted-foreground">
+                  Options (JSON)
+                </Label>
+                <Textarea
+                  id="provider-options-json"
+                  placeholder='{"thinking_mode": "adaptive"}'
+                  value={optionsJson}
+                  onChange={(e) => setOptionsJson(e.target.value)}
                   className="font-mono text-sm min-h-[60px]"
                   rows={2}
                 />

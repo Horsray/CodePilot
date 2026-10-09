@@ -232,6 +232,30 @@ interface MediaBlock {
 
 `media-import-mcp.ts` 的 mediaType 判断从 mimeType 前缀派生（`mimeType.startsWith('video/')` / `'audio/'`），不再用扩展名逐个匹配。
 
+## 图片生成的传输协议选择（openai-image）
+
+`image-generator.ts` 对 `family === 'openai'` 的 provider 按 **media_protocol** 决定传输方式，三条路径不要混用：
+
+| media_protocol | base_url 特征 | 传输 | 端点 |
+|---|---|---|---|
+| —（未设置） | 官方 `api.openai.com` | OpenAI SDK | `/v1/images/generations` |
+| `openai-images` | 任意中转 | OpenAI SDK（baseURL 指向中转） | `{base}/images/generations` |
+| 其他值 / 未设置 | 非官方中转 | 自研 relay 客户端 | `/v1/chat/completions`（图片从 `choices[].message.content` 提取） |
+
+**为什么要区分**：早期 fork 把「任何非官方 base_url」一律当作 relay（神马中转这类把图片塞在 chat completions 返回里的平台）。但 BananaRouter 这类平台实现的是**标准 OpenAI Images API**，走 chat completions 拿不到图。`media_protocol: 'openai-images'` 就是给这类平台的开关。
+
+**配置位置**：`api_providers.options_json.media_protocol`。
+- `custom-media`（通用中转平台）preset 在保存对话框里让用户显式选「中转协议」；
+- 协议固定的 preset（如 `bananarouter-image`）在 `VENDOR_PRESETS` 里声明 `mediaProtocol`，`PresetConnectDialog` 保存时写入 `options_json`。
+
+### BananaRouter 生图（`bananarouter-image`）
+
+- protocol `openai-image`，`baseUrl: https://api.bananarouter.com/v1`，`mediaProtocol: 'openai-images'`
+- 模型目录：`gpt-image-2.5-flare`（默认，速度优先）、`gpt-image-2.5-sunburst`（能力优先）、`gpt-image-2`（基础）
+- 默认模型由 `extra_env.OPENAI_IMAGE_MODEL` 决定；`/api/providers/active-image` 的 label 解析会遍历**所有** media preset 的 `defaultModels`（不再硬编码 preset key 列表），因此新 preset 的友好名能直接映射出来
+- 尺寸走 `mapAspectToOpenAISize()` 的 GPT Image 2 约束（边长 ≤3840、16 的倍数、长宽比 ≤3:1、总像素 655,360–8,294,400），与 BananaRouter 文档的约束一致，无需额外适配
+- `findMatchingPreset()` 的 base_url 精确匹配加了**同类别**约束——BananaRouter 的聊天 preset 与生图 preset 共用同一 base_url，不区分类别会把生图 provider 打开在聊天编辑表单里
+
 ## 已清理的技术债务
 
 - ~~`ToolCallBlock.tsx` 孤立代码~~ — 已删除。媒体渲染由 `MessageItem` / `StreamingMessage` 直接处理

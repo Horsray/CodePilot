@@ -6,6 +6,17 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * 中文注释：判断当前是否处于暗色模式。
+ * 移植 cc-haha 后主题切换使用 html[data-theme="dark"]，这里同时兼容旧的 .dark class，
+ * 供 widget iframe 主题同步等需要直接读取 DOM 的场景使用。
+ */
+export function isDarkModeActive(): boolean {
+  if (typeof document === 'undefined') return false;
+  const el = document.documentElement;
+  return el.getAttribute('data-theme') === 'dark' || el.classList.contains('dark');
+}
+
+/**
  * Parse a date string from the database as UTC.
  *
  * DB timestamps are stored as UTC but without timezone indicator

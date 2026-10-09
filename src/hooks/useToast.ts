@@ -13,6 +13,8 @@ export interface Toast {
   id: string;
   type: ToastType;
   message: string;
+  description?: string;
+  source?: string;
   action?: ToastAction;
   duration?: number;
 }

@@ -164,7 +164,6 @@ export function MarketplaceSkillDetail({
         onOpenChange={setShowProgress}
         action={progressAction}
         source={skill.source}
-        skillId={skill.skillId}
         skillName={skill.name}
         onComplete={onInstallComplete}
       />

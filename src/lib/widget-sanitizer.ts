@@ -95,7 +95,7 @@ export function buildReceiverSrcdoc(
     "style-src 'unsafe-inline'",
     "img-src * data: blob:",
     "font-src * data:",
-    "connect-src 'none'",
+    "connect-src *",
   ].join('; ');
 
   const receiverScript = `(function(){
@@ -104,13 +104,15 @@ var _t=null,_first=true;
 function _h(){
 if(_t)clearTimeout(_t);
 _t=setTimeout(function(){
-var h=document.body.scrollHeight;
-if(h>0)parent.postMessage({type:'widget:resize',height:h,first:_first},'*');
+var r=root.getBoundingClientRect();
+var h=Math.ceil(r.height);
+if(h>0&&h!==_lastH){_lastH=h;parent.postMessage({type:'widget:resize',height:h,first:_first},'*');}
 _first=false;
 },60);
 }
+var _lastH=0;
 var _ro=new ResizeObserver(_h);
-_ro.observe(document.body);
+_ro.observe(root);
 
 function applyHtml(html){
 root.innerHTML=html;
@@ -260,8 +262,8 @@ parent.postMessage({type:'widget:ready'},'*');
 ${styleBlock}
 </style>
 </head>
-<body style="margin:0;padding:0;">
-<div id="__root"></div>
+<body style="margin:0;padding:0;height:fit-content;">
+<div id="__root" style="height:fit-content;"></div>
 <script>${receiverScript}</script>
 </body>
 </html>`;

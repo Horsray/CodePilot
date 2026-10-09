@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useSyncExternalStore } from "react";
-import { type Icon, Gear, Code, UserCircle, Plug, ChartBar } from "@/components/ui/icon";
+import { type Icon, Gear, Code, UserCircle, Plug, ChartBar, BookOpen, SquaresFour } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { GeneralSection } from "./GeneralSection";
@@ -9,10 +9,13 @@ import { ProviderManager } from "./ProviderManager";
 import { CliSettingsSection } from "./CliSettingsSection";
 import { UsageStatsSection } from "./UsageStatsSection";
 import { AssistantWorkspaceSection } from "./AssistantWorkspaceSection";
+import { LangOptSettingsSection } from "./LangOptSettingsSection";
+import { RulesSection } from "./RulesSection";
+import { WidgetsSection } from "./WidgetsSection";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
 
-type Section = "general" | "providers" | "cli" | "usage" | "assistant";
+type Section = "general" | "providers" | "cli" | "usage" | "assistant" | "rules" | "widgets";
 
 interface SidebarItem {
   id: Section;
@@ -22,6 +25,8 @@ interface SidebarItem {
 
 const sidebarItems: SidebarItem[] = [
   { id: "general", label: "General", icon: Gear },
+  { id: "rules", label: "Rules", icon: BookOpen },
+  { id: "widgets", label: "Widgets", icon: SquaresFour },
   { id: "providers", label: "Providers", icon: Plug },
   { id: "cli", label: "Claude CLI", icon: Code },
   { id: "usage", label: "Usage", icon: ChartBar },
@@ -44,7 +49,6 @@ function subscribeToHash(callback: () => void) {
 
 export function SettingsLayout() {
   // useSyncExternalStore subscribes to hash changes without triggering
-  // the react-hooks/set-state-in-effect lint rule.
   const hashSection = useSyncExternalStore(subscribeToHash, getSectionFromHash, () => "general" as Section);
 
   // Local state allows immediate UI update on click before the hash updates.
@@ -55,6 +59,8 @@ export function SettingsLayout() {
 
   const settingsLabelKeys: Record<string, TranslationKey> = {
     'General': 'settings.general',
+    'Rules': 'settings.rules',
+    'Widgets': 'settings.widgets',
     'Providers': 'settings.providers',
     'Claude CLI': 'settings.claudeCli',
     'Usage': 'settings.usage',
@@ -104,7 +110,14 @@ export function SettingsLayout() {
           {activeSection === "providers" && <ProviderManager />}
           {activeSection === "cli" && <CliSettingsSection />}
           {activeSection === "usage" && <UsageStatsSection />}
-          {activeSection === "assistant" && <AssistantWorkspaceSection />}
+          {activeSection === "assistant" && (
+            <div className="space-y-6">
+              <AssistantWorkspaceSection />
+              <LangOptSettingsSection />
+            </div>
+          )}
+          {activeSection === "rules" && <RulesSection />}
+          {activeSection === "widgets" && <WidgetsSection />}
         </div>
       </div>
     </div>

@@ -1,14 +1,25 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { clearLogs, getRecentLogs } from '@/lib/runtime-log';
+import { NextRequest } from 'next/server';
+import { initRuntimeLog, getRecentLogs, clearLogs } from '@/lib/runtime-log';
+
+// Ensure runtime log interceptors are installed
+initRuntimeLog();
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * GET /api/runtime-logs — Return buffered server-side log entries.
+ * Used by ConsolePanel to display server logs in the browser.
+ */
 export async function GET() {
-  return NextResponse.json({ logs: getRecentLogs() });
+  const logs = getRecentLogs();
+  return Response.json({ logs });
 }
 
-export async function DELETE(_request: NextRequest) {
+/**
+ * DELETE /api/runtime-logs — Clear all buffered log entries.
+ */
+export async function DELETE() {
   clearLogs();
-  return NextResponse.json({ success: true });
+  return Response.json({ ok: true });
 }

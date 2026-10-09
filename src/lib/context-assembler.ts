@@ -10,9 +10,13 @@
  *   Bridge:  workspace + session + assistant instructions + CLI tools (no widget)
  */
 
-import type { ChatSession } from '@/types';
-import { getSetting } from '@/lib/db';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import type { ChatSession, PromptInstructionSourceMeta } from '@/types';
+import { getProviderOptions, getSetting } from '@/lib/db';
 import { EGG_IMAGE_URL } from '@/lib/buddy';
+import { buildSystemPrompt } from './agent-system-prompt';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -22,7 +26,7 @@ export interface ContextAssemblyConfig {
   /** Entry point: controls which layers are injected */
   entryPoint: 'desktop' | 'bridge';
   /** Current user prompt (used for workspace retrieval + widget keyword detection) */
-  userPrompt: string;
+  userPrompt?: string;
   /** Per-request system prompt append (e.g., skill injection for image generation) */
   systemPromptAppend?: string;
   /** Conversation history (for widget keyword detection in resume context) */
@@ -31,147 +35,164 @@ export interface ContextAssemblyConfig {
   imageAgentMode?: boolean;
   /** Whether this is an auto-trigger turn (heartbeat, onboarding hook, etc.) */
   autoTrigger?: boolean;
-  /** Fast path skips heavyweight desktop prompt layers for plain chat turns */
-  replyProfileMode?: 'fast' | 'deep';
+  /** User attachments for complexity analysis */
+  files?: import('@/types').FileAttachment[];
+  /** Whether OMC plugin is enabled for this workspace */
+  omcPluginEnabled?: boolean;
 }
 
 export interface AssembledContext {
   /** Final assembled system prompt string, or undefined if no layers produced content */
   systemPrompt: string | undefined;
+  /** Files discovered and referenced in the prompt (CLAUDE.md, etc.) */
+  referencedContexts?: string[];
+  /** Structured rule/index sources actually injected into this turn */
+  instructionSources?: import('@/types').PromptInstructionSourceMeta[];
   /** Whether generative UI is enabled (affects widget MCP server + streamClaude param) */
   generativeUIEnabled: boolean;
   /** Onboarding/checkin instructions (route.ts uses this for server-side completion detection) */
   assistantProjectInstructions: string;
   /** Whether this session is in the assistant workspace */
   isAssistantProject: boolean;
+  /** Context inclusion toggles */
+  includeAgentsMd?: boolean;
+  includeClaudeMd?: boolean;
+  enableAgentsSkills?: boolean;
+  syncProjectRules?: boolean;
+  knowledgeBaseEnabled?: boolean;
 }
 
 // ── Main function ────────────────────────────────────────────────────
 
 export async function assembleContext(config: ContextAssemblyConfig): Promise<AssembledContext> {
-  const { session, entryPoint, userPrompt, systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, replyProfileMode } = config;
+  const { session, entryPoint, userPrompt = '', systemPromptAppend, conversationHistory, imageAgentMode, autoTrigger, files } = config;
+  const _unused_history = conversationHistory;
   const t0 = Date.now();
-  const lightweightMode = replyProfileMode === 'fast';
 
   let workspacePrompt = '';
   let memoryHint = '';
   let assistantProjectInstructions = '';
+  const referencedContexts: string[] = [];
+  const instructionSources: PromptInstructionSourceMeta[] = [];
   let isAssistantProject = false;
+  let includeAgentsMd = getSetting('include_agents_md') !== 'false';
+  let includeClaudeMd = getSetting('include_claude_md') !== 'false';
+  let enableAgentsSkills = getSetting('enable_agents_skills') !== 'false';
+  let syncProjectRules = getSetting('sync_project_rules') !== 'false';
+  let knowledgeBaseEnabled = false;
 
   // ── Layer 1: Workspace prompt (if assistant project session) ──────
-  try {
-    const workspacePath = getSetting('assistant_workspace_path');
-    if (workspacePath) {
-      const sessionWd = session.working_directory || '';
-      isAssistantProject = sessionWd === workspacePath;
+  // For imageAgentMode, we skip the workspace prompt and assistant instructions
+  // to prevent the engineering persona from overriding the image generation focus.
+  if (!imageAgentMode) {
+    try {
+      const workspacePath = getSetting('assistant_workspace_path');
+      if (workspacePath) {
+        const sessionWd = session.working_directory || '';
+        isAssistantProject = sessionWd === workspacePath;
 
-      if (isAssistantProject && !lightweightMode) {
-        const { loadWorkspaceFiles, assembleWorkspacePrompt, loadState, shouldRunHeartbeat } =
-          await import('@/lib/assistant-workspace');
+        if (isAssistantProject) {
+          const { loadWorkspaceFiles, assembleWorkspacePrompt, loadState, shouldRunHeartbeat } =
+            await import('@/lib/assistant-workspace');
 
-        // Incremental reindex BEFORE MCP search so tool calls see latest content.
-        // Runs with a 3s timeout to prevent blocking on large workspaces.
-        // If it times out, we continue without indexing (stale index is acceptable).
-        try {
-          const { indexWorkspace } = await import('@/lib/workspace-indexer');
-          const indexStart = Date.now();
-
-          // Run indexing with a 3s timeout — if it takes longer, we skip it
-          await Promise.race([
-            new Promise<void>((resolve) => {
-              indexWorkspace(workspacePath);
-              resolve();
-            }),
-            new Promise<void>((resolve) => setTimeout(() => {
-              console.warn(`[context-assembler] Workspace indexing timed out after 3s — skipping`);
-              resolve();
-            }, 3000)),
-          ]);
-
-          const indexMs = Date.now() - indexStart;
-          if (indexMs > 3000) {
-            console.warn(`[context-assembler] Workspace indexing took ${indexMs}ms — consider reducing workspace size`);
-          }
-        } catch {
-          // indexer not available or timed out, skip — MCP search will use stale index
-        }
-
-        const files = loadWorkspaceFiles(workspacePath);
-
-        // Memory/retrieval is handled by codepilot_memory_search MCP tool.
-        // assembleWorkspacePrompt only includes identity files (soul/user/claude).
-        // We also inject a lightweight "memory availability hint" so AI knows
-        // what's available without loading full content.
-        workspacePrompt = assembleWorkspacePrompt(files);
-
-        // Memory availability hint — stored separately as volatile content
-        // (changes daily, should not invalidate the static identity prefix cache)
-        try {
-          const { loadDailyMemories } = await import('@/lib/assistant-workspace');
-          const recentDays = loadDailyMemories(workspacePath, 5);
-          if (recentDays.length > 0) {
-            const dateList = recentDays.map(d => d.date).join(', ');
-            memoryHint = `<memory-hint>Recent daily memories available: ${dateList}. Use codepilot_memory_recent to review them.</memory-hint>`;
-          }
-        } catch {
-          // skip if daily memories unavailable
-        }
-
-        const state = loadState(workspacePath);
-
-        // Detect heartbeat auto-trigger by checking the actual prompt content,
-        // not just the autoTrigger flag (which is also true for buddy-welcome).
-        const isHeartbeatTrigger = autoTrigger && userPrompt.includes('心跳检查');
-
-        if (!state.onboardingComplete) {
-          assistantProjectInstructions = buildOnboardingInstructions();
-        } else if (isHeartbeatTrigger && shouldRunHeartbeat(state)) {
-          // Full heartbeat task mode — only for explicit heartbeat auto-trigger
-          assistantProjectInstructions = buildHeartbeatInstructions();
-        } else {
-          // Progressive file update guidance for completed onboarding
-          assistantProjectInstructions = buildProgressiveUpdateInstructions();
-
-          // Soft heartbeat hint for normal conversations when overdue.
-          // The AI naturally incorporates a brief check-in; the backend
-          // updates lastHeartbeatDate when it detects heartbeat keywords
-          // in the assistant response (no HEARTBEAT_OK token needed).
-          if (!autoTrigger && shouldRunHeartbeat(state)) {
-            assistantProjectInstructions += '\n\n' + buildSoftHeartbeatHint();
+          // Incremental reindex BEFORE MCP search so tool calls see latest content.
+          // Timeout after 5s to prevent blocking on large workspaces (e.g. Obsidian vaults).
+          try {
+            const { indexWorkspace } = await import('@/lib/workspace-indexer');
+            const indexStart = Date.now();
+            indexWorkspace(workspacePath);
+            const indexMs = Date.now() - indexStart;
+            if (indexMs > 3000) {
+              console.warn(`[context-assembler] Workspace indexing took ${indexMs}ms — consider reducing workspace size`);
+            }
+          } catch {
+            // indexer not available or timed out, skip — MCP search will use stale index
           }
 
-          // If no buddy yet, prepend a welcome + adoption prompt
-          if (!state.buddy) {
-            assistantProjectInstructions = buildNoBuddyWelcome() + '\n\n' + assistantProjectInstructions;
+          const files = loadWorkspaceFiles(workspacePath);
+
+          // Memory/retrieval is handled by codepilot_memory_search MCP tool.
+          // assembleWorkspacePrompt only includes identity files (soul/user/claude).
+          // We also inject a lightweight "memory availability hint" so AI knows
+          // what's available without loading full content.
+          workspacePrompt = assembleWorkspacePrompt(files);
+
+          // Memory availability hint — stored separately as volatile content
+          // (changes daily, should not invalidate the static identity prefix cache)
+          try {
+            const { loadDailyMemories } = await import('@/lib/assistant-workspace');
+            const recentDays = loadDailyMemories(workspacePath, 5);
+            if (recentDays.length > 0) {
+              const dateList = recentDays.map(d => d.date).join(', ');
+              memoryHint = `<memory-hint>Recent daily memories available: ${dateList}. Use codepilot_memory_recent to review them.</memory-hint>`;
+            }
+          } catch {
+            // skip if daily memories unavailable
+          }
+
+          const state = loadState(workspacePath);
+
+          // Project-level settings override global ones
+          if (state.includeAgentsMd !== undefined) includeAgentsMd = state.includeAgentsMd;
+          if (state.includeClaudeMd !== undefined) includeClaudeMd = state.includeClaudeMd;
+          if (state.enableAgentsSkills !== undefined) enableAgentsSkills = state.enableAgentsSkills;
+          if (state.syncProjectRules !== undefined) syncProjectRules = state.syncProjectRules;
+          if (state.knowledgeBaseEnabled !== undefined) knowledgeBaseEnabled = state.knowledgeBaseEnabled;
+
+          // Detect heartbeat auto-trigger by checking the actual prompt content,
+          // not just the autoTrigger flag (which is also true for buddy-welcome).
+          const isHeartbeatTrigger = autoTrigger && userPrompt.includes('心跳检查');
+
+          if (!state.onboardingComplete) {
+            assistantProjectInstructions = buildOnboardingInstructions();
+          } else if (isHeartbeatTrigger && shouldRunHeartbeat(state)) {
+            // Full heartbeat task mode — only for explicit heartbeat auto-trigger
+            assistantProjectInstructions = buildHeartbeatInstructions();
           } else {
-            // Inject buddy personality prompt before progressive update instructions
-            const buddyPersonality = buildBuddyPersonalityPrompt(state.buddy);
-            assistantProjectInstructions = buddyPersonality + '\n\n' + assistantProjectInstructions;
+            // Progressive file update guidance for completed onboarding
+            assistantProjectInstructions = buildProgressiveUpdateInstructions();
 
-            // Check evolution readiness
-            try {
-              const { checkEvolution } = await import('@/lib/buddy');
-              const fs = await import('fs');
-              const path = await import('path');
-              let memCount = 0;
+            // Soft heartbeat hint for normal conversations when overdue.
+            // The AI naturally incorporates a brief check-in; the backend
+            // updates lastHeartbeatDate when it detects heartbeat keywords
+            // in the assistant response (no HEARTBEAT_OK token needed).
+            if (!autoTrigger && shouldRunHeartbeat(state)) {
+              assistantProjectInstructions += '\n\n' + buildSoftHeartbeatHint();
+            }
+
+            // If no buddy yet, prepend a welcome + adoption prompt
+            if (!state.buddy) {
+              assistantProjectInstructions = buildNoBuddyWelcome() + '\n\n' + assistantProjectInstructions;
+            } else {
+              // Inject buddy personality prompt before progressive update instructions
+              const buddyPersonality = buildBuddyPersonalityPrompt(state.buddy);
+              assistantProjectInstructions = buddyPersonality + '\n\n' + assistantProjectInstructions;
+
+              // Check evolution readiness
               try {
-                const dailyDir = path.join(workspacePath, 'memory', 'daily');
-                if (fs.existsSync(dailyDir)) {
-                  memCount = fs.readdirSync(dailyDir).filter((f: string) => f.endsWith('.md')).length;
+                const { checkEvolution } = await import('@/lib/buddy');
+                const fs = await import('fs');
+                const path = await import('path');
+                let memCount = 0;
+                try {
+                  const dailyDir = path.join(workspacePath, 'memory', 'daily');
+                  if (fs.existsSync(dailyDir)) {
+                    memCount = fs.readdirSync(dailyDir).filter((f: string) => f.endsWith('.md')).length;
+                  }
+                } catch {}
+
+                const evoCheck = checkEvolution(state.buddy as Parameters<typeof checkEvolution>[0], memCount);
+                if (evoCheck.canEvolve) {
+                  assistantProjectInstructions += '\n\n<evolution-ready>你的进化条件已满足！在合适的时机告诉用户："我好像准备好进化了！你可以在看板面板点击检查进化。"</evolution-ready>';
                 }
               } catch {}
-
-              const evoCheck = checkEvolution(state.buddy as Parameters<typeof checkEvolution>[0], memCount);
-              if (evoCheck.canEvolve) {
-                assistantProjectInstructions += '\n\n<evolution-ready>你的进化条件已满足！在合适的时机告诉用户："我好像准备好进化了！你可以在看板面板点击检查进化。"</evolution-ready>';
-              }
-            } catch {}
+            }
           }
         }
       }
+    } catch (e) {
+      console.warn('[context-assembler] Failed to load assistant workspace:', e);
     }
-  } catch (e) {
-    console.warn('[context-assembler] Failed to load assistant workspace:', e);
   }
 
   // ── Prompt assembly: STATIC PREFIX → VOLATILE SUFFIX ──────────────
@@ -197,34 +218,93 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
 
   // [STATIC 1] Widget system prompt (desktop only) — compile-time constant
   const generativeUISetting = getSetting('generative_ui_enabled');
-  const generativeUIEnabled = !lightweightMode && entryPoint === 'desktop' && generativeUISetting !== 'false';
+  const generativeUIEnabled = entryPoint === 'desktop' && generativeUISetting !== 'false';
 
   if (generativeUIEnabled) {
     try {
       const { WIDGET_SYSTEM_PROMPT } = await import('@/lib/widget-guidelines');
       staticParts.push(WIDGET_SYSTEM_PROMPT);
+      referencedContexts.push('Widget System Prompt');
+      instructionSources.push({ filename: 'Widget System Prompt', level: 'workspace', category: 'widget_prompt' });
     } catch {
       // Widget prompt injection failed — don't block
     }
   }
 
-  // [STATIC 2] Session system prompt — set once at session creation
-  if (session.system_prompt) {
+  // [STATIC 2] Base Agent Persona & Task Orchestration
+  // 中文注释：功能名称「主控系统提示词前置注入」，用法是恢复历史主控模式，
+  // 让系统提示词作为前置静态层尽早建立 Todo、Agent、Skill、联网等执行规则。
+  const basePromptResult = buildSystemPrompt({
+    sessionId: session.id,
+    workingDirectory: session.working_directory || undefined,
+    modelId: session.model,
+    includeAgentsMd,
+    includeClaudeMd,
+    enableAgentsSkills,
+    syncProjectRules,
+    knowledgeBaseEnabled,
+    includeDiscoveredProjectInstructions: true,
+  });
+  staticParts.push(basePromptResult.prompt);
+  if (basePromptResult.referencedFiles) {
+    referencedContexts.push(...basePromptResult.referencedFiles);
+  }
+  if (basePromptResult.instructionSources) {
+    instructionSources.push(...basePromptResult.instructionSources);
+  }
+
+  // Track SDK-native loaded files (CLAUDE.md, AGENTS.md) for UI display.
+  // These are loaded by the SDK via settingSources — we only track their
+  // existence here so the "referenced contexts" UI shows them, without
+  // duplicating their content in the system prompt.
+  const cwd = session.working_directory || '';
+  if (cwd) {
+    const sdkNativeFiles: Array<{ filename: string; filePath: string; category: PromptInstructionSourceMeta['category'] }> = [
+      { filename: 'CLAUDE.md', filePath: path.join(cwd, 'CLAUDE.md'), category: 'repo_instruction' },
+      { filename: 'CLAUDE.local.md', filePath: path.join(cwd, 'CLAUDE.local.md'), category: 'repo_instruction' },
+      { filename: 'AGENTS.md', filePath: path.join(cwd, 'AGENTS.md'), category: 'repo_instruction' },
+      { filename: 'AGENTS.local.md', filePath: path.join(cwd, 'AGENTS.local.md'), category: 'repo_instruction' },
+    ];
+    const homeDir = os.homedir();
+    const userFiles: Array<{ filename: string; filePath: string; category: PromptInstructionSourceMeta['category'] }> = [
+      { filename: 'CLAUDE.md (user)', filePath: path.join(homeDir, '.claude', 'CLAUDE.md'), category: 'hard_rule' },
+      { filename: 'CLAUDE.local.md (user)', filePath: path.join(homeDir, '.claude', 'CLAUDE.local.md'), category: 'hard_rule' },
+    ];
+    for (const f of [...sdkNativeFiles, ...userFiles]) {
+      try {
+        if (fs.existsSync(f.filePath)) {
+          referencedContexts.push(f.filePath);
+          instructionSources.push({ filename: f.filename, level: 'workspace', category: f.category, filePath: f.filePath });
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  if (session.system_prompt && session.system_prompt.trim()) {
     staticParts.push(session.system_prompt);
+    referencedContexts.push('Session System Prompt');
+    instructionSources.push({ filename: 'Session System Prompt', level: 'workspace', category: 'session_prompt' });
   }
 
   // [STATIC 3] Workspace identity files (soul/user/claude.md)
-  // Note: workspacePrompt was computed earlier WITHOUT memory hint (identity only)
+  // 中文注释：功能名称「assistant workspace 身份层恢复」，用法是恢复历史有效路径，
+  // 继续把工作区身份文件作为系统提示的静态上下文参与编排。
   if (workspacePrompt) {
     staticParts.push(workspacePrompt);
+    referencedContexts.push('Workspace Identity (soul/user/claude.md)');
+    instructionSources.push({ filename: 'Workspace Identity (soul/user/claude.md)', level: 'workspace', category: 'workspace_identity' });
   }
 
   // [VOLATILE 4] Memory hint — changes daily
   if (memoryHint) {
     volatileParts.push(memoryHint);
+    referencedContexts.push('Memory Hint (daily)');
+    instructionSources.push({ filename: 'Memory Hint (daily)', level: 'workspace', category: 'memory' });
   }
 
   // [VOLATILE 5] Assistant project instructions — state-dependent
+  // 中文注释：功能名称「assistant workspace 状态指令恢复」，用法是恢复历史有效路径，
+  // 继续允许 onboarding、heartbeat、buddy、memory-file-update 等状态规则参与系统提示。
   if (assistantProjectInstructions) {
     volatileParts.push(assistantProjectInstructions);
   }
@@ -232,8 +312,34 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
   // Widget MCP keyword detection is handled solely in claude-client.ts
   // where the actual MCP server registration happens.
 
-  // [VOLATILE 6] Dashboard context (desktop only)
-  if (!lightweightMode && entryPoint === 'desktop' && session.working_directory) {
+  // [VOLATILE 6] Current Todo List State
+  try {
+    const { getTasksBySession } = await import('@/lib/db');
+    const tasks = getTasksBySession(session.id);
+    // 中文注释：功能名称「全局 Todo 状态恢复」，用法是无论当前列表是否为空，
+    // 都把 Todo 作为本轮执行前约束注入，避免模型在复杂任务里直接越过任务编排。
+    let taskPrompt = `<current-todo-list>\n`;
+    if (tasks && tasks.length > 0) {
+      taskPrompt += `Here is the CURRENT state of the Todo list for this session.\n`;
+      taskPrompt += `Before any further tool work, reconcile this list with TodoWrite. If the plan is stale, missing steps, or missing a current in_progress item, update it immediately.\n\n`;
+      tasks.forEach((t, i) => {
+        const check = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
+        const desc = t.description ? ` - ${t.description}` : '';
+        taskPrompt += `${i + 1}. ${check} (${t.status}) ${t.title}${desc}\n`;
+      });
+    } else {
+      taskPrompt += `The current Todo list is empty.\n`;
+      taskPrompt += `If the request is CLEAR and specific (known files, numbered requirements, 3+ distinct implementation steps), create a TodoWrite list before starting work.\n`;
+      taskPrompt += `If the request is BROAD or needs investigation first (e.g. "排查问题", "improve performance", "investigate why X"), you may explore the codebase or dispatch research agents to understand scope before writing the Todo list.\n`;
+    }
+    taskPrompt += `</current-todo-list>`;
+    volatileParts.push(taskPrompt);
+  } catch {
+    // ignore
+  }
+
+  // [VOLATILE 6.5] Dashboard context (desktop only)
+  if (entryPoint === 'desktop' && session.working_directory) {
     try {
       const { readDashboard } = await import('@/lib/dashboard-store');
       const config = readDashboard(session.working_directory);
@@ -260,9 +366,16 @@ export async function assembleContext(config: ContextAssemblyConfig): Promise<As
 
   return {
     systemPrompt: finalSystemPrompt,
+    referencedContexts,
+    instructionSources,
     generativeUIEnabled,
     assistantProjectInstructions,
     isAssistantProject,
+    includeAgentsMd,
+    includeClaudeMd,
+    enableAgentsSkills,
+    syncProjectRules,
+    knowledgeBaseEnabled,
   };
 }
 

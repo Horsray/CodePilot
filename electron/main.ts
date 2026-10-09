@@ -140,7 +140,7 @@ async function isBridgeActive(): Promise<boolean> {
     return await new Promise<boolean>((resolve) => {
       const req = http.get(`http://127.0.0.1:${serverPort}/api/bridge`, (res: { statusCode?: number; on: (event: string, cb: (data?: Buffer) => void) => void }) => {
         let body = '';
-        res.on('data', (chunk?: Buffer) => { if (chunk) body += chunk.toString(); });
+        res.on('data', (chunk?: Buffer) => { body += (chunk ?? '').toString(); });
         res.on('end', () => {
           try {
             const data = JSON.parse(body);
@@ -198,11 +198,11 @@ function createTray(): void {
   const iconPath = getIconPath();
   const trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
   tray = new Tray(trayIcon);
-  tray.setToolTip('CodePilot — Bridge Active');
+  tray.setToolTip('HueyingAgent — Bridge Active');
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Open CodePilot',
+      label: 'Open HueyingAgent',
       click: () => {
         if (BrowserWindow.getAllWindows().length === 0) {
           createWindow(`http://127.0.0.1:${serverPort || 3000}`);
@@ -362,7 +362,7 @@ function checkNativeModuleABI(): void {
     if (msg.includes('NODE_MODULE_VERSION')) {
       console.error(`[ABI check] ABI mismatch detected: ${msg}`);
       dialog.showErrorBox(
-        'CodePilot - Native Module ABI Mismatch',
+        'HueyingAgent - Native Module ABI Mismatch',
         `The bundled better-sqlite3 native module was compiled for a different Node.js version.\n\n` +
         `${msg}\n\n` +
         `This usually means the build process did not correctly recompile native modules for Electron.\n` +
@@ -507,8 +507,40 @@ function getExpandedShellPath(): string {
   }
 }
 
-function getPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+/**
+ * Try to bind a specific port. Resolves true if free, false if taken.
+ * Both EADDRINUSE and other errors count as "not free" (we'll try the next).
+ */
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen(port, '127.0.0.1', () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+/**
+ * Stable port range for the embedded Next.js server.
+ *
+ * IMPORTANT: localStorage in the renderer is keyed by origin (scheme+host+port).
+ * If we pick a random OS-assigned port (`listen(0)`) every launch, localStorage
+ * is effectively wiped on every restart — which silently breaks the theme,
+ * default model badge, last-selected provider, working-directory memory, and
+ * any other UI state that uses localStorage. (See B-004 in issue tracker.)
+ *
+ * We try this range in order so the origin stays consistent across restarts.
+ * Range chosen: 47823–47830 (8 ports). These are unassigned by IANA and
+ * uncommon in practice. 8 candidates handles up to 8 concurrent CodePilot
+ * instances before falling back to OS-assigned, which is plenty for normal use.
+ */
+const STABLE_PORTS = [47823, 47824, 47825, 47826, 47827, 47828, 47829, 47830];
+
+/** Allocate an OS-assigned port (last-resort fallback when all stable ports fail). */
+async function getDynamicPort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
     const server = net.createServer();
     server.unref();
     server.on('error', reject);
@@ -522,6 +554,66 @@ function getPort(): Promise<number> {
       }
     });
   });
+}
+
+/**
+ * Start the embedded server, choosing an available stable port.
+ *
+ * The previous implementation just probed `isPortFree` then returned the
+ * port — a classic TOCTOU race when two packaged instances launch close
+ * together (both observe 47823 free, the second one then loses with
+ * EADDRINUSE and the app crashes). This function actually attempts to bind
+ * each candidate via the real subprocess and advances to the next one if
+ * the server fails to come up due to a port conflict.
+ *
+ * Returns the bound port. Sets the global `serverProcess` as a side effect.
+ * Throws only if every candidate AND the OS-assigned fallback fail.
+ */
+async function startServerOnStablePort(): Promise<number> {
+  for (const candidate of STABLE_PORTS) {
+    // Quick pre-check skips obviously-occupied ports without spawning.
+    // Not a guarantee — but cheap, and avoids a process spawn for the common
+    // case where another app already owns 47823.
+    if (!(await isPortFree(candidate))) {
+      console.log(`[port] ${candidate} is in use, trying next stable port`);
+      continue;
+    }
+
+    console.log(`[port] Attempting stable port ${candidate}...`);
+    serverProcess = startServer(candidate);
+    try {
+      await waitForServer(candidate);
+      console.log(`[port] Bound stable port ${candidate} — localStorage origin will be consistent across restarts`);
+      return candidate;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isPortConflict = /EADDRINUSE|address.+(?:already )?in use|listen EACCES/i.test(msg);
+      console.warn(
+        `[port] Port ${candidate} failed${isPortConflict ? ' (collided with another process)' : ''}: ${msg.slice(0, 200)}` +
+        (isPortConflict ? ' — trying next stable port' : ''),
+      );
+      // Make sure the failed subprocess is dead before trying again — otherwise
+      // we'd leak processes on each retry.
+      try { serverProcess?.kill(); } catch { /* already gone */ }
+      serverProcess = null;
+
+      // Non-port errors (Next.js boot crash, missing file, etc.) won't be
+      // fixed by switching ports, but we still try the rest because the cost
+      // is small and a transient error on the first port shouldn't be fatal.
+    }
+  }
+
+  // Every stable port failed — last resort: OS-assigned dynamic port.
+  // localStorage will be lost on next restart, but at least the app boots.
+  console.warn(
+    `[port] All stable ports (${STABLE_PORTS[0]}-${STABLE_PORTS[STABLE_PORTS.length - 1]}) failed; ` +
+    `falling back to OS-assigned port. UI settings stored in localStorage (theme, last model, etc.) ` +
+    `may not persist across this restart.`,
+  );
+  const dynamicPort = await getDynamicPort();
+  serverProcess = startServer(dynamicPort);
+  await waitForServer(dynamicPort);
+  return dynamicPort;
 }
 
 async function waitForServer(port: number, timeout = 30000): Promise<void> {
@@ -668,7 +760,7 @@ const LOADING_HTML = `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTY
 <body>
 <div class="container">
   <div class="spinner"></div>
-  <p>Starting CodePilot...</p>
+  <p>Starting HueyingAgent...</p>
 </div>
 </body>
 </html>`)}`;
@@ -684,6 +776,7 @@ function createWindow(url?: string) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
     },
   };
 
@@ -700,6 +793,17 @@ function createWindow(url?: string) {
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+
+  // 中文注释：功能名称「webview 安全验证」，用法是在 webview 挂载时校验其 URL 和配置，
+  // 防止恶意页面通过 webview 提权访问 file:// 等危险协议
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    if (params.src && params.src.startsWith('file://')) {
+      event.preventDefault();
+    }
+  });
 
   // External links: open in system default browser instead of Electron
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
@@ -1245,6 +1349,15 @@ app.whenReady().then(async () => {
     return shell.openPath(folderPath);
   });
 
+  // 中文注释：在系统默认浏览器中打开 URL —— 对齐 cc-haha 的 shellOpenExternal。
+  // OAuth 授权页依赖系统浏览器的登录会话与安全环境，Electron 内嵌窗口打开会失败。
+  ipcMain.handle('shell:open-external', async (_event: Electron.IpcMainInvokeEvent, url: string) => {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+      throw new Error('Invalid external URL');
+    }
+    await shell.openExternal(url);
+  });
+
   // Bridge status IPC
   ipcMain.handle('bridge:is-active', async () => {
     return isBridgeActive();
@@ -1314,6 +1427,151 @@ app.whenReady().then(async () => {
     }
   });
 
+  // --- Artifact long-shot export (Phase 3) ---
+  // Captures an arbitrary HTML source as a single full-page PNG, using
+  // Chromium's CDP captureBeyondViewport so we can exceed the viewport
+  // height without manual stitching. Runs in an isolated hidden
+  // BrowserWindow with its own session partition (mirrors
+  // widget:export-png's security envelope).
+  //
+  // Module-level export lock serializes concurrent calls; capturePage +
+  // debugger.attach don't play nicely with a second export starting on
+  // the same machine before the first finishes.
+  let exportLongShotBusy = false;
+
+  ipcMain.handle('artifact:export-long-shot', async (_event, params: {
+    html: string;
+    width: number;
+    pixelRatio?: number;
+    outPath?: string;
+    maxHeightPx?: number;
+    timeoutMs?: number;
+  }) => {
+    if (exportLongShotBusy) {
+      return { error: 'busy' as const };
+    }
+    exportLongShotBusy = true;
+
+    const {
+      html,
+      width,
+      pixelRatio = 2,
+      outPath,
+      maxHeightPx = 50000,
+      timeoutMs = 30000,
+    } = params;
+
+    const exportWindow = new BrowserWindow({
+      show: false,
+      width,
+      height: 2000,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        partition: `artifact-export-${Date.now()}`,
+      },
+    });
+    exportWindow.webContents.on('will-navigate', (e) => e.preventDefault());
+    exportWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
+
+    try {
+      await exportWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+
+      // Give the document a chance to finish layout + image loading. We
+      // race a scriptsReady console signal against a fixed ceiling.
+      const readyRace = Promise.race([
+        new Promise<'ready'>((resolve) => {
+          exportWindow.webContents.on('console-message', (_e, _level, message) => {
+            if (message === '__scriptsReady__') resolve('ready');
+          });
+          // Unconditional floor — even if the page never emits scriptsReady,
+          // we still resolve after 3s so simple HTML artifacts render.
+          setTimeout(() => resolve('ready'), 3000);
+        }),
+        deadline,
+      ]);
+      const readyResult = await readyRace;
+      if (readyResult === 'timeout') {
+        return { error: 'timeout' as const };
+      }
+      // Small extra delay so image repaints settle before we measure height.
+      await new Promise((r) => setTimeout(r, 200));
+
+      const contentHeight: number = await exportWindow.webContents.executeJavaScript(
+        'document.body.scrollHeight',
+      );
+      if (contentHeight > maxHeightPx) {
+        return {
+          error: 'canvas_limit' as const,
+          meta: { contentHeight, maxHeightPx },
+        };
+      }
+
+      // Use CDP Page.captureScreenshot with captureBeyondViewport so we
+      // don't need to size the window up to the content or stitch segments.
+      // debugger.attach is independent of DevTools; the export window
+      // itself is hidden so DevTools never attach to it.
+      try {
+        exportWindow.webContents.debugger.attach('1.3');
+      } catch (err) {
+        return {
+          error: 'debugger_busy' as const,
+          meta: { detail: String(err) },
+        };
+      }
+
+      let pngBase64: string;
+      try {
+        const result = await exportWindow.webContents.debugger.sendCommand(
+          'Page.captureScreenshot',
+          {
+            format: 'png',
+            captureBeyondViewport: true,
+            // Force device-pixel ratio so the produced image matches the
+            // user's monitor scale — without this, retina users get a
+            // half-resolution PNG.
+            // Note: CDP doesn't take pixelRatio directly; we size via
+            // clip + deviceScaleFactor below if needed.
+          },
+        );
+        pngBase64 = (result as { data: string }).data;
+      } finally {
+        try {
+          exportWindow.webContents.debugger.detach();
+        } catch {
+          // Detach failures are harmless — the window destroy below
+          // tears everything down regardless.
+        }
+      }
+
+      if (outPath) {
+        const fs = await import('fs/promises');
+        const buf = Buffer.from(pngBase64, 'base64');
+        await fs.writeFile(outPath, buf);
+        return { path: outPath, bytes: buf.length };
+      }
+      return { base64: pngBase64, bytes: Buffer.from(pngBase64, 'base64').length };
+    } catch (err) {
+      return {
+        error: 'oom' as const,
+        meta: { detail: err instanceof Error ? err.message : String(err) },
+      };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      exportWindow.destroy();
+      exportLongShotBusy = false;
+      // Unused here but kept to signal we didn't forget the pixelRatio
+      // param — Phase 3 follow-up may wire it via deviceScaleFactor emu.
+      void pixelRatio;
+    }
+  });
+
   // --- Terminal IPC handlers ---
   terminalManager.setOnData((id, data) => {
     mainWindow?.webContents.send('terminal:data', { id, data });
@@ -1324,22 +1582,15 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('terminal:create', async (_event, opts: { id: string; cwd: string; cols: number; rows: number }) => {
-    try {
-      terminalManager.create(opts.id, {
-        cwd: opts.cwd,
-        cols: opts.cols,
-        rows: opts.rows,
-        env: userShellEnv,
-      });
-      return { ok: true };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error('[main] terminal:create failed:', message);
-      throw new Error(message);
-    }
+    terminalManager.create(opts.id, {
+      cwd: opts.cwd,
+      cols: opts.cols,
+      rows: opts.rows,
+      env: userShellEnv,
+    });
   });
 
-  ipcMain.handle('terminal:write', async (_event, data: { id: string; data: string }) => {
+  ipcMain.on('terminal:write', (_event, data: { id: string; data: string }) => {
     terminalManager.write(data.id, data.data);
   });
 
@@ -1392,21 +1643,21 @@ app.whenReady().then(async () => {
     let port: number;
 
     if (isDev) {
-      port = 3000;
+      const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : NaN;
+      port = Number.isNaN(envPort) ? 3000 : envPort;
       console.log(`Dev mode: connecting to http://127.0.0.1:${port}`);
       serverPort = port;
       createWindow(`http://127.0.0.1:${port}`);
     } else {
-      port = await getPort();
-      console.log(`Starting server on port ${port}...`);
-      serverProcess = startServer(port);
-      serverPort = port;
-
-      // Show window immediately with loading screen
+      // Show window immediately with loading screen so user sees progress
+      // even if port acquisition takes a moment.
       createWindow();
 
-      // Wait for server in background, then navigate to real URL
-      await waitForServer(port);
+      // startServerOnStablePort actually binds the subprocess on each
+      // candidate port and advances on EADDRINUSE — closing the TOCTOU
+      // race window from the previous "probe-then-release" approach.
+      port = await startServerOnStablePort();
+      serverPort = port;
       console.log('Server is ready');
       if (mainWindow) {
         mainWindow.loadURL(`http://127.0.0.1:${port}`);
@@ -1434,7 +1685,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('Failed to start:', err);
     dialog.showErrorBox(
-      'CodePilot - Failed to Start',
+      'HueyingAgent - Failed to Start',
       `The internal server could not start.\n\n${err instanceof Error ? err.message : String(err)}\n\nPlease try restarting the application.`
     );
     app.quit();
@@ -1466,11 +1717,9 @@ app.on('activate', async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     try {
       if (!isDev && !serverProcess) {
-        const port = await getPort();
-        serverProcess = startServer(port);
-        // Show loading window immediately
+        // Show loading window immediately so user sees progress
         createWindow();
-        await waitForServer(port);
+        const port = await startServerOnStablePort();
         serverPort = port;
         if (mainWindow) {
           mainWindow.loadURL(`http://127.0.0.1:${port}`);

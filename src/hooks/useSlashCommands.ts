@@ -32,7 +32,10 @@ export function useSlashCommands(opts: {
   setTriggerPos: (pos: number | null) => void;
   closePopover: () => void;
   onCommand?: (command: string) => void;
-  setBadge: (badge: { command: string; label: string; description: string; kind: SkillKind; installedSource?: "agents" | "claude" } | null) => void;
+  addBadge: (badge: { command: string; label: string; description: string; kind: SkillKind; installedSource?: "agents" | "claude" }) => void;
+  onMentionInserted?: (mention: { path: string; nodeType: 'file' | 'directory'; display: string }) => void;
+  /** When true, block immediate commands and badge selection from popover */
+  isStreaming?: boolean;
 }): UseSlashCommandsReturn {
   const {
     sessionId,
@@ -51,7 +54,9 @@ export function useSlashCommands(opts: {
     setTriggerPos,
     closePopover,
     onCommand,
-    setBadge,
+    addBadge,
+    onMentionInserted,
+    isStreaming,
   } = opts;
 
   // Enrich built-in commands with icons (presentation layer enrichment)
@@ -64,25 +69,24 @@ export function useSlashCommands(opts: {
   const fetchFiles = useCallback(async (filter: string) => {
     try {
       const params = new URLSearchParams();
-      if (sessionId) params.set('session_id', sessionId);
+      if (sessionId) params.set('sessionId', sessionId);
+      if (!sessionId && workingDirectory) params.set('workingDirectory', workingDirectory);
       if (filter) params.set('q', filter);
-      const res = await fetch(`/api/files?${params.toString()}`);
+      params.set('limit', '50');
+      const res = await fetch(`/api/files/suggest?${params.toString()}`);
       if (!res.ok) return [];
       const data = await res.json();
-      const tree = data.tree || [];
-      const items: PopoverItem[] = [];
-      function flattenTree(nodes: Array<{ name: string; path: string; type: string; children?: unknown[] }>) {
-        for (const node of nodes) {
-          items.push({ label: node.name, value: node.path });
-          if (node.children) flattenTree(node.children as typeof nodes);
-        }
-      }
-      flattenTree(tree);
-      return items.slice(0, 20);
+      const items = (data.items || []) as Array<{ path: string; display?: string; type?: 'file' | 'directory'; nodeType?: 'file' | 'directory' }>;
+      return items.map((item) => ({
+        label: item.display || item.path,
+        value: item.path,
+        display: item.display || item.path,
+        nodeType: item.type || item.nodeType || 'file',
+      }));
     } catch {
       return [];
     }
-  }, [sessionId]);
+  }, [sessionId, workingDirectory]);
 
   // Fetch skills for / command (built-in + API)
   const fetchSkills = useCallback(async () => {
@@ -102,7 +106,7 @@ export function useSlashCommands(opts: {
             if (s.source === 'plugin' && s.loaded === false) return false;
             return true;
           })
-          .map((s: { name: string; description: string; source?: "global" | "project" | "plugin" | "installed" | "sdk"; kind?: SkillKind; installedSource?: "agents" | "claude" }) => ({
+          .map((s: { name: string; description: string; content?: string; source?: "global" | "project" | "plugin" | "installed" | "sdk"; kind?: SkillKind; installedSource?: "agents" | "claude" }) => ({
             label: s.name,
             value: `/${s.name}`,
             description: s.description || "",
@@ -110,6 +114,7 @@ export function useSlashCommands(opts: {
             installedSource: s.installedSource,
             source: s.source,
             kind: s.kind || 'slash_command',
+            content: s.content || undefined,
           }));
       }
     } catch {
@@ -180,6 +185,8 @@ export function useSlashCommands(opts: {
 
     switch (result.action) {
       case 'immediate_command':
+        // Block during streaming — destructive commands (e.g. /clear) would race
+        if (isStreaming) { closePopover(); return; }
         if (onCommand) {
           setInputValue('');
           closePopover();
@@ -188,19 +195,32 @@ export function useSlashCommands(opts: {
         return;
 
       case 'set_badge':
-        setBadge(result.badge!);
-        setInputValue('');
+        // Block during streaming — badges dispatch as slash/skill prompts, not queueable
+        if (isStreaming) { closePopover(); return; }
+        addBadge(result.badge!);
+        setInputValue(result.newInputValue ?? '');
         closePopover();
-        setTimeout(() => textareaRef.current?.focus(), 0);
+        setTimeout(() => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          const pos = el.value.length;
+          el.setSelectionRange(pos, pos);
+        }, 0);
         return;
 
       case 'insert_file_mention':
         setInputValue(result.newInputValue!);
+        onMentionInserted?.({
+          path: item.value,
+          nodeType: item.nodeType || 'file',
+          display: item.display || item.value,
+        });
         closePopover();
         setTimeout(() => textareaRef.current?.focus(), 0);
         return;
     }
-  }, [triggerPos, popoverMode, closePopover, onCommand, inputValue, popoverFilter, textareaRef, setInputValue, setBadge]);
+  }, [triggerPos, popoverMode, closePopover, onCommand, inputValue, popoverFilter, textareaRef, setInputValue, addBadge, onMentionInserted, isStreaming]);
 
   // Handle input changes to detect @ and /
   const handleInputChange = useCallback(async (val: string) => {
@@ -234,15 +254,21 @@ export function useSlashCommands(opts: {
     }
   }, [fetchFiles, fetchSkills, popoverMode, closePopover, textareaRef, setInputValue, setPopoverMode, setPopoverFilter, setTriggerPos, setSelectedIndex, setPopoverItems]);
 
-  // Insert `/` into textarea to trigger slash command popover
+  // Insert `/` into textarea to trigger slash command popover. When the
+  // preceding char isn't whitespace, auto-prepend a space so the trigger regex
+  // (which requires `^|\s` before `/`) matches — this is why the user can
+  // click the slash button mid-word and still see the picker, without forcing
+  // the regex to false-positive on path-like text.
   const handleInsertSlash = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const cursorPos = textarea.selectionStart;
     const before = inputValue.slice(0, cursorPos);
     const after = inputValue.slice(cursorPos);
-    const newValue = before + '/' + after;
-    const newCursorPos = cursorPos + 1;
+    const needsSpace = before.length > 0 && !/\s$/.test(before);
+    const inserted = needsSpace ? ' /' : '/';
+    const newValue = before + inserted + after;
+    const newCursorPos = cursorPos + inserted.length;
     setInputValue(newValue);
     // Set cursor position first so handleInputChange reads correct selectionStart
     textarea.value = newValue;

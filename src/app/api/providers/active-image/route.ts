@@ -1,0 +1,138 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getSetting, setSetting, getProvider } from '@/lib/db';
+import { getPreset, getPresetsByCategory } from '@/lib/provider-catalog';
+import type { ApiProvider } from '@/types';
+
+/**
+ * Resolve the model id + friendly label a media provider would currently use.
+ * Used by the image-gen UI so the Design Agent card can show the model name
+ * without every client re-implementing the extra_env parse + catalog lookup.
+ */
+function resolveModelForProvider(provider: ApiProvider): { model: string; modelLabel: string } {
+  const isOpenAI = provider.provider_type === 'openai-image';
+  const envKey = isOpenAI ? 'OPENAI_IMAGE_MODEL' : 'GEMINI_IMAGE_MODEL';
+  let configuredModel = isOpenAI ? 'gpt-image-2' : 'gemini-3.1-flash-image-preview';
+
+  // For custom-media providers with _custom_models, use the first custom model
+  // as default (or role_models_json.default if it exists in the custom list).
+  try {
+    const envOv = JSON.parse(provider.env_overrides_json || '{}');
+    const parsedCustom = typeof envOv._custom_models === 'string' ? JSON.parse(envOv._custom_models) : envOv._custom_models;
+    if (Array.isArray(parsedCustom) && parsedCustom.length > 0) {
+      // Try role_models_json.default first
+      try {
+        const rm = JSON.parse(provider.role_models_json || '{}');
+        if (rm.default && parsedCustom.some((m: { modelId: string }) => m.modelId === rm.default)) {
+          const match = parsedCustom.find((m: { modelId: string }) => m.modelId === rm.default);
+          return { model: rm.default, modelLabel: match?.displayName || rm.default };
+        }
+      } catch { /* ignore */ }
+      // Fall back to first custom model
+      return { model: parsedCustom[0].modelId, modelLabel: parsedCustom[0].displayName || parsedCustom[0].modelId };
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const env = JSON.parse(provider.extra_env || '{}');
+    if (typeof env[envKey] === 'string' && env[envKey]) configuredModel = env[envKey];
+  } catch { /* fall through to default */ }
+
+  // Walk every media preset under this protocol — covers the official preset,
+  // the generic *-thirdparty variant, and vendor-specific ones (e.g.
+  // bananarouter-image) that ship their own catalog.
+  const protocol = isOpenAI ? 'openai-image' : 'gemini-image';
+  for (const preset of getPresetsByCategory('media')) {
+    if (preset.protocol !== protocol) continue;
+    const match = preset.defaultModels.find(m => m.modelId === configuredModel);
+    if (match) return { model: configuredModel, modelLabel: match.displayName };
+  }
+  return { model: configuredModel, modelLabel: configuredModel };
+}
+
+/**
+ * GET /api/providers/active-image
+ * Returns the id of the provider currently marked active for image generation,
+ * plus a `stale: true` flag when the stored id no longer resolves to a usable
+ * media provider (deleted row, non-media type, or empty api_key). Callers that
+ * render a UI badge can downgrade the badge in the stale case instead of
+ * showing a provider as "active" while generation silently falls back.
+ */
+export async function GET() {
+  const id = getSetting('active_image_provider_id') || '';
+  if (!id) return NextResponse.json({ providerId: '', stale: false });
+
+  const provider = getProvider(id);
+  const isMedia = !!provider
+    && (provider.provider_type === 'gemini-image' || provider.provider_type === 'openai-image');
+  const hasKey = !!provider?.api_key;
+  const stale = !provider || !isMedia || !hasKey;
+
+  // When the active row is still a healthy media provider, include the
+  // resolved model + friendly label so the image-gen UI can display them
+  // inline (the Design Agent card needs this to answer "what will run?"
+  // without a second round trip).
+  if (provider && isMedia) {
+    const { model, modelLabel } = resolveModelForProvider(provider);
+    return NextResponse.json({
+      providerId: id,
+      stale,
+      providerName: provider.name,
+      providerType: provider.provider_type,
+      family: provider.provider_type === 'openai-image' ? 'openai' : 'gemini',
+      model,
+      modelLabel,
+    });
+  }
+  return NextResponse.json({ providerId: id, stale });
+}
+
+/**
+ * PUT /api/providers/active-image
+ * Body: { providerId: string }  (empty string clears the setting)
+ *
+ * Validates that the provider exists, is a media provider, AND has an api_key
+ * before saving. Blocking empty-key rows avoids the "looks active in the UI
+ * but generateSingleImage ignores it because its SELECT requires api_key != ''"
+ * inconsistency.
+ */
+export async function PUT(request: NextRequest) {
+  try {
+    const { providerId } = (await request.json()) as { providerId?: string };
+    if (typeof providerId !== 'string') {
+      return NextResponse.json({ error: 'providerId must be a string' }, { status: 400 });
+    }
+
+    if (providerId === '') {
+      setSetting('active_image_provider_id', '');
+      return NextResponse.json({ providerId: '', stale: false });
+    }
+
+    const provider = getProvider(providerId);
+    if (!provider) {
+      return NextResponse.json({ error: 'Provider not found' }, { status: 404 });
+    }
+    if (provider.provider_type !== 'gemini-image' && provider.provider_type !== 'openai-image') {
+      return NextResponse.json(
+        { error: 'Only media providers (gemini-image, openai-image) can be marked active for images.' },
+        { status: 400 },
+      );
+    }
+    if (!provider.api_key) {
+      return NextResponse.json(
+        {
+          error: 'This provider has no API key configured. Enter a key first, then mark it as the image-generation default.',
+          code: 'MISSING_API_KEY',
+        },
+        { status: 400 },
+      );
+    }
+
+    setSetting('active_image_provider_id', providerId);
+    return NextResponse.json({ providerId, stale: false });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to update active image provider' },
+      { status: 500 },
+    );
+  }
+}

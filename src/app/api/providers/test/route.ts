@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { testProviderConnection } from '@/lib/claude-client';
 import { getPreset } from '@/lib/provider-catalog';
-import { getSetting } from '@/lib/db';
-import { readCCSwitchConfig, readCCSwitchClaudeSettings } from '@/lib/cc-switch';
+import { getProvider } from '@/lib/db';
 import type { ErrorResponse } from '@/types';
 
 /**
@@ -10,32 +9,57 @@ import type { ErrorResponse } from '@/types';
  *
  * Test a provider connection without saving to DB.
  * Sends a minimal SDK query and returns structured success/error.
+ *
+ * Body fields:
+ * - providerId (optional) — if present, DB-stored api_key will be used when
+ *   the caller sends no apiKey or a masked value ("***xxxx"). This fixes the
+ *   edit-then-test flow where the UI shows masked keys (#449).
+ * - apiKey (optional when providerId is given) — real or empty; masked
+ *   ("***xxxx") is treated as "not modified, fall back to DB".
+ * - other fields: presetKey, baseUrl, protocol, authStyle, envOverrides,
+ *   providerName, modelName — all pass through to testProviderConnection.
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { presetKey, apiKey, baseUrl, protocol, authStyle, envOverrides, providerName, modelName, useCCSwitch } = body;
+    const {
+      providerId,
+      presetKey,
+      apiKey: bodyApiKey,
+      baseUrl,
+      protocol,
+      authStyle,
+      envOverrides,
+      providerName,
+      modelName,
+    } = body;
 
-    // If no API key provided and useCCSwitch is true, try to get from cc-switch config
-    let finalApiKey = apiKey;
-    let finalBaseUrl = baseUrl;
-    
-    if (!finalApiKey && useCCSwitch && getSetting('cc_switch_enabled') === 'true') {
-      const ccConfig = readCCSwitchConfig();
-      const ccSettings = readCCSwitchClaudeSettings();
-      
-      if (ccSettings && typeof ccSettings === 'object' && 'apiKey' in ccSettings) {
-        finalApiKey = (ccSettings as { apiKey: string }).apiKey;
-        finalBaseUrl = (ccSettings as { baseUrl: string }).baseUrl;
-      } else if (ccConfig && Object.keys(ccConfig).length > 0) {
-        const firstConfig = Object.values(ccConfig)[0];
-        finalApiKey = firstConfig.ANTHROPIC_API_KEY || firstConfig.ANTHROPIC_AUTH_TOKEN || '';
-        finalBaseUrl = firstConfig.ANTHROPIC_BASE_URL || '';
+    // Step 1: back-fill real api_key from DB when the caller sends no key or a
+    // masked placeholder. This must happen BEFORE the NO_CREDENTIALS check.
+    let effectiveApiKey: string = typeof bodyApiKey === 'string' ? bodyApiKey : '';
+    const isMasked = effectiveApiKey.startsWith('***');
+    if (providerId && (!effectiveApiKey || isMasked)) {
+      try {
+        const stored = getProvider(providerId);
+        if (stored?.api_key) {
+          effectiveApiKey = stored.api_key;
+        }
+      } catch {
+        // DB lookup failure → fall through; the NO_CREDENTIALS check below
+        // will surface a clean error.
       }
     }
 
-    if (!finalApiKey && authStyle !== 'env_only') {
-      return NextResponse.json({ success: false, error: { code: 'NO_CREDENTIALS', message: 'API Key is required', suggestion: 'Please enter your API key or enable CC-Switch' } });
+    // Step 2: credential check (after back-fill)
+    if (!effectiveApiKey && authStyle !== 'env_only') {
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: 'NO_CREDENTIALS',
+          message: 'API Key is required',
+          suggestion: 'Please enter your API key',
+        },
+      });
     }
 
     // Look up preset meta for recovery action URLs
@@ -43,8 +67,8 @@ export async function POST(request: NextRequest) {
     const meta = preset?.meta;
 
     const result = await testProviderConnection({
-      apiKey: finalApiKey || '',
-      baseUrl: finalBaseUrl || '',
+      apiKey: effectiveApiKey,
+      baseUrl: baseUrl || '',
       protocol: protocol || 'anthropic',
       authStyle: authStyle || 'api_key',
       envOverrides: envOverrides || {},

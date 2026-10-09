@@ -8,13 +8,26 @@ import { ArrowDown, DownloadSimple } from "@phosphor-icons/react";
 import { useCallback } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
+/** 中文注释：丝滑跟随弹簧参数（2026-10-07 经数值模拟+逐帧实测选定）。
+ *  库的积分器：v=(damping·v+stiffness·e)/mass; pos+=v（每 rAF 帧一次）。
+ *  判定稳定性看根模长 |λ|=√(damping/mass)：≥1 是发散振荡（旧值 0.86/0.7→1.11，
+ *  表现为越晃越大、最后猛扑到底）；<1 且判别式≥0 是单调收敛（无过冲、无回弹）。
+ *  本组参数：damping/mass=0.49、stiffness/mass=0.07 → 特征根 0.83/0.59（实根），
+ *  100px 跳变 0 过冲、约 370ms 收敛；流式稳态滞后约一行内（≈14px），零波动。 */
+const SILKY_SPRING = { damping: 0.49, stiffness: 0.07, mass: 1 } as const;
+
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
 export const Conversation = ({ className, ...props }: ConversationProps) => (
   <StickToBottom
-    className={cn("relative flex-1 overflow-y-hidden", className)}
-    initial="smooth"
-    resize="instant"
+    /* 中文注释：chat-scroll-gutter-fix 覆盖库内联的 scrollbar-gutter（该槽位会在窄卡片下形成左右空白） */
+    className={cn("chat-scroll-gutter-fix relative flex-1 overflow-y-hidden", className)}
+    initial="instant"
+    /* 中文注释：流式内容增长时用丝滑弹簧跟随 —— 新文字软着陆到底部，
+       既不瞬跳（生硬），也不回弹（旧参数是不收敛振荡器）。 */
+    resize={SILKY_SPRING}
+    /* 中文注释：同一组参数给「发送消息 / 点回到底部按钮」的离散跳转用，保持手感一致。 */
+    {...SILKY_SPRING}
     role="log"
     {...props}
   />

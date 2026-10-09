@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Folder, DotOutline, ArrowRight, Plus } from "@/components/ui/icon";
-import { Button } from "@/components/ui/button";
-import { useTranslation } from "@/hooks/useTranslation";
+import { Folder, ArrowRight, Plus, Circle } from "@/components/ui/icon";
 import { useRouter } from "next/navigation";
 import type { GitWorktree } from "@/types";
 
@@ -13,13 +11,15 @@ interface GitWorktreeSectionProps {
 }
 
 export function GitWorktreeSection({ cwd, onDeriveWorktree }: GitWorktreeSectionProps) {
-  const { t } = useTranslation();
   const router = useRouter();
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!cwd) return;
+    if (!cwd) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
 
     (async () => {
@@ -27,19 +27,21 @@ export function GitWorktreeSection({ cwd, onDeriveWorktree }: GitWorktreeSection
       try {
         const res = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(cwd)}`);
         const data = await res.json();
-        if (!cancelled) setWorktrees(data.worktrees || []);
+        if (!cancelled) setWorktrees(Array.isArray(data.worktrees) ? data.worktrees : []);
       } catch {
-        // ignore
+        // silently ignore fetch errors
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [cwd]);
 
+  // 切换到指定工作树对应的会话（CodePilot 能力，cc-haha 此处为 TODO 仅刷新）
   const handleSwitchTo = async (worktreePath: string) => {
-    // Find or create a session for this worktree's working directory
     try {
       const res = await fetch(`/api/chat/sessions/by-cwd?cwd=${encodeURIComponent(worktreePath)}`);
       if (res.ok) {
@@ -50,9 +52,9 @@ export function GitWorktreeSection({ cwd, onDeriveWorktree }: GitWorktreeSection
         }
       }
       // No existing session — create one
-      const createRes = await fetch('/api/chat/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const createRes = await fetch("/api/chat/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ working_directory: worktreePath }),
       });
       if (createRes.ok) {
@@ -64,65 +66,107 @@ export function GitWorktreeSection({ cwd, onDeriveWorktree }: GitWorktreeSection
     }
   };
 
-  if (loading) {
-    return <div className="px-3 py-2 text-[11px] text-muted-foreground">{t('git.loading')}</div>;
-  }
-
-  const isCurrent = (wt: GitWorktree) => {
-    // Normalize paths for comparison
-    const normalize = (p: string) => p.replace(/\/+$/, '');
+  const isCurrent = (wt: GitWorktree): boolean => {
+    if (!cwd) return false;
+    const normalize = (p: string) => p.replace(/\/+$/, "");
     return normalize(wt.path) === normalize(cwd);
   };
 
+  if (loading) {
+    return (
+      <div className="py-2 text-center">
+        <span className="text-xs text-[var(--color-text-tertiary)]">加载中...</span>
+      </div>
+    );
+  }
+
+  if (worktrees.length === 0) {
+    return (
+      <div className="py-2 text-center">
+        <span className="text-xs text-[var(--color-text-tertiary)]">暂无工作树</span>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1">
-      {worktrees.map(wt => {
+      {worktrees.map((wt) => {
         const current = isCurrent(wt);
         return (
           <div
             key={wt.path}
-            className={`flex items-center gap-2 px-3 py-1.5 ${current ? 'bg-muted/30' : 'hover:bg-muted/20'}`}
+            className="flex items-center gap-2 px-2 py-1.5"
+            style={{
+              backgroundColor: current ? "var(--color-surface-container-low)" : "transparent",
+            }}
           >
-            <Folder size={14} className={current ? 'text-foreground shrink-0' : 'text-muted-foreground shrink-0'} />
+            <Folder
+              size={14}
+              className="shrink-0"
+              style={{ color: current ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}
+            />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1">
-                <span className={`text-[12px] truncate ${current ? 'font-medium' : ''}`}>
+                <span
+                  className="text-[12px] truncate"
+                  style={{
+                    color: "var(--color-text-primary)",
+                    fontWeight: current ? 500 : 400,
+                  }}
+                >
                   {wt.branch || wt.head.substring(0, 7)}
                 </span>
                 {current && (
-                  <span className="text-[9px] text-muted-foreground bg-muted rounded px-1">{t('git.current')}</span>
+                  <span
+                    className="text-[9px] rounded px-1"
+                    style={{
+                      color: "var(--color-text-tertiary)",
+                      backgroundColor: "var(--color-surface)",
+                    }}
+                  >
+                    当前
+                  </span>
                 )}
                 {wt.dirty && (
-                  <DotOutline size={10} weight="fill" className="text-amber-500 shrink-0" />
+                  <Circle
+                    size={8}
+                    fill="var(--color-warning)"
+                    className="shrink-0"
+                    style={{ color: "var(--color-warning)" }}
+                  />
                 )}
               </div>
-              <p className="text-[10px] text-muted-foreground truncate">{wt.path}</p>
+              <p
+                className="text-[10px] truncate"
+                style={{ color: "var(--color-text-tertiary)" }}
+              >
+                {wt.path}
+              </p>
             </div>
             {!current && !wt.bare && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="shrink-0 text-muted-foreground hover:text-foreground"
+              <button
+                className="shrink-0 p-0.5 hover:bg-[var(--color-surface)] transition-colors"
+                title="切换到此"
                 onClick={() => handleSwitchTo(wt.path)}
+                style={{ color: "var(--color-text-tertiary)" }}
               >
                 <ArrowRight size={12} />
-                <span className="sr-only">{t('git.switchWorktree')}</span>
-              </Button>
+                <span className="sr-only">切换到此</span>
+              </button>
             )}
           </div>
         );
       })}
 
-      <div className="px-3 pt-1">
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full text-xs"
+      <div className="px-2 pt-1">
+        <button
+          className="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs border border-[var(--color-border)] hover:bg-[var(--color-surface-container-low)] transition-colors"
+          style={{ color: "var(--color-text-secondary)" }}
           onClick={onDeriveWorktree}
         >
-          <Plus size={14} className="mr-1.5" />
-          {t('git.deriveWorktree')}
-        </Button>
+          <Plus size={14} />
+          派生工作树
+        </button>
       </div>
     </div>
   );

@@ -11,10 +11,9 @@ import {
   findAllClaudeBinaries,
   isWindows,
   findGitBash,
-  getExpandedPath,
 } from '@/lib/platform';
-import { resolveProvider, resolveForClaudeCode, toClaudeCodeEnv } from '@/lib/provider-resolver';
-import { readCCSwitchConfig, readCCSwitchClaudeSettings } from './cc-switch';
+import { resolveProvider, resolveForClaudeCode } from '@/lib/provider-resolver';
+import { prepareSdkSubprocessEnv } from '@/lib/sdk-subprocess-env';
 import {
   getAllProviders,
   getDefaultProviderId,
@@ -25,10 +24,12 @@ import {
 import {
   getDefaultModelsForProvider,
   inferProtocolFromLegacy,
+  getEffectiveProviderProtocol,
   findPresetForLegacy,
   type Protocol,
 } from '@/lib/provider-catalog';
 import { classifyError, type ClassifiedError } from '@/lib/error-classifier';
+import { getOAuthStatus } from '@/lib/openai-oauth-manager';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, SDKResultSuccess } from '@anthropic-ai/claude-agent-sdk';
 import os from 'os';
@@ -178,32 +179,6 @@ async function runAuthProbe(): Promise<ProbeResult> {
   const envApiKey = process.env.ANTHROPIC_API_KEY;
   const envAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const dbAuthToken = getSetting('anthropic_auth_token');
-  
-  // Check cc-switch config
-  const ccSwitchConfig = readCCSwitchConfig();
-  const ccSwitchSettings = readCCSwitchClaudeSettings();
-  const ccSwitchEnabled = ccSwitchConfig !== null || ccSwitchSettings !== null;
-  const hasCCSwitchCreds = (() => {
-    if (ccSwitchConfig) {
-      return Object.values(ccSwitchConfig).some(c => c.ANTHROPIC_API_KEY || c.ANTHROPIC_AUTH_TOKEN);
-    }
-    if (ccSwitchSettings) {
-      return Object.values(ccSwitchSettings).some((c: unknown) => {
-        const config = c as Record<string, string>;
-        return config.ANTHROPIC_API_KEY || config.ANTHROPIC_AUTH_TOKEN;
-      });
-    }
-    return false;
-  })();
-
-  if (ccSwitchEnabled && hasCCSwitchCreds) {
-    findings.push({
-      severity: 'ok',
-      code: 'auth.cc-switch',
-      message: 'CC-Switch credentials detected',
-      detail: 'Credentials found in ~/.cc-switch/config.json or ~/.claude/settings.json',
-    });
-  }
 
   if (envApiKey) {
     findings.push({
@@ -240,15 +215,36 @@ async function runAuthProbe(): Promise<ProbeResult> {
     });
   }
 
-  if (!envApiKey && !envAuthToken && !dbAuthToken && !hasCCSwitchCreds) {
+  // Check OpenAI OAuth status
+  let openaiOAuthOk = false;
+  try {
+    const oauthStatus = getOAuthStatus();
+    if (oauthStatus.authenticated) {
+      openaiOAuthOk = true;
+      findings.push({
+        severity: oauthStatus.needsRefresh ? 'warn' : 'ok',
+        code: 'auth.openai-oauth',
+        message: `OpenAI OAuth authenticated${oauthStatus.email ? ` (${oauthStatus.email})` : ''}${oauthStatus.plan ? ` — ${oauthStatus.plan}` : ''}`,
+        ...(oauthStatus.needsRefresh ? { detail: 'Token is near expiry and will be refreshed on next use' } : {}),
+      });
+    }
+  } catch { /* OpenAI OAuth not available */ }
+
+  if (!envApiKey && !envAuthToken && !dbAuthToken) {
     // Check if there are any configured providers with keys
     const providers = getAllProviders();
     const withKeys = providers.filter(p => !!p.api_key);
-    if (withKeys.length === 0) {
+    if (withKeys.length === 0 && !openaiOAuthOk) {
       findings.push({
         severity: 'error',
         code: 'auth.no-credentials',
-        message: 'No API credentials found (environment, DB settings, cc-switch config, or providers)',
+        message: 'No API credentials found (environment, DB settings, providers, or OpenAI OAuth)',
+      });
+    } else if (withKeys.length === 0 && openaiOAuthOk) {
+      findings.push({
+        severity: 'ok',
+        code: 'auth.openai-oauth-only',
+        message: 'No Anthropic credentials, but OpenAI OAuth is available',
       });
     } else {
       findings.push({
@@ -257,41 +253,16 @@ async function runAuthProbe(): Promise<ProbeResult> {
         message: `No environment credentials, but ${withKeys.length} provider(s) have API keys configured`,
       });
     }
-  } else if (!envApiKey && !envAuthToken && !dbAuthToken && hasCCSwitchCreds) {
-    // cc-switch has credentials
-    findings.push({
-      severity: 'ok',
-      code: 'auth.cc-switch-only',
-      message: 'Using CC-Switch credentials from config files',
-    });
   }
 
   // Check resolved provider auth
   try {
     const resolved = resolveProvider();
-    
-    // Check if cc-switch has credentials
-    const ccSwitchConfig = readCCSwitchConfig();
-    const ccSwitchSettings = readCCSwitchClaudeSettings();
-    const hasCCSwitchCreds = (() => {
-      if (ccSwitchConfig) {
-        return Object.values(ccSwitchConfig).some(c => c.ANTHROPIC_API_KEY || c.ANTHROPIC_AUTH_TOKEN);
-      }
-      if (ccSwitchSettings) {
-        return Object.values(ccSwitchSettings).some((c: unknown) => {
-          const config = c as Record<string, string>;
-          return config.ANTHROPIC_API_KEY || config.ANTHROPIC_AUTH_TOKEN;
-        });
-      }
-      return false;
-    })();
-    
-    if (resolved.hasCredentials || hasCCSwitchCreds) {
-      const credSource = hasCCSwitchCreds ? 'CC-Switch' : resolved.authStyle;
+    if (resolved.hasCredentials) {
       findings.push({
         severity: 'ok',
         code: 'auth.resolved-ok',
-        message: `Resolved provider has usable credentials (authStyle: ${credSource})`,
+        message: `Resolved provider has usable credentials (authStyle: ${resolved.authStyle})`,
       });
     } else {
       findings.push({
@@ -388,25 +359,57 @@ async function runProviderProbe(): Promise<ProbeResult> {
 
   // Check each provider for common issues
   for (const p of providers) {
-    if (!p.base_url && p.protocol && !['anthropic'].includes(p.protocol)) {
+    // Compute effective protocol up-front — legacy Default rows have
+    // protocol='' and rely on inference; driving diagnostics off raw
+    // p.protocol would miss exactly those rows.
+    const protocol: Protocol = getEffectiveProviderProtocol(
+      p.provider_type,
+      p.protocol,
+      p.base_url,
+    );
+
+    // Protocols that legitimately have no base_url:
+    //   - anthropic: ambiguous (separate diagnostic below)
+    //   - bedrock / vertex: IAM / gcloud ADC auth, no HTTP endpoint
+    //     configured by the user (matches testProviderConnection's
+    //     SKIPPED branch for cloud providers)
+    const protocolsWithoutUrl = new Set(['anthropic', 'bedrock', 'vertex']);
+    if (!p.base_url && !protocolsWithoutUrl.has(protocol)) {
       findings.push({
         severity: 'warn',
         code: 'provider.missing-base-url',
-        message: `Provider "${p.name}" (${p.protocol}) has no base_url`,
+        message: `Provider "${p.name}" (${protocol}) has no base_url`,
         detail: `Provider ID: ${p.id}`,
       });
     }
 
-    // Check if the provider has any available models
-    const protocol: Protocol = (p.protocol as Protocol) ||
-      inferProtocolFromLegacy(p.provider_type, p.base_url);
+    // Empty base_url on an anthropic-protocol provider is genuinely
+    // ambiguous: it could be a legacy "Default" row migrated from older
+    // settings (which we route to first-party catalog so the user gets
+    // Opus 4.7 / xhigh / 1M), OR a third-party preset that forgot to
+    // fill the URL (which would silently proxy to api.anthropic.com).
+    // We can't tell them apart without a persisted preset_key, so we
+    // surface a warn + actionable suggestion either way. Write-path
+    // validation (/api/providers) blocks new occurrences of this state.
+    //
+    // Uses the *effective* protocol so legacy rows with raw protocol=''
+    // — i.e. exactly the migrations we most want to flag — still get
+    // the diagnostic.
+    if (!p.base_url && protocol === 'anthropic') {
+      findings.push({
+        severity: 'warn',
+        code: 'provider.anthropic-empty-base-url',
+        message: `Provider "${p.name}" uses Anthropic protocol but has no base_url`,
+        detail: `Provider ID: ${p.id}. If this is the official Anthropic API, set base_url to https://api.anthropic.com. If it's a third-party proxy, set its endpoint URL. Empty base_url silently proxies to the official Anthropic endpoint and inherits first-party capabilities, which is almost never what a third-party configuration intends.`,
+      });
+    }
     let hasModels = false;
     try {
       const dbModels = getModelsForProvider(p.id);
       if (dbModels.length > 0) hasModels = true;
     } catch { /* table may not exist */ }
     if (!hasModels) {
-      const catalogModels = getDefaultModelsForProvider(protocol, p.base_url);
+      const catalogModels = getDefaultModelsForProvider(protocol, p.base_url, p.provider_type);
       if (catalogModels.length > 0) hasModels = true;
     }
     // Also check role_models_json.default — it synthesizes a model entry at runtime
@@ -445,7 +448,6 @@ async function runProviderProbe(): Promise<ProbeResult> {
       // But for generic anthropic-thirdparty or unmatched presets, warn.
       const matchedPreset = findPresetForLegacy(p.base_url, p.provider_type, protocol as Protocol);
       const presetHandlesModels = matchedPreset && (
-        matchedPreset.key === 'anthropic-official' ||
         matchedPreset.defaultRoleModels?.default ||
         matchedPreset.defaultEnvOverrides?.ANTHROPIC_MODEL
       );
@@ -518,13 +520,11 @@ async function runFeaturesProbe(): Promise<ProbeResult> {
   try {
     const resolved = resolveProvider();
     const protocol = resolved.protocol;
-    const baseUrl = (resolved.provider?.base_url || process.env.ANTHROPIC_BASE_URL || getSetting('anthropic_base_url') || '').trim();
-    const isOfficialAnthropic = baseUrl.startsWith('https://api.anthropic.com');
 
     // Thinking support — only Anthropic native API supports extended thinking
     const thinkingMode = getSetting('thinking_mode');
     if (thinkingMode && thinkingMode !== 'disabled') {
-      const supportsThinking = protocol === 'anthropic' && isOfficialAnthropic;
+      const supportsThinking = protocol === 'anthropic';
       if (!supportsThinking) {
         findings.push({
           severity: 'warn',
@@ -536,7 +536,7 @@ async function runFeaturesProbe(): Promise<ProbeResult> {
         findings.push({
           severity: 'ok',
           code: 'features.thinking-ok',
-          message: `Thinking mode "${thinkingMode}" is compatible with current provider`,
+          message: `Thinking mode "${thinkingMode}" is compatible with protocol "${protocol}"`,
         });
       }
     }
@@ -544,7 +544,7 @@ async function runFeaturesProbe(): Promise<ProbeResult> {
     // Context 1M — check if enabled on unsupported providers
     const context1m = getSetting('context_1m');
     if (context1m === 'true') {
-      const supportsContext1m = protocol === 'anthropic' && isOfficialAnthropic;
+      const supportsContext1m = protocol === 'anthropic';
       if (!supportsContext1m) {
         findings.push({
           severity: 'warn',
@@ -787,20 +787,13 @@ async function runLiveProbe(): Promise<ProbeResult> {
     return { probe: 'live', severity: probeSeverity(findings), findings, durationMs: Date.now() - start };
   }
 
-  // 4. Build env
-  const sdkEnv: Record<string, string> = { ...process.env as Record<string, string> };
-  if (!sdkEnv.HOME) sdkEnv.HOME = os.homedir();
-  if (!sdkEnv.USERPROFILE) sdkEnv.USERPROFILE = os.homedir();
-  sdkEnv.PATH = getExpandedPath();
-  delete sdkEnv.CLAUDECODE;
-
-  if (process.platform === 'win32' && !process.env.CLAUDE_CODE_GIT_BASH_PATH) {
-    const gitBashPath = findGitBash();
-    if (gitBashPath) sdkEnv.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
-  }
-
-  const resolvedEnv = toClaudeCodeEnv(sdkEnv, resolved, resolved.model);
-  Object.assign(sdkEnv, resolvedEnv);
+  // 4. Build env via the shared helper so the live probe sees the EXACT same
+  // provider-owned auth isolation as the real chat path. Otherwise the
+  // diagnostic could pass against cc-switch's Anthropic-direct credentials
+  // while the actual chat hits the explicit DB provider, producing a
+  // confusing "doctor green, chat broken" split.
+  const setup = prepareSdkSubprocessEnv(resolved);
+  const sdkEnv = setup.env;
 
   // 5. Build query options
   const LIVE_PROBE_TIMEOUT = 15_000;
@@ -819,7 +812,8 @@ async function runLiveProbe(): Promise<ProbeResult> {
   const queryOptions: Options = {
     cwd: os.tmpdir(),
     abortController,
-    permissionMode: 'default',
+    permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
     env: sanitizeEnvForProbe(sdkEnv),
     maxTurns: 1,
     stderr: stderrCallback,
@@ -901,6 +895,9 @@ async function runLiveProbe(): Promise<ProbeResult> {
         ].filter(Boolean).join('\n'),
       });
     }
+  } finally {
+    // Tear down the per-request shadow ~/.claude/ if we built one. Best-effort.
+    setup.shadow.cleanup();
   }
 
   return {

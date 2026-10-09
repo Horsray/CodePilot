@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState, useEffect } from "react";
 import { usePanel } from "./usePanel";
+import { LocalUrlDetector } from "@/lib/url-detector";
 
 function resolveTerminalUrl(pathname: string): string {
   if (typeof window === "undefined") return `http://localhost:3000${pathname}`;
@@ -20,69 +21,97 @@ function resolveTerminalUrl(pathname: string): string {
  */
 export function useWebTerminal() {
   const { workingDirectory, sessionId } = usePanel();
-  // 终端后端开关：桌面端暂时强制走 HTTP+SSE，绕过 Electron IPC 写入链路不稳定问题。
-  const useElectronBackend = false;
+  const isElectron = typeof window !== "undefined" && !!(window as any).electronAPI?.terminal;
+  const terminalId = `agent-terminal-${sessionId || "default"}`;
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
-  const terminalIdRef = useRef<string>("");
-  const backendRef = useRef<"electron" | "http">("http");
+  const [isElectronState] = useState(
+    () => typeof window !== "undefined" && !!(window as any).electronAPI?.terminal
+  );
+  const [reconnectCount, setReconnectCount] = useState(0);
+  const terminalIdRef = useRef<string>(terminalId);
   const eventSourceRef = useRef<EventSource | null>(null);
   const onDataCallbackRef = useRef<((data: string) => void) | null>(null);
   const onExitCallbackRef = useRef<((code: number) => void) | null>(null);
+  const exitedRef = useRef<boolean>(false);
+  const reconnectCountRef = useRef<number>(0);
+  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const urlDetectorRef = useRef(new LocalUrlDetector());
 
-  const create = useCallback(async (cols: number, rows: number) => {
-    const terminalApi = window.electronAPI?.terminal;
+  const unsubDataRef = useRef<(() => void) | null>(null);
+  const unsubExitRef = useRef<(() => void) | null>(null);
+
+  // Keep refs in sync
+  useEffect(() => {
+    exitedRef.current = exited;
+  }, [exited]);
+
+  useEffect(() => {
+    reconnectCountRef.current = reconnectCount;
+  }, [reconnectCount]);
+
+  const create = useCallback(async (cols: number, rows: number, customId?: string, customCwd?: string) => {
+    const id = customId || terminalId;
+
+    if (isElectronState) {
+      const api = (window as any).electronAPI?.terminal;
+      if (!api) return;
+
+      if (terminalIdRef.current && terminalIdRef.current !== id) {
+        try { await api.kill(terminalIdRef.current); } catch {}
+      }
+
+      terminalIdRef.current = id;
+      setConnected(false);
+      setExited(false);
+      urlDetectorRef.current.reset();
+
+      unsubDataRef.current?.();
+      unsubExitRef.current?.();
+
+      unsubDataRef.current = api.onData((data: any) => {
+        if (data.id === id && data.data) {
+          urlDetectorRef.current.handleData(data.data);
+          onDataCallbackRef.current?.(data.data);
+        }
+      });
+
+      unsubExitRef.current = api.onExit((data: any) => {
+        if (data.id === id) {
+          setConnected(false);
+          setExited(true);
+          onExitCallbackRef.current?.(data.exitCode ?? 0);
+        }
+      });
+
+      await api.create({ id, cwd: customCwd || workingDirectory || undefined, cols, rows });
+      setConnected(true);
+      return;
+    }
+
     const apiUrl = resolveTerminalUrl("/api/terminal");
+
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
 
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
-
-    if (terminalIdRef.current) {
-      try {
-        if (useElectronBackend && backendRef.current === "electron" && terminalApi) {
-          await terminalApi.kill(terminalIdRef.current);
-        } else {
-          await fetch(apiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "kill", id: terminalIdRef.current }),
-          });
-        }
-      } catch { /* ignore */ }
-    }
-
-    const id = `web-term-${sessionId || 'default'}-${Date.now()}`;
     terminalIdRef.current = id;
     setConnected(false);
     setExited(false);
+    urlDetectorRef.current.reset();
 
     try {
-      if (useElectronBackend && terminalApi) {
-        try {
-          await terminalApi.create({
-            id,
-            // 终端创建：空工作目录时传空字符串，让桌面端自动回退到系统可用目录（避免 "/" 在部分平台不可用）。
-            cwd: workingDirectory || "",
-            cols,
-            rows,
-          });
-          // 后端选择：优先使用 Electron IPC，失败时自动回退到 HTTP 路径。
-          backendRef.current = "electron";
-          setConnected(true);
-          return;
-        } catch (electronErr) {
-          console.warn("[terminal] electron backend create failed, fallback to http backend", electronErr);
-        }
-      }
-
       const res = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "create",
-          id,
-          cwd: workingDirectory || undefined,
+          id: customId || terminalId,
+          cwd: customCwd || workingDirectory || undefined,
           cols,
           rows,
         }),
@@ -92,23 +121,28 @@ export function useWebTerminal() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Failed to create terminal");
       }
-      // 后端选择：HTTP create 成功后，后续读写统一走 HTTP + SSE。
-      backendRef.current = "http";
 
-      const streamUrl = resolveTerminalUrl(`/api/terminal/stream?id=${encodeURIComponent(id)}`);
+      // If backend gave us an ID, use it
+      const responseData = await res.json().catch(() => ({ id }));
+      const actualId = responseData.id || id;
+      terminalIdRef.current = actualId;
+
+      const streamUrl = resolveTerminalUrl(`/api/terminal/stream?id=${encodeURIComponent(actualId)}`);
       const es = new EventSource(streamUrl);
       eventSourceRef.current = es;
 
       es.onopen = () => {
-        if (terminalIdRef.current === id) {
+        if (terminalIdRef.current === actualId) {
           setConnected(true);
+          setReconnectCount(0);
         }
       };
 
       es.onmessage = (event) => {
+        if (terminalIdRef.current !== actualId) return;
+        
         try {
           const message = JSON.parse(event.data);
-          if (terminalIdRef.current !== id) return;
 
           if (message.type === "connected") {
             setConnected(true);
@@ -116,6 +150,7 @@ export function useWebTerminal() {
           }
 
           if (message.type === "output") {
+            urlDetectorRef.current.handleData(message.data);
             onDataCallbackRef.current?.(message.data);
             return;
           }
@@ -130,12 +165,23 @@ export function useWebTerminal() {
             }
           }
         } catch {
+          // Heartbeat or malformed JSON
         }
       };
 
       es.onerror = () => {
-        if (terminalIdRef.current !== id) return;
+        if (terminalIdRef.current !== actualId) return;
         setConnected(false);
+        es.close();
+        
+        // Reconnect if not exited
+        if (!exitedRef.current && reconnectCountRef.current < 5) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectCountRef.current), 10000);
+          reconnectTimerRef.current = setTimeout(() => {
+            setReconnectCount(c => c + 1);
+            void create(cols, rows, customId);
+          }, delay);
+        }
       };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -144,19 +190,18 @@ export function useWebTerminal() {
       setExited(true);
       throw err instanceof Error ? new Error(message, { cause: err }) : new Error(message);
     }
-  }, [workingDirectory, sessionId]);
+  }, [terminalId, workingDirectory, isElectronState]);
 
   const write = useCallback(async (data: string) => {
     if (!terminalIdRef.current) return;
-    
-    const terminalApi = window.electronAPI?.terminal;
-    try {
-      if (useElectronBackend && backendRef.current === "electron" && terminalApi) {
-        // 输入写入：必须 await，确保 IPC 失败能进入 catch，避免“可显示但无法输入”静默失败。
-        await terminalApi.write(terminalIdRef.current, data);
-        return;
-      }
 
+    if (isElectronState) {
+      const api = (window as any).electronAPI?.terminal;
+      if (api) api.write(terminalIdRef.current, data);
+      return;
+    }
+    
+    try {
       await fetch(resolveTerminalUrl("/api/terminal"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -167,17 +212,18 @@ export function useWebTerminal() {
         }),
       });
     } catch { /* ignore */ }
-  }, []);
+  }, [isElectronState]);
 
   const resize = useCallback(async (cols: number, rows: number) => {
     if (!terminalIdRef.current) return;
-    const terminalApi = window.electronAPI?.terminal;
-    try {
-      if (useElectronBackend && backendRef.current === "electron" && terminalApi) {
-        await terminalApi.resize(terminalIdRef.current, cols, rows);
-        return;
-      }
 
+    if (isElectronState) {
+      const api = (window as any).electronAPI?.terminal;
+      if (api) await api.resize(terminalIdRef.current, cols, rows);
+      return;
+    }
+
+    try {
       await fetch(resolveTerminalUrl("/api/terminal"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -189,28 +235,33 @@ export function useWebTerminal() {
         }),
       });
     } catch { /* ignore */ }
-  }, []);
+  }, [isElectronState]);
 
   const kill = useCallback(async () => {
     if (!terminalIdRef.current) return;
-    const terminalApi = window.electronAPI?.terminal;
+
+    if (isElectronState) {
+      const api = (window as any).electronAPI?.terminal;
+      if (api) {
+        try { await api.kill(terminalIdRef.current); } catch {}
+      }
+      terminalIdRef.current = "";
+      setConnected(false);
+      return;
+    }
+
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
     try {
-      if (useElectronBackend && backendRef.current === "electron" && terminalApi) {
-        await terminalApi.kill(terminalIdRef.current);
-      } else {
-        await fetch(resolveTerminalUrl("/api/terminal"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "kill", id: terminalIdRef.current }),
-        });
-      }
+      await fetch(resolveTerminalUrl("/api/terminal"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "kill", id: terminalIdRef.current }),
+      });
     } catch { /* ignore */ }
     terminalIdRef.current = "";
-    backendRef.current = "http";
     setConnected(false);
-  }, []);
+  }, [isElectronState]);
 
   const setOnData = useCallback((cb: (data: string) => void) => {
     onDataCallbackRef.current = cb;
@@ -221,49 +272,23 @@ export function useWebTerminal() {
   }, []);
 
   useEffect(() => {
-    const terminalApi = window.electronAPI?.terminal;
-    if (!useElectronBackend || !terminalApi) {
-      cleanupRef.current = () => {
-        eventSourceRef.current?.close();
-        eventSourceRef.current = null;
-      };
-      return () => {
-        cleanupRef.current?.();
-      };
-    }
-
-    const removeDataListener = terminalApi.onData((event: { id: string; data: string }) => {
-      if (event.id === terminalIdRef.current) {
-        onDataCallbackRef.current?.(event.data);
-      }
-    });
-
-    const removeExitListener = terminalApi.onExit((event: { id: string; code: number }) => {
-      if (event.id === terminalIdRef.current) {
-        setConnected(false);
-        setExited(true);
-        onExitCallbackRef.current?.(event.code);
-      }
-    });
-
     cleanupRef.current = () => {
-      removeDataListener();
-      removeExitListener();
+      unsubDataRef.current?.();
+      unsubExitRef.current?.();
+
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
     };
 
     return () => {
       cleanupRef.current?.();
-      eventSourceRef.current?.close();
-      eventSourceRef.current = null;
-      if (useElectronBackend && terminalIdRef.current) {
-        terminalApi.kill(terminalIdRef.current).catch(() => {});
-      }
     };
-  }, [useElectronBackend]);
+  }, []);
 
   return {
     connected,
     exited,
+    isElectron: isElectronState,
     create,
     write,
     resize,

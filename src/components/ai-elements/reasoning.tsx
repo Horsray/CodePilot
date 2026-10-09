@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { Brain, CaretDown } from "@phosphor-icons/react";
@@ -25,6 +24,9 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { MARKDOWN_PROSE_CLASS, markdownComponents } from "./markdown-shared";
+
+const LOCAL_URL_REGEX = /(https?:\/\/(?:localhost|127\.0\.0\.1):\d+)/i;
 
 import { Shimmer } from "./shimmer";
 
@@ -53,7 +55,7 @@ export type ReasoningProps = ComponentProps<typeof Collapsible> & {
   duration?: number;
 };
 
-const AUTO_CLOSE_DELAY = 1000;
+const AUTO_CLOSE_DELAY = 500;
 const MS_IN_S = 1000;
 
 export const Reasoning = memo(
@@ -205,19 +207,27 @@ export type ReasoningContentProps = ComponentProps<
   children: string;
 };
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+// 与 message.tsx / tool-actions-group.tsx 对齐：不注册 @streamdown/code 高亮插件，
+// 代码围栏统一交给 markdownComponents.pre → 项目自研 CodeBlock 渲染。
+const streamdownPlugins = { cjk, math, mermaid };
 
 export const ReasoningContent = memo(
-  ({ className, children, ...props }: ReasoningContentProps) => (
+  ({ className, children, dir, ...props }: ReasoningContentProps) => (
     <CollapsibleContent
       className={cn(
         "mt-4 text-sm",
         "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-muted-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
         className
       )}
+      dir={dir}
       {...props}
     >
-      <Streamdown plugins={streamdownPlugins} {...props}>
+      <Streamdown
+        dir={(dir ?? "auto") as "auto" | "ltr" | "rtl"}
+        className={MARKDOWN_PROSE_CLASS}
+        plugins={streamdownPlugins}
+        components={markdownComponents}
+      >
         {children}
       </Streamdown>
     </CollapsibleContent>

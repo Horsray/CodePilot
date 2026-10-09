@@ -13,7 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { SpinnerGap, PencilSimple, Stethoscope } from "@/components/ui/icon";
+import { SpinnerGap, PencilSimple, Stethoscope, CheckCircle } from "@/components/ui/icon";
 import { ProviderForm } from "./ProviderForm";
 import { ProviderDoctorDialog } from "./ProviderDoctorDialog";
 import type { ProviderFormData } from "./ProviderForm";
@@ -22,6 +22,8 @@ import {
   QUICK_PRESETS,
   GEMINI_IMAGE_MODELS,
   getGeminiImageModel,
+  OPENAI_IMAGE_MODELS,
+  getOpenAIImageModel,
   getProviderIcon,
   findMatchingPreset,
   type QuickPreset,
@@ -29,12 +31,6 @@ import {
 import type { ApiProvider, ProviderModelGroup } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
-import {
-  getConfiguredImageModelNames,
-  getMediaRelayProtocol,
-  getMediaRelayTargetSummary,
-  isOfficialGeminiImageProvider,
-} from "@/lib/image-provider-utils";
 import Anthropic from "@lobehub/icons/es/Anthropic";
 import { ProviderOptionsSection } from "./ProviderOptionsSection";
 import {
@@ -46,7 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { LangOptSettingsSection } from "./LangOptSettingsSection";
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -57,7 +53,6 @@ export function ProviderManager() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [envDetected, setEnvDetected] = useState<Record<string, string>>({});
-  const [ccSwitchModels, setCCSwitchModels] = useState<Record<string, unknown>>({});
   const { t } = useTranslation();
   const isZh = t('nav.chats') === '对话';
 
@@ -74,6 +69,11 @@ export function ProviderManager() {
   const [deleteTarget, setDeleteTarget] = useState<ApiProvider | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // OpenAI OAuth state
+  const [openaiAuth, setOpenaiAuth] = useState<{ authenticated: boolean; email?: string; plan?: string } | null>(null);
+  const [openaiLoggingIn, setOpenaiLoggingIn] = useState(false);
+  const [openaiError, setOpenaiError] = useState<string | null>(null);
+
   // Doctor dialog state
   const [doctorOpen, setDoctorOpen] = useState(false);
 
@@ -81,7 +81,18 @@ export function ProviderManager() {
   const [providerGroups, setProviderGroups] = useState<ProviderModelGroup[]>([]);
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [globalDefaultProvider, setGlobalDefaultProvider] = useState('');
-  const [ccSwitchEnabled, setCCSwitchEnabled] = useState(false);
+
+  // Active media-generation provider id. Persisted server-side in the
+  // `active_image_provider_id` setting. Used by the image-generator to break
+  // ties when multiple media providers are configured (e.g. both Gemini +
+  // OpenAI); without this, the generator would silently prefer Gemini and
+  // the "OpenAI Image" setup would appear inert to the user.
+  const [activeImageProviderId, setActiveImageProviderId] = useState<string>('');
+  // `stale=true` means the stored id no longer resolves to a usable media
+  // provider (row deleted, type changed, or api_key cleared). In that case
+  // we render the "active" row with a muted/warning badge rather than the
+  // normal green one so users notice the mismatch.
+  const [activeImageProviderStale, setActiveImageProviderStale] = useState<boolean>(false);
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -91,9 +102,6 @@ export function ProviderManager() {
       const data = await res.json();
       setProviders(data.providers || []);
       setEnvDetected(data.env_detected || {});
-      setCCSwitchModels(data.cc_switch_models || {});
-
-      setCCSwitchEnabled(data.cc_switch_enabled === true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load providers");
     } finally {
@@ -103,52 +111,41 @@ export function ProviderManager() {
 
   useEffect(() => { fetchProviders(); }, [fetchProviders]);
 
-  // Sync cc-switch models to model selector when they change
+  // Fetch active-image-provider id (which media provider wins when both are configured)
+  const fetchActiveImageProvider = useCallback(() => {
+    fetch('/api/providers/active-image')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        setActiveImageProviderId(data.providerId || '');
+        setActiveImageProviderStale(!!data.stale);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { fetchActiveImageProvider(); }, [fetchActiveImageProvider]);
+  // Also refresh when providers change (e.g. user clears the api_key of the
+  // active row — the badge must flip to the stale variant without requiring
+  // a full page reload).
   useEffect(() => {
-    if (ccSwitchEnabled && Object.keys(ccSwitchModels).length > 0) {
-      const ccSwitchModelOptions = Object.keys(ccSwitchModels).map(modelName => ({
-        value: modelName,
-        label: modelName,
-      }));
-      const ccSwitchGroup = {
-        provider_id: 'cc-switch',
-        provider_name: 'CC-Switch',
-        models: ccSwitchModelOptions,
-        provider_type: 'custom',
-      };
-      // Add CC-Switch group at the beginning
-      setProviderGroups(prev => {
-        const filtered = prev.filter(g => g.provider_id !== 'cc-switch');
-        return [ccSwitchGroup, ...filtered];
-      });
-    }
-  }, [ccSwitchEnabled, ccSwitchModels]);
+    const handler = () => fetchActiveImageProvider();
+    window.addEventListener('provider-changed', handler);
+    return () => window.removeEventListener('provider-changed', handler);
+  }, [fetchActiveImageProvider]);
+
+  // Fetch OpenAI OAuth status
+  useEffect(() => {
+    fetch('/api/openai-oauth/status')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setOpenaiAuth(data); })
+      .catch(() => {});
+  }, []);
 
   // Fetch all provider models for the global default model selector
   const fetchModels = useCallback(() => {
     fetch('/api/providers/models')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
-        if (data?.groups) {
-          // If cc-switch is enabled and has models, add them as a special group
-          if (ccSwitchEnabled && Object.keys(ccSwitchModels).length > 0) {
-            const ccSwitchModelOptions = Object.keys(ccSwitchModels).map(modelName => ({
-              value: modelName,
-              label: modelName,
-            }));
-            const updatedGroups = [
-              ...data.groups,
-              {
-                provider_id: 'cc-switch',
-                provider_name: 'CC-Switch',
-                models: ccSwitchModelOptions,
-              },
-            ];
-            setProviderGroups(updatedGroups);
-          } else {
-            setProviderGroups(data.groups);
-          }
-        }
+        if (data?.groups) setProviderGroups(data.groups);
       })
       .catch(() => {});
     // Load current global default model
@@ -161,7 +158,7 @@ export function ProviderManager() {
         }
       })
       .catch(() => {});
-  }, [ccSwitchEnabled, ccSwitchModels]);
+  }, []);
 
   useEffect(() => {
     fetchModels();
@@ -223,37 +220,7 @@ export function ProviderManager() {
 
   const handleOpenPresetDialog = (preset: QuickPreset) => {
     setConnectPreset(preset);
-    setPresetEditProvider(null);
-    
-    // If cc-switch is enabled and this is a custom preset, pre-fill with cc-switch config
-    if (ccSwitchEnabled && preset.key === 'custom-anthropic' && Object.keys(ccSwitchModels).length > 0) {
-      // Get first model's config as default
-      const firstModelName = Object.keys(ccSwitchModels)[0];
-      const modelConfig = ccSwitchModels[firstModelName] as Record<string, string>;
-      
-      if (modelConfig) {
-        const prefillProvider: ApiProvider = {
-          id: '',
-          name: preset.name,
-          provider_type: preset.key,
-          protocol: 'anthropic',
-          base_url: modelConfig.ANTHROPIC_BASE_URL || '',
-          api_key: modelConfig.ANTHROPIC_API_KEY || modelConfig.ANTHROPIC_AUTH_TOKEN || '',
-          is_active: 0,
-          sort_order: 0,
-          extra_env: '',
-          headers_json: '',
-          env_overrides_json: JSON.stringify({ model_names: Object.keys(ccSwitchModels).join(',') }),
-          role_models_json: '',
-          options_json: '',
-          notes: '',
-          created_at: '',
-          updated_at: '',
-        };
-        setPresetEditProvider(prefillProvider);
-      }
-    }
-    
+    setPresetEditProvider(null); // ensure create mode
     setConnectDialogOpen(true);
   };
 
@@ -272,10 +239,42 @@ export function ProviderManager() {
     }
   };
 
+  const setActiveImageProvider = useCallback(async (providerId: string) => {
+    // Persist the user's pick server-side. On success the server confirms
+    // non-stale; on failure (typically: no api_key) we revert the optimistic
+    // state and surface the error. Without this revert a row with an empty
+    // key would flip green in the UI while /api/media/generate silently
+    // picks a different provider.
+    const previousId = activeImageProviderId;
+    const previousStale = activeImageProviderStale;
+    setActiveImageProviderId(providerId);
+    setActiveImageProviderStale(false);
+    try {
+      const res = await fetch('/api/providers/active-image', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId }),
+      });
+      if (!res.ok) {
+        setActiveImageProviderId(previousId);
+        setActiveImageProviderStale(previousStale);
+        const body = await res.json().catch(() => ({}));
+        setError(body?.error || 'Failed to set active image provider');
+      } else {
+        // Clear any prior error surfaced from this action.
+        setError(null);
+      }
+    } catch {
+      setActiveImageProviderId(previousId);
+      setActiveImageProviderStale(previousStale);
+    }
+  }, [activeImageProviderId, activeImageProviderStale]);
+
   const handleImageModelChange = useCallback(async (provider: ApiProvider, model: string) => {
     try {
       const env = JSON.parse(provider.extra_env || '{}');
-      env.GEMINI_IMAGE_MODEL = model;
+      const key = provider.provider_type === 'openai-image' ? 'OPENAI_IMAGE_MODEL' : 'GEMINI_IMAGE_MODEL';
+      env[key] = model;
       const newExtraEnv = JSON.stringify(env);
       const res = await fetch(`/api/providers/${provider.id}`, {
         method: 'PUT',
@@ -295,7 +294,80 @@ export function ProviderManager() {
         window.dispatchEvent(new Event('provider-changed'));
       }
     } catch { /* ignore */ }
-  }, []);
+    // Picking a model on a provider is a strong signal that this is the one
+    // the user wants to use; mark it active automatically so /api/media/generate
+    // picks the right family without a separate click.
+    setActiveImageProvider(provider.id);
+  }, [setActiveImageProvider]);
+
+  const handleOpenAILogin = async () => {
+    setOpenaiLoggingIn(true);
+    setOpenaiError(null);
+    try {
+      const res = await fetch("/api/openai-oauth/start");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to start OAuth');
+      }
+      const { authUrl } = await res.json();
+      // 中文注释：对齐 cc-haha —— Electron 环境用系统默认浏览器打开 OAuth 授权页。
+      // window.open 会创建 Electron 内嵌子窗口，OpenAI 的安全检测/登录会话依赖
+      // 系统浏览器环境，内嵌窗口经常被拦截或行为异常导致登录失败。
+      const w = window as unknown as { electronAPI?: { shell?: { openExternal?: (url: string) => Promise<void> } } };
+      if (w.electronAPI?.shell?.openExternal) {
+        await w.electronAPI.shell.openExternal(authUrl);
+      } else {
+        window.open(authUrl, '_blank');
+      }
+
+      // Poll for completion with timeout
+      let pollCount = 0;
+      const maxPolls = 150; // 5 minutes at 2s intervals
+      const poll = setInterval(async () => {
+        pollCount++;
+        if (pollCount >= maxPolls) {
+          clearInterval(poll);
+          setOpenaiLoggingIn(false);
+          setOpenaiError(isZh ? '登录超时，请重试' : 'Login timed out, please try again');
+          return;
+        }
+        try {
+          const statusRes = await fetch("/api/openai-oauth/status");
+          if (statusRes.ok) {
+            const status = await statusRes.json();
+            if (status.authenticated) {
+              clearInterval(poll);
+              setOpenaiAuth(status);
+              setOpenaiLoggingIn(false);
+              fetchModels(); // refresh model list to include OpenAI models
+              // OAuth is a virtual provider source that hasCodePilotProvider()
+              // counts; broadcast so listeners (SetupCenter's ProviderCard,
+              // anywhere reading provider presence) re-evaluate.
+              window.dispatchEvent(new Event('provider-changed'));
+            } else if (status.error) {
+              clearInterval(poll);
+              setOpenaiLoggingIn(false);
+              setOpenaiError(status.error);
+            }
+          }
+        } catch { /* keep polling */ }
+      }, 2000);
+    } catch (err) {
+      setOpenaiLoggingIn(false);
+      setOpenaiError(err instanceof Error ? err.message : 'Login failed');
+    }
+  };
+
+  const handleOpenAILogout = async () => {
+    try {
+      await fetch("/api/openai-oauth/status", { method: "DELETE" });
+      setOpenaiAuth({ authenticated: false });
+      fetchModels(); // refresh model list
+      // Logout removes the virtual OAuth provider; listeners must re-check
+      // so SetupCenter's ProviderCard can downgrade if OAuth was the only source.
+      window.dispatchEvent(new Event('provider-changed'));
+    } catch { /* ignore */ }
+  };
 
   const sorted = [...providers].sort((a, b) => a.sort_order - b.sort_order);
 
@@ -421,7 +493,41 @@ export function ProviderManager() {
         <div className="rounded-lg border border-border/50 p-4 space-y-2">
           <h3 className="text-sm font-medium mb-1">{t('provider.connectedProviders')}</h3>
 
-          {/* Claude Code default config */}
+          {/* Orphaned-active-image safety net. The stored active id can be
+              stale for three reasons:
+                1. The row was deleted — no match in `providers`.
+                2. The row still exists but its provider_type was edited
+                   away from gemini-image/openai-image — matches a row, but
+                   that row is no longer a media provider, so the per-row
+                   capsule/badge doesn't render on it.
+                3. The row's api_key was cleared — per-row badge handles this.
+              Cases 1 and 2 both leave the setting invisible without this
+              banner, so the condition here is "no usable media row matches"
+              rather than "no row matches". */}
+          {activeImageProviderStale && activeImageProviderId && !providers.some(
+            p => p.id === activeImageProviderId
+              && (p.provider_type === 'gemini-image' || p.provider_type === 'openai-image'),
+          ) && (
+            <div className="mb-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2 flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  {isZh
+                    ? '当前“图片生成默认”指向的服务商已不可用（被删除或类型已变更），图片生成会回退到其他服务商'
+                    : 'The provider currently marked as the image-generation default is unavailable (deleted or type changed). Image generation will fall back to another provider.'}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="h-6 text-[11px] text-amber-700 dark:text-amber-400 shrink-0"
+                onClick={() => setActiveImageProvider('')}
+              >
+                {isZh ? '清除' : 'Clear'}
+              </Button>
+            </div>
+          )}
+
+          {/* Claude Code — settings link */}
           <div className="border-b border-border/30 pb-2">
             <div className="flex items-center gap-3 py-2.5 px-1">
               <div className="shrink-0 w-[22px] flex justify-center">
@@ -437,54 +543,62 @@ export function ProviderManager() {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-[11px] text-muted-foreground">{isZh ? '使用 cc-switch' : 'Use cc-switch'}</span>
-                <Switch
-                  checked={ccSwitchEnabled}
-                  onCheckedChange={async (checked) => {
-                    setCCSwitchEnabled(checked);
-                    try {
-                      await fetch('/api/settings/app', {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ settings: { cc_switch_enabled: checked ? 'true' : '' } }),
-                      });
-                      // Refresh provider list to get cc-switch models
-                      fetchProviders();
-                    } catch (e) {
-                      console.error('Failed to save cc-switch setting:', e);
-                    }
-                  }}
-                  size="sm"
-                />
-              </div>
+              <a
+                href="/settings#cli"
+                className="text-xs text-primary hover:underline flex-shrink-0"
+              >
+                {t('provider.goToClaudeCodeSettings')}
+              </a>
             </div>
-            {ccSwitchEnabled && (
-              <>
-                <p className="text-[11px] text-muted-foreground ml-[34px] leading-relaxed">
-                  {isZh ? '已启用 cc-switch 配置接管，配置来源：~/.cc-switch/config.json 或 ~/.claude/settings.json' : 'cc-switch config enabled, reading from ~/.cc-switch/config.json or ~/.claude/settings.json'}
-                </p>
-                {Object.keys(ccSwitchModels).length > 0 && (
-                  <div className="ml-[34px] mt-2 space-y-1">
-                    <p className="text-[11px] font-medium">{isZh ? '可用模型：' : 'Available Models:'}</p>
-                    {Object.entries(ccSwitchModels).map(([modelName, config]) => (
-                      <div key={modelName} className="text-[10px] text-muted-foreground bg-muted/50 rounded px-2 py-1 flex justify-between items-center">
-                        <span className="font-mono">{modelName}</span>
-                        <span className="truncate max-w-[200px]">
-                          {(config as Record<string, string>).ANTHROPIC_BASE_URL || (config as Record<string, string>).ANTHROPIC_BASE_URL || 'N/A'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+            <p className="text-[11px] text-muted-foreground ml-[34px] leading-relaxed">
+              {t('provider.ccSwitchHint')}
+            </p>
+          </div>
+
+          {/* OpenAI OAuth login */}
+          <div className="border-b border-border/30 pb-2">
+            <div className="flex items-center gap-3 py-2.5 px-1">
+              <div className="shrink-0 w-[22px] flex justify-center">
+                <span className="text-sm font-bold">AI</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">OpenAI</span>
+                  {openaiAuth?.authenticated && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-status-success-foreground border-status-success-border">
+                      {openaiAuth.plan || 'OAuth'}
+                    </Badge>
+                  )}
+                </div>
+                {openaiAuth?.authenticated && openaiAuth.email && (
+                  <p className="text-[10px] text-muted-foreground">{openaiAuth.email}</p>
                 )}
-              </>
-            )}
-            {!ccSwitchEnabled && (
-              <p className="text-[11px] text-muted-foreground ml-[34px] leading-relaxed">
-                {t('provider.ccSwitchHint')}
+              </div>
+              {openaiAuth?.authenticated ? (
+                <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={handleOpenAILogout}>
+                  {t('cli.openaiLogout')}
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1"
+                  onClick={handleOpenAILogin}
+                  disabled={openaiLoggingIn}
+                >
+                  {openaiLoggingIn && <SpinnerGap size={12} className="animate-spin" />}
+                  {t('cli.openaiLogin')}
+                </Button>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground ml-[34px] leading-relaxed">
+              {t('provider.openaiOAuthHint')}
+            </p>
+            {openaiError && (
+              <p className="text-[11px] text-destructive ml-[34px] mt-1">
+                {openaiError}
               </p>
             )}
-            <ProviderOptionsSection providerId="env" showThinkingOptions />
           </div>
 
           {/* Connected provider list */}
@@ -507,18 +621,6 @@ export function ProviderManager() {
                           : t('provider.configured')}
                       </Badge>
                     </div>
-                    {provider.provider_type === 'gemini-image' && !isOfficialGeminiImageProvider(provider) && (
-                      <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
-                        <p className="truncate">
-                          {isZh ? '协议' : 'Protocol'}: {getMediaRelayProtocol(provider) === 'openai-images'
-                            ? 'OpenAI Images API'
-                            : (isZh ? '自定义图片接口' : 'Custom Image API')}
-                        </p>
-                        <p className="truncate">
-                          Endpoint: {getMediaRelayTargetSummary(provider)}
-                        </p>
-                      </div>
-                    )}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Button
@@ -539,51 +641,98 @@ export function ProviderManager() {
                     </Button>
                   </div>
                 </div>
-                {/* Provider options — thinking/1M for Anthropic-official only */}
-                {provider.provider_type !== 'gemini-image' && provider.base_url === 'https://api.anthropic.com' && (
+                {/* Provider options — thinking/1M for Anthropic-official and Deepseek */}
+                {provider.provider_type !== 'gemini-image' && provider.provider_type !== 'openai-image'
+                  && (provider.base_url === 'https://api.anthropic.com'
+                    || provider.base_url?.includes('deepseek.com')
+                    || provider.name?.toLowerCase().includes('deepseek')) && (
                   <ProviderOptionsSection
                     providerId={provider.id}
                     showThinkingOptions
+                    isDeepseek={!!(provider.base_url?.includes('deepseek.com') || provider.name?.toLowerCase().includes('deepseek'))}
                   />
                 )}
-                {/* Gemini Image model selector — capsule buttons */}
-                {provider.provider_type === 'gemini-image' && isOfficialGeminiImageProvider(provider) && (
-                  <div className="ml-[34px] mt-2 flex items-center gap-1.5">
-                    <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型' : 'Model'}:</span>
-                    {GEMINI_IMAGE_MODELS.map((m) => {
-                      const isActive = getGeminiImageModel(provider) === m.value;
-                      return (
-                        <Button
-                          key={m.value}
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleImageModelChange(provider, m.value)}
-                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium border h-auto ${
-                            isActive
-                              ? 'bg-primary/10 text-primary border-primary/30'
-                              : 'text-muted-foreground border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50'
-                          }`}
-                        >
-                          {m.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                )}
-                {provider.provider_type === 'gemini-image' && !isOfficialGeminiImageProvider(provider) && getConfiguredImageModelNames(provider).length > 0 && (
-                  <div className="ml-[34px] mt-2 flex items-center gap-1.5">
-                    <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型列表' : 'Models'}:</span>
-                    {getConfiguredImageModelNames(provider).map((model, index) => (
-                      <Badge
-                        key={model}
-                        variant={index === 0 ? "secondary" : "outline"}
-                        className="text-[10px] px-1.5 py-0"
-                      >
-                        {model}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
+                {/* Media-provider model selector — capsule buttons */}
+                {(provider.provider_type === 'gemini-image' || provider.provider_type === 'openai-image') && (() => {
+                  const isOpenAI = provider.provider_type === 'openai-image';
+                  // Use user-configured models from _custom_models if available,
+                  // otherwise fall back to hardcoded catalog constants.
+                  let models = isOpenAI ? OPENAI_IMAGE_MODELS : GEMINI_IMAGE_MODELS;
+                  if (!isOpenAI) {
+                    try {
+                      const envOv = JSON.parse(provider.env_overrides_json || '{}');
+                      const parsed = typeof envOv._custom_models === 'string' ? JSON.parse(envOv._custom_models) : envOv._custom_models;
+                      if (Array.isArray(parsed) && parsed.length > 0) {
+                        models = parsed.map((m: { modelId: string; displayName: string }) => ({
+                          value: m.modelId,
+                          label: m.displayName || m.modelId,
+                        }));
+                      }
+                    } catch { /* keep default */ }
+                  }
+                  const current = isOpenAI ? getOpenAIImageModel(provider) : getGeminiImageModel(provider);
+                  const isActiveProvider = activeImageProviderId === provider.id;
+                  return (
+                    <>
+                      <div className="ml-[34px] mt-2 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[11px] text-muted-foreground mr-1">{isZh ? '模型' : 'Model'}:</span>
+                        {models.map((m) => {
+                          const isActive = current === m.value;
+                          return (
+                            <Button
+                              key={m.value}
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleImageModelChange(provider, m.value)}
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium border h-auto ${
+                                isActive
+                                  ? 'bg-primary/10 text-primary border-primary/30'
+                                  : 'text-muted-foreground border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50'
+                              }`}
+                            >
+                              {m.label}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                      <div className="ml-[34px] mt-1.5 flex items-center gap-2">
+                        {isActiveProvider ? (
+                          activeImageProviderStale ? (
+                            // Stale: badge flagged because the stored id no longer
+                            // resolves to a usable row (key cleared). Tell the
+                            // user and offer a 1-click fix.
+                            <>
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-amber-600 border-amber-500/50 dark:text-amber-400">
+                                {isZh ? '已失效（缺少密钥）' : 'Inactive (missing API key)'}
+                              </Badge>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                className="h-6 text-[11px] text-muted-foreground"
+                                onClick={() => setActiveImageProvider('')}
+                              >
+                                {isZh ? '清除' : 'Clear'}
+                              </Button>
+                            </>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-status-success-foreground border-status-success-border">
+                              {isZh ? '用于图片生成' : 'Used for image generation'}
+                            </Badge>
+                          )
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            className="h-6 text-[11px] text-muted-foreground"
+                            onClick={() => setActiveImageProvider(provider.id)}
+                          >
+                            {isZh ? '设为图片生成默认' : 'Use for image generation'}
+                          </Button>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             ))
           ) : (
@@ -595,6 +744,9 @@ export function ProviderManager() {
           )}
         </div>
       )}
+
+      {/* Language Optimization Settings */}
+      {!loading && <LangOptSettingsSection />}
 
       {/* ─── Section 2: Add Provider (Quick Presets) ─── */}
       {!loading && (

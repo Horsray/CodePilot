@@ -1,42 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getPluginInfoList, setPluginEnabled } from '@/lib/plugin-discovery';
+import type { PluginsResponse, ErrorResponse } from '@/types';
+import { getPluginInfoList } from '@/lib/plugin-discovery';
 
-export async function GET(request: NextRequest) {
+export async function GET(request: NextRequest): Promise<NextResponse<PluginsResponse | ErrorResponse>> {
   try {
-    const { searchParams } = new URL(request.url);
-    const cwd = searchParams.get('cwd') || undefined;
-    
+    // Accept optional cwd for project/local settings layer resolution
+    const cwd = request.nextUrl.searchParams.get('cwd') || undefined;
     const plugins = getPluginInfoList(cwd);
-    
     return NextResponse.json({ plugins });
   } catch (error) {
-    console.error('Error fetching plugins:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch plugins' },
-      { status: 500 }
-    );
-  }
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { pluginKey, enabled, cwd } = body;
-    
-    if (!pluginKey || typeof enabled !== 'boolean') {
-      return NextResponse.json(
-        { error: 'Missing required fields: pluginKey, enabled' },
-        { status: 400 }
-      );
-    }
-    
-    const result = setPluginEnabled(pluginKey, enabled, cwd);
-    
-    return NextResponse.json(result);
-  } catch (error) {
-    console.error('Error toggling plugin:', error);
-    return NextResponse.json(
-      { error: 'Failed to toggle plugin' },
+      { error: error instanceof Error ? error.message : 'Failed to load plugins' },
       { status: 500 }
     );
   }

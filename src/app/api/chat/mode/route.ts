@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getConversation } from '@/lib/conversation-registry';
-import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * POST /api/chat/mode — Switch mode (code/plan) mid-session.
+ *
+ * The frontend updates the session mode in DB before calling this endpoint.
+ * Native Runtime reads the mode from the session at each agent-loop start
+ * and passes it to the permission system. No SDK conversation object required.
+ */
 export async function POST(request: NextRequest) {
   try {
     const { sessionId, mode } = await request.json();
@@ -13,14 +18,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'sessionId and mode are required' }, { status: 400 });
     }
 
-    const conversation = getConversation(sessionId);
-    if (!conversation) {
-      return NextResponse.json({ applied: false });
-    }
-
-    const permissionMode: PermissionMode = mode === 'code' ? 'acceptEdits' : 'plan';
-    await conversation.setPermissionMode(permissionMode);
-
+    // Mode is persisted to DB by the frontend (PATCH /api/chat/sessions/:id).
+    // The next agent-loop invocation reads it from the session record.
+    // No runtime-specific action needed here.
     return NextResponse.json({ applied: true });
   } catch (error) {
     console.error('[mode] Failed to switch mode:', error);

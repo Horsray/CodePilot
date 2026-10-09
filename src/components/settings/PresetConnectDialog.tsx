@@ -8,7 +8,9 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -24,17 +26,9 @@ import { SpinnerGap, CaretDown, CaretUp, ArrowSquareOut, CheckCircle, XCircle, W
 import type { ProviderFormData } from "./ProviderForm";
 import type { QuickPreset } from "./provider-presets";
 import { QUICK_PRESETS } from "./provider-presets";
-import type { ApiProvider } from "@/types";
+import type { ApiProvider, ProviderModelGroup } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
-import {
-  DEFAULT_MEDIA_RELAY_PROTOCOL,
-  getConfiguredImageModelNames,
-  getMediaRelayEndpoint,
-  getMediaRelayProtocol,
-  parseModelNames,
-  type MediaRelayProtocol,
-} from "@/lib/image-provider-utils";
 
 /** Infer auth style from base URL by fuzzy-matching preset hostnames */
 function inferAuthStyleFromUrl(url: string): "api_key" | "auth_token" | null {
@@ -70,13 +64,23 @@ export function PresetConnectDialog({
 }: PresetConnectDialogProps) {
   const isEdit = !!editProvider;
   const [apiKey, setApiKey] = useState("");
+  // Edit-mode flag: DB already has a stored key for this provider. When true
+  // and apiKey is empty, the UI shows a "keep existing" placeholder and
+  // test/save requests OMIT the apiKey field so the backend falls back to the
+  // stored value. This is the fix for #449 — the old code shoved the masked
+  // key string into state and sent it back, which tried to auth with "***"
+  // against upstream APIs. See docs/exec-plans/active/v0.48-post-release-issues.md §5.5.
+  const [hasStoredKey, setHasStoredKey] = useState(false);
+  // Companion flag for an explicit "I want to clear the stored key" intent.
+  // Without this, users would have no way to delete a stored key — the
+  // hasStoredKey + empty input combination is unconditionally interpreted as
+  // "keep existing". When clearStoredKey=true, save sends api_key="" so the
+  // backend overwrites the stored value.
+  const [clearStoredKey, setClearStoredKey] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
   const [name, setName] = useState("");
   const [extraEnv, setExtraEnv] = useState("{}");
   const [modelName, setModelName] = useState("");
-  const [modelNamesText, setModelNamesText] = useState("");
-  const [mediaProtocol, setMediaProtocol] = useState<MediaRelayProtocol>(DEFAULT_MEDIA_RELAY_PROTOCOL);
-  const [mediaEndpoint, setMediaEndpoint] = useState("");
   // Auth style for anthropic-thirdparty: 'api_key' or 'auth_token'
   const [authStyle, setAuthStyle] = useState<"api_key" | "auth_token">("api_key");
   // Track the initial auth style to detect changes
@@ -89,45 +93,96 @@ export function PresetConnectDialog({
   const [mapSonnet, setMapSonnet] = useState("");
   const [mapOpus, setMapOpus] = useState("");
   const [mapHaiku, setMapHaiku] = useState("");
+  const [modelNamesText, setModelNamesText] = useState("");
+  const [providerGroups, setProviderGroups] = useState<ProviderModelGroup[]>([]);
+  const [mediaProtocol, setMediaProtocol] = useState<"custom-image" | "openai-images">("custom-image");
+  const [mediaEndpoint, setMediaEndpoint] = useState("");
+  const [imageInputSupport, setImageInputSupport] = useState<"auto" | "supported" | "unsupported">("auto");
+  const [ocrTarget, setOcrTarget] = useState("");
+  const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // Structured model rows for custom-media: [{modelId, displayName}]
+  const [customModels, setCustomModels] = useState<Array<{modelId: string; displayName: string}>>([{modelId: '', displayName: ''}]);
+  // Eye toggle for API key visibility (custom-media)
+  const [showApiKey, setShowApiKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; error?: { code: string; message: string; suggestion: string; recoveryActions?: Array<{ label: string; url?: string; action?: string }> } } | null>(null);
-  const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const { t } = useTranslation();
   const isZh = t('nav.chats') === '对话';
 
+  // Unified auth-style transition. Both the dropdown selector and the
+  // "smart recommend" helper link MUST go through this helper so edit-mode
+  // stored-key state migrates consistently. Switching AWAY from the stored
+  // style clears hasStoredKey (the user must provide a key for the new
+  // scheme); switching BACK restores it. Any pending "clear" intent is
+  // cancelled because an auth-style change is an unrelated user action.
+  const applyAuthStyleChange = (newStyle: "api_key" | "auth_token") => {
+    setAuthStyle(newStyle);
+    if (isEdit && editProvider?.api_key) {
+      setApiKey("");
+      setClearStoredKey(false);
+      setHasStoredKey(newStyle === initialAuthStyle);
+    }
+  };
+
+  // Whether the "Test connection" button can meaningfully run with the
+  // current form state. Four cases:
+  //   1. Preset doesn't use api_key (Bedrock / Vertex / extra_env) → always OK.
+  //   2. User typed a replacement key → test with it directly.
+  //   3. Edit mode with an untouched stored key → backend back-fills via providerId.
+  //   4. Edit mode with a pending clear and no replacement → test would
+  //      use the DB key that's about to be deleted, giving a misleading
+  //      success. Block it — the user must either enter a new key or
+  //      undo the clear first. This is the Codex P2 clear-and-test
+  //      defense; without it, clicking Test in the pending-clear state
+  //      reports success with credentials the saved config won't have.
+  const canTest = (() => {
+    if (!preset?.fields.includes("api_key")) return true;
+    if (apiKey) return true;
+    if (isEdit && hasStoredKey && !clearStoredKey) return true;
+    return false;
+  })();
+
   const handleTestConnection = async () => {
+    // Belt-and-suspenders: the button disabled state already enforces
+    // this, but guard here in case something bypasses the UI (keyboard
+    // event, third-party DOM manipulation).
+    if (!canTest) return;
+
     setTesting(true);
     setTestResult(null);
     try {
-      const effectiveModelName = preset?.key === 'custom-media'
-        ? parseModelNames(modelNamesText || modelName)[0]
-        : modelName.trim();
       const envOverrides: Record<string, string> = {};
       try {
         const parsed = JSON.parse(extraEnv || '{}');
         Object.assign(envOverrides, parsed);
       } catch { /* ignore */ }
-      
-      // Check if we should use cc-switch config (when apiKey is empty and preset is custom)
-      const useCCSwitch = !apiKey && preset?.key === 'custom-anthropic';
-      
+      // #449 fix: in edit mode, send providerId so the backend can look up the
+      // real key from DB when the user hasn't touched the placeholder. Omit
+      // apiKey entirely in that case — never send the masked value.
+      const body: Record<string, unknown> = {
+        presetKey: preset?.key,
+        baseUrl: baseUrl || preset?.base_url || '',
+        protocol: preset?.protocol || 'anthropic',
+        authStyle: preset?.authStyle || authStyle,
+        envOverrides,
+        modelName: modelName || undefined,
+        providerName: name || preset?.name,
+      };
+      if (isEdit && editProvider) {
+        body.providerId = editProvider.id;
+      }
+      if (apiKey) {
+        body.apiKey = apiKey;
+      }
+      // If edit mode + empty apiKey + hasStoredKey → body has providerId but
+      // no apiKey field, backend will back-fill from DB.
       const res = await fetch('/api/providers/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          presetKey: preset?.key,
-          apiKey: apiKey || undefined,
-          baseUrl: baseUrl || preset?.base_url || '',
-          protocol: preset?.protocol || 'anthropic',
-          authStyle: preset?.key === 'anthropic-thirdparty' ? authStyle : (preset?.authStyle || authStyle),
-          envOverrides,
-          modelName: effectiveModelName || undefined,
-          providerName: name || preset?.name,
-          useCCSwitch,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       setTestResult(data);
@@ -145,61 +200,111 @@ export function PresetConnectDialog({
     setSaving(false);
     setTesting(false);
     setTestResult(null);
+    setClearStoredKey(false);
+    setShowApiKey(false);
 
     if (isEdit && editProvider) {
       // Edit mode — pre-fill from existing provider
       setName(editProvider.name);
       setBaseUrl(editProvider.base_url);
       setExtraEnv(editProvider.extra_env || preset.extra_env);
-      setHasStoredApiKey(!!editProvider.api_key);
       // Use preset authStyle as source of truth; fall back to extra_env inference for legacy records
-      let detected: 'auth_token' | 'api_key' = preset.authStyle === 'auth_token' ? 'auth_token' : 'api_key';
-      if (preset.key === 'anthropic-thirdparty') {
-        // Thirdparty presets: infer from stored extra_env since user chose the style
-        try {
-          const env = JSON.parse(editProvider.extra_env || "{}");
-          detected = "ANTHROPIC_AUTH_TOKEN" in env ? "auth_token" : "api_key";
-        } catch { /* keep preset default */ }
-      }
+      const detected: 'auth_token' | 'api_key' = preset.authStyle === 'auth_token' ? 'auth_token' : 'api_key';
       setAuthStyle(detected);
       setInitialAuthStyle(detected);
-      // If api_key field isn't shown and stored key is empty, use preset default
-      // (e.g. Ollama needs ANTHROPIC_AUTH_TOKEN='ollama' without user input)
+      // #449 fix: DO NOT put the (possibly masked) stored key into apiKey state.
+      // Instead, set hasStoredKey=true and keep apiKey empty. The input will
+      // show a "keep existing" placeholder; test/save will omit the apiKey
+      // field and backend back-fills from DB.
       if (!preset.fields.includes("api_key") && !editProvider.api_key) {
+        // Preset doesn't expose api_key field AND stored is empty → pre-fill
+        // from preset extra_env default (e.g. Ollama uses 'ollama' token).
         const presetEnv = (() => { try { return JSON.parse(preset.extra_env || '{}'); } catch { return {}; } })();
         const defaultToken = detected === 'auth_token'
           ? (presetEnv['ANTHROPIC_AUTH_TOKEN'] || '')
           : (presetEnv['ANTHROPIC_API_KEY'] || '');
         setApiKey(defaultToken);
+        setHasStoredKey(false);
+      } else if (preset.key === "custom-media" && editProvider.api_key) {
+        // custom-media: show the (masked) stored key directly in the input
+        // so users can see what's configured. The save logic will detect if
+        // the key unchanged (still masked) and omit it to preserve the real key.
+        setApiKey(editProvider.api_key);
+        setHasStoredKey(true);
       } else {
         setApiKey("");
+        setHasStoredKey(!!editProvider.api_key);
       }
       // Pre-fill advanced fields
       setHeadersJson(editProvider.headers_json || "{}");
       setEnvOverridesJson(editProvider.env_overrides_json || "");
       setNotes(editProvider.notes || "");
-      setMediaProtocol(
-        preset.key === "custom-media"
-          ? getMediaRelayProtocol(editProvider)
-          : DEFAULT_MEDIA_RELAY_PROTOCOL
-      );
-      setMediaEndpoint(
-        preset.key === "custom-media"
-          ? getMediaRelayEndpoint(editProvider)
-          : ""
-      );
+      try {
+        const envOverrides = JSON.parse(editProvider.env_overrides_json || "{}");
+        const modelNames = typeof envOverrides.model_names === "string" ? envOverrides.model_names : "";
+        setModelNamesText(
+          modelNames
+            .split(/[\n,]/)
+            .map((v: string) => v.trim())
+            .filter(Boolean)
+            .join("\n")
+        );
+      } catch {
+        setModelNamesText("");
+      }
+      try {
+        const options = JSON.parse(editProvider.options_json || "{}");
+        const protocol = options.media_protocol === "openai-images" ? "openai-images" : "custom-image";
+        const endpoint = typeof options.media_endpoint === "string" ? options.media_endpoint : "";
+        setMediaProtocol(protocol);
+        setMediaEndpoint(endpoint);
+        setImageInputSupport(options.image_input_support === "supported" || options.image_input_support === "unsupported" ? options.image_input_support : "auto");
+        setOcrTarget(typeof options.ocr_provider_id === "string" && typeof options.ocr_model === "string"
+          ? `${options.ocr_provider_id}:${options.ocr_model}`
+          : "");
+      } catch {
+        setMediaProtocol("custom-image");
+        setMediaEndpoint("");
+        setImageInputSupport("auto");
+        setOcrTarget("");
+      }
+      // Parse structured custom models from env_overrides_json._custom_models
+      try {
+        const envOv = JSON.parse(editProvider.env_overrides_json || "{}");
+        const parsedCustom = typeof envOv._custom_models === 'string' ? JSON.parse(envOv._custom_models) : envOv._custom_models;
+        if (Array.isArray(parsedCustom) && parsedCustom.length > 0) {
+          setCustomModels(parsedCustom.map((m: {modelId?: string; displayName?: string}) => ({
+            modelId: m.modelId || '',
+            displayName: m.displayName || '',
+          })));
+        } else {
+          // Fallback: try to parse from model_names (comma-separated, "id:displayName" format)
+          const modelNames = typeof envOv.model_names === "string" ? envOv.model_names : "";
+          if (modelNames) {
+            const parsed = modelNames.split(",").map((v: string) => v.trim()).filter(Boolean).map((entry: string) => {
+              const colonIdx = entry.indexOf(':');
+              if (colonIdx > 0) {
+                return { modelId: entry.slice(0, colonIdx).trim(), displayName: entry.slice(colonIdx + 1).trim() };
+              }
+              return { modelId: entry, displayName: '' };
+            });
+            setCustomModels(parsed.length > 0 ? parsed : [{modelId: '', displayName: ''}]);
+          } else {
+            setCustomModels([{modelId: '', displayName: ''}]);
+          }
+        }
+      } catch {
+        setCustomModels([{modelId: '', displayName: ''}]);
+      }
       // Pre-fill model name from role_models_json
       try {
         const rm = JSON.parse(editProvider.role_models_json || "{}");
-        const configuredModelNames = getConfiguredImageModelNames(editProvider);
-        setModelName(configuredModelNames[0] || rm.default || "");
-        setModelNamesText(configuredModelNames.join("\n"));
+        setModelName(rm.default || "");
         setMapSonnet(rm.sonnet || "");
         setMapOpus(rm.opus || "");
         setMapHaiku(rm.haiku || "");
       } catch {
         setModelName("");
-        setModelNamesText("");
         setMapSonnet("");
         setMapOpus("");
         setMapHaiku("");
@@ -229,8 +334,7 @@ export function PresetConnectDialog({
       setBaseUrl(preset.base_url);
       setName(preset.name);
       setExtraEnv(preset.extra_env);
-      setModelName("");
-      setModelNamesText("");
+      setModelName(preset.key.startsWith("minimax") ? "MiniMax-M2.7" : "");
       // Use authStyle directly from preset (single source of truth)
       const detectedStyle = (preset.authStyle === 'auth_token' ? 'auth_token' : 'api_key') as 'api_key' | 'auth_token';
       // If preset doesn't expose api_key field, pre-fill from extra_env default
@@ -244,47 +348,116 @@ export function PresetConnectDialog({
       } else {
         setApiKey("");
       }
-      setHasStoredApiKey(false);
+      setHasStoredKey(false);
       setAuthStyle(detectedStyle);
       setInitialAuthStyle(detectedStyle);
-      setMapSonnet("");
-      setMapOpus("");
-      setMapHaiku("");
+      setMapSonnet(preset.key.startsWith("minimax") ? "coding-plan-vlm" : "");
+      setMapOpus(preset.key.startsWith("minimax") ? "MiniMax-M2.7" : "");
+      setMapHaiku(preset.key.startsWith("minimax") ? "coding-plan-search" : "");
       setHeadersJson("{}");
       setEnvOverridesJson("");
       setNotes("");
-      setMediaProtocol(preset.key === "custom-media" ? "openai-images" : DEFAULT_MEDIA_RELAY_PROTOCOL);
-      setMediaEndpoint(preset.key === "custom-media" ? "/v1/images/generations" : "");
-      setShowAdvanced(false);
+      setModelNamesText(preset.key.startsWith("minimax") ? "MiniMax-M2.7\ncoding-plan-vlm\ncoding-plan-search" : "");
+      setMediaProtocol("custom-image");
+      setMediaEndpoint("");
+      setImageInputSupport("auto");
+      setOcrTarget("");
+      setHasStoredApiKey(false);
+      if (preset.key === "custom-media") {
+        setName("通用中转平台");
+        setMediaProtocol("custom-image");
+        setCustomModels([{modelId: '', displayName: ''}]);
+      }
+      setShowAdvanced(preset.key.startsWith("minimax"));
     }
   }, [open, preset, isEdit, editProvider]);
 
+  useEffect(() => {
+    if (!open || !preset || isEdit || preset.key !== "cc-switch") return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/providers");
+        if (!res.ok) return;
+        const data = await res.json();
+        const resolved = data?.cc_switch_resolved;
+        if (!resolved || cancelled) return;
+        const models = Array.isArray(resolved.models) ? resolved.models : [];
+        const roleModels = resolved.roleModels || {};
+        setBaseUrl(typeof resolved.baseUrl === "string" ? resolved.baseUrl : "");
+        setApiKey(typeof resolved.apiKey === "string" ? resolved.apiKey : "");
+        setHasStoredApiKey(Boolean(resolved.apiKey));
+        setModelName(typeof resolved.currentModel === "string" ? resolved.currentModel : "");
+        setMapSonnet(typeof roleModels.sonnet === "string" ? roleModels.sonnet : "");
+        setMapOpus(typeof roleModels.opus === "string" ? roleModels.opus : "");
+        setMapHaiku(typeof roleModels.haiku === "string" ? roleModels.haiku : "");
+        setModelNamesText(models.join("\n"));
+      } catch {
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, preset, isEdit]);
+
+  useEffect(() => {
+    if (open && preset) {
+      fetch('/api/providers/models')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data?.groups) {
+            // OCR calls must target an actual model, never another multi-head router.
+            const filteredGroups = data.groups.filter((g: any) => g.protocol !== 'multi_head');
+            setProviderGroups(filteredGroups);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [open, preset]);
+
   if (!preset) return null;
-  const isMaskedApiKey = isEdit && apiKey.startsWith("***");
-  const showKeepKeyHint = isEdit && hasStoredApiKey && !apiKey.trim();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    // If auth style changed in edit mode, require a new key
-    if (isEdit && authStyle !== initialAuthStyle && (!apiKey || apiKey.startsWith("***"))) {
+    // Anthropic-protocol presets (any preset that isn't pinned to a vendor
+    // URL) must require an explicit base URL. Empty URL on an anthropic
+    // provider is indistinguishable at resolver time from a legacy Default
+    // migration and would silently proxy to api.anthropic.com with the
+    // first-party catalog (xhigh / Opus 4.7 upstream / 1M window). Mirrored
+    // by server-side validation in /api/providers route; this pre-check is
+    // just for a clearer UX.
+    if (preset.protocol === 'anthropic' && !preset.base_url && !baseUrl.trim()) {
+      setError(isZh
+        ? '请填写 Base URL（官方 API 使用 https://api.anthropic.com）'
+        : 'Please specify a base URL (use https://api.anthropic.com for the official API)');
+      return;
+    }
+    // Third-party media presets: empty baseUrl would silently resolve to the
+    // official endpoint server-side. Mirror the anthropic-thirdparty rule so
+    // the user gets a clear error before saving.
+    if (
+      (preset.protocol === 'openai-image' || preset.protocol === 'gemini-image')
+      && !preset.base_url
+      && !baseUrl.trim()
+    ) {
+      setError(isZh
+        ? '请填写 Base URL（留空会回落到官方服务，无法作为第三方生效）'
+        : 'Please specify a base URL (leaving this blank falls back to the official endpoint)');
+      return;
+    }
+
+    // If auth style changed in edit mode, require a new key.
+    // hasStoredKey is cleared when the user switches away from the stored
+    // style (see auth style onValueChange), so checking !apiKey alone is
+    // sufficient — masked values no longer enter state.
+    if (isEdit && authStyle !== initialAuthStyle && !apiKey) {
       setError(isZh
         ? '切换认证方式后需要重新输入密钥'
         : 'Please re-enter the key after changing auth style');
       return;
-    }
-
-    if (preset.fields.includes("api_key")) {
-      if (isEdit) {
-        if (!apiKey.trim() && !hasStoredApiKey) {
-          setError(isZh ? '请输入 API Key' : 'Please enter the API key');
-          return;
-        }
-      } else if (!apiKey.trim()) {
-        setError(isZh ? '请输入 API Key' : 'Please enter the API key');
-        return;
-      }
     }
 
     // For anthropic-thirdparty, inject the correct auth key into extra_env
@@ -309,13 +482,80 @@ export function PresetConnectDialog({
           : '{"ANTHROPIC_API_KEY":""}';
       }
     }
+    let envOverridesObj: Record<string, string> = {};
+    if (envOverridesJson && envOverridesJson.trim()) {
+      try {
+        const parsed = JSON.parse(envOverridesJson.trim());
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          envOverridesObj = parsed as Record<string, string>;
+        }
+      } catch {
+        setError(isZh ? "环境覆盖 JSON 格式不正确" : "Environment overrides must be valid JSON");
+        return;
+      }
+    }
+
+    if (preset.key === "custom-media") {
+      // Serialize structured custom models into env_overrides_json
+      const validModels = customModels.filter(m => m.modelId.trim());
+      if (validModels.length > 0) {
+        envOverridesObj._custom_models = JSON.stringify(validModels.map(m => ({
+          modelId: m.modelId.trim(),
+          displayName: m.displayName.trim(),
+        })));
+        // Also populate model_names for backward compatibility
+        envOverridesObj.model_names = validModels.map(m => m.modelId.trim()).join(",");
+      } else {
+        delete envOverridesObj._custom_models;
+        delete envOverridesObj.model_names;
+      }
+    } else if (preset.fields.includes("model_names")) {
+      const parsedModelNames = modelNamesText
+        .split(/[\n,]/)
+        .map(v => v.trim())
+        .filter(Boolean);
+      if (parsedModelNames.length > 0) {
+        envOverridesObj.model_names = parsedModelNames.join(",");
+      } else {
+        delete envOverridesObj.model_names;
+      }
+    }
+
+    const optionsObj: Record<string, string> = (() => {
+      try {
+        const parsed = isEdit && editProvider ? JSON.parse(editProvider.options_json || '{}') : {};
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
+      } catch { return {}; }
+    })();
+    if (imageInputSupport === 'auto') delete optionsObj.image_input_support;
+    else optionsObj.image_input_support = imageInputSupport;
+    if (ocrTarget.includes(':')) {
+      const [ocrProviderId, ...ocrModelParts] = ocrTarget.split(':');
+      optionsObj.ocr_provider_id = ocrProviderId;
+      optionsObj.ocr_model = ocrModelParts.join(':');
+    } else {
+      delete optionsObj.ocr_provider_id;
+      delete optionsObj.ocr_model;
+    }
+    if (preset.key === "custom-media") {
+      optionsObj.media_protocol = mediaProtocol;
+      if (mediaEndpoint.trim()) {
+        optionsObj.media_endpoint = mediaEndpoint.trim();
+      }
+    } else if (preset.mediaProtocol) {
+      // Media presets that ship a fixed transport (e.g. BananaRouter speaks the
+      // OpenAI Images API) declare it on the preset — persist it so the saved
+      // provider routes through the same transport the preset was built for.
+      optionsObj.media_protocol = preset.mediaProtocol;
+    }
+
     // In edit mode, preserve existing role_models_json unless the user modifies mapping fields
     let roleModelsJson = (isEdit && editProvider?.role_models_json) ? editProvider.role_models_json : "{}";
 
     // Model mapping (sonnet/opus/haiku → actual API model IDs)
     // Merge into existing roleModels to preserve roles not shown in this preset.
     // If the preset exposes these fields and user cleared them all, remove those keys.
-    if (preset.fields.includes("model_mapping")) {
+    if (preset.fields.includes("model_mapping") || preset.protocol === 'multi_head') {
       const hasAny = mapSonnet.trim() || mapOpus.trim() || mapHaiku.trim();
       if (hasAny) {
         // If user fills any, all 3 are required
@@ -344,77 +584,19 @@ export function PresetConnectDialog({
 
     // Inject model name into role_models_json — merge, don't replace.
     // If the preset exposes model_names and user cleared it, remove the default key.
-    if (preset.fields.includes("model_names")) {
+    if (preset.fields.includes("model_names") || preset.protocol === 'multi_head') {
       const existing = (() => { try { return JSON.parse(roleModelsJson); } catch { return {}; } })();
-      const configuredModelNames = preset.key === "custom-media"
-        ? parseModelNames(modelNamesText || modelName)
-        : parseModelNames(modelName);
-
-      if (preset.key === "custom-media" && configuredModelNames.length === 0) {
-        setError(isZh
-          ? '通用中转平台至少需要填写一个模型名称'
-          : 'Relay image provider requires at least one model name');
-        return;
-      }
-
-      if (configuredModelNames.length > 0) {
-        roleModelsJson = JSON.stringify({ ...existing, default: configuredModelNames[0] });
+      if (modelName.trim()) {
+        roleModelsJson = JSON.stringify({ ...existing, default: modelName.trim() });
       } else {
         delete existing.default;
         roleModelsJson = JSON.stringify(existing);
       }
     }
 
-    if (envOverridesJson.trim()) {
-      try {
-        JSON.parse(envOverridesJson);
-      } catch {
-        setError('Env overrides must be valid JSON');
-        return;
-      }
-    }
-
-    const finalEnvOverridesJson = (() => {
-      const base = (() => { try { return JSON.parse(envOverridesJson || "{}"); } catch { return {}; } })();
-      if (preset.key === "custom-media" && preset.fields.includes("model_names")) {
-        const configuredModelNames = parseModelNames(modelNamesText || modelName);
-        if (configuredModelNames.length > 0) {
-          base.model_names = configuredModelNames.join(",");
-        } else {
-          delete base.model_names;
-        }
-      }
-      return Object.keys(base).length > 0 ? JSON.stringify(base) : "";
-    })();
-
-    const finalOptionsJson = (() => {
-      if (preset.key !== "custom-media") {
-        return isEdit ? editProvider?.options_json || "{}" : "{}";
-      }
-      const existing = (() => {
-        try {
-          return JSON.parse(editProvider?.options_json || "{}");
-        } catch {
-          return {};
-        }
-      })();
-      const nextOptions = {
-        ...existing,
-        media_protocol: mediaProtocol,
-      } as Record<string, unknown>;
-      if (mediaEndpoint.trim()) {
-        nextOptions.media_endpoint = mediaEndpoint.trim();
-      } else {
-        delete nextOptions.media_endpoint;
-      }
-      return JSON.stringify(nextOptions);
-    })();
-
     // Validate JSON fields
     for (const [label, val] of [
       ["Extra environment variables", finalExtraEnv],
-      ["Env overrides", finalEnvOverridesJson],
-      ["Options", finalOptionsJson],
       ...(isEdit ? [["Headers", headersJson]] : []),
     ] as const) {
       if (val && val.trim()) {
@@ -427,17 +609,38 @@ export function PresetConnectDialog({
 
     setSaving(true);
     try {
+      // #449 fix: three distinct save intents for api_key in edit mode.
+      //
+      //   apiKey non-empty         → "new value" — always wins.
+      //   hasStoredKey, clearStoredKey=true → "clear it" — send "" so the
+      //       backend overwrites the stored value. updateProvider()'s
+      //       `?? existing.api_key` only falls back on nullish, so "" wins.
+      //   hasStoredKey, clearStoredKey=false → "keep existing" — omit the
+      //       field entirely. undefined → JSON.stringify drops the key →
+      //       PUT body has no api_key → updateProvider() preserves DB value.
+      //   create mode / no stored key → pass apiKey as-is (possibly "").
+      const apiKeyForSave: string | undefined = (() => {
+        // custom-media: if the key is still the masked value from DB (starts with ***),
+        // omit it so the backend preserves the real stored key.
+        if (preset.key === "custom-media" && isEdit && hasStoredKey && editProvider?.api_key && apiKey === editProvider.api_key) {
+          return undefined;
+        }
+        if (apiKey) return apiKey;
+        if (isEdit && hasStoredKey && clearStoredKey) return "";
+        if (isEdit && hasStoredKey) return undefined;
+        return apiKey;
+      })();
       await onSave({
         name: name.trim() || preset.name,
         provider_type: preset.provider_type,
         protocol: preset.protocol,
         base_url: baseUrl.trim(),
-        ...((!isEdit || apiKey.trim()) ? { api_key: apiKey } : {}),
+        api_key: apiKeyForSave,
         extra_env: finalExtraEnv,
         role_models_json: roleModelsJson,
         headers_json: isEdit ? headersJson.trim() || "{}" : undefined,
-        env_overrides_json: finalEnvOverridesJson,
-        options_json: finalOptionsJson,
+        env_overrides_json: JSON.stringify(envOverridesObj),
+        options_json: Object.keys(optionsObj).length > 0 ? JSON.stringify(optionsObj) : undefined,
         notes: isEdit ? notes.trim() : "",
       });
       onOpenChange(false);
@@ -446,6 +649,33 @@ export function PresetConnectDialog({
     } finally {
       setSaving(false);
     }
+  };
+
+  const renderModelSelect = (val: string, onChange: (v: string) => void, placeholder: string) => {
+    return (
+      <Select value={val} onValueChange={onChange}>
+        <SelectTrigger className="h-8 text-sm font-mono w-full min-w-0 max-w-[260px]">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent className="max-h-[300px] w-[300px]">
+          {providerGroups.map((group) => (
+            <SelectGroup key={group.provider_id}>
+              <SelectLabel className="text-[11px] text-muted-foreground bg-muted/50 py-1 font-semibold tracking-wide">
+                {group.provider_name}
+              </SelectLabel>
+              {group.models.map((m) => {
+                const fullVal = `${group.provider_id}:${m.value}`;
+                return (
+                  <SelectItem key={fullVal} value={fullVal} className="text-xs font-mono truncate">
+                    {m.label || m.value}
+                  </SelectItem>
+                );
+              })}
+            </SelectGroup>
+          ))}
+        </SelectContent>
+      </Select>
+    );
   };
 
   return (
@@ -515,6 +745,33 @@ export function PresetConnectDialog({
             </div>
           )}
 
+          {/* Model mapping (always visible for multi_head) */}
+          {preset.protocol === 'multi_head' && (
+            <div className="space-y-4 border-b border-border/50 pb-4 mb-4">
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">
+                  {isZh ? '多头路由映射' : 'Multi-Head Routing Mapping'}
+                </Label>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  {isZh ? '请从下方下拉列表中，选择您已经配置好的其他服务商模型。' : 'Please select models from your configured providers using the dropdowns below.'}
+                </p>
+                <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-3 items-center">
+                  <span className="text-xs font-medium text-foreground text-right">Orchestrator</span>
+                  {renderModelSelect(modelName, setModelName, "Select Orchestrator...")}
+                  
+                  <span className="text-xs text-muted-foreground text-right">Opus (Architect)</span>
+                  {renderModelSelect(mapOpus, setMapOpus, "Select Opus...")}
+                  
+                  <span className="text-xs text-muted-foreground text-right">Sonnet (Executor)</span>
+                  {renderModelSelect(mapSonnet, setMapSonnet, "Select Sonnet...")}
+                  
+                  <span className="text-xs text-muted-foreground text-right">Haiku (Search)</span>
+                  {renderModelSelect(mapHaiku, setMapHaiku, "Select Haiku...")}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Base URL */}
           {preset.fields.includes("base_url") && (
             <div className="space-y-2">
@@ -526,58 +783,6 @@ export function PresetConnectDialog({
                 className="text-sm font-mono"
               />
             </div>
-          )}
-
-          {preset.key === "custom-media" && (
-            <>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  {isZh ? "接口协议" : "Protocol"}
-                </Label>
-                <Select
-                  value={mediaProtocol}
-                  onValueChange={(value) => setMediaProtocol(value as MediaRelayProtocol)}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="openai-images">
-                      {isZh ? "OpenAI 图片接口" : "OpenAI Images API"}
-                    </SelectItem>
-                    <SelectItem value="custom-image">
-                      {isZh ? "自定义图片接口" : "Custom Image API"}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-[11px] text-muted-foreground">
-                  {mediaProtocol === "openai-images"
-                    ? (isZh
-                      ? "适用于 /v1/images/generations 这类 OpenAI-compatible 生图接口。"
-                      : "Use this for OpenAI-compatible image endpoints such as /v1/images/generations.")
-                    : (isZh
-                      ? "适用于返回 { images: [...] } 的自定义中转接口。"
-                      : "Use this for custom relay APIs that return { images: [...] }.")}
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  {isZh ? "接口地址" : "Endpoint"}
-                </Label>
-                <Input
-                  value={mediaEndpoint}
-                  onChange={(e) => setMediaEndpoint(e.target.value)}
-                  placeholder={mediaProtocol === "openai-images" ? "/v1/images/generations" : "https://api.example.com/image/generate"}
-                  className="text-sm font-mono"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  {isZh
-                    ? "可填写相对路径或完整 URL。留空时，自定义接口直接请求 Base URL，OpenAI 图片接口默认补成 /v1/images/generations。"
-                    : "Use a relative path or full URL. Leave empty to call Base URL directly for custom relays, or default to /v1/images/generations for OpenAI Images."}
-                </p>
-              </div>
-            </>
           )}
 
           {/* API Key with optional auth style select */}
@@ -592,17 +797,7 @@ export function PresetConnectDialog({
                 {preset.key === "anthropic-thirdparty" && (
                   <Select
                     value={authStyle}
-                    onValueChange={(v) => {
-                      const newStyle = v as "api_key" | "auth_token";
-                      setAuthStyle(newStyle);
-                      if (isEdit) {
-                        if (newStyle !== initialAuthStyle) {
-                          setApiKey("");
-                        } else {
-                          setApiKey("");
-                        }
-                      }
-                    }}
+                    onValueChange={(v) => applyAuthStyleChange(v as "api_key" | "auth_token")}
                   >
                     <SelectTrigger className="w-[130px] shrink-0 text-xs">
                       <SelectValue />
@@ -613,30 +808,75 @@ export function PresetConnectDialog({
                     </SelectContent>
                   </Select>
                 )}
-                <Input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={authStyle === "auth_token" ? "token-..." : "sk-..."}
-                  className="text-sm font-mono flex-1"
-                  autoFocus
-                />
+                <div className="flex gap-1.5 flex-1 min-w-0">
+                  <Input
+                    type={preset.key === "custom-media" ? (showApiKey ? "text" : "password") : "password"}
+                    value={apiKey}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                      // Typing a new key overrides any pending "clear" intent
+                      if (clearStoredKey) setClearStoredKey(false);
+                    }}
+                    placeholder={
+                      clearStoredKey
+                        ? (isZh ? "保存后将清空已存密钥" : "Stored key will be cleared on save")
+                        : hasStoredKey
+                        ? (isZh ? "已保存，留空则沿用原密钥" : "Saved — leave blank to keep existing")
+                        : (authStyle === "auth_token" ? "token-..." : "sk-...")
+                    }
+                    className="text-sm font-mono flex-1"
+                    autoFocus
+                  />
+                  {preset.key === "custom-media" && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="shrink-0 text-muted-foreground hover:text-foreground"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                    >
+                      {showApiKey ? "🙈" : "👁"}
+                    </Button>
+                  )}
+                </div>
               </div>
-              {(isMaskedApiKey || showKeepKeyHint) && (
-                <p className="text-[11px] text-muted-foreground">
-                  {isZh
-                    ? (showKeepKeyHint
-                      ? '该服务商已保存密钥（为安全不显示）。留空保存会保留原值，重新输入才会替换。'
-                      : '当前显示的是掩码。直接保存会保留原 API Key，只有重新输入才会替换。')
-                    : (showKeepKeyHint
-                      ? 'This provider already has a saved key (hidden for security). Leave blank to keep it; enter a new one to replace it.'
-                      : 'This field is masked. Saving without changes keeps the current API key; re-enter it only if you want to replace it.')}
-                </p>
-              )}
               {/* Show auth style badge for non-thirdparty presets (auto-determined) */}
               {preset.key !== "anthropic-thirdparty" && (
                 <p className="text-[11px] text-muted-foreground">
                   Auth: <span className="font-mono">{authStyle === "auth_token" ? "Authorization: Bearer ..." : "X-Api-Key: ..."}</span>
+                </p>
+              )}
+              {/* Explicit "clear stored key" action — only visible in edit
+                  mode when a stored key exists and the user hasn't typed a
+                  replacement. Without this, hasStoredKey + empty input was
+                  always interpreted as "keep existing", leaving users with
+                  no way to actually delete a stored key. */}
+              {isEdit && hasStoredKey && !apiKey && (
+                <p className="text-[11px]">
+                  {clearStoredKey ? (
+                    <>
+                      <span className="text-amber-500">
+                        {isZh ? "保存后将清空已存密钥。" : "The stored key will be cleared on save. "}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="link"
+                        className="h-auto p-0 text-[11px] text-amber-500 underline hover:no-underline"
+                        onClick={() => setClearStoredKey(false)}
+                      >
+                        {isZh ? "撤销" : "Undo"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="h-auto p-0 text-[11px] text-muted-foreground underline hover:no-underline"
+                      onClick={() => setClearStoredKey(true)}
+                    >
+                      {isZh ? "清除已存密钥" : "Clear stored key"}
+                    </Button>
+                  )}
                 </p>
               )}
               {/* Smart recommend for thirdparty based on URL */}
@@ -651,7 +891,7 @@ export function PresetConnectDialog({
                     <Button
                       variant="link"
                       className="h-auto p-0 text-[11px] text-amber-500 underline hover:no-underline"
-                      onClick={() => setAuthStyle(inferred)}
+                      onClick={() => applyAuthStyleChange(inferred)}
                     >
                       {isZh ? '切换' : 'Switch'}
                     </Button>
@@ -661,40 +901,117 @@ export function PresetConnectDialog({
             </div>
           )}
 
-          {/* Model name — for providers that need user-specified model */}
-          {preset.fields.includes("model_names") && (
+          {/* Model name — for providers that need user-specified model (hidden for custom-media, uses structured rows) */}
+          {preset.fields.includes("model_names") && preset.key !== "custom-media" && (
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">{t('provider.modelName' as TranslationKey)}</Label>
-              {preset.key === "custom-media" ? (
-                <Textarea
-                  value={modelNamesText}
-                  onChange={(e) => {
-                    setModelNamesText(e.target.value);
-                    const names = parseModelNames(e.target.value);
-                    setModelName(names[0] || "");
-                  }}
-                  placeholder={"gemini-2.5-flash-image\nimagen-4.0-generate-preview"}
-                  className="text-sm font-mono min-h-[88px]"
-                  rows={4}
-                />
-              ) : (
-                <Input
-                  value={modelName}
-                  onChange={(e) => setModelName(e.target.value)}
-                  placeholder="ark-code-latest"
-                  className="text-sm font-mono"
-                />
-              )}
+              <Input
+                value={modelName}
+                onChange={(e) => setModelName(e.target.value)}
+                placeholder="ark-code-latest"
+                className="text-sm font-mono"
+              />
               <p className="text-[11px] text-muted-foreground">
-                {preset.key === "custom-media"
-                  ? (isZh
-                    ? '每行一个或用逗号分隔。首个模型会作为默认值，生成时可在图片卡片里切换。'
-                    : 'One model per line or comma-separated. The first model becomes the default, and users can switch models in the image card.')
-                  : (isZh
-                    ? '在服务商控制台配置的模型名称，如 ark-code-latest、doubao-seed-2.0-code'
-                    : 'Model name configured in provider console, e.g. ark-code-latest')}
+                {isZh
+                  ? '在服务商控制台配置的模型名称，如 ark-code-latest、doubao-seed-2.0-code'
+                  : 'Model name configured in provider console, e.g. ark-code-latest'}
               </p>
             </div>
+          )}
+
+          {preset.fields.includes("model_names") && preset.key !== "custom-media" && (
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">{isZh ? '可用模型列表（每行一个）' : 'Available Models (one per line)'}</Label>
+              <Textarea
+                value={modelNamesText}
+                onChange={(e) => setModelNamesText(e.target.value)}
+                placeholder={preset.key.startsWith("minimax")
+                  ? "MiniMax-M2.7\ncoding-plan-vlm\ncoding-plan-search"
+                  : isZh
+                    ? "claude-sonnet-4-5\nclaude-opus-4-1"
+                    : "claude-sonnet-4-5\nclaude-opus-4-1"}
+                className="text-sm font-mono min-h-[72px]"
+                rows={4}
+              />
+            </div>
+          )}
+
+          {preset.key === "custom-media" && (
+            <>
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">{isZh ? '中转协议' : 'Relay Protocol'}</Label>
+                <Select value={mediaProtocol} onValueChange={(v: "custom-image" | "openai-images") => setMediaProtocol(v)}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="custom-image">{isZh ? "自定义图像接口" : "Custom Image API"}</SelectItem>
+                    <SelectItem value="openai-images">OpenAI Images API</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">{isZh ? '中转端点（可选）' : 'Relay Endpoint (optional)'}</Label>
+                <Input
+                  value={mediaEndpoint}
+                  onChange={(e) => setMediaEndpoint(e.target.value)}
+                  placeholder={isZh ? "/v1/images/generations 或完整 URL" : "/v1/images/generations or full URL"}
+                  className="text-sm font-mono"
+                />
+              </div>
+              {/* Structured model rows */}
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">{isZh ? '模型列表' : 'Models'}</Label>
+                <div className="space-y-2">
+                  {customModels.map((m, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <Input
+                        value={m.modelId}
+                        onChange={(e) => {
+                          const next = [...customModels];
+                          next[idx] = { ...next[idx], modelId: e.target.value };
+                          setCustomModels(next);
+                        }}
+                        placeholder={isZh ? "模型 ID" : "Model ID"}
+                        className="text-sm font-mono flex-1 h-8"
+                      />
+                      <Input
+                        value={m.displayName}
+                        onChange={(e) => {
+                          const next = [...customModels];
+                          next[idx] = { ...next[idx], displayName: e.target.value };
+                          setCustomModels(next);
+                        }}
+                        placeholder={isZh ? "显示名称（可选）" : "Display name (optional)"}
+                        className="text-sm flex-1 h-8"
+                      />
+                      {customModels.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => {
+                            setCustomModels(customModels.filter((_, i) => i !== idx));
+                          }}
+                        >
+                          ×
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-primary hover:text-primary h-auto px-0 py-0.5"
+                  onClick={() => setCustomModels([...customModels, {modelId: '', displayName: ''}])}
+                >
+                  + {isZh ? '继续添加' : 'Add model'}
+                </Button>
+              </div>
+            </>
           )}
 
           {/* Extra env — bedrock/vertex/custom always shown */}
@@ -710,8 +1027,8 @@ export function PresetConnectDialog({
             </div>
           )}
 
-          {/* Advanced options — for presets that don't normally show extra_env */}
-          {!preset.fields.includes("extra_env") && (
+          {/* Advanced options — for presets that don't normally show extra_env (hidden for custom-media) */}
+          {!preset.fields.includes("extra_env") && preset.key !== "custom-media" && (
             <>
               <Button
                 type="button"
@@ -726,41 +1043,63 @@ export function PresetConnectDialog({
               {showAdvanced && (
                 <div className="space-y-4 border-t border-border/50 pt-3">
                   {/* Model mapping (sonnet/opus/haiku → API model IDs) */}
-                  {preset.fields.includes("model_mapping") && (
+                  {preset.fields.includes("model_mapping") && preset.protocol !== 'multi_head' && (
                     <div className="space-y-2">
                       <Label className="text-xs text-muted-foreground">
-                        {isZh ? '模型名称映射' : 'Model Name Mapping'}
+                        {isZh ? '协作模型映射' : 'Collaboration Model Mapping'}
                       </Label>
                       <p className="text-[11px] text-muted-foreground leading-relaxed">
-                        {isZh
-                          ? '如果服务商使用不同的模型名称（如 claude-sonnet-4-6），在此映射。留空则使用默认名称（sonnet / opus / haiku）。'
-                          : 'Map model names if the provider uses different IDs (e.g. claude-sonnet-4-6). Leave empty to use defaults (sonnet / opus / haiku).'}
+                        {preset.key.startsWith("minimax")
+                          ? (isZh
+                              ? '用于配置团队协作时各角色使用的模型。Researcher 对应 Haiku/Search，Executor 对应 Sonnet/VLM，Architect 对应 Opus/M2.7。'
+                              : 'Configure which model each collaboration role uses. Researcher maps to Haiku/Search, Executor to Sonnet/VLM, Architect to Opus/M2.7.')
+                          : (isZh
+                              ? '如果服务商使用不同的模型名称（如 claude-sonnet-4-6），在此映射。留空则使用默认名称（sonnet / opus / haiku）。'
+                              : 'Map model names if the provider uses different IDs (e.g. claude-sonnet-4-6). Leave empty to use defaults (sonnet / opus / haiku).')}
                       </p>
                       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 items-center">
-                        <span className="text-xs text-muted-foreground text-right">Sonnet</span>
+                        <span className="text-xs text-muted-foreground text-right">{preset.key.startsWith("minimax") ? 'Executor' : 'Sonnet'}</span>
                         <Input
                           value={mapSonnet}
                           onChange={(e) => setMapSonnet(e.target.value)}
-                          placeholder="claude-sonnet-4-6"
+                          placeholder={preset.key.startsWith("minimax") ? "coding-plan-vlm" : "claude-sonnet-4-6"}
                           className="text-sm font-mono h-8"
                         />
-                        <span className="text-xs text-muted-foreground text-right">Opus</span>
+                        <span className="text-xs text-muted-foreground text-right">{preset.key.startsWith("minimax") ? 'Architect' : 'Opus'}</span>
                         <Input
                           value={mapOpus}
                           onChange={(e) => setMapOpus(e.target.value)}
-                          placeholder="claude-opus-4-6"
+                          placeholder={preset.key.startsWith("minimax") ? "MiniMax-M2.7" : "claude-opus-4-7"}
                           className="text-sm font-mono h-8"
                         />
-                        <span className="text-xs text-muted-foreground text-right">Haiku</span>
+                        <span className="text-xs text-muted-foreground text-right">{preset.key.startsWith("minimax") ? 'Researcher' : 'Haiku'}</span>
                         <Input
                           value={mapHaiku}
                           onChange={(e) => setMapHaiku(e.target.value)}
-                          placeholder="claude-haiku-4-5-20251001"
+                          placeholder={preset.key.startsWith("minimax") ? "coding-plan-search" : "claude-haiku-4-5-20251001"}
                           className="text-sm font-mono h-8"
                         />
                       </div>
                     </div>
                   )}
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">{t('provider.imageInputSupport')}</Label>
+                    <Select value={imageInputSupport} onValueChange={(value) => setImageInputSupport(value as "auto" | "supported" | "unsupported")}>
+                      <SelectTrigger className="w-full text-sm"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">{t('provider.imageInputAuto')}</SelectItem>
+                        <SelectItem value="supported">{t('provider.imageInputSupported')}</SelectItem>
+                        <SelectItem value="unsupported">{t('provider.imageInputUnsupported')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">{t('provider.imageInputHint')}</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">{t('provider.ocrModel')}</Label>
+                    {renderModelSelect(ocrTarget, setOcrTarget, t('provider.ocrProviderUnset'))}
+                  </div>
 
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">{t('provider.extraEnvVars')} (JSON)</Label>
@@ -864,7 +1203,7 @@ export function PresetConnectDialog({
                 type="button"
                 variant="outline"
                 onClick={handleTestConnection}
-                disabled={saving || testing || (!apiKey && preset.fields.includes("api_key") && preset.key !== 'custom-anthropic')}
+                disabled={saving || testing || !canTest}
                 className="gap-1.5"
               >
                 {testing ? <SpinnerGap size={14} className="animate-spin" /> : <Lightning size={14} />}

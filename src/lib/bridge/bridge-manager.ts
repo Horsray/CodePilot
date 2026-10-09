@@ -20,6 +20,7 @@ import { PLATFORM_LIMITS as limits } from './types';
 import { markdownToTelegramChunks } from './markdown/telegram';
 import { markdownToDiscordChunks } from './markdown/discord';
 import { getSetting, insertAuditLog, updateChannelBinding } from '../db';
+import { getSkill } from '../skill-discovery';
 import { setBridgeModeActive } from '../telegram-bot';
 import { escapeHtml } from './adapters/telegram-utils';
 import {
@@ -70,6 +71,14 @@ function getStreamConfig(channelType = 'telegram'): StreamConfig {
   const maxChars = parseInt(getSetting(`${prefix}max_chars`) || '', 10) || defaults.maxChars;
   return { intervalMs, minDeltaChars, maxChars };
 }
+
+// 中文注释：功能名称「未完成自动续跑」，用法是一轮回复被判定为"说了但没做完"
+// （模型提前 end_turn / 工具调用悬空）时，自动追加一轮把任务做完，最多 CONTINUE_MAX 次。
+// 2026-10-07 微信桥接实测：deepseek 中转模型常在"让我看看…："处 end_turn，
+// 半截过程叙述被当成最终答复推给手机，用户以为任务结束了。
+const CONTINUE_MAX = 2;
+const CONTINUE_PROMPT =
+  '继续完成上面未完成的任务。不要只描述你接下来打算做什么，直接执行工具调用并把事情做完，最后给出结论。';
 
 /** Fire-and-forget: send a preview draft. Only degrades on permanent failure. */
 function flushPreview(
@@ -192,6 +201,47 @@ async function deliverResponse(
     parseMode: 'plain',
     replyToMessageId,
   }, { sessionId });
+}
+
+/**
+ * Deliver a message to all IM channels bound to a specific CodePilot session.
+ * Used for server-initiated spontaneous messages (e.g. Scheduled Tasks).
+ */
+export async function deliverToSession(sessionId: string, text: string): Promise<void> {
+  let state = getState();
+  if (!state.running) {
+    // 中文注释：功能名称「桥接懒启动兜底」，用法是当定时任务等后台流程主动推送消息时，若远程桥接尚未运行，则先尝试按当前设置自动启动，避免消息被静默丢弃。
+    const startResult = await start();
+    state = getState();
+    if (!startResult.started || !state.running) {
+      console.warn('[bridge-manager] deliverToSession skipped because bridge is not running', {
+        sessionId,
+        reason: startResult.reason ?? 'bridge_not_running',
+      });
+      return;
+    }
+  }
+
+  const bindings = router.listBindings();
+  let delivered = 0;
+  for (const b of bindings) {
+    if (b.codepilotSessionId === sessionId && b.active) {
+      const adapter = state.adapters.get(b.channelType);
+      if (adapter && adapter.isRunning()) {
+        const address: ChannelAddress = { channelType: b.channelType as typeof b.channelType, chatId: b.chatId };
+        try {
+          await deliverResponse(adapter, address, text, sessionId);
+          delivered++;
+        } catch (err) {
+          console.error(`[bridge-manager] Failed to deliver spontaneous message to ${b.channelType}:${b.chatId}`, err);
+        }
+      }
+    }
+  }
+
+  if (delivered === 0) {
+    console.warn('[bridge-manager] No active bridge bindings matched session for spontaneous delivery', { sessionId });
+  }
 }
 
 interface AdapterMeta {
@@ -345,6 +395,19 @@ export async function stop(): Promise<void> {
 
   state.running = false;
 
+  // Abort all active tool/stream tasks so in-flight Claude sessions stop
+  // writing to DB and release session locks cleanly. Without this, `/stop`
+  // had "interrupt current task" semantics per-session but global stop()
+  // would let running tasks finish in the background uncounted.
+  for (const [sessionId, taskAbort] of state.activeTasks) {
+    try {
+      taskAbort.abort();
+    } catch (err) {
+      console.warn(`[bridge-manager] Error aborting task ${sessionId}:`, err);
+    }
+  }
+  state.activeTasks.clear();
+
   // Abort all event loops
   for (const [, abort] of state.loopAborts) {
     abort.abort();
@@ -364,7 +427,6 @@ export async function stop(): Promise<void> {
   state.adapters.clear();
   state.adapterMeta.clear();
   state.sessionLocks.clear();
-  state.activeTasks.clear();
   state.startedAt = null;
 
   // Re-enable notification bot polling
@@ -537,6 +599,14 @@ async function handleMessage(
       return;
     }
 
+    // AskUserQuestion option button (#282)
+    if (msg.callbackData.startsWith('ask:')) {
+      broker.handleAskUserQuestionCallback(msg.callbackData, msg.address.chatId, msg.callbackMessageId);
+      // No confirmation — the model will respond to the chosen answer naturally.
+      ack();
+      return;
+    }
+
     // Permission buttons
     const handled = broker.handlePermissionCallback(msg.callbackData, msg.address.chatId, msg.callbackMessageId);
     if (handled) {
@@ -556,15 +626,44 @@ async function handleMessage(
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
   if (!rawText && !hasAttachments) { ack(); return; }
 
-  // Check for IM commands (before sanitization — commands are validated individually)
+  // Check for IM commands (before sanitization — commands are validated individually).
+  // 未识别的 / 命令回退为 skill 匹配，实现与桌面端 Slash 弹窗一致的技能调用体验。
+  let skillSystemPromptAppend: string | undefined;
+  let skillPromptOverride: string | undefined;
   if (rawText.startsWith('/')) {
-    await handleCommand(adapter, msg, rawText, msg.messageId);
-    ack();
-    return;
+    const builtinHandled = await handleCommand(adapter, msg, rawText, msg.messageId);
+    if (builtinHandled) {
+      ack();
+      return;
+    }
+
+    // 未命中内置 IM 命令 → 按 skill 名匹配（去 / 前缀与 @botname，剩余作为用户上下文）
+    const slashParts = rawText.split(/\s+/);
+    const skillName = slashParts[0].slice(1).split('@')[0].trim();
+    const skillUserContext = slashParts.slice(1).join(' ').trim();
+    const probeBinding = router.resolve(msg.address);
+    const skill = getSkill(skillName, probeBinding.workingDirectory || undefined);
+
+    if (!skill) {
+      await deliver(adapter, {
+        address: msg.address,
+        text: `Unknown command: ${escapeHtml('/' + skillName)}\nType /help for available commands.`,
+        parseMode: 'HTML',
+        replyToMessageId: msg.messageId,
+      });
+      ack();
+      return;
+    }
+
+    // 命中 skill：注入技能正文，prompt 与桌面端 dispatchBadge 一致
+    skillSystemPromptAppend = `[Skill Instructions]\n${skill.body}`;
+    skillPromptOverride = skillUserContext
+      ? `Please use the ${skillName} skill. User context: ${skillUserContext}`
+      : `Please use the ${skillName} skill.`;
   }
 
   // Sanitize general message text before routing to conversation engine
-  const { text, truncated } = sanitizeInput(rawText);
+  const { text, truncated } = sanitizeInput(skillPromptOverride ?? rawText);
   if (truncated) {
     console.warn(`[bridge-manager] Input truncated from ${rawText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
     insertAuditLog({
@@ -740,10 +839,24 @@ async function handleMessage(
   try {
     // Pass permission callback so requests are forwarded to IM immediately
     // during streaming (the stream blocks until permission is resolved).
-    // Use text or empty string for image-only messages (prompt is still required by streamClaude)
-    const promptText = text || (hasAttachments ? 'Describe this image.' : '');
+    // Type-aware fallback prompt for attachment-only turns — "Describe this image"
+    // was misleading when audio/video/file types were added (#291).
+    let promptText = text;
+    if (!promptText && hasAttachments) {
+      const types = new Set((msg.attachments || []).map((a) => (a.type || '').split('/')[0]));
+      if (types.has('image') && types.size === 1) {
+        promptText = 'Describe this image.';
+      } else if (types.has('audio') && types.size === 1) {
+        promptText = 'Transcribe and summarize this audio.';
+      } else if (types.has('video') && types.size === 1) {
+        promptText = 'Describe what happens in this video.';
+      } else {
+        // Mixed or file: let the model decide based on attachment content.
+        promptText = 'Please review the attached file(s).';
+      }
+    }
 
-    const result = await engine.processMessage(binding, promptText, async (perm) => {
+    const forwardPermission: Parameters<typeof engine.processMessage>[2] = async (perm) => {
       await broker.forwardPermissionRequest(
         adapter,
         msg.address,
@@ -754,7 +867,50 @@ async function handleMessage(
         perm.suggestions,
         msg.messageId,
       );
-    }, taskAbort.signal, hasAttachments ? msg.attachments : undefined, onPartialText, onToolEvent);
+    };
+
+    let result = await engine.processMessage(
+      binding,
+      promptText,
+      forwardPermission,
+      taskAbort.signal,
+      hasAttachments ? msg.attachments : undefined,
+      onPartialText,
+      onToolEvent,
+      skillSystemPromptAppend,
+    );
+
+    // 中文注释：未完成自动续跑 —— 判定为"说了但没做完"时再跑一轮，把任务真正做完，
+    // 而不是把过程叙述当成最终答复推给手机。续跑轮不落库用户消息、不做流式预览，
+    // 避免"继续"出现在会话历史里、以及预览文字来回抖动。
+    for (let round = 0; round < CONTINUE_MAX; round++) {
+      if (taskAbort.signal.aborted || result.hasError || !result.incomplete) break;
+      console.log(`[bridge-manager] Turn incomplete — auto-continue ${round + 1}/${CONTINUE_MAX}`);
+      const next = await engine.processMessage(
+        binding,
+        CONTINUE_PROMPT,
+        forwardPermission,
+        taskAbort.signal,
+        undefined,
+        undefined,
+        onToolEvent,
+        undefined,
+        false,
+      );
+      // 续跑产出了新结论就用它；否则保留上一轮文本（至少别把内容弄丢）。
+      const hasFreshText = !!next.responseText
+        && next.responseText !== '_(reasoning completed, no text output)_';
+      result = hasFreshText || next.hasError ? next : { ...next, responseText: result.responseText };
+    }
+
+    // 续跑到上限仍未完成 —— 裁掉"让我…："式的尾巴并明确告知，别让用户以为答完了。
+    if (result.incomplete && !result.hasError && result.responseText) {
+      const trimmed = engine.trimTrailingIntent(result.responseText);
+      result = {
+        ...result,
+        responseText: `${trimmed || result.responseText}\n\n---\n⚠️ 任务可能尚未完成，回复「继续」可接着做。`,
+      };
+    }
 
     // Await any in-flight card creation before checking cardMessageId,
     // preventing race where processMessage() returns before create() resolves.
@@ -772,18 +928,22 @@ async function handleMessage(
       } else {
         await deliverResponse(adapter, msg.address, result.responseText, binding.codepilotSessionId, msg.messageId);
       }
-    } else if (result.hasError) {
-      if (cardController && cardMessageId) {
-        await cardController.finalize(cardMessageId, `❌ Error: ${result.errorMessage}`, 'error');
+    }
+
+    // 中文注释：错误提示不再被半截文本吞掉。原逻辑是 `else if (result.hasError)`，
+    // 只要有任何文本产出，真正的失败原因就永远送不到用户手上（2026-10-07 修复）。
+    if (result.hasError) {
+      const errorNotice = `⚠️ ${result.errorMessage || '任务执行出错'}`;
+      if (cardController && cardMessageId && !cardFinalized) {
+        await cardController.finalize(cardMessageId, errorNotice, 'error');
         cardFinalized = true;
       } else {
-        const errorResponse: OutboundMessage = {
+        await deliver(adapter, {
           address: msg.address,
-          text: `<b>Error:</b> ${escapeHtml(result.errorMessage)}`,
-          parseMode: 'HTML',
-          replyToMessageId: msg.messageId,
-        };
-        await deliver(adapter, errorResponse);
+          text: errorNotice,
+          parseMode: 'plain',
+          replyToMessageId: result.responseText ? undefined : msg.messageId,
+        }, { sessionId: binding.codepilotSessionId });
       }
     }
 
@@ -799,6 +959,32 @@ async function handleMessage(
           updateChannelBinding(binding.id, { sdkSessionId: result.sdkSessionId });
         }
       } catch { /* best effort */ }
+    }
+  } catch (err) {
+    // processMessage() threw an exception (e.g. provider mismatch, missing
+    // credentials, unexpected runtime error). Deliver error to user instead
+    // of silently swallowing it.
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[bridge-manager] handleMessage threw:`, err);
+    try {
+      if (cardController && cardMessageId) {
+        await cardController.finalize(cardMessageId, `❌ Error: ${escapeHtml(errMsg)}`, 'error');
+        cardFinalized = true;
+      } else {
+        const errorResponse: OutboundMessage = {
+          address: msg.address,
+          text: `<b>Error:</b> ${escapeHtml(errMsg)}`,
+          parseMode: 'HTML',
+          replyToMessageId: msg.messageId,
+        };
+        await deliver(adapter, errorResponse);
+      }
+    } catch (deliverErr) {
+      console.error(`[bridge-manager] Failed to deliver error to user:`, deliverErr);
+    }
+    // Clear SDK session ID on crash to prevent stale resume
+    if (binding.id) {
+      try { updateChannelBinding(binding.id, { sdkSessionId: '' }); } catch { /* best effort */ }
     }
   } finally {
     // Clean up preview state
@@ -835,7 +1021,7 @@ async function handleCommand(
   msg: InboundMessage,
   text: string,
   replyToMessageId?: string,
-): Promise<void> {
+): Promise<boolean> {
   // Extract command and args (handle /command@botname format)
   const parts = text.split(/\s+/);
   const command = parts[0].split('@')[0].toLowerCase();
@@ -858,7 +1044,7 @@ async function handleCommand(
       parseMode: 'plain',
       replyToMessageId,
     });
-    return;
+    return true;
   }
 
   let response = '';
@@ -966,7 +1152,7 @@ async function handleCommand(
         inlineButtons,
       };
       await deliver(adapter, cardMsg);
-      return; // Don't send response — card is already sent
+      return true; // Don't send response — card is already sent
     }
 
     case '/mode': {
@@ -1297,7 +1483,8 @@ async function handleCommand(
       break;
 
     default:
-      response = `Unknown command: ${escapeHtml(command)}\nType /help for available commands.`;
+      // 未识别的 / 命令：返回 false，让 handleMessage 回退为 skill 匹配（与桌面端 Slash 弹窗一致）。
+      return false;
   }
 
   if (response) {
@@ -1308,4 +1495,6 @@ async function handleCommand(
       replyToMessageId,
     });
   }
+
+  return true;
 }

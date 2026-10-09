@@ -1,47 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import path from 'path';
-import fs from 'fs';
+import { spawn } from 'child_process';
 
-const execAsync = promisify(exec);
-
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { path: filePath } = body;
-
-    if (!filePath) {
-      return NextResponse.json(
-        { error: 'Path is required' },
-        { status: 400 }
-      );
-    }
-
-    // Security check: prevent directory traversal
-    const resolvedPath = path.resolve(filePath);
-    
-    // Check if path exists
-    if (!fs.existsSync(resolvedPath)) {
-      return NextResponse.json(
-        { error: 'Path does not exist' },
-        { status: 404 }
-      );
-    }
-
-    // Open in Finder (macOS)
-    const stats = fs.statSync(resolvedPath);
-    const targetPath = stats.isDirectory() ? resolvedPath : path.dirname(resolvedPath);
-    
-    // Use 'open' command on macOS to open Finder
-    await execAsync(`open "${targetPath}"`);
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Error opening in Finder:', error);
-    return NextResponse.json(
-      { error: 'Failed to open in Finder' },
-      { status: 500 }
-    );
+export async function POST(req: NextRequest) {
+  const { path, openInFinder } = await req.json();
+  if (!path || typeof path !== 'string') {
+    return NextResponse.json({ error: 'Missing path' }, { status: 400 });
   }
+
+  const platform = process.platform;
+  let cmd: string;
+  let args: string[] = [];
+
+  if (platform === 'darwin') {
+    // open -R: 在 Finder 中显示文件（在父文件夹中选中该文件）
+    // open: 打开文件或目录
+    if (openInFinder) {
+      cmd = 'open';
+      args = ['-R', path]; // -R 参数让 Finder 显示并选中该文件
+    } else {
+      cmd = 'open';
+      args = [path];
+    }
+  } else if (platform === 'win32') {
+    cmd = 'explorer';
+    args = [path];
+  } else {
+    cmd = 'xdg-open';
+    args = [path];
+  }
+
+  return new Promise<NextResponse>((resolve) => {
+    const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
+    child.on('error', (err) => {
+      resolve(NextResponse.json({ error: err.message }, { status: 500 }));
+    });
+    child.on('spawn', () => {
+      child.unref();
+      resolve(NextResponse.json({ ok: true }));
+    });
+  });
 }

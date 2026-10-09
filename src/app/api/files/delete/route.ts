@@ -1,52 +1,61 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import * as fs from 'fs/promises';
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { path: filePath } = body;
+    const { path: targetPath, recursive } = await request.json();
 
-    if (!filePath) {
+    if (!targetPath) {
       return NextResponse.json(
-        { error: 'Path is required' },
+        { error: '缺少文件路径' },
         { status: 400 }
       );
     }
 
-    const resolvedPath = path.resolve(filePath);
+    // 安全检查：确保路径在允许的目录下
+    const homeDir = process.env.HOME || '/Users/horsray';
+    const allowedDirs = [
+      homeDir,
+      '/Users/horsray/Documents',
+      '/Users/horsray/Desktop',
+      '/Users/horsray/Downloads',
+    ];
 
-    // 安全检查
-    const forbiddenPaths = ['/System', '/usr', '/bin', '/sbin', '/etc', '/dev', '/var'];
-    if (forbiddenPaths.some(fp => resolvedPath.startsWith(fp))) {
+    const isAllowed = allowedDirs.some(dir => targetPath.startsWith(dir));
+    if (!isAllowed) {
       return NextResponse.json(
-        { error: 'Access to system directories is not allowed' },
+        { error: '不允许删除此路径的文件' },
         { status: 403 }
       );
     }
 
-    // 检查文件/文件夹是否存在
-    if (!fs.existsSync(resolvedPath)) {
+    // 检查文件/目录是否存在
+    try {
+      await fs.access(targetPath);
+    } catch {
       return NextResponse.json(
-        { error: 'File or directory does not exist' },
+        { error: '文件或目录不存在' },
         { status: 404 }
       );
     }
 
-    // 删除文件或文件夹
-    const stats = fs.statSync(resolvedPath);
-    if (stats.isDirectory()) {
-      fs.rmSync(resolvedPath, { recursive: true, force: true });
+    // 执行删除
+    if (recursive) {
+      await fs.rm(targetPath, { recursive: true, force: true });
     } else {
-      fs.unlinkSync(resolvedPath);
+      await fs.unlink(targetPath);
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      message: '删除成功',
+    });
   } catch (error) {
-    console.error('Delete file/folder error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to delete';
+    console.error('Delete file error:', error);
     return NextResponse.json(
-      { error: errorMessage },
+      {
+        error: error instanceof Error ? error.message : '删除失败'
+      },
       { status: 500 }
     );
   }

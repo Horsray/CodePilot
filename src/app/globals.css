@@ -1,50 +1,147 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@xterm/xterm/css/xterm.css";
 
-@custom-variant dark (&:is(.dark *));
+/* ─── 自托管字体（移植自 cc-haha，不依赖 Google CDN）────────────── */
 
+/* Inter – variable weight 400-600, latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* Manrope – variable weight 400-800, latin */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/fonts/manrope-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/fonts/manrope-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* JetBrains Mono – weight 400, latin */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* Material Symbols Outlined – variable weight, use block to avoid showing raw text */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('/fonts/material-symbols-outlined.woff2') format('woff2');
+}
+
+/* 中文注释：主题切换从 .dark class 迁移到 data-theme 属性（对齐 cc-haha），
+   dark: 工具类同时兼容 html[data-theme="dark"] 自身与后代元素。 */
+@custom-variant dark (&:is([data-theme="dark"] *, [data-theme="dark"]));
+
+/* 中文注释：@theme inline 把 CSS 变量映射为 Tailwind 工具类。
+   这里同时保留 shadcn 命名（background/card/muted...）与 cc-haha 命名（surface/on-surface/outline...），
+   存量组件无需逐个改类名即可自动换肤。 */
 @theme inline {
+  /* shadcn 兼容命名 */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-  --radius-3xl: calc(var(--radius) + 12px);
-  --radius-4xl: calc(var(--radius) + 16px);
-  /* Status semantic colors */
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* cc-haha 语义命名（新增组件直接使用） */
+  --color-surface: var(--surface);
+  --color-surface-bright: var(--surface-bright);
+  --color-surface-dim: var(--surface-dim);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-surface-container-lowest: var(--surface-container-lowest);
+  --color-surface-variant: var(--surface-variant);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-selected: var(--surface-selected);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-secondary-brand: var(--secondary-brand);
+  --color-secondary-brand-container: var(--secondary-brand-container);
+  --color-brand: var(--brand);
+  --color-surface-user-msg: var(--user-bubble);
+  --color-surface-user-msg-fg: var(--user-bubble-foreground);
+  --color-surface-glass: var(--surface-glass);
+  --color-surface-glass-border: var(--surface-glass-border);
+  --color-overlay-scrim: var(--overlay-scrim);
+  --color-error: var(--color-status-error-brand);
+  --color-error-container: var(--error-container);
+  --color-on-error-container: var(--on-error-container);
+  --color-success: var(--status-success);
+  --color-warning: var(--status-warning);
+
+  /* 状态语义色 */
   --color-status-success: var(--status-success);
   --color-status-success-foreground: var(--status-success-foreground);
   --color-status-success-muted: var(--status-success-muted);
@@ -61,122 +158,316 @@
   --color-status-info-foreground: var(--status-info-foreground);
   --color-status-info-muted: var(--status-info-muted);
   --color-status-info-border: var(--status-info-border);
+
+  /* 字体（对齐 cc-haha 自托管字体栈） */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-headline: 'Manrope', 'Inter', sans-serif;
+  --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-label: 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+  /* 圆角（cc-haha 更紧凑的圆角刻度） */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-2xl: 10px;
+  --radius-3xl: 12px;
+  --radius-4xl: 16px;
+
+  /* 阴影 */
+  --shadow-dropdown: var(--shadow-dropdown-value);
+  --shadow-focus-ring: var(--shadow-focus-ring-value);
+  --shadow-button-primary: var(--shadow-button-primary-value);
+
+  /* 动效 */
+  --motion-sidebar-duration: 280ms;
+  --motion-sidebar-easing: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-:root {
-  --radius: 0.75rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.147 0.004 49.25);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.147 0.004 49.25);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.147 0.004 49.25);
-  --primary: oklch(0.546 0.245 262.881);
-  --primary-foreground: oklch(0.985 0.001 106.423);
-  --secondary: oklch(0.97 0.001 106.424);
-  --secondary-foreground: oklch(0.216 0.006 56.043);
-  --muted: oklch(0.97 0.001 106.424);
-  --muted-foreground: oklch(0.553 0.013 58.071);
-  --accent: oklch(0.97 0.001 106.424);
-  --accent-foreground: oklch(0.216 0.006 56.043);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.923 0.003 48.717);
-  --input: oklch(0.923 0.003 48.717);
-  --ring: oklch(0.546 0.245 262.881);
-  --chart-1: oklch(0.546 0.245 262.881);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0.001 106.423);
-  --sidebar-foreground: oklch(0.147 0.004 49.25);
-  --sidebar-primary: oklch(0.546 0.245 262.881);
-  --sidebar-primary-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-accent: oklch(0.97 0.001 106.424);
-  --sidebar-accent-foreground: oklch(0.216 0.006 56.043);
-  --sidebar-border: oklch(0.923 0.003 48.717);
-  --sidebar-ring: oklch(0.546 0.245 262.881);
-  --user-bubble: oklch(0.22 0.005 250);
-  --user-bubble-foreground: oklch(0.985 0.001 106.423);
-  /* Status semantic tokens */
-  --status-success: oklch(0.527 0.154 150.069);
-  --status-success-foreground: oklch(0.393 0.124 148.697);
-  --status-success-muted: oklch(0.527 0.154 150.069 / 10%);
-  --status-success-border: oklch(0.527 0.154 150.069 / 20%);
-  --status-warning: oklch(0.705 0.213 47.604);
-  --status-warning-foreground: oklch(0.646 0.222 41.116);
-  --status-warning-muted: oklch(0.705 0.213 47.604 / 10%);
-  --status-warning-border: oklch(0.705 0.213 47.604 / 20%);
-  --status-error: oklch(0.577 0.245 27.325);
-  --status-error-foreground: oklch(0.577 0.245 27.325);
-  --status-error-muted: oklch(0.577 0.245 27.325 / 10%);
-  --status-error-border: oklch(0.577 0.245 27.325 / 20%);
-  --status-info: oklch(0.546 0.245 262.881);
-  --status-info-foreground: oklch(0.546 0.245 262.881);
-  --status-info-muted: oklch(0.546 0.245 262.881 / 10%);
-  --status-info-border: oklch(0.546 0.245 262.881 / 20%);
-  /* Terminal / code-block (bash) tokens */
-  --terminal-bg: oklch(0.13 0.004 49.25);
-  --terminal-foreground: oklch(0.87 0.006 106);
-  --terminal-muted: oklch(0.55 0.01 58);
-  --terminal-border: oklch(0.30 0.005 49);
-  --terminal-accent: oklch(0.55 0.17 155);
-  --terminal-hover-bg: oklch(0.25 0.005 49);
-  --terminal-gradient-from: oklch(0.13 0.004 49.25);
+/* ─── 亮色主题（移植 cc-haha 设计令牌）─────────────── */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* 布局尺寸 */
+  --sidebar-width: 270px;
+  --sidebar-rail-width: 72px;
+  --titlebar-height: 40px;
+  --statusbar-height: 36px;
+
+  /* cc-haha 核心色板 */
+  --present-primary: #0A56D0;
+  --present-primary-container: #0842A0;
+  --present-primary-fixed: #D3E3FD;
+  --present-primary-fixed-dim: #A8C7FA;
+  --present-on-primary: #FFFFFF;
+
+  /* Surface 层级 */
+  --surface: #FFFFFF;
+  --surface-bright: #FFFFFF;
+  --surface-dim: #F9FAFB;
+  --surface-container: #F3F4F6;
+  --surface-container-low: #F9FAFB;
+  --surface-container-high: #C8CDD4;
+  --surface-container-highest: #D1D5DB;
+  --surface-container-lowest: #FFFFFF;
+  --surface-variant: #E5E7EB;
+  --on-surface: #1F1F1F;
+  --on-surface-variant: #444746;
+  --outline: #737373;
+  --outline-variant: #E5E7EB;
+  --error-container: #FFDAD6;
+  --on-error-container: #410002;
+  --color-status-error-brand: #BA1A1A;
+
+  /* cc-haha secondary 品牌色（AskUserQuestion 等强调场景；CodePilot 的 secondary 已被 shadcn 语义占用） */
+  --secondary-brand: #2D628F;
+  --secondary-brand-container: #9ACBFE;
+
+  /* 语义别名 */
+  --background: #e7ecf4;
+  --foreground: var(--on-surface);
+  --card: var(--surface);
+  --card-foreground: var(--on-surface);
+  --popover: var(--surface);
+  --popover-foreground: var(--on-surface);
+  --primary: var(--present-primary);
+  --primary-foreground: var(--present-on-primary);
+  --secondary: var(--surface-container);
+  --secondary-foreground: var(--on-surface);
+  --muted: var(--surface-container);
+  --muted-foreground: var(--outline);
+  --accent: var(--surface-variant);
+  --accent-foreground: var(--on-surface);
+  --destructive: #BA1A1A;
+  --border: var(--outline-variant);
+  --input: var(--outline-variant);
+  --ring: var(--present-primary);
+  --chart-1: #0A56D0;
+  --chart-2: #2563eb;
+  --chart-3: #059669;
+  --chart-4: #d97706;
+  --chart-5: #7c3aed;
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: var(--on-surface);
+  --sidebar-primary: var(--present-primary);
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: var(--surface-variant);
+  --sidebar-accent-foreground: var(--on-surface);
+  --sidebar-border: var(--outline-variant);
+  --sidebar-ring: var(--present-primary);
+
+  /* 表面交互别名 */
+  --surface-hover: var(--surface-variant);
+  --surface-selected: var(--surface-container);
+  --surface-sidebar: transparent;
+  --sidebar-panel-bg-image: none;
+
+  /* 文本别名 */
+  --text-primary: var(--on-surface);
+  --text-secondary: var(--on-surface-variant);
+  --text-tertiary: var(--outline);
+  --brand: var(--present-primary);
+
+  /* 状态语义色 */
+  --status-success: #16A34A;
+  --status-success-foreground: #15803D;
+  --status-success-muted: rgba(22, 163, 74, 0.10);
+  --status-success-border: rgba(22, 163, 74, 0.22);
+  --status-warning: #CA8A04;
+  --status-warning-foreground: #A16207;
+  --status-warning-muted: rgba(202, 138, 4, 0.10);
+  --status-warning-border: rgba(202, 138, 4, 0.22);
+  --status-error: #BA1A1A;
+  --status-error-foreground: #BA1A1A;
+  --status-error-muted: rgba(186, 26, 26, 0.10);
+  --status-error-border: rgba(186, 26, 26, 0.22);
+  --status-info: #0A56D0;
+  --status-info-foreground: #0A56D0;
+  --status-info-muted: rgba(10, 86, 208, 0.10);
+  --status-info-border: rgba(10, 86, 208, 0.22);
+
+  /* 用户消息气泡 — Trae 风格 */
+  --user-bubble: #dfe5f0;
+  --user-bubble-foreground: #1a1a2e;
+
+  /* 工具时间线色板 — Trae 风格 */
+  --timeline-edit: #d97706;
+  --timeline-read: #2563eb;
+  --timeline-bash: #059669;
+  --timeline-search: #7c3aed;
+  --timeline-agent: #6d28d9;
+  --timeline-task: #059669;
+  --timeline-ask: #2563eb;
+  --timeline-creative: #db2777;
+  --timeline-browser: #ea580c;
+  --timeline-plan: #4f46e5;
+  --timeline-config: #6b7280;
+  --timeline-mcp: #0891b2;
+  --timeline-default: #6b7280;
+
+  /* 玻璃/遮罩 */
+  --overlay-scrim: rgba(27, 28, 26, 0.48);
+  --surface-glass: rgba(255, 255, 255, 0.84);
+  --surface-glass-border: rgba(218, 193, 186, 0.22);
+
+  /* 代码块与 diff */
+  --code-bg: var(--surface-container-low);
+  --diff-added-bg: #E8F5E2;
+  --diff-removed-bg: #FDECEA;
+
+  /* 阴影 */
+  --shadow-dropdown-value: 0 4px 20px rgba(27, 28, 26, 0.04), 0 12px 40px rgba(27, 28, 26, 0.08);
+  --shadow-focus-ring-value: 0 0 0 1px rgba(10, 86, 208, 0.16);
+  --shadow-button-primary-value: 0 8px 24px rgba(10, 86, 208, 0.18);
+
+  /* 主按钮渐变 */
+  --color-btn-primary-fg: var(--present-on-primary);
+  --gradient-btn-primary: linear-gradient(135deg, #0A56D0, #0842A0);
+  --gradient-btn-primary-hover: linear-gradient(135deg, #0842A0, #0A56D0);
+
+  /* 选中 */
+  --selection-bg: rgba(100, 100, 100, 0.35);
+  --selection-fg: #1a1a1a;
+
+  /* Terminal / 代码块（bash）令牌 — 亮色对齐 cc-haha 白色终端 */
+  --terminal-bg: #ffffff;
+  --terminal-foreground: #1f1f1f;
+  --terminal-muted: #999999;
+  --terminal-border: #e0e0e0;
+  --terminal-accent: #28C840;
+  --terminal-hover-bg: #f5f5f5;
+  --terminal-gradient-from: #ffffff;
 }
 
-.dark {
-  --background: oklch(0.147 0.004 49.25);
-  --foreground: oklch(0.985 0.001 106.423);
-  --card: oklch(0.216 0.006 56.043);
-  --card-foreground: oklch(0.985 0.001 106.423);
-  --popover: oklch(0.216 0.006 56.043);
-  --popover-foreground: oklch(0.985 0.001 106.423);
-  --primary: oklch(0.623 0.214 259.815);
-  --primary-foreground: oklch(0.985 0.001 106.423);
-  --secondary: oklch(0.268 0.007 34.298);
-  --secondary-foreground: oklch(0.985 0.001 106.423);
-  --muted: oklch(0.268 0.007 34.298);
-  --muted-foreground: oklch(0.709 0.01 56.259);
-  --accent: oklch(0.268 0.007 34.298);
-  --accent-foreground: oklch(0.985 0.001 106.423);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.623 0.214 259.815);
-  --chart-1: oklch(0.623 0.214 259.815);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.216 0.006 56.043);
-  --sidebar-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-primary: oklch(0.623 0.214 259.815);
-  --sidebar-primary-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-accent: oklch(0.268 0.007 34.298);
-  --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.623 0.214 259.815);
-  --user-bubble: oklch(0.90 0.003 106);
-  --user-bubble-foreground: oklch(0.147 0.004 49.25);
-  /* Status semantic tokens */
-  --status-success: oklch(0.527 0.154 150.069);
-  --status-success-foreground: oklch(0.448 0.133 148.697);
-  --status-success-muted: oklch(0.527 0.154 150.069 / 10%);
-  --status-success-border: oklch(0.527 0.154 150.069 / 20%);
-  --status-warning: oklch(0.705 0.213 47.604);
-  --status-warning-foreground: oklch(0.705 0.213 47.604);
-  --status-warning-muted: oklch(0.705 0.213 47.604 / 10%);
-  --status-warning-border: oklch(0.705 0.213 47.604 / 20%);
-  --status-error: oklch(0.704 0.191 22.216);
-  --status-error-foreground: oklch(0.704 0.191 22.216);
-  --status-error-muted: oklch(0.704 0.191 22.216 / 10%);
-  --status-error-border: oklch(0.704 0.191 22.216 / 20%);
-  --status-info: oklch(0.623 0.214 259.815);
-  --status-info-foreground: oklch(0.623 0.214 259.815);
-  --status-info-muted: oklch(0.623 0.214 259.815 / 10%);
-  --status-info-border: oklch(0.623 0.214 259.815 / 20%);
-  /* Terminal tokens — dark mode: stronger border contrast against dark page bg */
+/* ─── 暗色主题（移植 cc-haha 设计令牌）─────────────── */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* cc-haha 核心色板 */
+  --present-primary: #60A5FA;
+  --present-primary-container: #1E3A8A;
+  --present-primary-fixed: #1D4ED8;
+  --present-primary-fixed-dim: #2563EB;
+  --present-on-primary: #FFFFFF;
+
+  /* Surface 层级 */
+  --surface: #1C1C1E;
+  --surface-bright: #2C2C2E;
+  --surface-dim: #111111;
+  --surface-container: #1C1C1E;
+  --surface-container-low: #111111;
+  --surface-container-high: #2C2C2E;
+  --surface-container-highest: #3A3A3C;
+  --surface-container-lowest: #000000;
+  --surface-variant: #2C2C2E;
+  --on-surface: #F9FAFB;
+  --on-surface-variant: #9CA3AF;
+  --outline: #6B7280;
+  --outline-variant: #374151;
+  --error-container: #93000A;
+  --on-error-container: #FFDAD6;
+  --color-status-error-brand: #FFB4AB;
+
+  /* cc-haha secondary 品牌色（AskUserQuestion 等强调场景） */
+  --secondary-brand: #CDBDFF;
+  --secondary-brand-container: #3A3050;
+
+  /* 语义别名 */
+  --background: #111111;
+  --foreground: var(--on-surface);
+  --card: var(--surface);
+  --card-foreground: var(--on-surface);
+  --popover: var(--surface);
+  --popover-foreground: var(--on-surface);
+  --primary: var(--present-primary);
+  --primary-foreground: var(--present-on-primary);
+  --secondary: var(--surface-variant);
+  --secondary-foreground: var(--on-surface);
+  --muted: var(--surface-container);
+  --muted-foreground: var(--on-surface-variant);
+  --accent: var(--surface-variant);
+  --accent-foreground: var(--on-surface);
+  --destructive: #FFB4AB;
+  --border: var(--outline-variant);
+  --input: var(--outline-variant);
+  --ring: var(--present-primary);
+  --chart-1: #60A5FA;
+  --chart-2: #818cf8;
+  --chart-3: #7EDB8B;
+  --chart-4: #F7C46C;
+  --chart-5: #CDBDFF;
+  --sidebar: #171615;
+  --sidebar-foreground: var(--on-surface);
+  --sidebar-primary: var(--present-primary);
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: rgba(255, 255, 255, 0.08);
+  --sidebar-accent-foreground: var(--on-surface);
+  --sidebar-border: rgba(255, 255, 255, 0.10);
+  --sidebar-ring: var(--present-primary);
+
+  /* 表面交互别名 */
+  --surface-hover: var(--surface-container-highest);
+  --surface-selected: var(--surface-container);
+  --surface-sidebar: #171615;
+  --sidebar-panel-bg-image:
+    radial-gradient(circle at top left, rgba(255, 181, 159, 0.045), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
+
+  /* 文本别名 */
+  --text-primary: var(--on-surface);
+  --text-secondary: var(--on-surface-variant);
+  --text-tertiary: #8F827D;
+  --brand: var(--present-primary);
+
+  /* 状态语义色 */
+  --status-success: #7EDB8B;
+  --status-success-foreground: #7EDB8B;
+  --status-success-muted: rgba(126, 219, 139, 0.16);
+  --status-success-border: rgba(126, 219, 139, 0.30);
+  --status-warning: #F7C46C;
+  --status-warning-foreground: #F7C46C;
+  --status-warning-muted: rgba(247, 196, 108, 0.16);
+  --status-warning-border: rgba(247, 196, 108, 0.30);
+  --status-error: #FFB4AB;
+  --status-error-foreground: #FFB4AB;
+  --status-error-muted: rgba(255, 180, 171, 0.16);
+  --status-error-border: rgba(255, 180, 171, 0.30);
+  --status-info: #60A5FA;
+  --status-info-foreground: #60A5FA;
+  --status-info-muted: rgba(96, 165, 250, 0.16);
+  --status-info-border: rgba(96, 165, 250, 0.30);
+
+  /* 用户消息气泡 */
+  --user-bubble: rgba(32, 31, 31, 0.92);
+  --user-bubble-foreground: #E5E2E1;
+
+  /* 玻璃/遮罩 */
+  --overlay-scrim: rgba(6, 6, 6, 0.56);
+  --surface-glass: rgba(32, 31, 31, 0.8);
+  --surface-glass-border: rgba(90, 65, 56, 0.18);
+
+  /* 代码块与 diff */
+  --code-bg: #0E0E0E;
+  --diff-added-bg: rgba(126, 219, 139, 0.12);
+  --diff-removed-bg: rgba(255, 110, 64, 0.12);
+
+  /* 阴影 */
+  --shadow-dropdown-value: 0 16px 40px rgba(0, 0, 0, 0.42);
+  --shadow-focus-ring-value: 0 0 0 1px rgba(96, 165, 250, 0.32);
+  --shadow-button-primary-value: 0 12px 24px rgba(96, 165, 250, 0.18);
+
+  /* 主按钮渐变 */
+  --color-btn-primary-fg: var(--present-on-primary);
+  --gradient-btn-primary: linear-gradient(135deg, #60A5FA, #1E3A8A);
+  --gradient-btn-primary-hover: linear-gradient(135deg, #1E3A8A, #60A5FA);
+
+  /* 选中 */
+  --selection-bg: rgba(200, 200, 200, 0.2);
+  --selection-fg: #f0f0f0;
+
+  /* Terminal 令牌 — 暗色保持深色终端风格 */
   --terminal-bg: oklch(0.10 0.002 49);
   --terminal-foreground: oklch(0.87 0.006 106);
   --terminal-muted: oklch(0.60 0.01 58);
@@ -186,23 +477,49 @@
   --terminal-gradient-from: oklch(0.10 0.002 49);
 }
 
+/* ─── xterm 容器微调 ─────────────────────────────── */
+.xterm-container .xterm {
+  width: 100%;
+  height: 100%;
+  font-size: 12px !important;
+}
+.xterm-container .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #424242 transparent;
+}
+.xterm-container .xterm-screen {
+  height: 100% !important;
+}
+.xterm-container .xterm-rows {
+  font-size: 12px !important;
+}
+
+/* ─── 基础层 ─────────────────────────────────────── */
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    box-sizing: border-box;
   }
-  body {
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-body);
     @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* 中文注释：Firefox 滚动条颜色，与 WebKit 滚动条样式保持一致。 */
+    scrollbar-color: rgba(128, 128, 128, 0.15) transparent;
+    scrollbar-width: thin;
   }
 
   /* Selection color — derives from primary */
   ::selection {
-    background: color-mix(in oklch, var(--primary) 30%, transparent);
-  }
-  .dark ::selection {
-    background: color-mix(in oklch, var(--primary) 35%, transparent);
+    background: var(--selection-bg);
+    color: var(--selection-fg);
   }
 
-  /* Custom scrollbar */
+  /* Custom scrollbar（移植 cc-haha：默认微显，hover 加深） */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -211,17 +528,17 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: color-mix(in oklch, var(--muted-foreground) 25%, transparent);
-    border-radius: 3px;
+    background: rgba(128, 128, 128, 0.15);
+    border-radius: 9999px;
+    transition: background 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+                opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1);
   }
+  *:hover::-webkit-scrollbar-thumb,
   ::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklch, var(--muted-foreground) 40%, transparent);
+    background: rgba(128, 128, 128, 0.4);
   }
-  .dark ::-webkit-scrollbar-thumb {
-    background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
-  }
-  .dark ::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  ::-webkit-scrollbar-thumb:active {
+    background: rgba(128, 128, 128, 0.55);
   }
 
   /* Prose (markdown) refinements */
@@ -233,13 +550,11 @@
     margin-top: 0.75em;
     margin-bottom: 0.75em;
   }
-  .prose h1,
-  .prose h2,
-  .prose h3 {
-    margin-top: 1.25em;
-    margin-bottom: 0.5em;
-    font-weight: 600;
-  }
+  /* 中文注释：Markdown 标题的压平规则不在这里 —— 已移至文件末尾的
+     `@layer utilities` 块。原因：Streamdown 会给标题挂 Tailwind 类
+     （h1 text-3xl / h2 text-2xl / h3 text-xl …），它们位于 utilities 层，
+     而层叠规则是「先比层、再比特异性」—— 写在 base 层的 `.prose h2` 无论如何
+     都盖不过 `.text-2xl`。这些规则此前一直静默失效。详见文件末尾。 */
   .prose ul,
   .prose ol {
     margin-top: 0.5em;
@@ -258,9 +573,6 @@
     text-decoration: underline;
     text-underline-offset: 2px;
   }
-  .dark .prose a {
-    color: var(--primary);
-  }
   .prose hr {
     border-color: var(--border);
   }
@@ -269,7 +581,415 @@
   }
 }
 
-/* Widget skeleton shimmer animation */
+/* ─── Markdown 标题压平（必须待在 utilities 层）─────── */
+/* 中文注释：Streamdown 渲染标题时会挂上 Tailwind 类 ——
+   h1 `text-3xl` / h2 `text-2xl` / h3 `text-xl` / h4 `text-lg` / h5 `text-base` / h6 `text-sm`，
+   外加 `mt-6 mb-2 font-semibold`。这些类位于 utilities 层，而层叠规则是
+   「先比 layer 顺序、再比特异性」，所以写在 `@layer base` 里的
+   `.prose h2 { font-size: 1em }` 永远盖不过 `.text-2xl` —— 这就是聊天正文里
+   二级标题实际显示 24px、而正文只有 14px 的原因（此前一直静默失效）。
+   放进 utilities 层后与本项目其余 utility 同层，再靠更高的特异性
+   （`.prose h2` = 0,1,1 > `.text-2xl` = 0,1,0）稳定胜出。
+   ⚠️ 不要把这些规则移回 `@layer base`。 */
+@layer utilities {
+  /* 压到与正文同一量级，层级靠字重 + 下边框 + 字色区分，而不是靠巨大字号。 */
+  .prose h1,
+  .prose h2,
+  .prose h3,
+  .prose h4,
+  .prose h5,
+  .prose h6 {
+    margin-top: 1.25em;
+    margin-bottom: 0.5em;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+  .prose h1 {
+    font-size: 1.125em; /* 略大于正文，作为「总结主标题」 */
+    font-weight: 700;
+    padding-bottom: 0.4em;
+    border-bottom: 1px solid var(--border);
+  }
+  .prose h2 {
+    font-size: 1em; /* 与正文同号，靠字重区分 */
+    font-weight: 600;
+  }
+  .prose h3 {
+    font-size: 1em;
+    font-weight: 600;
+    color: var(--muted-foreground);
+  }
+  .prose h4,
+  .prose h5,
+  .prose h6 {
+    font-size: 1em;
+    font-weight: 600;
+    color: var(--muted-foreground);
+  }
+}
+
+/* ─── cc-haha 布局与交互工具类 ───────────────────── */
+
+/* 聊天滚动容器 — 滚动条自动显隐 + 布局隔离（WKWebView 性能优化） */
+.chat-scroll-container::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.08);
+}
+.chat-scroll-container:hover::-webkit-scrollbar-thumb,
+.chat-scroll-container::-webkit-scrollbar-thumb:active {
+  background: rgba(128, 128, 128, 0.35);
+}
+.chat-scroll-container {
+  contain: layout style;
+}
+
+/* 中文注释：use-stick-to-bottom 会给滚动容器内联 scrollbar-gutter: stable both-edges，
+   在窄聊天卡片下左右各预留一条滚动条槽形成多余空白；这里覆盖为 auto，
+   滚动条仅在真正需要时占位，让消息列贴合容器。 */
+.chat-scroll-gutter-fix [style*="scrollbar-gutter"] {
+  scrollbar-gutter: auto !important;
+}
+
+/* 玻璃面板 */
+.glass-panel {
+  background: var(--surface-glass);
+  border: 1px solid var(--surface-glass-border);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-dropdown);
+}
+.glass-panel:focus-within {
+  box-shadow: var(--shadow-focus-ring), var(--shadow-dropdown);
+}
+
+/* 侧边栏宽度过渡 */
+.sidebar-shell {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width var(--motion-sidebar-duration) var(--motion-sidebar-easing);
+  contain: layout style;
+}
+.sidebar-shell[data-transitioning="true"] {
+  will-change: width;
+}
+.sidebar-shell[data-state="closed"] {
+  width: var(--sidebar-rail-width);
+}
+.sidebar-panel {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  background-color: var(--surface-sidebar);
+  background-image: var(--sidebar-panel-bg-image);
+  background-repeat: no-repeat;
+  /* 中文注释：width/min-width 也要参与过渡，展开 ↔ 72px 图标栏（rail）才有 280ms 缓动动画 */
+  transition:
+    width var(--motion-sidebar-duration) var(--motion-sidebar-easing),
+    min-width var(--motion-sidebar-duration) var(--motion-sidebar-easing),
+    background-color var(--motion-sidebar-duration) var(--motion-sidebar-easing),
+    border-color var(--motion-sidebar-duration) var(--motion-sidebar-easing);
+}
+.sidebar-panel[data-state="closed"] {
+  width: var(--sidebar-rail-width);
+  min-width: var(--sidebar-rail-width);
+}
+.sidebar-copy {
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    max-width var(--motion-sidebar-duration) var(--motion-sidebar-easing),
+    opacity calc(var(--motion-sidebar-duration) - 40ms) ease,
+    transform var(--motion-sidebar-duration) var(--motion-sidebar-easing);
+}
+.sidebar-copy--visible {
+  max-width: 240px;
+  opacity: 1;
+  transform: translateX(0);
+}
+.sidebar-copy--hidden {
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(-10px);
+}
+.sidebar-section {
+  overflow: hidden;
+  transition:
+    max-height var(--motion-sidebar-duration) var(--motion-sidebar-easing),
+    opacity calc(var(--motion-sidebar-duration) - 40ms) ease,
+    transform var(--motion-sidebar-duration) var(--motion-sidebar-easing);
+}
+.sidebar-section--visible {
+  max-height: 1200px;
+  opacity: 1;
+  transform: translateX(0);
+}
+.sidebar-section--hidden {
+  max-height: 0;
+  opacity: 0;
+  transform: translateX(-12px);
+  pointer-events: none;
+}
+
+/* Trae 风格展开/折叠动画 */
+.timeline-expand-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 250ms cubic-bezier(0.22, 1, 0.36, 1),
+              opacity 200ms ease;
+}
+.timeline-expand-content[data-expanded="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.timeline-expand-content > div {
+  overflow: hidden;
+}
+
+/* 工具时间线连接线 */
+.tool-timeline-item {
+  position: relative;
+  padding-left: 20px;
+}
+.tool-timeline-item::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--border) 8%,
+    var(--border) 92%,
+    transparent 100%
+  );
+  opacity: 0.3;
+}
+.tool-timeline-item::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 14px;
+  width: 8px;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.3;
+}
+
+/* 工具分组时间线连接线 */
+.timeline-group-connector {
+  position: absolute;
+  left: 15px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--border) 8%,
+    var(--border) 92%,
+    transparent 100%
+  );
+  opacity: 0.4;
+}
+
+/* 工具活动行 hover 显现竖条 */
+.tool-activity-row {
+  position: relative;
+  border-radius: 6px;
+  transition: background-color 150ms ease;
+}
+.tool-activity-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.tool-activity-row:hover::before {
+  opacity: 1;
+}
+
+/* 消息操作条 — hover 消息时显现 */
+[data-message-shell]:hover [data-message-actions],
+[data-message-shell]:focus-within [data-message-actions] {
+  opacity: 1 !important;
+}
+
+/* Material Symbols */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}
+
+/* Electron 拖拽区域 */
+[data-electron-drag-region] {
+  -webkit-app-region: drag;
+}
+button, input, textarea, select, a, [role="button"] {
+  -webkit-app-region: no-drag;
+}
+[draggable="true"] {
+  -webkit-app-region: no-drag;
+}
+
+/* ─── 动画 ───────────────────────────────────────── */
+
+/* 模态框 */
+@keyframes modal-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modal-content-in {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes modal-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes modal-content-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to { opacity: 0; transform: scale(0.95) translateY(8px); }
+}
+.modal-entering {
+  animation: modal-backdrop-in 200ms var(--motion-sidebar-easing) forwards;
+}
+.modal-entering .modal-content {
+  animation: modal-content-in 250ms var(--motion-sidebar-easing) forwards;
+}
+.modal-exiting {
+  animation: modal-backdrop-out 150ms ease forwards;
+}
+.modal-exiting .modal-content {
+  animation: modal-content-out 150ms ease forwards;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.animate-spin { animation: spin 1s linear infinite; }
+.animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+
+/* 流式状态指示器（✦ 星标 + 渐变文字） */
+@keyframes star-breathe {
+  0%, 100% { transform: scale(0.85); opacity: 0.6; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+@keyframes star-spin {
+  from { rotate: 0deg; }
+  to { rotate: 360deg; }
+}
+@keyframes text-stat-flow {
+  0% { background-position: 100% center; }
+  100% { background-position: -100% center; }
+}
+.streaming-star {
+  display: inline-block;
+  user-select: none;
+  font-size: 18px;
+  background: linear-gradient(135deg, #3b82f6 0%, #818cf8 50%, #3b82f6 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: star-breathe 2s cubic-bezier(0.4, 0, 0.6, 1) infinite, star-spin 3s linear infinite;
+}
+.streaming-verb {
+  color: var(--text-tertiary);
+}
+.streaming-stat {
+  background: linear-gradient(90deg, #6b7280 0%, #9ca3af 50%, #6b7280 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: text-stat-flow 3.4s ease-in-out infinite;
+}
+
+/* 流式脉冲点 */
+@keyframes streaming-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.5; }
+}
+.streaming-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: streaming-pulse 1.2s ease-in-out infinite;
+}
+
+/* 压缩进度 shimmer */
+@keyframes shimmer-flow {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 搜索命中闪烁（消息定位） */
+@keyframes search-highlight-pulse {
+  0% {
+    background-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  }
+  50% {
+    background-color: color-mix(in oklch, var(--primary) 20%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@utility search-highlight-flash {
+  animation: search-highlight-pulse 2s ease-in-out 1;
+  border-radius: 2px;
+  padding: 0 2px;
+  margin: 0 -2px;
+}
+
+/* 文件树定位闪烁 */
+@keyframes file-tree-pulse {
+  0% {
+    background-color: color-mix(in oklch, var(--primary) 35%, transparent);
+  }
+  50% {
+    background-color: color-mix(in oklch, var(--primary) 15%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@utility file-tree-flash {
+  animation: file-tree-pulse 2s ease-in-out 1;
+}
+
+/* Widget 骨架 shimmer */
 @keyframes widget-shimmer {
   0% {
     background-position: 200% 0;
@@ -292,12 +1012,32 @@
   background-size: 200% 100%;
 }
 
-/*
- * Override Streamdown's bash/shell code block inline Shiki token colors.
- * Placed outside @layer to ensure highest CSS specificity.
- * Streamdown sets inline style="color:..." on each token span; only
- * !important at the top layer can override inline styles.
- */
+/* ─── Shiki 代码查看器（cc-haha 风格行号与 hover） ─── */
+.code-viewer-area .line {
+  display: block;
+  padding: 0 12px;
+}
+.code-viewer-area .has-line-numbers .line {
+  padding-left: 12px;
+}
+.code-viewer-area .line:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+.code-viewer-area .line-numbers::before {
+  margin-right: 1.5ch;
+}
+.code-viewer-area .has-line-numbers {
+  --line-numbers-foreground: rgba(135, 115, 109, 0.5);
+  --line-numbers-width: 2.5ch;
+  --line-numbers-padding-left: 0;
+  --line-numbers-padding-right: 0;
+  --line-numbers-font-size: 11px;
+}
+[data-theme="dark"] .code-viewer-area .line:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ─── Streamdown 代码块样式覆盖 ─────────────────── */
 [data-language="bash"] pre,
 [data-language="sh"] pre,
 [data-language="shell"] pre,
@@ -316,4 +1056,173 @@
 [data-language="terminal"] pre span[style] {
   color: inherit !important;
   background-color: transparent !important;
+}
+
+/* 代码块横向滚动改为换行 */
+[data-streamdown="code-block-body"] {
+  white-space: pre-wrap !important;
+  overflow-wrap: break-word !important;
+}
+
+/* 代码块外壳（紧凑精致风格） */
+[data-streamdown="code-block"] {
+  margin: 12px 0 !important;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  background-color: color-mix(in srgb, var(--muted) 30%, transparent) !important;
+}
+
+[data-streamdown="code-block-header"] {
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 12px !important;
+  background-color: color-mix(in srgb, var(--muted) 70%, transparent) !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent) !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+[data-streamdown="code-block-header"] > div,
+[data-streamdown="code-block-header"] > span {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 100% !important;
+}
+
+[data-streamdown="code-block-header"] button {
+  height: 24px !important;
+  padding: 0 6px !important;
+  border-radius: 4px !important;
+  color: var(--muted-foreground) !important;
+  transition: all 0.2s !important;
+  display: flex !important;
+  align-items: center !important;
+  background: transparent !important;
+}
+
+[data-streamdown="code-block-header"] button:hover {
+  background-color: var(--accent) !important;
+  color: var(--accent-foreground) !important;
+}
+
+[data-streamdown="code-block-body"] > code > span {
+  display: block !important;
+  position: relative;
+  padding-left: 2.5rem;
+}
+
+[data-streamdown="code-block-body"] > code > span::before {
+  position: absolute !important;
+  left: 0;
+  width: 1.5rem !important;
+  margin-right: 1rem !important;
+}
+
+/* 中文注释：会话切换/打开时的内容入场动画 —— 淡入 + 轻微上移。
+   ChatView 以 sessionId 为 key 重挂载，天然在每次切换会话时重放该动画，
+   让内容替换从"硬切"变成有节奏的过渡（对齐 cc-haha 的整体动效语言）。 */
+@keyframes chat-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-chat-enter {
+  animation: chat-enter 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-chat-enter { animation: none; }
+}
+
+/* 中文注释：时间线文字段入场 —— 模型先输出正文、随后调用工具时，这段文字会被
+   "重归类"进工具时间线（右移并挂上小图标）。入场淡入让这次搬迁读起来像渐显而非硬跳。 */
+@keyframes segment-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-segment-enter {
+  animation: segment-enter 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-segment-enter { animation: none; }
+}
+
+/* 中文注释：侧边栏会话项/项目行入场（新建会话、列表刷新时轻微淡入） */
+@keyframes list-item-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-list-item-enter {
+  animation: list-item-enter 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-list-item-enter { animation: none; }
+}
+
+/* 中文注释：消息入场 —— 新出现的消息淡入。
+   ⚠️ 这里刻意不使用 translateY。原因：位移动画中的文本会落在亚像素位置被重采样，
+   表现为"文字发虚"；当位移与同类滚动/替换同时发生时，肉眼会看到同一行文字的
+   双层错位重影（用户实测反馈"任务快结束时会互相遮挡"）。
+   文字类入场只用透明度过渡即可，观感干净且没有重采样代价。 */
+@keyframes message-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-message-enter {
+  animation: message-enter 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-message-enter { animation: none; }
+}
+
+/* 中文注释：时间线卡片入场 —— 工具卡片/思考行等元素在流式期间首次出现时
+   淡入 + 轻微上浮，与消息入场同一动效语言（同曲线、同时长量级）。
+   用法：由 EnterOnce 包装组件在「挂载时刻处于流式」时套上 .timeline-card-enter
+   （display:contents 外壳不产生盒子，布局零影响）；历史加载、会话切换、
+   流式结束后的正式消息都不套，避免整屏重放闪动。 */
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.timeline-card-enter > * {
+  animation: card-enter 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .timeline-card-enter > * { animation: none; }
+}
+
+/* 中文注释：流式正文容器 —— 把"已定型前缀（真实 Markdown）"与"仍在增长的尾段（纯文本）"
+   拼在一个容器里，用与最终排版一致的 16px 段间距衔接。
+   最终消息的段间距来自 prose 的 space-y-4（margin-bottom: 1rem）；
+   这里必须用同一个值，否则流式结束的替换瞬间整块文字会上下窜动。 */
+.streaming-blocks > * + * {
+  margin-top: 1rem;
+}
+
+/* 中文注释：流式尾段的轻量文本预览 —— 只用于尚未定型的那一小段，
+   避免每帧 Markdown 重解析。
+   注意：这里不能写 margin（Tailwind preflight 已把 pre 的 margin 归零）。
+   若写了 `margin: 0`，它与 `.streaming-blocks > * + *` 同优先级且定义在后，
+   会把段间距吃掉，尾段就会紧贴上一段。间距一律由 .streaming-blocks 统一控制。 */
+.streaming-plain-text {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.625;
+  color: var(--text-primary);
+}
+
+/* 中文注释：总结过渡提示 —— 工具全部跑完、开始输出最终总结时，在总结正文前
+   淡入一条「任务已完成，开始总结」的轻量分隔提示，柔和过渡，不抢总结正文的戏。 */
+@keyframes summary-transition {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.summary-transition {
+  animation: summary-transition 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .summary-transition { animation: none; }
 }

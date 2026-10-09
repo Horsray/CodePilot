@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
+import { isDarkModeActive } from '@/lib/utils';
 import { resolveThemeVars, getWidgetIframeStyleBlock } from '@/lib/widget-css-bridge';
 import { sanitizeForStreaming, sanitizeForIframe, buildReceiverSrcdoc } from '@/lib/widget-sanitizer';
 import { Code } from '@/components/ui/icon';
@@ -19,6 +20,7 @@ interface WidgetRendererProps {
 
 /** Max iframe height to prevent runaway widgets. */
 const MAX_IFRAME_HEIGHT = 2000;
+
 
 /** Debounce delay for streaming updates (ms). */
 const STREAM_DEBOUNCE = 120;
@@ -61,8 +63,8 @@ function WidgetRendererInner({ widgetCode, isStreaming, title, showOverlay, extr
 
   // Build receiver srcdoc once
   const srcdoc = useMemo(() => {
-    const isDark = typeof document !== 'undefined'
-      && document.documentElement.classList.contains('dark');
+    // 中文注释：主题判定统一走 isDarkModeActive（data-theme 属性 + .dark 兼容）。
+    const isDark = isDarkModeActive();
     const resolvedVars = resolveThemeVars();
     const styleBlock = getWidgetIframeStyleBlock(resolvedVars);
     return buildReceiverSrcdoc(styleBlock, isDark);
@@ -108,7 +110,7 @@ function WidgetRendererInner({ widgetCode, isStreaming, title, showOverlay, extr
 
         case 'widget:resize':
           if (typeof e.data.height === 'number' && e.data.height > 0) {
-            const newH = Math.min(e.data.height + 2, MAX_IFRAME_HEIGHT);
+            const newH = Math.min(e.data.height, MAX_IFRAME_HEIGHT);
             const cacheKey = getHeightCacheKey(widgetCode);
             // During finalization, only allow height to grow (innerHTML swap
             // briefly empties DOM causing a near-zero resize report)
@@ -169,7 +171,7 @@ function WidgetRendererInner({ widgetCode, isStreaming, title, showOverlay, extr
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [widgetCode]);
 
   // ── Streaming updates ──────────────────────────────────────────────────
   const sendUpdate = useCallback((html: string) => {
@@ -214,13 +216,14 @@ function WidgetRendererInner({ widgetCode, isStreaming, title, showOverlay, extr
   useEffect(() => {
     if (!iframeReady) return;
     const observer = new MutationObserver(() => {
-      const nowDark = document.documentElement.classList.contains('dark');
+      const nowDark = isDarkModeActive();
       const vars = resolveThemeVars();
       iframeRef.current?.contentWindow?.postMessage(
         { type: 'widget:theme', vars, isDark: nowDark }, '*',
       );
     });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    // 中文注释：同时监听 data-theme（新机制）与 class（旧机制）的变化。
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
     return () => observer.disconnect();
   }, [iframeReady]);
 
@@ -233,7 +236,7 @@ function WidgetRendererInner({ widgetCode, isStreaming, title, showOverlay, extr
       {/* iframe — always visible, no skeleton, no hiding */}
       <iframe
         ref={iframeRef}
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-same-origin"
         srcDoc={srcdoc}
         title={title || 'Widget'}
         // Fallback for missed widget:ready postMessage (race with useEffect listener setup).

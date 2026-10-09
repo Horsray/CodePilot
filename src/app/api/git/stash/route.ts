@@ -29,7 +29,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, output });
       }
       case 'pop': {
-        const output = await gitService.stashPop(cwd);
+        const output = await gitService.stashPop(cwd, typeof index === 'number' ? index : undefined);
+        return NextResponse.json({ success: true, output });
+      }
+      case 'apply': {
+        if (typeof index !== 'number') {
+          return NextResponse.json({ error: 'index is required for apply' }, { status: 400 });
+        }
+        const output = await gitService.stashApply(cwd, index);
         return NextResponse.json({ success: true, output });
       }
       case 'drop': {
@@ -40,7 +47,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true });
       }
       default:
-        return NextResponse.json({ error: 'Invalid action. Use save, pop, or drop' }, { status: 400 });
+        return NextResponse.json({ error: 'Invalid action. Use save, pop, apply, or drop' }, { status: 400 });
     }
   } catch (err) {
     return NextResponse.json(

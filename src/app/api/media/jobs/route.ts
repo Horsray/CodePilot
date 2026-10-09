@@ -5,7 +5,6 @@ import {
   createMediaJob,
   createMediaJobItems,
   getMediaJob,
-  getMediaJobItems,
 } from '@/lib/db';
 import type { CreateMediaJobRequest } from '@/types';
 

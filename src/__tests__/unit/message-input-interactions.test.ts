@@ -26,6 +26,8 @@ import {
   resolveKeyAction,
   resolveDirectSlash,
   buildCliAppend,
+  parseMentionRefs,
+  dedupeMentionsByPath,
 } from '../../lib/message-input-logic';
 
 // =====================================================================
@@ -52,6 +54,34 @@ describe('Slash command popover trigger detection', () => {
   it('typing "/" mid-word does NOT trigger skill mode', () => {
     const result = detectPopoverTrigger('path/to/file', 12);
     assert.equal(result, null);
+  });
+
+  it('typing "/" right after text does NOT trigger skill mode', () => {
+    // Regex alone can't distinguish "hello/skill" from "src/app" — the
+    // slash button inserts a leading space for the user-click path instead.
+    const result = detectPopoverTrigger('hello/', 6);
+    assert.equal(result, null);
+  });
+
+  it('single-slash relative paths do NOT trigger skill mode', () => {
+    assert.equal(detectPopoverTrigger('src/app', 7), null);
+    assert.equal(detectPopoverTrigger('foo/bar', 7), null);
+    assert.equal(detectPopoverTrigger('~/bin', 5), null);
+    assert.equal(detectPopoverTrigger('docs/readme.md', 14), null);
+  });
+
+  it('URL scheme http:// does NOT trigger skill mode', () => {
+    const result = detectPopoverTrigger('http://x', 8);
+    assert.equal(result, null);
+  });
+
+  it('"/" after a space (as produced by slash button mid-word) triggers skill mode', () => {
+    // The slash button auto-inserts a leading space when preceded by non-ws,
+    // so "hello " + "/" becomes "hello /" and the picker opens.
+    const result = detectPopoverTrigger('hello /', 7);
+    assert.ok(result);
+    assert.equal(result.mode, 'skill');
+    assert.equal(result.filter, '');
   });
 
   it('typing "@" triggers file popover mode', () => {
@@ -331,6 +361,39 @@ describe('Badge dispatch by kind', () => {
       };
       const result = dispatchBadge(unknownBadge, '');
       assert.equal(result.prompt, '/unknown');
+    });
+  });
+
+  describe('multi-skill (agent_skill array)', () => {
+    const skillA: CommandBadge = {
+      command: '/skill-a', label: 'skill-a', description: '', kind: 'agent_skill',
+    };
+    const skillB: CommandBadge = {
+      command: '/skill-b', label: 'skill-b', description: '', kind: 'agent_skill',
+    };
+
+    it('combines multiple skills into one prompt with user context', () => {
+      const result = dispatchBadge([skillA, skillB], 'build a thing');
+      assert.ok(result.prompt.includes('skill-a'), 'prompt references first skill');
+      assert.ok(result.prompt.includes('skill-b'), 'prompt references second skill');
+      assert.ok(result.prompt.includes('build a thing'), 'prompt includes user context');
+    });
+
+    it('combines skills without user context', () => {
+      const result = dispatchBadge([skillA, skillB], '');
+      assert.equal(result.prompt, 'Please use the skill-a, skill-b skills.');
+    });
+
+    it('display label joins with spaces', () => {
+      const result = dispatchBadge([skillA, skillB], '');
+      assert.equal(result.displayLabel, '/skill-a /skill-b');
+    });
+
+    it('single-element array preserves single-badge behavior', () => {
+      const arrayResult = dispatchBadge([skillA], 'ctx');
+      const directResult = dispatchBadge(skillA, 'ctx');
+      assert.equal(arrayResult.prompt, directResult.prompt);
+      assert.equal(arrayResult.displayLabel, directResult.displayLabel);
     });
   });
 });
@@ -614,6 +677,47 @@ describe('CLI badge behavior', () => {
       isSubmitEnabled({ inputValue: '', hasBadge: true, hasFiles: false, isStreaming: false, disabled: false }),
       true,
     );
+  });
+});
+
+describe('@mention parsing and dedupe', () => {
+  it('parses file mention with source range', () => {
+    const refs = parseMentionRefs('Please check @src/app/page.tsx now');
+    assert.equal(refs.length, 1);
+    assert.equal(refs[0].path, 'src/app/page.tsx');
+    assert.equal(refs[0].nodeType, 'file');
+    assert.ok(refs[0].sourceRange.start >= 0);
+    assert.ok(refs[0].sourceRange.end > refs[0].sourceRange.start);
+  });
+
+  it('parses multiple mentions and keeps order', () => {
+    const refs = parseMentionRefs('Compare @a.ts and @b.ts');
+    assert.equal(refs.length, 2);
+    assert.equal(refs[0].path, 'a.ts');
+    assert.equal(refs[1].path, 'b.ts');
+  });
+
+  it('respects node type lookup for directory mentions', () => {
+    const refs = parseMentionRefs(
+      'Open @src/components',
+      { 'src/components': 'directory' },
+    );
+    assert.equal(refs.length, 1);
+    assert.equal(refs[0].nodeType, 'directory');
+  });
+
+  it('strips trailing punctuation from mention path', () => {
+    const refs = parseMentionRefs('See @src/index.ts, please.');
+    assert.equal(refs.length, 1);
+    assert.equal(refs[0].path, 'src/index.ts');
+  });
+
+  it('dedupes mentions by path', () => {
+    const refs = parseMentionRefs('@src/a.ts @src/a.ts @src/b.ts');
+    const deduped = dedupeMentionsByPath(refs);
+    assert.equal(deduped.length, 2);
+    assert.equal(deduped[0].path, 'src/a.ts');
+    assert.equal(deduped[1].path, 'src/b.ts');
   });
 });
 

@@ -100,8 +100,9 @@ export function createBinding(
   const defaultProviderId = getSetting('bridge_default_provider_id') || '';
 
   const displayName = address.displayName || address.chatId;
+  const prefix = address.channelType === 'weixin' ? 'WeChat' : address.channelType === 'feishu' ? 'Feishu' : 'Bridge';
   const session = createSession(
-    `Bridge: ${displayName}`,
+    `${prefix}: ${displayName}`,
     defaultModel,
     undefined,
     defaultCwd,
@@ -120,6 +121,7 @@ export function createBinding(
     workingDirectory: defaultCwd,
     model: defaultModel,
     mode: 'code',
+    providerId: defaultProviderId || undefined,
   });
 }
 
@@ -159,7 +161,7 @@ export function bindToSession(
  */
 export function updateBinding(
   id: string,
-  updates: Partial<Pick<ChannelBinding, 'sdkSessionId' | 'workingDirectory' | 'model' | 'mode' | 'active'>>,
+  updates: Partial<Pick<ChannelBinding, 'sdkSessionId' | 'workingDirectory' | 'model' | 'mode' | 'providerId' | 'active'>>,
 ): void {
   updateChannelBinding(id, updates);
 }

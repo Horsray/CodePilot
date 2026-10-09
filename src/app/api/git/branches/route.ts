@@ -17,3 +17,21 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export async function DELETE(req: NextRequest) {
+  const cwd = req.nextUrl.searchParams.get('cwd');
+  const branch = req.nextUrl.searchParams.get('branch');
+  if (!cwd || !branch) {
+    return NextResponse.json({ error: 'cwd and branch are required' }, { status: 400 });
+  }
+
+  try {
+    await gitService.deleteBranch(cwd, branch);
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Failed to delete branch' },
+      { status: 500 }
+    );
+  }
+}

@@ -44,21 +44,34 @@
 
 | 文件 | 主题 | 状态 |
 |------|------|------|
+| active/chat-ui-performance-integration.md | 聊天 UI 收口 + 首轮响应提速 + 文件审查/上下文可见性回补 | Phase 0 完成，Phase 1 进行中 |
 | active/chat-latency-remediation.md | 聊天链路提速 + 模式入口收敛 + MCP 持久开关 | Phase 0 完成，Phase 1-4 待开始 |
+| active/agent-timeline-runtime-rebuild.md | 智能体时间线交互系统重构 | Phase 0 完成，Phase 1 进行中 |
+| active/upstream-interruption-and-cli-compaction-observability.md | 上游中断与 CLI 压缩全程可观测、终态协议修复 | Phase 0 进行中 |
 | active/context-storage-migration.md | 上下文共享与存储迁移 | Phase 0 部分完成，Phase 1-3 待开始 |
 | active/site-and-docs.md | 官网 + 文档站（apps/site） | Phase 0-1 进行中 |
 | active/weixin-bridge-channel.md | 微信 Bridge 通道一次性交付方案 | One Shot 待开始 |
+| active/claude-code-parity-fast-path.md | Claude Code 主路径回归原生能力体验：CLI Full Capabilities 默认开启 + FILEMAP 前置索引策略 + MCP/Skills 单一真相源收口 | Phase 0-9 完成，Phase 10 进行中 |
 | active/unified-context-layer.md | 统一上下文层 + 浮窗助理 + 产品架构演进 | Phase 1-3 已完成，Phase 4-5 待开始 |
+| active/omc-team-orchestration-refactor.md | OMC Team 多智能体动态编排重构（并行执行 + 动态路由 + 验证闭环） | ✅ Phase 0-5 已完成（V1 基础） |
+| active/multi-agent-orchestration-v2.md | 多Agent编排架构重构 V2 — 对齐 OMC 策略（去除 planner LLM、非嵌套约束、验证协议、熔断升级） | Phase 0 完成，Phase 1-5 待开始 |
+| active/multi-agent-commercial-runtime.md | 多Agent商用级编排能力补齐：确定性 Team 入口、持久 runtime、stage/handoff、验证闭环 | Phase 1-4 已完成（V1 runtime） |
 | active/provider-governance.md | 服务商系统治理：Preset Schema 校验、宿主接管、连通性验证、引导 UX、错误治理 | Phase 0 完成，Phase 1-6 待开始 |
-
+| active/decouple-claude-code.md | 脱离 Claude Code 依赖 — 自建 Agent Runtime（Provider/Loop/Tools/MCP/Permission/Session/Skills/SubAgent） | Phase 0 完成，Phase 1-8 待开始 |
+| active/runtime-auto-and-onboarding.md | Runtime auto 简化（CLI binary check 代替凭据推断）+ Chat 入口拦截 + 错误归一翻译（复用现有 SetupCenter）+ FileTree hotfix + 百炼 catalog 替换 | Phase 0-4 已完成（commits bc308e9/2d06f50/d1fac18/3e03919/a32837e），Phase 5 待发版 |
+| active/issue-tracker.md | **统一问题跟踪** — 合并所有 Bug / Feature Request / Sentry 监控，持续更新（替代 open-issues + v0.48-post-release） | 持续维护 |
+| active/commercial-agent-upgrade.md | 商用级桌面 Agent 体验升级：Doom Loop 阻断、虚拟文件树、终端流式输出、状态解耦 | Phase 1 进行中，Phase 2-3 待开始 |
+| active/opus-4-7-upgrade.md | Opus 4.7 模型升级：双 SDK 升级（agent-sdk + ai-sdk/anthropic）、`xhigh` effort + catalog 能力元数据回填、Native 路径 thinking/display/beta header 清理、tokenizer + vision 预算复核、prompt 字面化回归 | Phase 0 部分完成，Phase 1-6 待开始 |
+| active/model-image-input-and-ocr-routing.md | 模型级图片输入能力、视觉模型 OCR 降级与聊天分流 | Phase 1 进行中 |
+| active/agent-sdk-0-2-111-adoption.md | Agent SDK 0.2.111 能力采纳（Codex 审核后双层化 + 用户视角推进路线图）：Layer A 已完成 Phase 1 chip + Phase 2b 类型适配 / 待做 Phase 1b chip 按钮 + Phase 2 限流 UI；Layer B 待 POC 后推进 WarmQuery / session fork / getContextUsage / 新 hooks / Elicitation / Deferred tools | SDK 升级已完成，下一步阶段 1（chip 按钮 + 限流 UI）1-2 周可发版 |
+| active/v0.48-post-release-issues.md | v0.48.0/0.48.1 发版后问题追查（已归档至 issue-tracker.md，保留原始记录） | 已归档 |
 ### Completed
 
 | 文件 | 主题 | 完成日期 |
 |------|------|----------|
-| completed/design-agent-structured-output-fix.md | 设计 Agent 结构化输出修复 | 2026-04-08 |
+| completed/delivery-collapse.md | 交付折叠 — 任务彻底完成后收起思考与工具调用过程（触发时机由"第一个结论字"返工为"消息落定"，复用 ToolActionsGroup 手风琴） | 2026-10-07 |
+| completed/session-lifecycle-and-stream-errors.md | 上游错误可见性、手动中断内容保留、会话过期清理与项目完成蓝点 | 2026-10-09 |
+| completed/markdown-artifact-overhaul.md | Markdown 渲染/编辑 × Artifact 网页预览扩展（DiffSummary 卡片 + Sandpack TSX + 长图导出 + 文件树新建 .md + CodeMirror 编辑 + DataTable + 文件 I/O API） | 2026-04-21 |
+| completed/hermes-inspired-runtime-upgrade.md | Hermes 借鉴的 Runtime 能力升级：6 核心模块 + 12 额外交付（并行安全、辅助模型、子目录 hint、session 搜索、Skill nudge UI、AskUserQuestion、压缩通知） | 2026-04-12 |
+| completed/cc-haha-ui-port.md | cc-haha 界面与流式体验移植（设计令牌/亮暗主题/卡片布局/渐进揭示流式渲染）| 2026-10-06 |
 | completed/engineering-quality-assurance.md | 工程质量保障体系（Harness Engineering）— 验证闭环、AI 文档、CDP、执行计划 | 2026-03-04 |
-| completed/image-provider-model-routing.md | 生图中转模型路由与错误治理 | 2026-04-08 |
-| completed/image-provider-selection.md | 生图服务选择与错误可见性修复 | 2026-04-08 |
-| completed/media-relay-endpoint-adaptation.md | 生图中转接口地址与协议适配 | 2026-04-08 |
-| completed/provider-edit-routing-fix.md | 服务商编辑路由修复 | 2026-04-08 |
-| completed/terminal-console-remediation.md | 内置终端 / Console 修复与 Trae 风格联动优化 | 2026-04-08 |

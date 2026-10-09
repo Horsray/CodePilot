@@ -13,7 +13,7 @@
 /** Max chars for tool-related content in recent messages */
 const RECENT_CONTENT_LIMIT = 5000;
 /** Max chars for tool-related content in old messages (>30 turns ago) */
-const OLD_CONTENT_LIMIT = 1000;
+const OLD_CONTENT_LIMIT = 4000;
 /** Messages older than this many turns from the end get aggressive truncation */
 const OLD_MESSAGE_THRESHOLD = 30;
 
@@ -28,35 +28,87 @@ export function normalizeMessageContent(role: string, raw: string): string {
 
   // For assistant messages with structured content (JSON arrays),
   // extract text + brief tool summaries instead of dropping tools entirely.
+  //
+  // IMPORTANT: markers for thinking/tool_use use XML-style self-closing tags
+  // rather than prose like "(used Read: {...})". Prose-style markers caused
+  // few-shot mimicry: after a compaction-driven fallback, the model would
+  // start writing pseudo tool calls as plain text ("(used Edit: {...})")
+  // instead of emitting real tool_use blocks. XML tags read as structured
+  // metadata that Claude is trained not to reproduce in its own output.
   if (role === 'assistant' && content.startsWith('[')) {
     try {
       const blocks = JSON.parse(content);
       const parts: string[] = [];
       for (const b of blocks) {
         if (b.type === 'thinking' && b.thinking) {
-          // Summarize thinking — extract first bold/heading or truncate
           const thinkingText = String(b.thinking);
           const boldMatch = thinkingText.match(/\*\*(.+?)\*\*/);
           const headingMatch = thinkingText.match(/^#{1,4}\s+(.+)$/m);
-          const summary = boldMatch?.[1] || headingMatch?.[1] || thinkingText.slice(0, 80);
-          parts.push(`(reasoning: ${summary})`);
+          const summary = boldMatch?.[1] || headingMatch?.[1] || thinkingText.slice(0, 500);
+          parts.push(`<prior-reasoning>${escapeXmlAttr(summary)}</prior-reasoning>`);
         } else if (b.type === 'text' && b.text) {
           parts.push(b.text);
         } else if (b.type === 'tool_use') {
-          // Keep a brief summary of tool usage (name + truncated input)
           const name = b.name || 'unknown_tool';
           const inputStr = typeof b.input === 'object' ? JSON.stringify(b.input) : String(b.input || '');
           const truncated = inputStr.length > 80 ? inputStr.slice(0, 80) + '...' : inputStr;
-          parts.push(`(used ${name}: ${truncated})`);
+          parts.push(`<prior-tool-call name="${escapeXmlAttr(name)}" input="${escapeXmlAttr(truncated)}"/>`);
         }
         // tool_result blocks are skipped — the summary above captures intent
       }
-      content = parts.length > 0 ? parts.join('\n') : '(assistant used tools)';
+      content = parts.length > 0 ? parts.join('\n') : '<prior-assistant-turn tools-only="true"/>';
     } catch {
       // Not JSON, use as-is
     }
   }
+
+  // Add processing for user role which might contain tool_result blocks (in JSON)
+  // that need to be normalized so they don't break token limits or get improperly truncated
+  if (role === 'user' && content.startsWith('[')) {
+    try {
+      const blocks = JSON.parse(content);
+      let isToolResult = false;
+      const parts: string[] = [];
+      
+      for (const b of blocks) {
+        if (b.type === 'tool_result') {
+          isToolResult = true;
+          const toolName = b.tool_name || b.name || 'unknown_tool';
+          // Try to get a short excerpt of the result without keeping the whole massive string
+          const resultStr = typeof b.content === 'string' 
+            ? b.content 
+            : (Array.isArray(b.content) && b.content.length > 0 && typeof b.content[0].text === 'string') 
+              ? b.content[0].text 
+              : JSON.stringify(b.content || '');
+              
+          const truncated = resultStr.length > 200 ? resultStr.slice(0, 200) + '...' : resultStr;
+          parts.push(`<prior-tool-result name="${escapeXmlAttr(toolName)}">${escapeXmlAttr(truncated)}</prior-tool-result>`);
+        } else if (b.type === 'text' && b.text) {
+          parts.push(b.text);
+        } else {
+          // Keep other user blocks as JSON strings to avoid losing content
+          parts.push(JSON.stringify(b));
+        }
+      }
+      
+      if (isToolResult) {
+        content = parts.length > 0 ? parts.join('\n') : '<prior-tool-results/>';
+      }
+    } catch {
+      // Not valid JSON or parsing failed, use as-is
+    }
+  }
+
   return content;
+}
+
+function escapeXmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\n/g, ' ');
 }
 
 // ── Microcompaction ─────────────────────────────────────────────────
@@ -89,4 +141,44 @@ export function microCompactMessage(role: string, content: string, ageFromEnd: n
   if (content.length <= limit) return content;
 
   return headTailTruncate(content, limit);
+}
+
+/**
+ * 修复"孤儿 user 消息"：在两个连续出现的 user 消息之间插入一条合成的
+ * assistant 占位，说明上一轮处理被中断、没有产生回复。
+ *
+ * 背景：轮次在产出任何内容前死掉时（进程被杀 / 客户端切走 / 上游卡死中止），
+ * assistant 回复从未落库，DB 里会留下两条相邻 user 消息。下一轮组装历史时，
+ * 模型看到自己"上一条用户消息没有任何回复"，会表现为上下文错乱
+ * （"上一轮我做了什么"完全丢失）。插入中性占位让轮次边界重新成立。
+ *
+ * - 合成的占位没有 _rowid，不会被 compact boundary 过滤掉（filterHistoryByCompactBoundary
+ *   对无 _rowid 的行一律保留），也不影响 resolveReactiveCompactBoundaryRowid
+ *   从末尾找最后一个有 _rowid 的行。
+ * - 正常会话（user/assistant 交替）不受影响：没有任何相邻 user 时原样返回。
+ */
+export function repairOrphanUserMessages<T extends { role: string; content: string }>(
+  history: T[],
+): T[] {
+  let hasOrphan = false;
+  for (let i = 1; i < history.length; i++) {
+    if (history[i].role === 'user' && history[i - 1].role === 'user') {
+      hasOrphan = true;
+      break;
+    }
+  }
+  if (!hasOrphan) return history;
+
+  const out: T[] = [];
+  for (const msg of history) {
+    const prev = out[out.length - 1];
+    if (msg.role === 'user' && prev && prev.role === 'user') {
+      out.push({
+        role: 'assistant',
+        content: '[上一轮处理被中断，未产生回复]',
+      } as T);
+    }
+    out.push(msg);
+  }
+  return out;
 }

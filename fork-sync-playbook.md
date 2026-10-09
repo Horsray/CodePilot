@@ -1,0 +1,497 @@
+# Fork 同步与自动合并记忆
+
+适用于本仓库相对 `https://github.com/op7418/CodePilot` 的增量维护。
+
+AI 在处理"同步主项目""合并官方更新""解决冲突""保留 fork 定制能力"等任务前，必须先阅读：
+
+1. 根目录 `CLAUDE.md`
+2. 根目录 `AGENTS.md`
+3. 本文 `fork-sync-playbook.md`
+4. 根目录 `fork-ownership-map.json`
+5. 根目录 `fork-patches.manifest.json`
+
+## 目标
+
+这份文档不是单纯记录"改过什么"，而是给未来的 AI 一个稳定的合并记忆入口，让它在拉取官方更新时知道：
+
+- 这个仓库是 `op7418/CodePilot` 的 fork
+- 哪些能力是 fork 独有的，不能被官方更新覆盖掉
+- 哪些文件是高冲突区，合并时要重点看
+- 应该优先采用什么合并策略
+- 合并完成后要验证哪些能力
+
+## 仓库关系
+
+- 官方上游仓库：`upstream = https://github.com/op7418/CodePilot.git`
+- 当前 fork 仓库：`origin = https://github.com/Horsray/CodePilot.git`
+- 当前长期维护分支：`integration/official-skeleton`
+- 当前 fork 与 `upstream/main` 的共同基线可通过 `git merge-base HEAD refs/remotes/upstream/main` 获取
+
+建议把 `integration/official-skeleton` 视为"官方能力 + 本地定制"的集成分支，后续所有同步都先在临时同步分支完成，再回合到该分支。
+
+## 同步机制
+
+为了避免每次都靠人工逐个看 diff，本仓库新增了两层固定机制：
+
+- `fork-ownership-map.json`：定义哪些路径默认归 `fork`、`core`、`shared` 或 `ignore`
+- `fork-patches.manifest.json`：定义 fork 增量能力、接缝文件和推荐保留策略
+- `scripts/upstream-sync-report.mjs`：基于 ownership map 自动生成 upstream 差异报告
+- `scripts/check-fork-ownership.mjs`：检查当前工作区改动是否落在预期边界内
+- `scripts/upstream-sync-bootstrap.mjs`：一键完成 fetch upstream、生成报告、执行 ownership 检查
+
+推荐命令：
+
+```bash
+npm run sync:bootstrap
+npm run sync:report
+npm run sync:report:write
+npm run sync:ownership
+```
+
+用途：
+
+- `sync:report`：把 `fork-only / upstream-only / both-changed` 自动按 ownership 分组
+- `sync:report:write`：把最新报告写入 `docs/research/upstream-sync-report-latest.md`
+- `sync:ownership`：在提交前检查当前工作区改动是否超出预期边界
+- `sync:bootstrap`：fetch upstream 后自动产出报告和 bootstrap 摘要
+- `sync:bootstrap:branch`：在当前 HEAD 上创建同步分支后，再自动产出报告和 bootstrap 摘要
+
+## 当前已知 Fork 差异
+
+基于当前已提交的 fork 增量，和官方主项目相比，差异主要集中在以下方向。
+
+### 1. CC Switch 服务商接入
+
+目标是让模型调用可以在本地、`/api` 和中转平台之间切换，形成更适合本地使用习惯的 provider 接入方式。
+
+涉及文件：
+
+- `src/lib/cc-switch.ts`
+- `src/lib/provider-catalog.ts`
+- `src/components/settings/provider-presets.tsx`
+- `src/components/settings/PresetConnectDialog.tsx`
+- `src/components/settings/ProviderForm.tsx`
+- `src/components/settings/ProviderManager.tsx`
+- `src/app/api/providers/route.ts`
+- `src/app/api/providers/models/route.ts`
+- `src/__tests__/unit/provider-preset.test.ts`
+
+保留要求：
+
+- 设置页里继续能配置 CC Switch
+- provider preset、表单字段、模型列表获取逻辑保持一致
+- 官方如果调整 provider 架构，应把 CC Switch 适配进新架构，而不是删除该能力
+
+### 2. 中转平台媒体生成支持
+
+原项目仅支持 google 官方的模型，扩展为支持中转站 api 模式的媒体生成能力，并可自定义维护 base_url 和 api 接口后缀，模型名称等必要参数。
+
+涉及文件：
+
+- `src/lib/image-provider-utils.ts`
+- `src/lib/image-generator.ts`
+- `src/app/api/media/generate/route.ts`
+
+保留要求：
+
+- generic-image 或等价中转能力不能在合并时被回退
+- 媒体协议、端点配置、provider 解析逻辑要与上游更新对齐
+
+### 3. 文件树 UI 与交互增强
+
+目标是增强文件树在真实项目场景中的可用性，增加右键菜单，可以把文件添加到对话，新建文件，新建文件夹，删除文件等能力。
+
+涉及文件：
+
+- `src/components/project/EnhancedFileTree.tsx`
+- `src/components/project/FileTree.tsx`
+- `src/components/layout/panels/FileTreePanel.tsx`
+
+保留要求：
+
+- 文件树增强交互不能被官方 UI 回滚
+- 展开状态、本地持久化、交互体验需要保留
+- 如果官方后续重构文件树结构，应把增强逻辑迁移到新结构里
+
+### 4. 工作区标签页系统
+
+将文件预览等从独立面板重构为统一的工作区标签页形式，提升多任务处理体验。
+
+涉及文件：
+
+- `src/components/layout/AppShell.tsx` - 工作区标签页管理
+- `src/components/layout/panels/PreviewPanel.tsx` - 文件预览面板（标签页形式）
+- `src/components/layout/panels/AssistantPanel.tsx` - 助手面板
+- `src/components/layout/panels/DashboardPanel.tsx` - Dashboard 面板
+- `src/components/layout/panels/GitPanel.tsx` - Git 面板
+- `src/hooks/usePanel.ts` - 面板管理 Hook
+- `electron/main.ts` - Electron webview 标签支持
+
+保留要求：
+
+- 标签页系统不能被官方布局调整回滚
+- 预览、Git 等面板以标签页形式存在
+- 文件树点击文件时在标签页中打开预览而非侧边面板
+- Electron 环境启用 webview 标签支持
+
+### 5. Native Agent Runtime（原生运行时）
+
+基于 Vercel AI SDK 的原生运行时，支持独立于 Claude Code CLI 运行，降低使用门槛。
+
+涉及文件：
+
+- `src/lib/runtime/native-runtime.ts` - Native Runtime 实现（使用 AI SDK streamText）
+- `src/lib/runtime/registry.ts` - Runtime 注册与解析（resolveRuntime / predictNativeRuntime）
+- `src/lib/runtime/types.ts` - Runtime 类型定义
+- `src/lib/runtime/index.ts` - Runtime 导出
+- `src/lib/runtime/sdk-runtime.ts` - SDK Runtime
+- `src/lib/runtime/event-bus.ts` - 运行时事件总线
+- `src/lib/agent-loop.ts` - Agent 循环（支持 Native Runtime）
+- `src/lib/agent-system-prompt.ts` - 系统提示词构建
+
+保留要求：
+
+- Native Runtime 作为独立运行时选项必须保留
+- Registry 解析逻辑（cli_enabled / override / auto 优先级）不能改变
+- Native Runtime 不依赖 Claude Code CLI 的特性必须保留
+- 支持 OpenAI Provider（非 Anthropic Provider 强制使用 Native）
+
+### 6. Bridge / Channel 系统
+
+多平台桥接支持，包括 Discord、Feishu（飞书）、Telegram、Weixin（微信）和 QQ 等渠道的适配与消息处理。
+
+涉及文件：
+
+- `src/lib/bridge/` - 桥接核心（channel-adapter.ts、delivery-layer.ts、permission-broker.ts）
+- `src/lib/bridge/adapters/` - 各平台适配器
+  - `discord-adapter.ts`
+  - `feishu-adapter.ts`
+  - `telegram-adapter.ts`
+  - `weixin-adapter.ts` + `src/lib/bridge/adapters/weixin/`（weixin-api.ts、weixin-auth.ts、weixin-media.ts、weixin-session-guard.ts、weixin-types.ts）
+  - `qq-adapter.ts` + `src/lib/bridge/adapters/qq-api.ts`
+- `src/lib/bridge/markdown/` - Markdown 渲染（discord.ts、feishu.ts、telegram.ts、ir.ts、render.ts）
+- `src/lib/bridge/security/` - 安全验证（rate-limiter.ts、validators.ts）
+- `src/lib/channels/` - 飞书渠道插件（feishu/index.ts、gateway.ts、inbound.ts、outbound.ts 等）
+- `src/app/api/bridge/` - 桥接相关 API
+
+保留要求：
+
+- 各平台适配器不能被删除
+- Bridge 安全验证机制保留
+- Markdown 渲染针对各平台的定制保留
+
+### 7. Assistant Workspace 增强
+
+工作区状态管理、文件模板、心跳机制和记忆系统。
+
+涉及文件：
+
+- `src/lib/assistant-workspace.ts` - Workspace 核心（验证、初始化、文件加载、状态迁移）
+- `src/lib/workspace-taxonomy.ts` - 工作区分类
+- `src/lib/workspace-indexer.ts` - 工作区索引
+- `src/lib/workspace-organizer.ts` - 工作区组织
+- `src/lib/workspace-retrieval.ts` - 工作区检索
+- `src/lib/workspace-config.ts` - 工作区配置
+- `src/lib/heartbeat.ts` - 心跳机制
+- `src/app/api/chat/sessions/by-cwd/route.ts` - 按工作目录查询会话
+
+保留要求：
+
+- Workspace 状态迁移（V1-V5）逻辑保留
+- 心跳/每日记忆机制保留
+- Workspace 文件模板（claude.md、soul.md、user.md、memory.md）保留
+
+### 8. Git 面板增强
+
+目标是恢复并增强 fork 版本的 Git 面板功能，提供完整的 Git 操作能力。
+
+#### 涉及文件
+
+**组件：**
+- `src/components/git/GitStatusSection.tsx` - Git 状态主面板，支持文件分组、stage/unstage/discard、代码行数统计（+X/-Y）
+- `src/components/git/GitDiffViewer.tsx` - 文件 diff 查看器，点击文件可查看详细变更
+- `src/components/git/GitStashSection.tsx` - Stash 储藏功能
+- `src/components/git/PushDialog.tsx` - Push 到指定分支的对话框
+- `src/components/git/GitBranchSelector.tsx` - 分支选择器，支持创建新分支
+- `src/components/git/CommitDialog.tsx` - 提交对话框
+
+**API 路由：**
+- `src/app/api/git/diff/route.ts` - 获取文件 diff
+- `src/app/api/git/stage/route.ts` - 暂存文件
+- `src/app/api/git/unstage/route.ts` - 取消暂存
+- `src/app/api/git/discard/route.ts` - 丢弃更改
+- `src/app/api/git/fetch/route.ts` - Fetch 远程更新
+- `src/app/api/git/pull/route.ts` - Pull 远程更新
+- `src/app/api/git/stash/route.ts` - Stash 操作
+- `src/app/api/git/ai-review/route.ts` - AI 生成 commit message
+
+**Service：**
+- `src/lib/git/service.ts` - Git 操作核心服务
+
+**类型：**
+- `src/types/index.ts` - `GitChangedFile` 接口（含 additions/deletions 字段）
+
+#### 保留要求
+
+- **暂存功能**：鼠标悬停文件行显示 + 按钮，点击可 stage 单个文件
+- **代码行数统计**：每个文件右侧显示绿色 +X 和红色 -Y 的变更行数
+- **Diff 查看**：点击文件（眼睛图标或文件名）可打开 diff 面板查看详细变更
+- **Stash 功能**：储藏当前更改、查看储藏列表、恢复、删除
+- **创建新分支**：GitBranchSelector 支持创建新分支并切换
+- **Pull/Fetch**：获取远程更新
+- **Commit 按钮**：保留现有的"提交全部"和"提交并推送"模式选择功能不变
+- **Push 按钮**：保留现有的推送功能不变
+- **AI 生成 commit message**：Sparkle 按钮用于 AI 生成提交信息
+
+#### 与官方原版的差异
+
+官方 upstream 版本的 Git 面板功能较简化为：
+- 无暂存/取消暂存/丢弃等精细化文件操作
+- 无代码行数统计显示
+- 无点击查看 diff 功能
+- 无 stash 功能
+- 无分支创建功能
+- 无 pull/fetch 按钮
+- 无 AI 生成 commit message
+
+同步时若 Git 相关文件发生冲突，**优先保留 fork 的增强功能**，不做整文件覆盖。
+
+### 9. 配套 UI、资源与国际化调整
+
+涉及文件：
+
+- `src/components/ui/context-menu.tsx`
+- `src/components/ui/icon.tsx`
+- `src/i18n/en.ts`
+- `src/i18n/zh.ts`
+- `public/icons/toplogo.png`
+- `package.json`
+- `package-lock.json`
+
+保留要求：
+
+- fork 新能力对应的文案、图标、依赖不能漏掉
+- 官方新增 i18n 键时，fork 自定义键不能被覆盖丢失
+
+## 合并时的高冲突区
+
+以下文件或模块在后续同步官方更新时最容易发生冲突，AI 必须优先审查：
+
+### 布局与导航
+- `src/components/layout/AppShell.tsx` - **工作区标签页系统核心**，极易冲突
+- `src/components/layout/UnifiedTopBar.tsx` - 顶部导航，标签页入口
+
+### 文件树与面板
+- `src/components/project/FileTree.tsx`、`src/components/project/EnhancedFileTree.tsx`
+- `src/components/layout/panels/FileTreePanel.tsx`
+- `src/components/layout/panels/PreviewPanel.tsx` - **新增预览面板**
+- `src/components/layout/panels/AssistantPanel.tsx` - **新增助手面板**
+- `src/components/layout/panels/DashboardPanel.tsx` - **新增 Dashboard 面板**
+- `src/components/layout/panels/GitPanel.tsx` - **新增 Git 面板**
+
+### Provider 设置（高冲突）
+- `src/components/settings/ProviderForm.tsx`、`ProviderManager.tsx`、`provider-presets.tsx`
+- `src/app/api/providers/route.ts`、`src/app/api/providers/models/route.ts`
+
+### 媒体生成（高冲突）
+- `src/lib/image-generator.ts`、`src/app/api/media/generate/route.ts`
+
+### Runtime 系统（高冲突）
+- `src/lib/runtime/native-runtime.ts`
+- `src/lib/runtime/registry.ts` - **Runtime 注册与解析逻辑**
+- `src/lib/runtime/types.ts`
+
+### Bridge / Channel
+- `src/lib/bridge/channel-adapter.ts`、`src/lib/bridge/delivery-layer.ts`
+- `src/lib/bridge/adapters/` 各平台适配器
+
+### Assistant Workspace
+- `src/lib/assistant-workspace.ts`
+- `src/lib/workspace-*.ts` 系列文件
+
+### 国际化（高冲突）
+- `src/i18n/en.ts`、`src/i18n/zh.ts`
+
+### 类型与依赖
+- `src/types/index.ts` - 自定义类型
+- `package.json`
+
+### API 路由
+- `src/app/api/media/generate/route.ts` - 媒体生成
+- `src/app/api/bridge/` - 桥接
+- `src/app/api/git/diff/route.ts` - Git diff
+- `src/app/api/git/stage/route.ts`、`src/app/api/git/unstage/route.ts` - Git stage/unstage
+- `src/app/api/git/discard/route.ts` - Git discard
+- `src/app/api/git/fetch/route.ts`、`src/app/api/git/pull/route.ts` - Git fetch/pull
+- `src/app/api/git/stash/route.ts` - Git stash
+- `src/app/api/git/ai-review/route.ts` - AI 生成 commit
+
+如果官方更新也修改了这些文件，AI 不允许简单地"整文件覆盖"，必须做结构化合并。
+
+## AI 合并原则
+
+未来 AI 在同步官方更新时，默认遵循下面的优先级：
+
+1. 优先吸收官方的安全修复、基础设施修复、架构升级、依赖升级
+2. 优先保留本 fork 的产品能力和入口，不允许把 CC Switch、媒体中转、增强文件树、工作区标签页、Native Runtime、Git 面板增强等直接合并掉
+3. 如果官方重构了相同模块，优先把 fork 能力迁移到新结构，而不是把官方重构回退成旧结构
+4. 对公共层代码优先采用官方实现，对 fork 独有能力采用"追加适配"的方式挂回去
+5. 合并冲突时，先判断"这是官方基础能力变更"还是"这是 fork 产品能力入口"，不要只按最近修改时间取舍
+6. **Runtime 系统**：Native Runtime 是 fork 独立运行能力的基础，不能回退；Registry 解析逻辑是确定的，不能改变优先级
+7. **Git 面板**：`CommitDialog` 的"提交全部"和"提交并推送"按钮功能、`PushDialog` 的推送功能必须保留；其他增强功能（stage/unstage/discard、diff 查看、stash、创建分支、AI commit、代码行数统计）也必须保留
+
+一句话原则：**优先继承官方演进，再把 fork 定制能力重新挂载回新的官方骨架。**
+
+## 推荐同步流程
+
+推荐使用 merge，不推荐默认用 rebase。
+
+原因：
+
+- 这是一个长期跟随官方演进的 fork，merge 更适合保留同步历史
+- AI 自动处理时，merge 的冲突语义更直观
+- 如果已经有自己持续迭代的提交，rebase 更容易把历史改写得难以追踪
+
+建议流程：
+
+```bash
+git status
+npm run sync:bootstrap:branch
+git checkout integration/official-skeleton
+git merge upstream/main
+npm run sync:report:write
+```
+
+然后让 AI 按下面顺序处理：
+
+1. 先看 `git status`，确保没有未提交改动混入同步任务
+2. 先跑 `npm run sync:report`，看 ownership map 自动标记出的 `upstream-only / both-changed`
+3. 再看 `git diff --name-only --diff-filter=U` 找出冲突文件
+4. 先处理"高冲突区"文件
+5. 逐项核对本文中的 fork 独有能力是否还存在
+6. 跑测试并做功能回归
+7. 确认无误后，再把同步分支合回 `integration/official-skeleton`
+
+**特别注意**：Git 面板相关文件（GitStatusSection、CommitDialog、GitBranchSelector 等）与官方差异较大，若官方更新 Git 面板，需确保 fork 的增强功能（暂存、diff 查看、stash、创建分支、代码行数统计、AI commit）不被覆盖。
+
+## AI 自动读取记忆的落地方式
+
+为了让未来的 AI 自动读到这份"fork 记忆"，需要保持下面三件事：
+
+### 1. 固定文档路径
+
+本文固定放在：
+
+- `fork-sync-playbook.md`（项目根目录）
+
+不要频繁改名，避免未来 AI 找不到。
+
+### 2. 在根规则文件里显式引用
+
+未来 AI 最容易优先读取的是根目录规则文件，所以必须在：
+
+- `CLAUDE.md`
+- `AGENTS.md`
+
+里明确写出：**处理 upstream 同步或官方合并任务前，先读根目录的本文。**
+
+### 3. 每次 fork 新增能力后都更新本文
+
+如果你后面又新增了功能，比如：
+
+- 新的 provider
+- 新的面板
+- 新的 Electron 原生能力
+- 新的 API 路由
+- 新的 Runtime
+- 新的 Bridge 渠道
+
+就要把"功能目标、关键文件、保留要求、高冲突区"继续补进本文。这样 AI 才能把它当成长期记忆，而不是一次性说明。
+
+## 给未来 AI 的标准任务提示词
+
+以后你要同步官方更新时，可以直接把下面这段发给 AI：
+
+```text
+你现在在维护一个相对 op7418/CodePilot 的 fork。
+
+在开始任何同步任务前，先阅读：
+1. CLAUDE.md
+2. AGENTS.md
+3. fork-sync-playbook.md
+
+然后执行下面目标：
+- 拉取 upstream/main 的最新更新
+- 将官方更新合并到 integration/official-skeleton
+- 保留 fork 独有能力：CC Switch、媒体中转、增强文件树、工作区标签页、Native Runtime、Bridge 渠道、Assistant Workspace、Git 面板增强等
+- 优先继承官方的新架构和修复，再把 fork 能力适配回去
+- 不允许通过整文件覆盖的方式粗暴解决冲突
+
+输出内容必须包含：
+- 本次 upstream 更新摘要
+- 冲突文件清单
+- 每个冲突文件的合并决策
+- 合并后保留了哪些 fork 能力
+- 运行了哪些测试和验证
+```
+
+## 合并后的验收清单
+
+每次同步完官方更新后，至少确认以下能力仍然正常：
+
+### 核心能力
+- [ ] 设置页仍然可以配置 CC Switch
+- [ ] 媒体生成链路仍然支持中转平台方案
+- [ ] 文件树增强交互仍然存在
+
+### Git 面板
+- [ ] Git 面板可正常打开，显示仓库状态
+- [ ] 文件列表显示 +X/-Y 代码行数统计
+- [ ] 鼠标悬停文件行显示 stage（+）按钮，点击可暂存
+- [ ] 点击文件可打开 diff 面板查看详细变更
+- [ ] Stash 功能正常：可储藏、查看列表、恢复、删除
+- [ ] GitBranchSelector 支持创建新分支
+- [ ] Pull/Fetch 按钮可正常获取远程更新
+- [ ] Commit 按钮的"提交全部"和"提交并推送"模式选择正常
+- [ ] Push 按钮正常
+- [ ] CommitDialog 中的 Sparkle 按钮可 AI 生成 commit message
+
+### 工作区标签页
+- [ ] 工作区标签页系统正常
+- [ ] 文件树点击文件时在标签页中打开预览
+- [ ] Electron webview 标签支持正常
+
+### Runtime 系统
+- [ ] Native Runtime 可用（不依赖 Claude Code CLI）
+- [ ] Runtime Registry 解析逻辑正常（cli_enabled / override / auto 优先级）
+- [ ] OpenAI Provider 强制使用 Native Runtime
+
+### Bridge / Channel
+- [ ] 各平台适配器（Discord、Feishu、Telegram、Weixin、QQ）正常
+- [ ] Bridge 安全验证机制正常
+- [ ] Markdown 渲染正常
+
+### Assistant Workspace
+- [ ] Workspace 初始化和状态迁移正常
+- [ ] 心跳机制正常
+- [ ] Workspace 文件模板正常
+
+### 国际化与 UI
+- [ ] 中英文文案没有漏项
+- [ ] fork 新增图标资源存在
+
+### 测试
+- [ ] `npm run test` 通过
+- [ ] 涉及 UI 改动时，`npm run test:smoke` 通过
+
+## 文档维护规则
+
+本文要保持"可执行记忆"而不是泛泛描述，所以后续更新时至少同步维护以下内容：
+
+- fork 新增了什么能力
+- 这些能力在哪些文件里
+- 官方更新时哪些地方最容易冲突
+- 合并完成后应该检查什么
+- **Git 面板**：若后续 Git 功能有变更，需同步更新"Git 面板增强"章节，确保暂存、diff、stash、创建分支、AI commit、代码行数统计等增强功能不被遗漏
+
+如果未来 fork 的主要差异发生变化，优先更新本文，再让 AI 继续做同步任务。

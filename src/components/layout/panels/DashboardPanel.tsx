@@ -9,6 +9,7 @@ import { usePanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import { WidgetRenderer } from "@/components/chat/WidgetRenderer";
+import { TaskList } from "@/components/project/TaskList";
 import type { DashboardConfig, DashboardWidget } from "@/types/dashboard";
 import type { TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -16,7 +17,7 @@ import { RARITY_DISPLAY, STAT_LABEL, SPECIES_LABEL, rarityColor, getBuddyTitle, 
 
 const DASHBOARD_MIN_WIDTH = 320;
 const DASHBOARD_MAX_WIDTH = 800;
-const DASHBOARD_DEFAULT_WIDTH = 480;
+const DASHBOARD_DEFAULT_WIDTH = 320;
 
 interface AssistantSummary {
   configured: boolean;
@@ -33,7 +34,7 @@ interface AssistantSummary {
 }
 
 export function DashboardPanel() {
-  const { setDashboardPanelOpen, workingDirectory, isAssistantWorkspace } = usePanel();
+  const { setDashboardPanelOpen, workingDirectory, isAssistantWorkspace, sessionId } = usePanel();
   const { t } = useTranslation();
   const [width, setWidth] = useState(DASHBOARD_DEFAULT_WIDTH);
   const [config, setConfig] = useState<DashboardConfig | null>(null);
@@ -261,100 +262,35 @@ export function DashboardPanel() {
     <div ref={panelRef} className="flex h-full shrink-0 overflow-hidden">
       <ResizeHandle side="left" onResize={handleResize} />
       <div
-        className="flex h-full flex-1 flex-col overflow-hidden border-r border-border/40 bg-background"
+        className="flex h-full flex-1 flex-col overflow-hidden bg-transparent"
         style={{ width }}
       >
-        {/* Header */}
-        <div className="flex h-10 shrink-0 items-center justify-between px-3">
-          <div className="flex items-center gap-2">
-            {isAssistantWorkspace ? (
-              assistantSummary?.buddy ? (
-                <img
-                  src={SPECIES_IMAGE_URL[assistantSummary.buddy.species as Species] || ''}
-                  alt={assistantSummary.buddy.species}
-                  width={24} height={24}
-                  className="rounded"
-                />
-              ) : (
-                <img src={EGG_IMAGE_URL} alt="egg" width={24} height={24} />
-              )
-            ) : null}
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {isAssistantWorkspace
-                ? (assistantSummary?.buddy
-                    ? (assistantSummary.name || t('assistant.defaultName'))
-                    : t('buddy.adoptPrompt'))
-                : t('dashboard.title')}
-            </span>
-          </div>
-          <div className="flex items-center gap-1">
-            {(widgets.length > 0 || isAssistantWorkspace) && (
-              <>
-                {/* Auto-refresh toggle */}
-                <button
-                  onClick={handleToggleAutoRefresh}
-                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <span>{t('dashboard.autoRefreshLabel')}</span>
-                  <span className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full transition-colors ${autoRefresh ? 'bg-primary' : 'bg-muted'}`}>
-                    <span className={`pointer-events-none block h-3 w-3 rounded-full bg-background shadow-sm ring-0 transition-transform mt-0.5 ${autoRefresh ? 'translate-x-3.5 ml-0' : 'translate-x-0.5'}`} />
-                  </span>
-                </button>
-                <div className="h-4 w-px bg-border/60 mx-1" />
-                {/* Refresh all */}
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => {
-                    // Refresh widgets + assistant status
-                    handleRefreshAll();
-                    if (isAssistantWorkspace) {
-                      fetch('/api/workspace/summary')
-                        .then(r => r.ok ? r.json() : null)
-                        .then(data => setAssistantSummary(data))
-                        .catch(() => {});
-                    }
-                  }}
-                  disabled={refreshingAll}
-                  title={t('dashboard.refresh')}
-                >
-                  <ArrowClockwise size={14} className={refreshingAll ? "animate-spin" : ""} />
-                  <span className="sr-only">{t('dashboard.refresh')}</span>
-                </Button>
-              </>
-            )}
-            {/* Close button — always visible */}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setDashboardPanelOpen(false)}
-            >
-              <X size={14} />
-              <span className="sr-only">{t('common.close')}</span>
-            </Button>
-          </div>
-        </div>
-
         {/* Content */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+          {/* Top slot for TaskList and Context Compression */}
+          {sessionId && <div className="border-b border-border/40 mx-4"><TaskList sessionId={sessionId} /></div>}
+          <div className="mx-4" id="dashboard-context-slot" />
+          <div className="mx-4" id="dashboard-memory-slot" />
+          <div className="mx-4" id="dashboard-omc-slot" />
+          <div className="border-b border-border/40 mx-4 shrink-0" />
+          
           {loading ? (
             <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
               {t('common.loading' as TranslationKey)}
             </div>
           ) : widgets.length === 0 ? (
-            <div className="flex flex-col h-full px-3 pt-3">
+            <div className="flex flex-col h-full px-4 pt-4">
               {isAssistantWorkspace && assistantSummary?.configured && (
                 <AssistantStatusCard summary={assistantSummary} t={t} />
               )}
               {!(isAssistantWorkspace && assistantSummary?.configured) && (
-                <div className="flex flex-col items-center justify-center flex-1 text-center text-muted-foreground">
-                  <ChartBar size={32} className="mb-3 opacity-40" />
-                  <p className="text-sm">{t('dashboard.empty')}</p>
+                <div className="flex flex-col items-center justify-center flex-1 text-center text-muted-foreground/60 py-8">
+                  <p className="text-xs">{t('dashboard.empty')}</p>
                 </div>
               )}
             </div>
           ) : (
-            <div className="flex flex-col gap-4 p-3">
+            <div className="flex flex-col gap-4 p-4">
               {/* Assistant status card — always first in assistant workspace */}
               {isAssistantWorkspace && assistantSummary?.configured && (
                 <AssistantStatusCard summary={assistantSummary} t={t} />
@@ -398,16 +334,9 @@ function DashboardWidgetCard({ widget, refreshing, isFirst, isLast, style, onRef
 
   return (
     <div className="group/card relative rounded-lg overflow-hidden" style={style}>
-      {/* Permanent title bar */}
-      <div className="flex items-center justify-between px-2 py-1.5">
-        <button
-          className="text-xs font-medium text-foreground/70 truncate hover:text-foreground transition-colors text-left"
-          onClick={() => window.dispatchEvent(new CustomEvent('dashboard-widget-drilldown', { detail: { title: widget.title, dataContract: widget.dataContract } }))}
-          title={t('dashboard.drilldown')}
-        >
-          {widget.title}
-        </button>
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/card:opacity-100 transition-opacity">
+      {/* Permanent title bar - Removed the text title, but kept the hover actions container */}
+      <div className="absolute top-0 right-0 z-10 px-2 py-1.5 flex justify-end w-full bg-gradient-to-b from-background/50 to-transparent opacity-0 group-hover/card:opacity-100 transition-opacity pointer-events-none">
+        <div className="flex items-center gap-0.5 shrink-0 pointer-events-auto bg-background/80 backdrop-blur rounded-md p-0.5 shadow-sm border border-border/40">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -467,7 +396,6 @@ function DashboardWidgetCard({ widget, refreshing, isFirst, isLast, style, onRef
           </Button>
         </div>
       </div>
-
       {/* Shimmer overlay during refresh */}
       {refreshing && (
         <div className="absolute inset-0 z-5 bg-background/30 backdrop-blur-[1px] flex items-center justify-center">
@@ -625,7 +553,7 @@ function AssistantStatusCard({ summary, t }: {
 
       {/* Evolution progress (when buddy exists and can potentially evolve) */}
       {buddy && buddy.rarity !== 'legendary' && (
-        <div className="border-t border-border/30 pt-2 mt-2">
+        <div className="border-t border-border/40 pt-2 mt-2">
           <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
             <span>{t('buddy.evolutionProgress' as TranslationKey)}</span>
             <span>{t('buddy.nextRarity' as TranslationKey)}: {RARITY_DISPLAY[getNextRarity(buddy.rarity) as keyof typeof RARITY_DISPLAY]?.label.zh}</span>

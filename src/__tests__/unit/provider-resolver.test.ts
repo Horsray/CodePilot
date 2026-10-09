@@ -1,5 +1,8 @@
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import {
   VENDOR_PRESETS,
   inferProtocolFromLegacy,
@@ -31,21 +34,6 @@ describe('Provider Catalog', () => {
       assert.equal(keys.length, unique.size, `Duplicate preset keys found`);
     });
 
-    it('GLM presets use anthropic protocol', () => {
-      const glmPresets = VENDOR_PRESETS.filter(p => p.key.startsWith('glm-'));
-      assert.ok(glmPresets.length >= 2, 'Expected at least 2 GLM presets');
-      for (const p of glmPresets) {
-        assert.equal(p.protocol, 'anthropic', `GLM preset ${p.key} should use anthropic protocol`);
-      }
-    });
-
-    it('Kimi preset uses anthropic protocol with api_key auth', () => {
-      const kimi = VENDOR_PRESETS.find(p => p.key === 'kimi');
-      assert.ok(kimi, 'Kimi preset not found');
-      assert.equal(kimi.protocol, 'anthropic');
-      assert.equal(kimi.authStyle, 'api_key');
-    });
-
     it('MiniMax presets use anthropic protocol', () => {
       const minimax = VENDOR_PRESETS.filter(p => p.key.startsWith('minimax-'));
       assert.ok(minimax.length >= 2, 'Expected at least 2 MiniMax presets');
@@ -54,49 +42,46 @@ describe('Provider Catalog', () => {
       }
     });
 
-    it('Volcengine preset uses anthropic protocol with auth_token', () => {
-      const volc = VENDOR_PRESETS.find(p => p.key === 'volcengine');
-      assert.ok(volc, 'Volcengine preset not found');
-      assert.equal(volc.protocol, 'anthropic');
-      assert.equal(volc.authStyle, 'auth_token');
+    it('MiniMax presets keep search/vision on MCP side instead of direct role models', () => {
+      const minimax = VENDOR_PRESETS.filter(p => p.key.startsWith('minimax-'));
+      assert.ok(minimax.length >= 2, 'Expected at least 2 MiniMax presets');
+      for (const p of minimax) {
+        assert.equal(p.defaultRoleModels?.default, 'MiniMax-M3');
+        assert.equal(p.defaultRoleModels?.sonnet, 'MiniMax-M3');
+        assert.equal(p.defaultRoleModels?.haiku, 'MiniMax-M3');
+      }
     });
 
-    it('Bailian preset uses anthropic protocol', () => {
-      const bailian = VENDOR_PRESETS.find(p => p.key === 'bailian');
-      assert.ok(bailian, 'Bailian preset not found');
-      assert.equal(bailian.protocol, 'anthropic');
+    it('DeepSeek preset uses anthropic protocol with auth_token', () => {
+      const deepseek = VENDOR_PRESETS.find(p => p.key === 'deepseek');
+      assert.ok(deepseek, 'DeepSeek preset not found');
+      assert.equal(deepseek.protocol, 'anthropic');
+      assert.equal(deepseek.authStyle, 'auth_token');
     });
 
-    it('Bedrock preset uses bedrock protocol with env_only auth', () => {
-      const bedrock = VENDOR_PRESETS.find(p => p.key === 'bedrock');
-      assert.ok(bedrock, 'Bedrock preset not found');
-      assert.equal(bedrock.protocol, 'bedrock');
-      assert.equal(bedrock.authStyle, 'env_only');
+    it('MiMo presets use anthropic protocol with lowercase V2.6 model IDs', () => {
+      const mimo = VENDOR_PRESETS.filter(p => p.key.startsWith('xiaomi-mimo'));
+      assert.ok(mimo.length >= 2, 'Expected at least 2 MiMo presets');
+      for (const p of mimo) {
+        assert.equal(p.protocol, 'anthropic', `MiMo preset ${p.key} should use anthropic protocol`);
+        assert.equal(p.authStyle, 'auth_token');
+        for (const m of p.defaultModels) {
+          assert.equal(m.modelId, m.modelId.toLowerCase(), `MiMo model ${m.modelId} must be lowercase (API requires it)`);
+        }
+      }
     });
 
-    it('Vertex preset uses vertex protocol with env_only auth', () => {
-      const vertex = VENDOR_PRESETS.find(p => p.key === 'vertex');
-      assert.ok(vertex, 'Vertex preset not found');
-      assert.equal(vertex.protocol, 'vertex');
-      assert.equal(vertex.authStyle, 'env_only');
-    });
-
-    it('OpenRouter preset uses openrouter protocol', () => {
-      const or = VENDOR_PRESETS.find(p => p.key === 'openrouter');
-      assert.ok(or, 'OpenRouter preset not found');
-      assert.equal(or.protocol, 'openrouter');
+    it('BananaRouter preset uses openai-compatible protocol with api_key auth', () => {
+      const banana = VENDOR_PRESETS.find(p => p.key === 'bananarouter');
+      assert.ok(banana, 'BananaRouter preset not found');
+      assert.equal(banana.protocol, 'openai-compatible');
+      assert.equal(banana.authStyle, 'api_key');
+      assert.equal(banana.baseUrl, 'https://api.bananarouter.com/v1');
     });
 
     it('custom-openai preset has been removed', () => {
       const custom = VENDOR_PRESETS.find(p => p.key === 'custom-openai');
       assert.equal(custom, undefined, 'custom-openai preset should not exist');
-    });
-
-    it('anthropic-thirdparty preset uses anthropic protocol and has env_overrides field', () => {
-      const preset = VENDOR_PRESETS.find(p => p.key === 'anthropic-thirdparty');
-      assert.ok(preset, 'anthropic-thirdparty preset not found');
-      assert.equal(preset.protocol, 'anthropic');
-      assert.ok(preset.fields.includes('env_overrides'), 'should expose env_overrides field');
     });
   });
 
@@ -152,6 +137,11 @@ describe('Provider Catalog', () => {
       assert.equal(inferProtocolFromLegacy('custom', 'https://my-server.example.com/v1'), 'anthropic');
     });
 
+    it('custom type + oLMX localhost url → anthropic protocol', () => {
+      assert.equal(inferProtocolFromLegacy('custom', 'http://127.0.0.1:8000'), 'anthropic');
+      assert.equal(inferProtocolFromLegacy('custom', 'http://127.0.0.1:8000/v1'), 'anthropic');
+    });
+
     it('custom type + URL containing /anthropic → anthropic protocol', () => {
       assert.equal(inferProtocolFromLegacy('custom', 'https://proxy.example.com/anthropic'), 'anthropic');
     });
@@ -186,16 +176,10 @@ describe('Provider Catalog', () => {
   });
 
   describe('getDefaultModelsForProvider', () => {
-    it('anthropic protocol with GLM CN url returns GLM models', () => {
-      const models = getDefaultModelsForProvider('anthropic', 'https://open.bigmodel.cn/api/anthropic');
+    it('anthropic protocol with MiniMax url returns MiniMax-M3 models', () => {
+      const models = getDefaultModelsForProvider('anthropic', 'https://api.minimaxi.com/anthropic');
       assert.ok(models.length > 0);
-      assert.ok(models.some(m => m.displayName.includes('GLM')));
-    });
-
-    it('anthropic protocol with Bailian url returns Bailian models', () => {
-      const models = getDefaultModelsForProvider('anthropic', 'https://coding.dashscope.aliyuncs.com/apps/anthropic');
-      assert.ok(models.length > 0);
-      assert.ok(models.some(m => m.displayName.includes('Qwen')));
+      assert.ok(models.some(m => m.modelId === 'MiniMax-M3'));
     });
 
     it('anthropic protocol with unknown url returns default Anthropic models', () => {
@@ -214,39 +198,80 @@ describe('Provider Catalog', () => {
       const models = getDefaultModelsForProvider('openai-compatible', 'https://example.com/v1');
       assert.equal(models.length, 0);
     });
+
+    it('openai-compatible protocol with BananaRouter url returns empty (user-specified model_names)', () => {
+      // BananaRouter has no hardcoded defaultModels — user must specify via model_names
+      const models = getDefaultModelsForProvider('openai-compatible', 'https://api.bananarouter.com/v1');
+      assert.equal(models.length, 0);
+    });
   });
 
   describe('findPresetForLegacy', () => {
-    it('finds bedrock preset by type', () => {
-      const preset = findPresetForLegacy('', 'bedrock');
+    it('finds MiniMax CN preset by base_url', () => {
+      const preset = findPresetForLegacy('https://api.minimaxi.com/anthropic', 'custom');
       assert.ok(preset);
-      assert.equal(preset.key, 'bedrock');
+      assert.equal(preset.key, 'minimax-cn');
     });
 
-    it('finds GLM preset by base_url', () => {
-      const preset = findPresetForLegacy('https://open.bigmodel.cn/api/anthropic', 'custom');
+    it('finds DeepSeek preset by base_url', () => {
+      const preset = findPresetForLegacy('https://api.deepseek.com/anthropic', 'custom');
       assert.ok(preset);
-      assert.equal(preset.key, 'glm-cn');
+      assert.equal(preset.key, 'deepseek');
     });
 
-    it('finds Kimi preset by base_url', () => {
-      const preset = findPresetForLegacy('https://api.kimi.com/coding/', 'custom');
+    it('finds MiMo preset by base_url', () => {
+      const preset = findPresetForLegacy('https://api.xiaomimimo.com/anthropic', 'custom');
       assert.ok(preset);
-      assert.equal(preset.key, 'kimi');
+      assert.equal(preset.key, 'xiaomi-mimo');
     });
 
-    it('finds anthropic-official by base_url + type', () => {
-      const preset = findPresetForLegacy('https://api.anthropic.com', 'anthropic');
+    it('finds BananaRouter preset by base_url with openai-compatible protocol', () => {
+      const preset = findPresetForLegacy('https://api.bananarouter.com/v1', 'custom', 'openai-compatible');
       assert.ok(preset);
-      assert.equal(preset.key, 'anthropic-official');
+      assert.equal(preset.key, 'bananarouter');
+    });
+
+    it('finds gemini-image media preset by type', () => {
+      const preset = findPresetForLegacy('', 'gemini-image');
+      assert.ok(preset);
+      assert.equal(preset.key, 'gemini-image');
     });
   });
 });
 
 // ── Provider Resolver Tests ─────────────────────────────────────
 
-import { resolveProvider, toClaudeCodeEnv, toAiSdkConfig } from '../../lib/provider-resolver';
-import type { ResolvedProvider } from '../../lib/provider-resolver';
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-provider-resolver-db-'));
+process.env.CLAUDE_GUI_DATA_DIR = dataDir;
+
+let closeDb: typeof import('../../lib/db').closeDb;
+let getSetting: typeof import('../../lib/db').getSetting;
+let setSetting: typeof import('../../lib/db').setSetting;
+let createProvider: typeof import('../../lib/db').createProvider;
+let deleteProvider: typeof import('../../lib/db').deleteProvider;
+let upsertProviderModel: typeof import('../../lib/db').upsertProviderModel;
+let resolveProvider: typeof import('../../lib/provider-resolver').resolveProvider;
+let toClaudeCodeEnv: typeof import('../../lib/provider-resolver').toClaudeCodeEnv;
+let toAiSdkConfig: typeof import('../../lib/provider-resolver').toAiSdkConfig;
+let routeAuxiliaryModel: typeof import('../../lib/provider-resolver').routeAuxiliaryModel;
+
+before(async () => {
+  const db = await import('../../lib/db');
+  closeDb = db.closeDb;
+  getSetting = db.getSetting;
+  setSetting = db.setSetting;
+  createProvider = db.createProvider;
+  deleteProvider = db.deleteProvider;
+  upsertProviderModel = db.upsertProviderModel;
+
+  const pr = await import('../../lib/provider-resolver');
+  resolveProvider = pr.resolveProvider;
+  toClaudeCodeEnv = pr.toClaudeCodeEnv;
+  toAiSdkConfig = pr.toAiSdkConfig;
+  routeAuxiliaryModel = pr.routeAuxiliaryModel;
+});
+
+type ResolvedProvider = import('../../lib/provider-resolver').ResolvedProvider;
 
 describe('Provider Resolver', () => {
   describe('resolveProvider', () => {
@@ -254,6 +279,9 @@ describe('Provider Resolver', () => {
       const resolved = resolveProvider({ providerId: 'env' });
       assert.equal(resolved.provider, undefined);
       assert.equal(resolved.protocol, 'anthropic');
+      // Env mode always enables full capabilities (CLAUDE.md, skills, hooks, OMC)
+      // to match the CLI experience, regardless of whether credentials come
+      // from shell env or ~/.claude/settings.json.
       assert.deepEqual(resolved.settingSources, ['user', 'project', 'local']);
     });
 
@@ -262,6 +290,111 @@ describe('Provider Resolver', () => {
       const resolved = resolveProvider({});
       // provider may be undefined or the default — depends on DB state
       assert.equal(resolved.protocol, 'anthropic');
+    });
+  });
+
+  describe('routeAuxiliaryModel', () => {
+    const baseMain: ResolvedProvider = {
+      provider: {
+        id: 'main-provider',
+        name: 'Main',
+        provider_type: 'anthropic',
+        protocol: 'anthropic',
+        base_url: 'https://api.example.com',
+        api_key: 'key',
+        is_active: 1,
+        sort_order: 0,
+        extra_env: '{}',
+        headers_json: '{}',
+        env_overrides_json: '',
+        role_models_json: '{}',
+        notes: '',
+        created_at: '',
+        updated_at: '',
+        options_json: '{}',
+      },
+      protocol: 'anthropic',
+      authStyle: 'api_key',
+      model: 'sonnet',
+      modelDisplayName: 'Sonnet',
+      upstreamModel: 'sonnet',
+      headers: {},
+      envOverrides: {},
+      roleModels: {},
+      hasCredentials: true,
+      availableModels: [],
+      settingSources: ['project', 'local'],
+    };
+
+    it('prefers explicit env override first', () => {
+      const resolved = routeAuxiliaryModel('compact', {
+        main: {
+          ...baseMain,
+          roleModels: { small: 'main-small', haiku: 'main-haiku' },
+        },
+        isMainSdkProxyOnly: false,
+        others: [],
+        envOverride: {
+          providerId: 'override-provider',
+          modelId: 'override-model',
+        },
+      });
+
+      assert.deepEqual(resolved, {
+        providerId: 'override-provider',
+        modelId: 'override-model',
+        source: 'env_override',
+      });
+    });
+
+    it('prefers main provider small model before other fallbacks', () => {
+      const resolved = routeAuxiliaryModel('compact', {
+        main: {
+          ...baseMain,
+          roleModels: { small: 'main-small', haiku: 'main-haiku' },
+        },
+        isMainSdkProxyOnly: false,
+        others: [
+          { id: 'other-provider', roleModels: { small: 'other-small' }, isSdkProxyOnly: false },
+        ],
+      });
+
+      assert.equal(resolved.providerId, 'main-provider');
+      assert.equal(resolved.modelId, 'main-small');
+      assert.equal(resolved.source, 'main_small');
+    });
+
+    it('falls back to another provider small model when main is sdk-proxy-only', () => {
+      const resolved = routeAuxiliaryModel('compact', {
+        main: {
+          ...baseMain,
+          roleModels: { small: 'main-small', haiku: 'main-haiku' },
+        },
+        isMainSdkProxyOnly: true,
+        others: [
+          { id: 'other-provider', roleModels: { small: 'other-small' }, isSdkProxyOnly: false },
+        ],
+      });
+
+      assert.equal(resolved.providerId, 'other-provider');
+      assert.equal(resolved.modelId, 'other-small');
+      assert.equal(resolved.source, 'fallback_provider_small');
+    });
+
+    it('falls back to main floor model when no small or haiku route exists', () => {
+      const resolved = routeAuxiliaryModel('compact', {
+        main: {
+          ...baseMain,
+          roleModels: {},
+          upstreamModel: 'main-upstream',
+        },
+        isMainSdkProxyOnly: false,
+        others: [],
+      });
+
+      assert.equal(resolved.providerId, 'main-provider');
+      assert.equal(resolved.modelId, 'main-upstream');
+      assert.equal(resolved.source, 'main_floor');
     });
   });
 
@@ -295,7 +428,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const env = toClaudeCodeEnv({ PATH: '/usr/bin' }, resolved);
@@ -335,7 +468,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const env = toClaudeCodeEnv({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'old-key' }, resolved);
@@ -377,7 +510,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const env = toClaudeCodeEnv({ PATH: '/usr/bin', SOME_CUSTOM_VAR: 'old' }, resolved);
@@ -420,7 +553,7 @@ describe('Provider Resolver', () => {
         },
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const env = toClaudeCodeEnv({}, resolved);
@@ -473,7 +606,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved);
@@ -502,7 +635,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved);
@@ -532,7 +665,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved);
@@ -561,7 +694,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved);
@@ -587,7 +720,7 @@ describe('Provider Resolver', () => {
         roleModels: {},
         hasCredentials: true,
         availableModels: [],
-        settingSources: ['project', 'local'],
+        settingSources: ['user'],
       };
 
       const config = toAiSdkConfig(resolved, 'opus');
@@ -621,6 +754,15 @@ describe('Provider Resolver', () => {
       assert.equal(config.apiKey, 'gkey');
     });
   });
+});
+
+after(() => {
+  try {
+    closeDb();
+  } catch {}
+  try {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  } catch {}
 });
 
 // ── Entry Point Consistency Tests ───────────────────────────────
@@ -957,8 +1099,6 @@ describe('Entry Point Resolution Contract', () => {
 
 // ── Global Default Model Tests ──────────────────────────────────
 
-import { getSetting, setSetting } from '../../lib/db';
-
 describe('Global Default Model', () => {
   // Save and restore settings around each test
   let savedModel: string | null | undefined;
@@ -1033,8 +1173,6 @@ describe('Global Default Model', () => {
 
   it('DB provider uses global default model when it belongs to that provider', () => {
     setup();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic import in test to avoid top-level side effects
-const { createProvider, deleteProvider } = require('../../lib/db');
     const provider = createProvider({
       name: '__test_global_default__',
       provider_type: 'anthropic',
@@ -1054,10 +1192,30 @@ const { createProvider, deleteProvider } = require('../../lib/db');
     }
   });
 
+  it('merges catalog vision capability into a persisted model that has no capability metadata', () => {
+    setup();
+    const provider = createProvider({
+      name: '__test_mimo_capability_merge__',
+      provider_type: 'anthropic',
+      base_url: 'https://api.xiaomimimo.com/anthropic',
+      api_key: 'test-key',
+    });
+    try {
+      upsertProviderModel({
+        provider_id: provider.id,
+        model_id: 'mimo-v2.6-flash',
+        capabilities_json: '{}',
+      });
+      const resolved = resolveProvider({ providerId: provider.id, model: 'mimo-v2.6-flash' });
+      assert.equal(resolved.availableModels.find(m => m.modelId === 'mimo-v2.6-flash')?.capabilities?.vision, true);
+    } finally {
+      deleteProvider(provider.id);
+      teardown();
+    }
+  });
+
   it('DB provider ignores global default model when it belongs to a different provider', () => {
     setup();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic import in test to avoid top-level side effects
-const { createProvider, deleteProvider } = require('../../lib/db');
     const provider = createProvider({
       name: '__test_global_default_cross__',
       provider_type: 'anthropic',
@@ -1083,8 +1241,6 @@ const { createProvider, deleteProvider } = require('../../lib/db');
 
   it('DB provider: session model overrides global default even when provider matches', () => {
     setup();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic import in test to avoid top-level side effects
-const { createProvider, deleteProvider } = require('../../lib/db');
     const provider = createProvider({
       name: '__test_global_default_session__',
       provider_type: 'anthropic',
@@ -1101,6 +1257,641 @@ const { createProvider, deleteProvider } = require('../../lib/db');
     } finally {
       deleteProvider(provider.id);
       teardown();
+    }
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// routeAuxiliaryModel — pure function tests
+// ────────────────────────────────────────────────────────────────
+
+describe('routeAuxiliaryModel (pure routing)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { routeAuxiliaryModel } = require('../../lib/provider-resolver');
+
+  // Helper: build a minimal ResolvedProvider for testing
+  function mockMain(opts: {
+    id?: string;
+    roleModels?: { small?: string; haiku?: string; default?: string };
+    model?: string;
+    upstreamModel?: string;
+    envMode?: boolean;
+  }): ResolvedProvider {
+    const roleModels = opts.roleModels || {};
+    if (opts.envMode) {
+      return {
+        provider: undefined,
+        protocol: 'anthropic',
+        authStyle: 'api_key',
+        model: opts.model,
+        upstreamModel: opts.upstreamModel,
+        modelDisplayName: undefined,
+        headers: {},
+        envOverrides: {},
+        roleModels,
+        hasCredentials: false,
+        availableModels: [],
+        settingSources: ['project', 'local'],
+      };
+    }
+    return {
+      provider: {
+        id: opts.id || 'main-prov',
+        name: 'Test Main',
+        provider_type: 'anthropic',
+        protocol: 'anthropic',
+        base_url: 'https://api.anthropic.com',
+        api_key: 'sk-test',
+        is_active: 1,
+        sort_order: 0,
+        extra_env: '{}',
+        headers_json: '{}',
+        env_overrides_json: '',
+        role_models_json: JSON.stringify(roleModels),
+        notes: '',
+        created_at: '',
+        updated_at: '', options_json: '{}',
+      },
+      protocol: 'anthropic',
+      authStyle: 'api_key',
+      model: opts.model || 'claude-sonnet-4-6',
+      upstreamModel: opts.upstreamModel || opts.model || 'claude-sonnet-4-6',
+      modelDisplayName: undefined,
+      headers: {},
+      envOverrides: {},
+      roleModels,
+      hasCredentials: true,
+      availableModels: [],
+      settingSources: ['project', 'local'],
+    };
+  }
+
+  describe('Tier 1 — env override', () => {
+    it('env override with both provider and model wins everything', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ roleModels: { small: 'haiku-4.5' } }),
+        isMainSdkProxyOnly: false,
+        others: [],
+        envOverride: { providerId: 'custom-prov', modelId: 'custom-model' },
+      });
+      assert.equal(result.providerId, 'custom-prov');
+      assert.equal(result.modelId, 'custom-model');
+      assert.equal(result.source, 'env_override');
+    });
+
+    it('env override missing modelId does NOT apply (needs both)', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ roleModels: { small: 'haiku-4.5' } }),
+        isMainSdkProxyOnly: false,
+        others: [],
+        envOverride: { providerId: 'custom-prov' }, // missing modelId
+      });
+      assert.equal(result.source, 'main_small');
+      assert.equal(result.modelId, 'haiku-4.5');
+    });
+
+    it('env override missing providerId does NOT apply', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ roleModels: { small: 'haiku-4.5' } }),
+        isMainSdkProxyOnly: false,
+        others: [],
+        envOverride: { modelId: 'custom-model' }, // missing providerId
+      });
+      assert.equal(result.source, 'main_small');
+    });
+  });
+
+  describe('Tier 2 — main provider small slot', () => {
+    it('main small slot is preferred when main is not sdkProxyOnly', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ roleModels: { small: 'haiku-4.5', haiku: 'haiku-4.5-alt' } }),
+        isMainSdkProxyOnly: false,
+        others: [],
+      });
+      assert.equal(result.source, 'main_small');
+      assert.equal(result.modelId, 'haiku-4.5');
+    });
+
+    it('main small slot is SKIPPED when main is sdkProxyOnly', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ id: 'kimi', roleModels: { small: 'kimi-small' } }),
+        isMainSdkProxyOnly: true,
+        others: [],
+      });
+      // falls through to main_floor since no other providers
+      assert.equal(result.source, 'main_floor');
+      assert.equal(result.providerId, 'kimi');
+    });
+  });
+
+  describe('Tier 3 — main provider haiku slot', () => {
+    it('main haiku used when small is absent', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ roleModels: { haiku: 'haiku-only' } }),
+        isMainSdkProxyOnly: false,
+        others: [],
+      });
+      assert.equal(result.source, 'main_haiku');
+      assert.equal(result.modelId, 'haiku-only');
+    });
+  });
+
+  describe('Tier 4 — fallback provider', () => {
+    it('fallback provider small used when main is sdkProxyOnly', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ id: 'kimi', roleModels: { small: 'kimi-small' } }),
+        isMainSdkProxyOnly: true,
+        others: [
+          {
+            id: 'anthropic',
+            roleModels: { small: 'claude-haiku-4-5' },
+            isSdkProxyOnly: false,
+          },
+        ],
+      });
+      assert.equal(result.source, 'fallback_provider_small');
+      assert.equal(result.providerId, 'anthropic');
+      assert.equal(result.modelId, 'claude-haiku-4-5');
+    });
+
+    it('fallback provider haiku used when no small anywhere', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ id: 'kimi', roleModels: {} }),
+        isMainSdkProxyOnly: true,
+        others: [
+          {
+            id: 'anthropic',
+            roleModels: { haiku: 'claude-haiku-4-5' },
+            isSdkProxyOnly: false,
+          },
+        ],
+      });
+      assert.equal(result.source, 'fallback_provider_haiku');
+      assert.equal(result.providerId, 'anthropic');
+    });
+
+    it('fallback skips other providers that are also sdkProxyOnly', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ id: 'kimi', roleModels: {} }),
+        isMainSdkProxyOnly: true,
+        others: [
+          {
+            id: 'glm',
+            roleModels: { small: 'glm-air' },
+            isSdkProxyOnly: true, // skipped
+          },
+          {
+            id: 'anthropic',
+            roleModels: { small: 'claude-haiku-4-5' },
+            isSdkProxyOnly: false,
+          },
+        ],
+      });
+      assert.equal(result.source, 'fallback_provider_small');
+      assert.equal(result.providerId, 'anthropic');
+    });
+  });
+
+  describe('Tier 5 — main floor (ultimate fallback)', () => {
+    it('falls back to main + main model when no small/haiku anywhere', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({
+          id: 'main',
+          roleModels: {},
+          model: 'main-model',
+          upstreamModel: 'upstream-main-model',
+        }),
+        isMainSdkProxyOnly: false,
+        others: [],
+      });
+      assert.equal(result.source, 'main_floor');
+      assert.equal(result.providerId, 'main');
+      // upstreamModel is preferred over model when both are set
+      assert.equal(result.modelId, 'upstream-main-model');
+    });
+
+    it('falls back to main_floor when all other providers are sdkProxyOnly', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ id: 'main-kimi', roleModels: {} }),
+        isMainSdkProxyOnly: true,
+        others: [
+          { id: 'glm', roleModels: { small: 'glm' }, isSdkProxyOnly: true },
+          { id: 'minimax', roleModels: { small: 'minimax' }, isSdkProxyOnly: true },
+        ],
+      });
+      assert.equal(result.source, 'main_floor');
+      assert.equal(result.providerId, 'main-kimi');
+    });
+
+    it('env mode with undefined provider still returns main_floor with providerId=env', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ envMode: true, roleModels: {}, upstreamModel: 'env-model' }),
+        isMainSdkProxyOnly: false,
+        others: [],
+      });
+      assert.equal(result.source, 'main_floor');
+      assert.equal(result.providerId, 'env');
+      assert.equal(result.modelId, 'env-model');
+    });
+
+    it('never returns null/undefined modelId (empty string fallback)', () => {
+      const result = routeAuxiliaryModel('compact', {
+        main: mockMain({ envMode: true, roleModels: {} }),
+        isMainSdkProxyOnly: false,
+        others: [],
+      });
+      assert.equal(result.source, 'main_floor');
+      assert.equal(typeof result.modelId, 'string');
+    });
+  });
+
+  describe('task parameter', () => {
+    it('task parameter does not affect routing for the same ctx', () => {
+      const ctx = {
+        main: mockMain({ roleModels: { small: 'haiku-4.5' } }),
+        isMainSdkProxyOnly: false,
+        others: [],
+      };
+      const compact = routeAuxiliaryModel('compact', ctx);
+      const vision = routeAuxiliaryModel('vision', ctx);
+      const summarize = routeAuxiliaryModel('summarize', ctx);
+      const webExtract = routeAuxiliaryModel('web_extract', ctx);
+      assert.equal(compact.modelId, 'haiku-4.5');
+      assert.equal(vision.modelId, 'haiku-4.5');
+      assert.equal(summarize.modelId, 'haiku-4.5');
+      assert.equal(webExtract.modelId, 'haiku-4.5');
+    });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// resolveAuxiliaryModel — integration with real DB state
+// ────────────────────────────────────────────────────────────────
+
+describe('resolveAuxiliaryModel (live wrapper)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { resolveAuxiliaryModel } = require('../../lib/provider-resolver');
+
+  it('returns a well-formed result without throwing', () => {
+    const result = resolveAuxiliaryModel('compact');
+    assert.ok(result);
+    assert.equal(typeof result.providerId, 'string');
+    assert.equal(typeof result.modelId, 'string');
+    assert.ok(
+      ['env_override', 'main_small', 'main_haiku', 'fallback_provider_small',
+       'fallback_provider_haiku', 'main_floor'].includes(result.source),
+      `unexpected source: ${result.source}`,
+    );
+  });
+
+  it('env override applies when AUXILIARY_COMPACT_PROVIDER+MODEL are set', () => {
+    process.env.AUXILIARY_COMPACT_PROVIDER = 'test-prov';
+    process.env.AUXILIARY_COMPACT_MODEL = 'test-model';
+    try {
+      const result = resolveAuxiliaryModel('compact');
+      assert.equal(result.source, 'env_override');
+      assert.equal(result.providerId, 'test-prov');
+      assert.equal(result.modelId, 'test-model');
+    } finally {
+      delete process.env.AUXILIARY_COMPACT_PROVIDER;
+      delete process.env.AUXILIARY_COMPACT_MODEL;
+    }
+  });
+
+  it('each task type reads its own env var (AUXILIARY_<TASK>_*)', () => {
+    process.env.AUXILIARY_VISION_PROVIDER = 'vision-prov';
+    process.env.AUXILIARY_VISION_MODEL = 'vision-model';
+    try {
+      const vision = resolveAuxiliaryModel('vision');
+      assert.equal(vision.source, 'env_override');
+      assert.equal(vision.modelId, 'vision-model');
+
+      // compact should NOT pick up vision env vars
+      const compact = resolveAuxiliaryModel('compact');
+      assert.notEqual(compact.source, 'env_override');
+    } finally {
+      delete process.env.AUXILIARY_VISION_PROVIDER;
+      delete process.env.AUXILIARY_VISION_MODEL;
+    }
+  });
+
+  // ───────────────────────────────────────────────────────────
+  // Regression tests for Codex review 2026-04-12
+  // ───────────────────────────────────────────────────────────
+
+  // ─ Codex review round 2: tighten Fix 1 and Fix 2 regression tests ─
+  //
+  // Previous assertions were too loose — they would have accepted the
+  // pre-fix behavior. These rewrites explicitly reject the pre-fix
+  // outcomes and pin the post-fix semantics.
+
+  it('[fix 1 P1 strict] session providerId wins over the global default — source discriminator', () => {
+    // Pre-fix behavior: resolveAuxiliaryModel() called resolveProvider()
+    // with NO arguments → picked the global default as "main" → returned
+    // source='main_small' pointing at the DEFAULT provider's small slot.
+    //
+    // Post-fix behavior: opts.providerId is forwarded, so the SESSION
+    // provider becomes "main". If the session provider has no small/haiku,
+    // the global default (if it has small/haiku) becomes a TIER-4 FALLBACK,
+    // producing source='fallback_provider_small' — a different enum value.
+    //
+    // The `source` field is the unambiguous discriminator. Asserting
+    // source !== 'main_small' catches the exact pre-fix regression.
+
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const {
+      createProvider,
+      deleteProvider,
+      getSetting,
+      setSetting,
+    } = require('../../lib/db');
+    /* eslint-enable @typescript-eslint/no-require-imports */
+
+    const savedDefaultId = getSetting('default_provider_id') || '';
+
+    const globalDefault = createProvider({
+      name: '__test_aux_globalDefault__',
+      provider_type: 'anthropic',
+      base_url: 'https://api.anthropic.com',
+      api_key: 'sk-global',
+      role_models_json: JSON.stringify({
+        default: 'global-default-model',
+        small: 'global-small-slot',
+      }),
+    });
+    const session = createProvider({
+      name: '__test_aux_session__',
+      provider_type: 'anthropic',
+      base_url: 'https://api.anthropic.com',
+      api_key: 'sk-session',
+      // Intentionally NO small/haiku — forces tier-4 or main_floor
+      role_models_json: JSON.stringify({ default: 'session-default-model' }),
+    });
+    setSetting('default_provider_id', globalDefault.id);
+
+    try {
+      const result = resolveAuxiliaryModel('compact', { providerId: session.id });
+
+      // Strict assertion on `source` — the unambiguous discriminator.
+      //
+      // Pre-fix semantics: globalDefault is resolved as "main" (because
+      // resolveProvider() with no opts reads default_provider_id), so its
+      // small slot matches tier 2 → source='main_small'.
+      //
+      // Post-fix semantics: `session` is resolved as "main" because opts
+      // is forwarded. `session` has no small/haiku, so tier 2/3 are
+      // skipped. Tier 4 may or may not find a fallback provider
+      // depending on other DB state, but regardless, source will be one
+      // of [fallback_provider_small, fallback_provider_haiku, main_floor]
+      // — NEVER main_small/main_haiku (because `session` explicitly
+      // lacks those slots).
+      //
+      // This assertion catches the exact pre-fix regression: if session
+      // context is ignored and globalDefault becomes main, source would
+      // be main_small/main_haiku, which we now reject.
+      assert.notEqual(
+        result.source,
+        'main_small',
+        'Regression: source=main_small means the session providerId was ignored and the global default was resolved as main',
+      );
+      assert.notEqual(
+        result.source,
+        'main_haiku',
+        'Regression: source=main_haiku means the session providerId was ignored',
+      );
+      assert.ok(
+        ['fallback_provider_small', 'fallback_provider_haiku', 'main_floor'].includes(result.source),
+        `Expected fallback/floor tier, got source=${result.source}`,
+      );
+
+      // If the returned source is main_floor, providerId MUST be session
+      // (because main_floor by definition uses the main provider). Any
+      // other ID in main_floor would indicate the session context was
+      // dropped somewhere in the routing.
+      if (result.source === 'main_floor') {
+        assert.equal(
+          result.providerId,
+          session.id,
+          'main_floor should bind to the session provider, not the global default',
+        );
+      }
+    } finally {
+      setSetting('default_provider_id', savedDefaultId);
+      deleteProvider(session.id);
+      deleteProvider(globalDefault.id);
+    }
+  });
+
+  it('[regression] stale invalid protocol in another provider does not crash tier-4 fallback scan', () => {
+    // A DB row with an invalid raw protocol string (e.g. migrated from an
+    // older schema, imported from a broken export, or created before the
+    // write-path validation landed) must not poison the "other providers"
+    // enumeration in resolveAuxiliaryModel. Before the effective-protocol
+    // fix the enum would pass 'random-garbage' straight to
+    // findPresetForLegacy and computeEffectiveRoleModels, producing
+    // inconsistent downstream routing between main and auxiliary paths.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createProvider, deleteProvider } = require('../../lib/db');
+
+    // Main provider — intentionally no small/haiku slots so the resolver
+    // must walk past tier-2/3 and into the tier-4 scan where the broken
+    // provider would be evaluated.
+    const main = createProvider({
+      name: '__test_aux_main_no_small__',
+      provider_type: 'anthropic',
+      base_url: 'https://api.anthropic.com',
+      api_key: 'sk-main',
+      role_models_json: JSON.stringify({ default: 'opus' }),
+    });
+
+    // Broken provider with an unknown protocol string. provider_type is
+    // anthropic so the effective-protocol helper can still infer something
+    // sensible; the broken value just shouldn't propagate.
+    const broken = createProvider({
+      name: '__test_aux_invalid_protocol__',
+      provider_type: 'anthropic',
+      protocol: 'random-garbage',
+      base_url: 'https://api.anthropic.com',
+      api_key: 'sk-broken',
+      role_models_json: JSON.stringify({ default: 'opus', small: 'broken-small' }),
+    });
+
+    try {
+      // Must not throw. We don't pin the exact source because it depends
+      // on DB state from parallel tests — but the call has to survive and
+      // yield a valid routing.
+      const result = resolveAuxiliaryModel('compact', { providerId: main.id });
+      assert.ok(result);
+      assert.ok(
+        ['env_override', 'main_small', 'main_haiku', 'fallback_provider_small',
+         'fallback_provider_haiku', 'main_floor'].includes(result.source),
+        `unexpected source: ${result.source}`,
+      );
+    } finally {
+      deleteProvider(main.id);
+      deleteProvider(broken.id);
+    }
+  });
+
+  it('[fix 1 P1] explicit providerId with small slot IS returned as main_small (positive case)', () => {
+    // Positive-case companion: the explicit providerId has a small slot,
+    // so the result MUST be main_small + that provider's slot. This
+    // catches a regression where session providerId is ignored and we
+    // return some other provider's slot.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createProvider, deleteProvider } = require('../../lib/db');
+    const explicit = createProvider({
+      name: '__test_aux_explicit__',
+      provider_type: 'anthropic',
+      base_url: 'https://api.anthropic.com',
+      api_key: 'sk-explicit',
+      role_models_json: JSON.stringify({
+        default: 'opus-foo',
+        small: 'explicit-small-unique-marker',
+      }),
+    });
+    try {
+      const result = resolveAuxiliaryModel('compact', { providerId: explicit.id });
+      assert.equal(result.source, 'main_small');
+      assert.equal(result.providerId, explicit.id);
+      assert.equal(result.modelId, 'explicit-small-unique-marker');
+    } finally {
+      deleteProvider(explicit.id);
+    }
+  });
+
+  it('[fix 2 P2 strict] computeEffectiveRoleModels merges preset.defaultRoleModels when json is empty', () => {
+    // The tier-4 scan previously only read role_models_json, missing
+    // preset-backed defaultRoleModels. The fix extracted this helper
+    // from buildResolution's merge logic (provider-resolver.ts:664-675).
+    //
+    // We test the helper directly because:
+    //   - No non-sdkProxyOnly preset in the catalog currently sets
+    //     defaultRoleModels (only MiniMax/MiMo set it, all sdkProxyOnly),
+    //     so a live end-to-end scenario is impossible with the real catalog
+    //   - The merge rule is simple enough that direct unit testing gives
+    //     the strongest possible contract lock
+    //   - A synthetic preset fixture lets us cover the exact branches:
+    //     (a) empty json + preset defaults → merged
+    //     (b) json with slots → json wins
+    //     (c) no preset → empty json stays empty
+    //     (d) json default/sonnet present → merge suppressed (guard)
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { computeEffectiveRoleModels } = require('../../lib/provider-resolver');
+
+    const makeProvider = (json: string) => ({
+      id: 'p',
+      name: 'Test',
+      provider_type: 'anthropic',
+      protocol: 'anthropic',
+      base_url: 'https://example.com',
+      api_key: 'k',
+      is_active: 1,
+      sort_order: 0,
+      extra_env: '{}',
+      headers_json: '{}',
+      env_overrides_json: '',
+      role_models_json: json,
+      notes: '',
+      created_at: '',
+      updated_at: '',
+      options_json: '{}',
+    });
+
+    // Minimal preset fixture — computeEffectiveRoleModels only reads
+    // .defaultRoleModels on the preset, so we don't need the full shape.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mockPresetWithDefaults: any = {
+      key: 'test-preset',
+      defaultRoleModels: { small: 'preset-small', haiku: 'preset-haiku' },
+    };
+
+    // (a) empty json + preset defaults → merged
+    const empty = computeEffectiveRoleModels(
+      makeProvider(JSON.stringify({})),
+      mockPresetWithDefaults,
+      'anthropic',
+    );
+    assert.equal(empty.small, 'preset-small', 'empty json should inherit preset small');
+    assert.equal(empty.haiku, 'preset-haiku', 'empty json should inherit preset haiku');
+
+    // (b) json with its own slots → json values win (spread order in fix)
+    const withOwn = computeEffectiveRoleModels(
+      makeProvider(JSON.stringify({ small: 'own-small' })),
+      mockPresetWithDefaults,
+      'anthropic',
+    );
+    // The current guard only merges when !default && !sonnet; json already
+    // has no default/sonnet, so merge fires, then json.small overrides
+    // preset.small via spread order.
+    assert.equal(withOwn.small, 'own-small', 'own json small should win over preset small');
+    assert.equal(withOwn.haiku, 'preset-haiku', 'preset haiku should still be inherited');
+
+    // (c) no preset → empty json stays empty
+    const noPreset = computeEffectiveRoleModels(
+      makeProvider(JSON.stringify({})),
+      undefined,
+      'anthropic',
+    );
+    assert.deepEqual(noPreset, {}, 'no preset means nothing to merge');
+
+    // (d) json.default is present → merge guard suppresses preset injection
+    const withDefault = computeEffectiveRoleModels(
+      makeProvider(JSON.stringify({ default: 'own-default' })),
+      mockPresetWithDefaults,
+      'anthropic',
+    );
+    assert.equal(withDefault.default, 'own-default');
+    assert.equal(withDefault.small, undefined, 'preset merge should be suppressed when json.default exists');
+    assert.equal(withDefault.haiku, undefined);
+
+    // (e) json.sonnet is present → same guard
+    const withSonnet = computeEffectiveRoleModels(
+      makeProvider(JSON.stringify({ sonnet: 'own-sonnet' })),
+      mockPresetWithDefaults,
+      'anthropic',
+    );
+    assert.equal(withSonnet.sonnet, 'own-sonnet');
+    assert.equal(withSonnet.small, undefined);
+    assert.equal(withSonnet.haiku, undefined);
+  });
+
+  it('[fix 2 P2] tier-4 scan uses computeEffectiveRoleModels (integration smoke)', () => {
+    // Integration-level smoke: even with the real catalog (where no
+    // non-sdkProxyOnly preset exposes defaultRoleModels), verify that
+    // the tier-4 scan calls computeEffectiveRoleModels and doesn't
+    // throw when providers rely on preset defaults. The strict
+    // behavioral assertion lives in the previous test; this one just
+    // guards against a refactor breaking the wire-up.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createProvider, deleteProvider } = require('../../lib/db');
+
+    const mainSdkOnly = createProvider({
+      name: '__test_main_sdkonly_smoke__',
+      provider_type: 'anthropic',
+      // Kimi coding URL is sdkProxyOnly via preset
+      base_url: 'https://api.moonshot.cn/anthropic/',
+      api_key: 'sk-main',
+      role_models_json: JSON.stringify({}),
+    });
+    const fallbackEmpty = createProvider({
+      name: '__test_fallback_empty_smoke__',
+      provider_type: 'anthropic',
+      base_url: 'https://api.anthropic.com',
+      api_key: 'sk-fallback',
+      role_models_json: JSON.stringify({}),
+    });
+
+    try {
+      // Should not throw regardless of whether tier-4 finds anything.
+      const result = resolveAuxiliaryModel('compact', { providerId: mainSdkOnly.id });
+      assert.ok(result);
+      assert.ok(typeof result.providerId === 'string');
+      assert.ok(typeof result.source === 'string');
+    } finally {
+      deleteProvider(mainSdkOnly.id);
+      deleteProvider(fallbackEmpty.id);
     }
   });
 });

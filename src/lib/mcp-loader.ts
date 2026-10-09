@@ -1,18 +1,16 @@
 /**
  * MCP Server Loader — shared module for loading MCP server configurations.
  *
- * The SDK auto-loads MCP servers from settingSources (['user', 'project', 'local']).
- * We only manually pass servers that need CodePilot-specific processing:
- * ${...} env placeholder resolution from the CodePilot DB.
+ * CodePilot does not let the SDK auto-load every MCP server during chat
+ * startup. We manually pass either CodePilot-processed servers or a small
+ * on-demand subset selected for the current request.
  *
  * This eliminates redundant config passing and reduces initialization overhead.
  */
 
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import type { MCPServerConfig } from '@/types';
 import { getSetting } from '@/lib/db';
+import { readEffectiveExternalMcpServers } from '@/lib/mcp-registry';
 
 // ── Cache ────────────────────────────────────────────────────────────
 
@@ -20,6 +18,7 @@ interface CachedMcpConfig {
   allServers: Record<string, MCPServerConfig>;
   codepilotServers: Record<string, MCPServerConfig>; // Only servers with resolved ${...} placeholders
   timestamp: number;
+  projectCwd: string;
 }
 
 const CACHE_TTL_MS = 30_000; // 30 seconds
@@ -30,36 +29,27 @@ export function invalidateMcpCache(): void {
   _cache = null;
 }
 
-// ── Internal helpers ─────────────────────────────────────────────────
-
-function readJson(p: string): Record<string, unknown> {
-  if (!fs.existsSync(p)) return {};
-  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return {}; }
-}
-
-function loadAndMerge(): CachedMcpConfig {
+function loadAndMerge(projectCwd?: string): CachedMcpConfig {
+  const cwd = projectCwd || process.cwd();
+  
   // Check cache
-  if (_cache && Date.now() - _cache.timestamp < CACHE_TTL_MS) {
+  if (_cache && _cache.projectCwd === cwd && Date.now() - _cache.timestamp < CACHE_TTL_MS) {
     return _cache;
   }
 
-  const userConfig = readJson(path.join(os.homedir(), '.claude.json'));
-  const settings = readJson(path.join(os.homedir(), '.claude', 'settings.json'));
-  const projectMcp = readJson(path.join(process.cwd(), '.mcp.json'));
-
   const merged: Record<string, MCPServerConfig> = {
-    ...((userConfig.mcpServers || {}) as Record<string, MCPServerConfig>),
-    ...((settings.mcpServers || {}) as Record<string, MCPServerConfig>),
-    ...((projectMcp.mcpServers || {}) as Record<string, MCPServerConfig>),
+    // Built-in official memory server fallback
+    'memory': {
+      type: 'stdio',
+      command: 'node',
+      args: ['-e', 'const cp=require("child_process");process.chdir(process.env.CODEPILOT_WORKSPACE);const child=cp.spawn(process.platform==="win32"?"npx.cmd":"npx",["-y","@modelcontextprotocol/server-memory"],{stdio:"inherit"});child.on("exit",c=>process.exit(c||0));process.on("SIGTERM",()=>child.kill("SIGTERM"));process.on("SIGINT",()=>child.kill("SIGINT"));process.stdin.on("end",()=>child.kill("SIGTERM"));process.stdin.on("close",()=>child.kill("SIGTERM"));'],
+      env: { CODEPILOT_WORKSPACE: cwd },
+      enabled: true
+    },
+    ...Object.fromEntries(
+      Object.entries(readEffectiveExternalMcpServers(cwd)).map(([name, entry]) => [name, entry.config]),
+    ),
   };
-
-  // Apply persistent enabled overrides for project-level servers
-  const settingsOverrides = (settings.mcpServerOverrides || {}) as Record<string, { enabled?: boolean }>;
-  for (const [name, override] of Object.entries(settingsOverrides)) {
-    if (merged[name] && override.enabled !== undefined) {
-      merged[name] = { ...merged[name], enabled: override.enabled };
-    }
-  }
 
   // Resolve ${...} placeholders and track which servers needed resolution
   const codepilotServers: Record<string, MCPServerConfig> = {};
@@ -93,9 +83,27 @@ function loadAndMerge(): CachedMcpConfig {
     allServers: merged,
     codepilotServers,
     timestamp: Date.now(),
+    projectCwd: cwd,
   };
 
   return _cache;
+}
+
+function resolveServerConfig(server: MCPServerConfig): MCPServerConfig {
+  const out = { ...server };
+  if (out.env) {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(out.env)) {
+      if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
+        const settingKey = value.slice(2, -1);
+        env[key] = getSetting(settingKey) || '';
+      } else if (typeof value === 'string') {
+        env[key] = value;
+      }
+    }
+    out.env = env;
+  }
+  return out;
 }
 
 // ── Public API ───────────────────────────────────────────────────────
@@ -105,13 +113,13 @@ function loadAndMerge(): CachedMcpConfig {
  *
  * Returns only servers with ${...} env placeholders that were resolved
  * against the CodePilot DB. Returns undefined when no such servers exist
- * (the common case), letting the SDK load everything natively.
+ * (the common case), so chat startup can continue without external MCP.
  *
  * Used by: route.ts, conversation-engine.ts — passed to streamClaude().
  */
-export function loadCodePilotMcpServers(): Record<string, MCPServerConfig> | undefined {
+export function loadCodePilotMcpServers(projectCwd?: string): Record<string, MCPServerConfig> | undefined {
   try {
-    const { codepilotServers } = loadAndMerge();
+    const { codepilotServers } = loadAndMerge(projectCwd);
     return Object.keys(codepilotServers).length > 0 ? codepilotServers : undefined;
   } catch {
     return undefined;
@@ -122,14 +130,98 @@ export function loadCodePilotMcpServers(): Record<string, MCPServerConfig> | und
  * Load ALL MCP servers (for UI display in MCP Manager).
  *
  * Returns the full merged config from all sources with overrides applied.
- * NOT intended for passing to the SDK — use loadCodePilotMcpServers() instead.
+ * NOT intended for passing wholesale to the SDK — use
+ * loadCodePilotMcpServers() or loadOnDemandMcpServers() instead.
  *
  * Used by: MCP Manager UI, diagnostics.
  */
-export function loadAllMcpServers(): Record<string, MCPServerConfig> | undefined {
+export function loadAllMcpServers(projectCwd?: string): Record<string, MCPServerConfig> | undefined {
   try {
-    const { allServers } = loadAndMerge();
+    const { allServers } = loadAndMerge(projectCwd);
     return Object.keys(allServers).length > 0 ? allServers : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 中文注释：常驻 MCP 白名单 —— 冷启动只为这些外部服务器进程买单（内置 codepilot-* 为
+ * 进程内服务器，不在此列也不产生启动开销）。其余低频服务器通过
+ * selectOnDemandMcpServerNames 按关键词在请求时补载，避免 26 个 MCP 全部拉起拖慢预热。
+ * 依据用户实际调用频次（filesystem/playwright/chrome-devtools/MiniMax 为 Top 使用）选取。
+ */
+export const COMMON_MCP_SERVERS = ['filesystem', 'playwright', 'chrome-devtools', 'MiniMax', 'context7'] as const;
+
+/**
+ * Load the always-on (common) subset of MCP servers.
+ * 低频服务器不在这里加载 —— 它们由按需选择器在相关请求中补载。
+ */
+export function loadCommonMcpServers(projectCwd?: string): Record<string, MCPServerConfig> | undefined {
+  try {
+    const { allServers } = loadAndMerge(projectCwd);
+    const resolved: Record<string, MCPServerConfig> = {};
+    for (const name of COMMON_MCP_SERVERS) {
+      if (allServers[name]) resolved[name] = allServers[name];
+    }
+    return Object.keys(resolved).length > 0 ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Load a named subset of user/settings/project MCP servers for one request.
+ *
+ * This supports the SDK fast-start path: normal chat turns avoid spawning slow
+ * user MCPs, while explicit needs like GitHub, browser automation, or web fetch
+ * still receive the relevant server before the Claude Code process starts.
+ */
+export function loadOnDemandMcpServers(
+  projectCwd: string | undefined,
+  names: Iterable<string>,
+): Record<string, MCPServerConfig> | undefined {
+  const selectedNames = new Set(Array.from(names).filter(Boolean));
+  if (selectedNames.size === 0) return undefined;
+
+  try {
+    const { allServers } = loadAndMerge(projectCwd);
+    const resolved: Record<string, MCPServerConfig> = {};
+
+    for (const name of selectedNames) {
+      if (allServers[name]) {
+        resolved[name] = allServers[name];
+      }
+    }
+
+    return Object.keys(resolved).length > 0 ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Load project-scoped MCP servers from the unified registry.
+ *
+ * Used when CodePilot decides a request needs project MCP access. Because the
+ * SDK fast-start path may still bypass Claude's native discovery, callers must
+ * explicitly pass the subset they want to expose for that turn.
+ *
+ * 这里返回的项目级集合会优先使用迁移后的 Claude 原生 `projects[cwd].mcpServers`，
+ * 并在首次读取时把遗留 `.mcp.json` / `claude.json` 复制进原生配置，确保 UI 与运行时看到同一份项目来源。
+ *
+ * @param projectCwd - The user's actual working directory (NOT process.cwd())
+ * @returns Map of resolved server configs, or undefined when none found
+ */
+export function loadProjectMcpServers(projectCwd: string | undefined): Record<string, MCPServerConfig> | undefined {
+  if (!projectCwd) return undefined;
+  try {
+    const effective = readEffectiveExternalMcpServers(projectCwd);
+    const resolved: Record<string, MCPServerConfig> = {};
+    for (const [name, entry] of Object.entries(effective)) {
+      if (entry.scope !== 'project') continue;
+      resolved[name] = resolveServerConfig(entry.config);
+    }
+    return Object.keys(resolved).length > 0 ? resolved : undefined;
   } catch {
     return undefined;
   }

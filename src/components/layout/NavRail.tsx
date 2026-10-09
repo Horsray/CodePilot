@@ -5,10 +5,10 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   ChatCircle,
   Lightning,
-  Plug,
-  Image,
+  Stack,
+  Shapes,
   Gear,
-  WifiHigh,
+  ShareNetwork,
   Terminal,
 } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
@@ -33,10 +33,10 @@ interface NavRailProps {
 const navItems = [
   { href: "/chat", label: "Chats", icon: ChatCircle },
   { href: "/skills", label: "Skills", icon: Lightning },
-  { href: "/mcp", label: "MCP", icon: Plug },
+  { href: "/mcp", label: "MCP", icon: Stack },
   { href: "/cli-tools", label: "CLI Tools", icon: Terminal },
-  { href: "/gallery", label: "Gallery", icon: Image },
-  { href: "/bridge", label: "Bridge", icon: WifiHigh },
+  { href: "/gallery", label: "Gallery", icon: Shapes },
+  { href: "/bridge", label: "Bridge", icon: ShareNetwork },
 ] as const;
 
 export function NavRail({ onToggleChatList, hasUpdate, readyToInstall, skipPermissionsActive }: NavRailProps) {

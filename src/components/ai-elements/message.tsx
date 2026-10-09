@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
-import { createCodePlugin } from "@streamdown/code";
+import { MARKDOWN_PROSE_CLASS, markdownComponents } from "./markdown-shared";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { CaretLeft, CaretRight } from "@phosphor-icons/react";
@@ -29,21 +29,39 @@ import {
   useMemo,
   useState,
 } from "react";
+import { ChatCircle } from "@/components/ui/icon";
 import { Streamdown } from "streamdown";
+
+const LOCAL_URL_REGEX = /(https?:\/\/(?:localhost|127\.0\.0\.1):\d+)/i;
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
 };
 
-export const Message = ({ className, from, ...props }: MessageProps) => (
+// 中文注释：移植 cc-haha 消息排布 —
+// 助手消息：左对齐整行，左侧固定 20px 图标槽（16px 蓝色 ChatCircle，与首行文字对齐）；
+// 用户消息：右对齐气泡，最大宽度收窄到 85%。
+export const Message = ({ className, from, children, ...props }: MessageProps) => (
   <div
     className={cn(
-      "group flex w-full max-w-[95%] flex-col gap-2",
-      from === "user" ? "is-user ml-auto justify-end" : "is-assistant",
+      "group flex w-full gap-3",
+      from === "user" ? "is-user ml-auto max-w-[85%] flex-col justify-end" : "is-assistant max-w-full",
       className
     )}
     {...props}
-  />
+  >
+    {from === "assistant" && (
+      <div
+        className="flex h-[20px] w-5 shrink-0 items-center justify-center pt-[1px]"
+        aria-hidden="true"
+      >
+        <ChatCircle size={16} className="text-[#2F80ED]" weight="regular" />
+      </div>
+    )}
+    <div className={cn("flex min-w-0 flex-1 flex-col gap-2", from === "user" && "items-end")}>
+      {children}
+    </div>
+  </div>
 );
 
 export type MessageContentProps = HTMLAttributes<HTMLDivElement>;
@@ -55,9 +73,13 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-sm",
-      "group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-(--user-bubble) group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-(--user-bubble-foreground)",
-      "group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground",
+      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-x-auto overflow-y-visible text-sm",
+      /* 中文注释：助手侧允许横向溢出 —— 时间线里的中段文字段用 -ml-8 对齐到消息图标列（与 cc-haha 的
+         "每段文字都是带图标的正常消息" 一致），不能被 overflow-x-auto 裁剪。 */
+      "group-[.is-assistant]:overflow-x-visible",
+      /* 中文注释：用户气泡对齐 cc-haha — 大圆角 + 右上角小圆角（rounded-tr-md），紧凑内边距 */
+      "group-[.is-user]:ml-auto group-[.is-user]:rounded-2xl group-[.is-user]:rounded-tr-md group-[.is-user]:bg-(--user-bubble) group-[.is-user]:px-4 group-[.is-user]:py-2.5 group-[.is-user]:text-(--user-bubble-foreground)",
+      "group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground scrollbar-none",
       className
     )}
     {...props}
@@ -322,27 +344,16 @@ export const MessageBranchPage = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
-// Wrap @streamdown/code to silently skip unsupported languages instead of throwing
-const _codePlugin = createCodePlugin();
-const safeCode: typeof _codePlugin = {
-  ..._codePlugin,
-  highlight(params, callback) {
-    if (!_codePlugin.supportsLanguage(params.language)) {
-      return null; // Let Streamdown render as plain text
-    }
-    return _codePlugin.highlight(params, callback);
-  },
-};
-const streamdownPlugins = { cjk, code: safeCode, math, mermaid };
+// 代码块/表格等 Markdown 覆盖已集中到 markdown-shared.tsx，
+// 所有 Streamdown 调用点（正文、思维链、时间线）共用同一份，避免各写一套导致外观漂移。
+const streamdownPlugins = { cjk, math, mermaid };
 
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
+  ({ className, components, ...props }: MessageResponseProps) => (
     <Streamdown
-      className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        className
-      )}
+      className={cn("size-full", MARKDOWN_PROSE_CLASS, className)}
       plugins={streamdownPlugins}
+      components={{ ...markdownComponents, ...components }}
       {...props}
     />
   ),

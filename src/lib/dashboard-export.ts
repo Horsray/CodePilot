@@ -11,6 +11,7 @@
 
 import { resolveThemeVars, getWidgetIframeStyleBlock } from '@/lib/widget-css-bridge';
 import { sanitizeForIframe, CDN_WHITELIST } from '@/lib/widget-sanitizer';
+import { isDarkModeActive } from '@/lib/utils';
 
 /**
  * Build a standalone HTML page for the widget (no receiver script needed).
@@ -69,7 +70,7 @@ function buildExportHtml(widgetCode: string, styleBlock: string, isDark: boolean
 <html class="${isDark ? 'dark' : ''}">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' ${cspDomains}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' ${cspDomains}; style-src 'unsafe-inline'; img-src * data: blob:; font-src * data:; connect-src *">
 <style>
 ${styleBlock}
 </style>
@@ -86,7 +87,8 @@ ${scriptExec}
 const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : null;
 
 export async function exportWidgetAsImage(widgetCode: string, width = 640): Promise<Blob> {
-  const isDark = document.documentElement.classList.contains('dark');
+  // 中文注释：统一走 isDarkModeActive（data-theme 属性 + .dark 兼容）。
+  const isDark = isDarkModeActive();
   const resolvedVars = resolveThemeVars();
   const styleBlock = getWidgetIframeStyleBlock(resolvedVars);
   const html = buildExportHtml(widgetCode, styleBlock, isDark);

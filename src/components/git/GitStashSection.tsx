@@ -1,52 +1,68 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Trash, ArrowClockwise, Plus, SpinnerGap } from "@/components/ui/icon";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Plus, Trash, Check, Copy, SpinnerGap } from "@/components/ui/icon";
 import { useTranslation } from "@/hooks/useTranslation";
-import { showToast } from "@/hooks/useToast";
+import type { GitStashEntry } from "@/types";
 
+// 与 cc-haha GitStashSection 对齐：应用按钮执行 stash pop（应用并删除），
+// 操作后仅刷新本列表（面板通过 10s 轮询感知外部变化），无 toast 提示。
 interface GitStashSectionProps {
   cwd: string;
-  onRefresh: () => void;
 }
 
-interface StashEntry {
-  index: number;
-  message: string;
-}
-
-export function GitStashSection({ cwd, onRefresh }: GitStashSectionProps) {
+export function GitStashSection({ cwd }: GitStashSectionProps) {
   const { t } = useTranslation();
-  const [stashes, setStashes] = useState<StashEntry[]>([]);
+  const [stashes, setStashes] = useState<GitStashEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [showInput, setShowInput] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; stash: GitStashEntry } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; stash: GitStashEntry } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const loadStashes = useCallback(async () => {
     if (!cwd) return;
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(`/api/git/stash?cwd=${encodeURIComponent(cwd)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setStashes(data.stashes || []);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to fetch stashes");
       }
-    } catch {
-      // ignore
+      const data = await res.json();
+      setStashes(Array.isArray(data.stashes) ? data.stashes : []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "获取暂存列表失败");
     } finally {
       setLoading(false);
     }
   }, [cwd]);
 
   useEffect(() => {
-    loadStashes();
+    void loadStashes();
   }, [loadStashes]);
 
+  // 点击外部关闭右键菜单
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [contextMenu]);
+
   const handleSave = useCallback(async () => {
-    if (!cwd || saving) return;
+    if (saving) return;
     setSaving(true);
+    setError(null);
     try {
       const res = await fetch("/api/git/stash", {
         method: "POST",
@@ -57,118 +73,294 @@ export function GitStashSection({ cwd, onRefresh }: GitStashSectionProps) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Stash failed");
       }
-      showToast({ type: "success", message: t("git.stashSuccess") });
       setMessage("");
-      loadStashes();
-      onRefresh();
+      setShowInput(false);
+      await loadStashes();
     } catch (err) {
-      showToast({ type: "error", message: err instanceof Error ? err.message : t("git.stashFailed") });
+      setError(err instanceof Error ? err.message : "暂存失败");
     } finally {
       setSaving(false);
     }
-  }, [cwd, message, saving, t, loadStashes, onRefresh]);
+  }, [cwd, message, saving, loadStashes]);
 
-  const handlePop = useCallback(async () => {
-    try {
-      const res = await fetch("/api/git/stash", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd, action: "pop" }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Pop failed");
+  // cc-haha 语义：应用即 pop（应用并删除该 stash）
+  const handlePop = useCallback(
+    async (index?: number) => {
+      setError(null);
+      try {
+        const res = await fetch("/api/git/stash", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd, action: "pop", index }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Pop failed");
+        }
+        await loadStashes();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "应用暂存失败");
       }
-      showToast({ type: "success", message: t("git.stashPopSuccess") });
-      loadStashes();
-      onRefresh();
-    } catch (err) {
-      showToast({ type: "error", message: err instanceof Error ? err.message : t("git.stashFailed") });
-    }
-  }, [cwd, t, loadStashes, onRefresh]);
+    },
+    [cwd, loadStashes],
+  );
 
-  const handleDrop = useCallback(async (index: number) => {
-    try {
-      const res = await fetch("/api/git/stash", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd, action: "drop", index }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Drop failed");
+  const handleDrop = useCallback(
+    async (index: number) => {
+      setError(null);
+      try {
+        const res = await fetch("/api/git/stash", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd, action: "drop", index }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Drop failed");
+        }
+        await loadStashes();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "删除暂存失败");
       }
-      showToast({ type: "success", message: t("git.stashDropSuccess") });
-      loadStashes();
-    } catch (err) {
-      showToast({ type: "error", message: err instanceof Error ? err.message : t("git.stashFailed") });
+    },
+    [cwd, loadStashes],
+  );
+
+  /** 右键菜单：复制暂存信息 */
+  const handleContextMenu = useCallback((e: React.MouseEvent, stash: GitStashEntry) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, stash });
+  }, []);
+
+  const handleCopyStashInfo = useCallback(async () => {
+    if (!contextMenu) return;
+    const { stash } = contextMenu;
+    setContextMenu(null);
+    const info = `stash@{${stash.index}}: ${stash.message}\n分支: ${stash.branch}\n时间: ${stash.timestamp || "未知"}`;
+    try {
+      await navigator.clipboard.writeText(info);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
     }
-  }, [cwd, t, loadStashes]);
+  }, [contextMenu]);
+
+  /** 格式化暂存时间 */
+  const formatTime = (dateStr: string): string => {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleString("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return "";
+    }
+  };
+
+  const handleMouseEnter = (e: React.MouseEvent, stash: GitStashEntry) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setTooltip({ x: rect.left, y: rect.top - 8, stash });
+  };
+
+  const handleMouseLeave = () => {
+    setTooltip(null);
+  };
 
   return (
-    <div className="space-y-2">
-      {/* Save stash */}
-      <div className="flex items-center gap-1.5 px-3">
-        <Input
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder={t("git.stashMessage")}
-          className="h-7 text-xs flex-1"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              handleSave();
-            }
-          }}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs gap-1 shrink-0"
-          onClick={handleSave}
-          disabled={saving}
-        >
-          {saving ? <SpinnerGap size={12} className="animate-spin" /> : <Plus size={12} />}
-          {t("git.stashSave")}
-        </Button>
+    <div>
+      {/* 操作按钮 */}
+      <div className="flex items-center gap-2">
+        {showInput ? (
+          <>
+            <input
+              type="text"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="输入暂存信息"
+              className="flex-1 h-7 px-2 text-xs rounded border outline-none"
+              style={{
+                background: "var(--color-surface)",
+                borderColor: "var(--color-border)",
+                color: "var(--color-text-primary)",
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSave();
+                if (e.key === "Escape") {
+                  setShowInput(false);
+                  setMessage("");
+                }
+              }}
+              autoFocus
+            />
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-1 h-7 px-3 text-xs rounded font-medium shrink-0 transition-opacity hover:opacity-85 disabled:opacity-60"
+              style={{ background: "var(--color-success)", color: "#fff" }}
+            >
+              {saving ? <SpinnerGap size={12} className="animate-spin" /> : <Plus size={12} />}
+              保存
+            </button>
+            <button
+              onClick={() => {
+                setShowInput(false);
+                setMessage("");
+              }}
+              className="h-7 px-3 text-xs rounded shrink-0 transition-colors hover:opacity-80"
+              style={{
+                background: "var(--color-surface-container-low)",
+                color: "var(--color-text-secondary)",
+              }}
+            >
+              取消
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => setShowInput(true)}
+            className="flex items-center gap-1 h-7 px-3 text-xs rounded font-medium shrink-0 transition-colors hover:opacity-80"
+            style={{
+              background: "var(--color-surface-container-low)",
+              color: "var(--color-text-primary)",
+            }}
+          >
+            <Plus size={12} />
+            {t("git.stashAdd")}
+          </button>
+        )}
       </div>
 
-      {/* Stash list */}
+      {/* 错误信息 */}
+      {error && (
+        <div className="mt-2 text-xs" style={{ color: "var(--color-error)" }}>
+          {error}
+        </div>
+      )}
+
+      {/* 暂存列表 */}
       {loading ? (
-        <div className="px-3 py-2 text-xs text-muted-foreground flex items-center gap-1.5">
-          <SpinnerGap size={12} className="animate-spin" />
+        <div className="mt-2 py-4 text-center">
+          <span className="text-xs" style={{ color: "var(--color-text-tertiary)" }}>加载中...</span>
         </div>
       ) : stashes.length === 0 ? (
-        <div className="px-3 py-2 text-xs text-muted-foreground">{t("git.stashEmpty")}</div>
+        <div className="mt-2 py-4 text-center">
+          <span className="text-xs" style={{ color: "var(--color-text-tertiary)" }}>暂无暂存</span>
+        </div>
       ) : (
-        <div className="max-h-[200px] overflow-y-auto">
+        <div className="mt-1 max-h-[200px] overflow-y-auto">
           {stashes.map((stash) => (
             <div
               key={stash.index}
-              className="flex items-center gap-2 px-3 py-1 text-[12px] hover:bg-muted/50 group"
+              className="flex items-center gap-2 px-2 py-1.5 text-xs rounded transition-colors group"
+              style={{ cursor: "default" }}
+              onMouseEnter={(e) => handleMouseEnter(e, stash)}
+              onMouseLeave={handleMouseLeave}
+              onContextMenu={(e) => handleContextMenu(e, stash)}
             >
-              <span className="text-muted-foreground font-mono shrink-0">#{stash.index}</span>
-              <span className="truncate flex-1 text-foreground/80">{stash.message}</span>
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                {stash.index === 0 && (
-                  <button
-                    onClick={() => handlePop()}
-                    className="p-0.5 hover:bg-muted rounded text-green-600 dark:text-green-400"
-                    title={t("git.stashPop")}
-                  >
-                    <ArrowClockwise size={12} />
-                  </button>
-                )}
+              {/* 序号 */}
+              <span
+                style={{ color: "var(--color-text-tertiary)" }}
+                className="font-mono shrink-0"
+              >
+                #{stash.index}
+              </span>
+              {/* 暂存信息 */}
+              <span
+                className="truncate flex-1"
+                style={{ color: "var(--color-text-primary)" }}
+              >
+                {stash.message || "WIP"}
+              </span>
+              {/* 所属分支 */}
+              {stash.branch && (
+                <span
+                  className="text-[10px] shrink-0 px-1.5 py-0.5 rounded"
+                  style={{
+                    color: "var(--color-text-tertiary)",
+                    background: "var(--color-surface-container-low)",
+                  }}
+                >
+                  {stash.branch}
+                </span>
+              )}
+              {/* 操作按钮 */}
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => handlePop(stash.index)}
+                  className="p-0.5 rounded transition-opacity hover:opacity-80"
+                  style={{ color: "var(--color-success)" }}
+                  title={t("git.stashApply")}
+                >
+                  <Check size={12} />
+                </button>
                 <button
                   onClick={() => handleDrop(stash.index)}
-                  className="p-0.5 hover:bg-muted rounded text-red-500"
-                  title={t("git.stashDrop")}
+                  className="p-0.5 rounded transition-opacity hover:opacity-80"
+                  style={{ color: "var(--color-error)" }}
+                  title={t("git.stashDelete")}
                 >
                   <Trash size={12} />
                 </button>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* 悬浮提示 */}
+      {tooltip && (
+        <div
+          className="fixed z-50 max-w-[280px] px-3 py-2 rounded-md border text-xs shadow-lg"
+          style={{
+            left: tooltip.x,
+            top: tooltip.y,
+            transform: "translateY(-100%)",
+            background: "var(--color-surface)",
+            borderColor: "var(--color-border)",
+            color: "var(--color-text-primary)",
+          }}
+        >
+          {tooltip.stash.message && (
+            <div className="mb-1">
+              <span style={{ color: "var(--color-text-tertiary)" }}>{t("git.stashMessage")}：</span>
+              {tooltip.stash.message}
+            </div>
+          )}
+          {tooltip.stash.branch && (
+            <div className="mb-1">
+              <span style={{ color: "var(--color-text-tertiary)" }}>{t("git.stashBranch")}：</span>
+              {tooltip.stash.branch}
+            </div>
+          )}
+          {tooltip.stash.timestamp && (
+            <div>
+              <span style={{ color: "var(--color-text-tertiary)" }}>{t("git.stashTime")}：</span>
+              {formatTime(tooltip.stash.timestamp)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 右键菜单：复制暂存信息 */}
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-50 min-w-[160px] py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            onClick={handleCopyStashInfo}
+            className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left text-[var(--color-text-primary)] hover:bg-[var(--color-surface-container-low)] transition-colors"
+          >
+            <Copy size={12} className="text-[var(--color-text-tertiary)]" />
+            {copied ? t("git.copied") : "复制暂存信息"}
+          </button>
         </div>
       )}
     </div>

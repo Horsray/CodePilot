@@ -61,7 +61,7 @@ export async function POST(request: Request) {
     // Insert celebration message with show-widget card into chat
     try {
       const { addMessage, getLatestSessionByWorkingDirectory } = await import('@/lib/db');
-      const { SPECIES_LABEL, RARITY_DISPLAY, STAT_LABEL, getBuddyTitle, rarityColor: getRarityColorClass } = await import('@/lib/buddy');
+      const { SPECIES_LABEL, RARITY_DISPLAY, STAT_LABEL, getBuddyTitle } = await import('@/lib/buddy');
       const session = getLatestSessionByWorkingDirectory(workspacePath);
       if (session) {
         const speciesName = SPECIES_LABEL[buddy.species as keyof typeof SPECIES_LABEL]?.zh || buddy.species;

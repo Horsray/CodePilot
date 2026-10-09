@@ -18,15 +18,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { useThemeFamily } from "@/lib/theme/context";
-import { resolveShikiTheme, resolveShikiThemes, SHIKI_DEFAULT_LIGHT, SHIKI_DEFAULT_DARK } from "@/lib/theme/code-themes";
+import { SHIKI_DEFAULT_LIGHT, SHIKI_DEFAULT_DARK } from "@/lib/theme/code-themes";
 import type { Icon } from "@phosphor-icons/react";
 import {
   Check,
   Copy,
   CaretDown,
   CaretUp,
+  Eye,
   FileCode,
+  Monitor,
   Terminal,
   Code,
   File,
@@ -43,11 +44,31 @@ import {
   useRef,
   useState,
 } from "react";
+import dynamic from "next/dynamic";
 import { createHighlighter } from "shiki";
 
 // ── Collapse/expand constants ──────────────────────────────────────────
 const COLLAPSE_THRESHOLD = 20;
 const VISIBLE_LINES = 10;
+
+// ── Preview constants ──────────────────────────────────────────────────
+/** 支持内联预览的代码语言 */
+const PREVIEWABLE_LANGUAGES = new Set(["svg", "html", "tsx", "jsx"]);
+
+// Lazy-loaded SandpackPreview for TSX/JSX inline preview in chat messages
+const SandpackPreviewInline = dynamic(
+  () => import("@/components/editor/SandpackPreview").then((mod) => ({ default: mod.SandpackPreview })),
+  { ssr: false, loading: () => (
+    <div className="flex items-center justify-center py-8">
+      <div className="animate-spin h-5 w-5 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full" />
+    </div>
+  )}
+);
+
+/** 将 SVG 代码转为安全的数据 URI，用于 img 标签预览 */
+function svgToDataUri(svgCode: string): string {
+  return `data:image/svg+xml,${encodeURIComponent(svgCode)}`;
+}
 
 // ── Terminal language detection ────────────────────────────────────────
 const TERMINAL_LANGUAGES = new Set(["bash", "sh", "shell", "terminal", "zsh", "console"]);
@@ -247,6 +268,77 @@ const createRawTokens = (code: string): TokenizedCode => ({
   ),
 });
 
+/**
+ * Shim TokenizedCode (this file's internal shape) → Shiki's TokensResult
+ * (the shape @streamdown/code's CodeHighlighterPlugin expects). Fills the
+ * two optional metadata fields Streamdown's renderer reads when present:
+ * themeName (used as a class hint on <pre>) and rootStyle (used as inline
+ * styles for background/foreground on the wrapper). Phase 5.5.
+ */
+function toTokensResult(
+  tokenized: TokenizedCode,
+  darkTheme: BundledTheme,
+): {
+  tokens: ThemedToken[][];
+  bg: string;
+  fg: string;
+  themeName: string;
+  rootStyle: string;
+} {
+  return {
+    ...tokenized,
+    themeName: String(darkTheme),
+    rootStyle: `background-color:${tokenized.bg};color:${tokenized.fg}`,
+  };
+}
+
+/**
+ * Create a Streamdown-compatible CodeHighlighterPlugin that routes through
+ * this file's highlightCode(). Sharing the LRU + Shiki highlighter pool
+ * with CodeBlockContent means chat messages and file previews don't each
+ * spin up their own unbounded caches — Phase 0.2 POC showed @streamdown/
+ * code's default plugin maintains its own unbounded module-level Map,
+ * which long chat sessions can grow without limit.
+ *
+ * Shape matches @streamdown/code/dist/index.d.ts's CodeHighlighterPlugin.
+ * themes prop is the [light, dark] pair; when null/undefined the caller
+ * gets SHIKI_DEFAULT_LIGHT / SHIKI_DEFAULT_DARK.
+ */
+export function createSharedCodePlugin(options?: {
+  themes?: [BundledTheme, BundledTheme];
+}): {
+  name: "shiki";
+  type: "code-highlighter";
+  highlight: (
+    params: { code: string; language: BundledLanguage; themes: [string, string] },
+    callback?: (result: ReturnType<typeof toTokensResult>) => void,
+  ) => ReturnType<typeof toTokensResult> | null;
+  supportsLanguage: (language: BundledLanguage) => boolean;
+  getSupportedLanguages: () => BundledLanguage[];
+  getThemes: () => [BundledTheme, BundledTheme];
+} {
+  const [defaultLight, defaultDark] = options?.themes ?? [SHIKI_DEFAULT_LIGHT, SHIKI_DEFAULT_DARK];
+  return {
+    name: "shiki" as const,
+    type: "code-highlighter" as const,
+    highlight(params, callback) {
+      const light = (params.themes[0] as BundledTheme) ?? defaultLight;
+      const dark = (params.themes[1] as BundledTheme) ?? defaultDark;
+      const tokenized = highlightCode(
+        params.code,
+        params.language,
+        callback ? (result) => callback(toTokensResult(result, dark)) : undefined,
+        light,
+        dark,
+      );
+      return tokenized ? toTokensResult(tokenized, dark) : null;
+    },
+    supportsLanguage: () => true,
+    getSupportedLanguages: () => [] as BundledLanguage[],
+    getThemes: () => [defaultLight, defaultDark],
+  };
+}
+
 // Synchronous highlight with callback for async results
 export const highlightCode = (
   code: string,
@@ -279,11 +371,15 @@ export const highlightCode = (
       const availableLangs = highlighter.getLoadedLanguages();
       const langToUse = availableLangs.includes(language) ? language : "text";
 
+      const availableThemes = highlighter.getLoadedThemes();
+      const safeLight = availableThemes.includes(lightTheme) ? lightTheme : SHIKI_DEFAULT_LIGHT;
+      const safeDark = availableThemes.includes(darkTheme) ? darkTheme : SHIKI_DEFAULT_DARK;
+
       const result = highlighter.codeToTokens(code, {
         lang: langToUse,
         themes: {
-          dark: darkTheme,
-          light: lightTheme,
+          dark: safeDark,
+          light: safeLight,
         },
       });
 
@@ -316,14 +412,15 @@ export const highlightCode = (
 
 // Line number styles using CSS counters
 const LINE_NUMBER_CLASSES = cn(
-  "block",
+  "block !relative !pl-10",
+  "before:absolute before:left-0",
   "before:content-[counter(line)]",
   "before:inline-block",
   "before:[counter-increment:line]",
-  "before:w-8",
+  "before:w-6",
   "before:mr-4",
   "before:text-right",
-  "before:text-muted-foreground/50",
+  "before:text-muted-foreground/40",
   "before:font-mono",
   "before:select-none"
 );
@@ -355,17 +452,17 @@ const CodeBlockBody = memo(
     return (
       <pre
         className={cn(
-          "m-0 p-4 text-sm",
+          "m-0 py-4 pr-4 pl-3 text-[13px] leading-[1.6] whitespace-pre-wrap break-words",
           isTerminal
             ? "!bg-[var(--terminal-bg)] !text-[var(--terminal-foreground)]"
-            : "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]",
+            : "bg-muted/10 dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]",
           className
         )}
         style={preStyle}
       >
         <code
           className={cn(
-            "font-mono text-sm",
+            "font-mono text-[13px]",
             showLineNumbers && "[counter-increment:line_0] [counter-reset:line]"
           )}
         >
@@ -398,7 +495,7 @@ export const CodeBlockContainer = ({
 }: HTMLAttributes<HTMLDivElement> & { language: string }) => (
   <div
     className={cn(
-      "group relative w-full overflow-hidden rounded-md border bg-background text-foreground",
+      "group relative w-full overflow-hidden rounded-lg border bg-background text-foreground shadow-sm",
       className
     )}
     data-language={language}
@@ -460,11 +557,9 @@ export const CodeBlockActions = ({
   </div>
 );
 
-/** Resolve Shiki theme pair from the current theme family. */
+/** 中文注释：多主题家族已移除，固定返回默认 Shiki 亮/暗主题对。 */
 function useShikiThemes(): { light: BundledTheme; dark: BundledTheme } {
-  const { family, families } = useThemeFamily();
-  const shikiTheme = resolveShikiTheme(families, family);
-  return resolveShikiThemes(shikiTheme);
+  return { light: SHIKI_DEFAULT_LIGHT, dark: SHIKI_DEFAULT_DARK };
 }
 
 export const CodeBlockContent = ({
@@ -611,7 +706,7 @@ export const CodeBlockContent = ({
 export const CodeBlock = ({
   code,
   language,
-  showLineNumbers = false,
+  showLineNumbers = true,
   filename,
   className,
   children,
@@ -619,10 +714,81 @@ export const CodeBlock = ({
 }: CodeBlockProps) => {
   const contextValue = useMemo(() => ({ code, language }), [code, language]);
   const isTerminal = TERMINAL_LANGUAGES.has(language.toLowerCase());
+  const langLower = language.toLowerCase();
+  const isPreviewable = PREVIEWABLE_LANGUAGES.has(langLower);
+  const [previewVisible, setPreviewVisible] = useState(false);
 
   // When children are provided, use the composable API (caller controls header).
   // Otherwise, render a default header with language icon, copy, copy-as-markdown.
   const hasCustomChildren = children != null;
+
+  const handleTogglePreview = useCallback(() => {
+    setPreviewVisible((v) => !v);
+  }, []);
+
+  // 切换文件/语言时重置预览状态
+  useEffect(() => {
+    setPreviewVisible(false);
+  }, [code, language]);
+
+  /** 渲染预览内容 */
+  const renderPreview = () => {
+    if (langLower === 'svg') {
+      // SVG 直接转为图片展示
+      return (
+        <div className="flex items-center justify-center p-6 bg-[repeating-linear-gradient(45deg,var(--muted)_0px,var(--muted)_2px,transparent_2px,transparent_8px)]">
+          <img
+            src={svgToDataUri(code)}
+            alt="SVG 预览"
+            className="max-w-full max-h-80 object-contain rounded"
+            // 限制 SVG 图片尺寸，避免过大
+          />
+        </div>
+      );
+    }
+
+    if (langLower === 'html') {
+      // HTML 用 iframe 沙箱渲染
+      return (
+        <div className="overflow-hidden rounded-b-lg" style={{ minHeight: 200 }}>
+          <iframe
+            srcDoc={code}
+            sandbox="allow-scripts"
+            className="w-full border-0"
+            style={{ minHeight: 200, height: 'auto' }}
+            title="HTML 预览"
+            // 自适应高度：通过 onLoad 动态调整
+            ref={(ref) => {
+              if (ref) {
+                const handler = () => {
+                  try {
+                    const body = ref.contentDocument?.body;
+                    if (body) {
+                      const h = body.scrollHeight;
+                      if (h > 0) ref.style.height = `${Math.max(h + 32, 200)}px`;
+                    }
+                  } catch { /* cross-origin 限制 */ }
+                };
+                ref.addEventListener('load', handler);
+                return () => ref.removeEventListener('load', handler);
+              }
+            }}
+          />
+        </div>
+      );
+    }
+
+    if (langLower === 'tsx' || langLower === 'jsx') {
+      // TSX/JSX 使用 Sandpack 在线预览
+      return (
+        <div className="overflow-hidden rounded-b-lg" style={{ minHeight: 480 }}>
+          <SandpackPreviewInline filePath={`/App.${langLower}`} content={code} />
+        </div>
+      );
+    }
+
+    return null;
+  };
 
   return (
     <CodeBlockContext.Provider value={contextValue}>
@@ -642,14 +808,21 @@ export const CodeBlock = ({
             language={language}
             filename={filename}
             isTerminal={isTerminal}
+            previewVisible={previewVisible}
+            onTogglePreview={isPreviewable ? handleTogglePreview : undefined}
+            isPreviewable={isPreviewable}
           />
         )}
-        <CodeBlockContent
-          code={code}
-          language={language as BundledLanguage}
-          showLineNumbers={showLineNumbers}
-          collapsible={!hasCustomChildren}
-        />
+        {previewVisible && isPreviewable ? (
+          renderPreview()
+        ) : (
+          <CodeBlockContent
+            code={code}
+            language={language as BundledLanguage}
+            showLineNumbers={showLineNumbers}
+            collapsible={!hasCustomChildren}
+          />
+        )}
       </CodeBlockContainer>
     </CodeBlockContext.Provider>
   );
@@ -660,14 +833,22 @@ const CodeBlockDefaultHeader = ({
   language,
   filename,
   isTerminal,
+  previewVisible,
+  onTogglePreview,
+  isPreviewable,
 }: {
   language: string;
   filename?: string;
   isTerminal: boolean;
+  /** 预览模式是否激活 */
+  previewVisible?: boolean;
+  /** 切换预览模式回调 */
+  onTogglePreview?: () => void;
+  /** 当前语言是否支持预览 */
+  isPreviewable?: boolean;
 }) => {
-  const { code: contextCode, language: contextLanguage } = useContext(CodeBlockContext);
+  const { code: contextCode } = useContext(CodeBlockContext);
   const [copied, setCopied] = useState(false);
-  const [copiedMarkdown, setCopiedMarkdown] = useState(false);
 
   const handleCopy = async () => {
     try {
@@ -679,91 +860,77 @@ const CodeBlockDefaultHeader = ({
     }
   };
 
-  const handleCopyMarkdown = async () => {
-    try {
-      const markdown = `\`\`\`${contextLanguage}\n${contextCode}\n\`\`\``;
-      await navigator.clipboard.writeText(markdown);
-      setCopiedMarkdown(true);
-      setTimeout(() => setCopiedMarkdown(false), 2000);
-    } catch {
-      // clipboard not available
-    }
+  const formatLang = (lang: string) => {
+    const lower = lang.toLowerCase();
+    if (['tsx', 'jsx', 'html', 'css', 'sql', 'php', 'json', 'yaml', 'xml'].includes(lower)) return lang.toUpperCase();
+    if (lower === 'typescript' || lower === 'ts') return 'TypeScript';
+    if (lower === 'javascript' || lower === 'js') return 'JavaScript';
+    if (lower === 'python' || lower === 'py') return 'Python';
+    if (lower === 'cpp' || lower === 'c++') return 'C++';
+    if (lower === 'csharp' || lower === 'c#') return 'C#';
+    if (lower === 'markdown' || lower === 'md') return 'Markdown';
+    return lang.charAt(0).toUpperCase() + lang.slice(1);
   };
 
-  const langIcon = getLanguageIcon(language);
+  const displayLang = formatLang(language);
 
   return (
     <div className={cn(
-      "flex items-center justify-between px-4 py-1.5 text-xs border-b",
+      "flex items-center justify-between px-4 py-2 text-[13px] border-b",
       isTerminal
-        ? "bg-[var(--terminal-bg)] text-[var(--terminal-muted)]"
-        : "bg-muted text-muted-foreground"
+        ? "bg-[var(--terminal-bg)] border-[var(--terminal-border)] text-[var(--terminal-muted)]"
+        : "bg-muted/40 border-border/50 text-muted-foreground"
     )}>
-      <div className="flex items-center gap-2 min-w-0">
-        {createElement(langIcon, { size: 14, className: cn(
-          "shrink-0",
-          isTerminal ? "text-[var(--terminal-accent)]" : "text-muted-foreground",
-        ) })}
-        {filename && (
-          <span className={cn(
-            "truncate font-medium",
-            isTerminal ? "text-[var(--terminal-foreground)]" : "text-foreground"
-          )}>{filename}</span>
+      <div className="flex items-center gap-1.5 font-medium text-muted-foreground/80">
+        {filename ? filename : (
+          <>
+            {displayLang}
+            <CaretDown size={12} className="opacity-50 ml-0.5" />
+          </>
         )}
-        {filename && <span className="text-muted-foreground/50">|</span>}
-        <span className={cn(
-          "rounded px-1.5 py-0.5",
-          isTerminal
-            ? "bg-[var(--terminal-hover-bg)] text-[var(--terminal-accent)]"
-            : "bg-accent text-accent-foreground"
-        )}>{language.toUpperCase()}</span>
       </div>
-      <div className="flex items-center gap-1 ml-2 shrink-0">
+      <div className="flex items-center gap-0.5">
+        {/* 预览切换按钮 — 仅可预览语言显示 */}
+        {isPreviewable && onTogglePreview && (
+          <button
+            onClick={onTogglePreview}
+            type="button"
+            className={cn(
+              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors",
+              isTerminal
+                ? "hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-foreground)]"
+                : "hover:bg-muted-foreground/10 hover:text-foreground",
+              previewVisible
+                ? (isTerminal ? "text-[var(--terminal-foreground)]" : "text-blue-500")
+                : (isTerminal ? "text-[var(--terminal-muted)]" : "text-muted-foreground/60")
+            )}
+            title={previewVisible ? "查看源代码" : "预览效果"}
+          >
+            {previewVisible ? (
+              <>
+                <Code size={13} />
+                <span>源码</span>
+              </>
+            ) : (
+              <>
+                <Eye size={13} />
+                <span>预览</span>
+              </>
+            )}
+          </button>
+        )}
         <button
           onClick={handleCopy}
           type="button"
           className={cn(
-            "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+            "flex items-center justify-center rounded p-1 transition-colors",
             isTerminal
-              ? "text-[var(--terminal-muted)] hover:text-[var(--terminal-foreground)] hover:bg-[var(--terminal-hover-bg)]"
-              : "text-muted-foreground hover:text-foreground hover:bg-accent"
+              ? "hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-foreground)]"
+              : "hover:bg-muted-foreground/10 hover:text-foreground"
           )}
-          title="Copy code"
+          title="复制代码"
         >
-          {copied ? (
-            <>
-              <Check size={12} />
-              <span>Copied</span>
-            </>
-          ) : (
-            <>
-              <Copy size={12} />
-              <span>Copy</span>
-            </>
-          )}
-        </button>
-        <button
-          onClick={handleCopyMarkdown}
-          type="button"
-          className={cn(
-            "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
-            isTerminal
-              ? "text-[var(--terminal-muted)] hover:text-[var(--terminal-foreground)] hover:bg-[var(--terminal-hover-bg)]"
-              : "text-muted-foreground hover:text-foreground hover:bg-accent"
-          )}
-          title="Copy as Markdown"
-        >
-          {copiedMarkdown ? (
-            <>
-              <Check size={12} />
-              <span>Copied</span>
-            </>
-          ) : (
-            <>
-              <FileCode size={12} />
-              <span>Markdown</span>
-            </>
-          )}
+          {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
         </button>
       </div>
     </div>

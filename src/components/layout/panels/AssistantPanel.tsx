@@ -38,7 +38,7 @@ export function AssistantPanel() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col border-l border-border bg-background">
+    <div className="flex h-full flex-col bg-transparent">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <div className="flex items-center gap-2">

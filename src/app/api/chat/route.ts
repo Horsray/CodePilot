@@ -1,22 +1,30 @@
 import { NextRequest } from 'next/server';
+import '@/lib/runtime';
 import { streamClaude } from '@/lib/claude-client';
-import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTitle, updateSdkSessionId, updateSessionModel, updateSessionProvider, updateSessionProviderId, getSetting, acquireSessionLock, renewSessionLock, releaseSessionLock, setSessionRuntimeStatus, syncSdkTasks } from '@/lib/db';
+import { addMessage, getMessages, getSession, getSessionSummary, updateSessionTitle, updateSdkSessionId, updateSessionModel, updateSessionProvider, updateSessionProviderId, getSetting, getProviderOptions, acquireSessionLock, renewSessionLock, releaseSessionLock, setSessionRuntimeStatus, syncSdkTasks, getProvider } from '@/lib/db';
 import { resolveProvider as resolveProviderUnified } from '@/lib/provider-resolver';
 import { notifySessionStart, notifySessionComplete, notifySessionError } from '@/lib/telegram-bot';
 import { extractCompletion } from '@/lib/onboarding-completion';
-import { loadCodePilotMcpServers } from '@/lib/mcp-loader';
+import { loadCommonMcpServers } from '@/lib/mcp-loader';
 import { assembleContext } from '@/lib/context-assembler';
-import { buildImageAgentFallbackText, IMAGE_AGENT_OUTPUT_FORMAT } from '@/lib/image-agent-structured';
-import type { SendMessageRequest, SSEEvent, TokenUsage, MessageContentBlock, FileAttachment, ClaudeStreamOptions, MediaBlock } from '@/types';
+import { buildContextCompressedStatus } from '@/lib/context-compressor';
+import { isImageFile, type SendMessageRequest, type SSEEvent, type TokenUsage, type MessageContentBlock, type FileAttachment, type MediaBlock, type Message } from '@/types';
 import { saveMediaToLibrary } from '@/lib/media-saver';
+import { wrapController } from '@/lib/safe-stream';
 import { ensureSchedulerRunning } from '@/lib/task-scheduler';
+import { hasCodePilotProvider } from '@/lib/provider-presence';
+import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
+import { getEnabledPluginConfigs, hasEnabledOmcPlugin } from '@/lib/plugin-discovery';
+import { generateConversationTitle, extractTitleFromResponse } from '@/lib/title-generator';
+import { resolveImageInputRoute } from '@/lib/image-input-routing';
+import { extractTextFromImages } from '@/lib/ocr-service';
+import { registerRequestController } from '@/lib/conversation-registry';
 
 // Start the task scheduler on first API call
 ensureSchedulerRunning();
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,22 +32,12 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: NextRequest) {
   let activeSessionId: string | undefined;
   let activeLockId: string | undefined;
-
-  // ── Timing instrumentation ────────────────────────────────────────────
-  type TimingMap = Record<string, number>;
-  const T: TimingMap & { _last?: number } = { total: Date.now() };
-  const track = (label: string) => {
-    const now = Date.now();
-    console.log(`[TIMING] ${label}: ${now - T.total}ms (delta: ${now - (T._last || T.total)}ms)`);
-    T[label] = now;
-    T._last = now;
-  };
+  let unregisterRequestController: (() => void) | undefined;
 
   try {
-    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean } = await request.json();
-    const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m } = body;
+    const body: SendMessageRequest & { files?: FileAttachment[]; toolTimeout?: number; provider_id?: string; systemPromptAppend?: string; autoTrigger?: boolean; thinking?: unknown; effort?: string; enableFileCheckpointing?: boolean; displayOverride?: string; context_1m?: boolean; client_message_id?: string } = await request.json();
+    const { session_id, content, model, mode, files, toolTimeout, provider_id, systemPromptAppend, autoTrigger, thinking, effort, enableFileCheckpointing, displayOverride, context_1m, client_message_id } = body;
 
-    track('request_received');
     console.log('[chat API] content length:', content.length, 'first 200 chars:', content.slice(0, 200));
     console.log('[chat API] systemPromptAppend:', systemPromptAppend ? `${systemPromptAppend.length} chars` : 'none');
 
@@ -50,7 +48,21 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    track('db_getSession');
+    // Precondition: CodePilot must have a provider configured. ~/.claude/settings.json
+    // (cc-switch, CLI login) is intentionally NOT counted — users with only that source
+    // are redirected to the setup flow to add a proper CodePilot provider.
+    if (!hasCodePilotProvider()) {
+      return new Response(
+        JSON.stringify({
+          error: 'No provider configured in CodePilot.',
+          code: 'NEEDS_PROVIDER_SETUP',
+          actionHint: 'open_setup_center',
+          initialCard: 'provider',
+        }),
+        { status: 412, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
     const session = getSession(session_id);
     if (!session) {
       return new Response(JSON.stringify({ error: 'Session not found' }), {
@@ -61,7 +73,6 @@ export async function POST(request: NextRequest) {
 
     // Acquire exclusive lock for this session to prevent concurrent requests
     const lockId = crypto.randomBytes(8).toString('hex');
-    track('db_acquireLock');
     const lockAcquired = acquireSessionLock(session_id, lockId, `chat-${process.pid}`, 600);
     if (!lockAcquired) {
       return new Response(
@@ -75,44 +86,156 @@ export async function POST(request: NextRequest) {
 
     // ── /compact command handler ────────────────────────────────────
     if (content.trim() === '/compact') {
+      console.log('[chat API] /compact handler entered, session:', session_id, 'model:', model || session?.model, 'provider_id:', provider_id || session?.provider_id);
       try {
-        const { compressConversation, resetCompressionState } = await import('@/lib/context-compressor');
-        const { getMessages: getDbMessages, getSessionSummary: getDbSummary, updateSessionSummary: updateDbSummary, addMessage: addDbMessage } = await import('@/lib/db');
+        const { compressConversation, resetCompressionState, filterHistoryByCompactBoundary } = await import('@/lib/context-compressor');
+        const { getMessages: getDbMessages, getSessionSummary: getDbSummary, updateSessionSummary: updateDbSummary } = await import('@/lib/db');
+        // Note: addMessage is intentionally NOT imported here. Neither the
+        // success path nor the no-op path persists slash-command feedback
+        // to DB — both are UI artifacts that would otherwise land after
+        // context_summary_boundary_rowid and leak into the model's
+        // transcript on subsequent turns. Repeated /compact calls would
+        // accumulate those rows and eventually get folded into the next
+        // summary. SSE frames convey the outcome to the user; the DB stays
+        // clean. See the regression test in
+        // context-compressor-handoff.test.ts that scans this block for
+        // any addMessage/addDbMessage call.
 
         resetCompressionState(session_id);
         const { messages: allMsgs } = getDbMessages(session_id, { limit: 200, excludeHeartbeatAck: true });
-        const existingSummary = getDbSummary(session_id).summary;
+        const existingSummaryData = getDbSummary(session_id);
 
-        if (allMsgs.length < 4) {
-          const msg = '对话还很短，暂不需要压缩。';
-          addDbMessage(session_id, 'assistant', JSON.stringify([{ type: 'text', text: msg }]));
+        // If a prior summary exists, only compress rows strictly after its
+        // coverage boundary. Without this, a second /compact would feed
+        // existingSummary + messages already covered by existingSummary +
+        // newer messages into the summarizer and duplicate the old context
+        // inside the new summary. This mirrors the auto pre-compression
+        // path (which filters by boundary via filterHistoryByCompactBoundary
+        // before estimating / compressing).
+        const rowsToCompactCandidate = filterHistoryByCompactBoundary({
+          history: allMsgs,
+          summary: existingSummaryData.summary,
+          summaryBoundaryRowid: existingSummaryData.boundaryRowid,
+        });
+
+        console.log('[chat API] /compact rowsToCompactCandidate:', rowsToCompactCandidate.length, 'existingSummary:', !!existingSummaryData.summary, 'boundaryRowid:', existingSummaryData.boundaryRowid);
+        if (rowsToCompactCandidate.length < 4) {
+          // Short path: either the whole conversation is short, or it's
+          // already compacted and there's not enough NEW material to
+          // warrant another pass. Either way: no compression, no SDK
+          // session invalidation, no context_compressed event. hasSummary
+          // must not flip because nothing new got summarized.
+          //
+          // Do NOT addDbMessage this notice. It's a UI artifact like the
+          // success-path confirmation. Persisting it would land a row
+          // AFTER context_summary_boundary_rowid, and on the next
+          // fallback/estimation pass the filter would keep it as real
+          // assistant context. Repeated /compact in an already-compacted
+          // session would accumulate these rows and the next real compact
+          // would fold them into the summary. SSE delivers the message
+          // to the user on this turn; the DB transcript stays clean.
+          const msg = existingSummaryData.summary
+            ? '上下文已经压缩过，新消息不多，暂不需要再次压缩。'
+            : '对话还很短，暂不需要压缩。';
           releaseSessionLock(session_id, lockId);
           setSessionRuntimeStatus(session_id, 'idle');
           const sseData = `data: ${JSON.stringify({ type: 'text', data: msg })}\n\ndata: ${JSON.stringify({ type: 'done' })}\n\n`;
           return new Response(sseData, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
         }
 
-        const msgData = allMsgs.map(m => ({ role: m.role, content: m.content }));
-        const result = await compressConversation({
+        const msgData = rowsToCompactCandidate.map(m => ({ role: m.role, content: m.content }));
+        const compactCwd = session.sdk_cwd || session.working_directory || process.cwd();
+
+        // Use TransformStream to emit progress events during compression
+        const { readable, writable } = new TransformStream();
+        const writer = writable.getWriter();
+        const encoder = new TextEncoder();
+
+        const writeSse = (data: string) => {
+          writer.write(encoder.encode(data));
+        };
+
+        // Fire compression in background, emit progress via SSE stream
+        compressConversation({
           sessionId: session_id,
           messages: msgData,
-          existingSummary: existingSummary || undefined,
+          existingSummary: existingSummaryData.summary || undefined,
           providerId: provider_id || session.provider_id || undefined,
           sessionModel: model || session.model || undefined,
+          cwd: compactCwd,
+          onProgress: (progress) => {
+            writeSse(`data: ${JSON.stringify({
+              type: 'status',
+              data: JSON.stringify({ subtype: 'context_compressing', ...progress }),
+            })}\n\n`);
+          },
+        }).then(result => {
+          console.log('[chat API] /compact result:', { messagesCompressed: result.messagesCompressed, estimatedTokensSaved: result.estimatedTokensSaved, summaryLength: result.summary?.length });
+          const compactBoundaryRowid =
+            rowsToCompactCandidate[rowsToCompactCandidate.length - 1]._rowid
+            ?? existingSummaryData.boundaryRowid
+            ?? 0;
+          const msg = `上下文已压缩。压缩了 ${result.messagesCompressed} 条消息，预计节省 ~${Math.round(result.estimatedTokensSaved / 1000)}K tokens。`;
+          updateDbSummary(session_id, result.summary, compactBoundaryRowid);
+          updateSdkSessionId(session_id, '');
+          releaseSessionLock(session_id, lockId);
+          setSessionRuntimeStatus(session_id, 'idle');
+
+          let contextUsageFrame = '';
+          try {
+            const { getContextWindow } = require('@/lib/model-context') as typeof import('@/lib/model-context');
+            const { roughTokenEstimate } = require('@/lib/context-estimator') as typeof import('@/lib/context-estimator');
+            const modelForWindow = model || session.model || 'sonnet';
+            const maxTokens = (getContextWindow(modelForWindow, { context1m: context_1m }) || 200000);
+            // Estimate post-compression context: summary + system prompt (~4000) + next-turn overhead (~500)
+            const summaryTokens = roughTokenEstimate(result.summary || '');
+            const systemPromptTokens = 4000;
+            const nextTurnOverhead = 500;
+            const totalTokens = summaryTokens + systemPromptTokens + nextTurnOverhead;
+            console.log(`[chat API] /compact context_usage: summaryTokens=${summaryTokens}, systemPrompt=${systemPromptTokens}, overhead=${nextTurnOverhead}, totalTokens=${totalTokens}, maxTokens=${maxTokens}, percentage=${(totalTokens / maxTokens * 100).toFixed(1)}%`);
+            contextUsageFrame = `data: ${JSON.stringify({
+              type: 'context_usage',
+              data: JSON.stringify({
+                totalTokens,
+                maxTokens,
+                rawMaxTokens: maxTokens,
+                percentage: maxTokens ? totalTokens / maxTokens : 0,
+                model: modelForWindow,
+                capturedAt: Date.now(),
+              }),
+            })}\n\n`;
+          } catch (ctxErr) { console.error('[chat API] /compact context_usage estimation failed:', ctxErr); }
+
+          writeSse(contextUsageFrame);
+          writeSse(`data: ${JSON.stringify({
+            type: 'status',
+            data: JSON.stringify(buildContextCompressedStatus({
+              messagesCompressed: result.messagesCompressed,
+              tokensSaved: result.estimatedTokensSaved,
+            })),
+          })}\n\n`);
+          writeSse(`data: ${JSON.stringify({ type: 'text', data: msg })}\n\n`);
+          writeSse(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+          writer.close();
+        }).catch(compactErr => {
+          console.error('[chat API] /compact failed:', compactErr);
+          releaseSessionLock(session_id, lockId);
+          setSessionRuntimeStatus(session_id, 'idle');
+          const errMsg = compactErr instanceof Error ? compactErr.message : String(compactErr);
+          writeSse(`data: ${JSON.stringify({ type: 'text', data: `压缩失败: ${errMsg}` })}\n\n`);
+          writeSse(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+          writer.close();
         });
 
-        updateDbSummary(session_id, result.summary);
-        const msg = `上下文已压缩。压缩了 ${result.messagesCompressed} 条消息，预计节省 ~${Math.round(result.estimatedTokensSaved / 1000)}K tokens。`;
-        addDbMessage(session_id, 'assistant', JSON.stringify([{ type: 'text', text: msg }]));
-        releaseSessionLock(session_id, lockId);
-        setSessionRuntimeStatus(session_id, 'idle');
-        const sseData = `data: ${JSON.stringify({ type: 'text', data: msg })}\n\ndata: ${JSON.stringify({ type: 'done' })}\n\n`;
-        return new Response(sseData, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+        return new Response(readable, {
+          headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        });
       } catch (compactErr) {
         console.error('[chat API] /compact failed:', compactErr);
         releaseSessionLock(session_id, lockId);
         setSessionRuntimeStatus(session_id, 'idle');
-        return new Response(JSON.stringify({ error: 'Compression failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        const errMsg = compactErr instanceof Error ? compactErr.message : String(compactErr);
+        return new Response(JSON.stringify({ error: `压缩失败: ${errMsg}` }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
 
@@ -127,11 +250,80 @@ export async function POST(request: NextRequest) {
       notifySessionStart(telegramNotifyOpts).catch(() => {});
     }
 
+    // Determine model: request override > session model > default setting.
+    // Resolve this before storing the user message so a text-only model never
+    // receives image bytes through either the SDK or the native history path.
+    const effectiveModel = model || session.model || getSetting('default_model') || undefined;
+    if (effectiveModel && effectiveModel !== session.model) {
+      updateSessionModel(session_id, effectiveModel);
+    }
+
+    const effectiveProviderId = provider_id || session.provider_id || '';
+    const resolved = resolveProviderUnified({
+      providerId: effectiveProviderId || undefined,
+      sessionProviderId: session.provider_id || undefined,
+      model: model || undefined,
+      sessionModel: session.model || undefined,
+    });
+    const resolvedProvider = resolved.provider;
+    const providerName = resolvedProvider?.name || '';
+    if (providerName !== (session.provider_name || '')) updateSessionProvider(session_id, providerName);
+    const persistProviderId = effectiveProviderId || provider_id || '';
+    if (persistProviderId !== (session.provider_id || '')) updateSessionProviderId(session_id, persistProviderId);
+
+    let modelPrompt = content;
+    let filesForModel = files;
+    const attachedImages = files?.filter(file => isImageFile(file.type)) || [];
+    let imagesAreOcrOnly = false;
+    if (attachedImages.length > 0) {
+      const selectedModel = resolved.upstreamModel || resolved.model || effectiveModel || '';
+      const selectedEntry = resolved.availableModels.find(entry =>
+        entry.modelId === selectedModel || entry.upstreamModelId === selectedModel,
+      );
+      const route = resolveImageInputRoute({
+        modelVision: selectedEntry?.capabilities?.vision,
+        options: resolvedProvider ? getProviderOptions(resolvedProvider.id) : undefined,
+      });
+
+      if (route.mode === 'blocked') {
+        const detail = route.reason === 'OCR_NOT_CONFIGURED'
+          ? '当前模型不支持图像输入，且尚未配置 OCR 服务商和模型。'
+          : '当前模型的图像输入能力未知。请在服务商设置中将“图片输入能力”设为支持或不支持。';
+        throw new Error(`IMAGE_INPUT_UNAVAILABLE: ${detail}`);
+      }
+
+      if (route.mode === 'ocr') {
+        const ocrResolved = resolveProviderUnified({ providerId: route.ocrProviderId, model: route.ocrModel });
+        const ocrSelected = ocrResolved.upstreamModel || ocrResolved.model || route.ocrModel;
+        const ocrEntry = ocrResolved.availableModels.find(entry =>
+          entry.modelId === ocrSelected || entry.upstreamModelId === ocrSelected,
+        );
+        const ocrRoute = resolveImageInputRoute({
+          modelVision: ocrEntry?.capabilities?.vision,
+          options: ocrResolved.provider ? getProviderOptions(ocrResolved.provider.id) : undefined,
+        });
+        if (ocrRoute.mode !== 'direct') {
+          throw new Error('OCR_MODEL_NOT_VISION_CAPABLE: 配置的 OCR 模型未标记为支持图像输入。');
+        }
+        const ocrText = await extractTextFromImages({
+          files: attachedImages,
+          providerId: route.ocrProviderId,
+          model: route.ocrModel,
+          abortSignal: request.signal,
+        });
+        if (!ocrText) throw new Error('OCR_EMPTY_RESULT: OCR 模型没有识别到可用文字。');
+        modelPrompt = `${content}\n\n[以下为附件图片的 OCR 文字，按原始图片阅读顺序]\n${ocrText}`;
+        filesForModel = files?.filter(file => !isImageFile(file.type));
+        imagesAreOcrOnly = true;
+      }
+    }
+
     // Save user message — persist file metadata so attachments survive page reload
     // Skip saving for autoTrigger messages (invisible system triggers for assistant hooks)
     // Use displayOverride for DB storage if provided (e.g. /skillName instead of expanded prompt)
-    let savedContent = displayOverride || content;
-    let fileMeta: Array<{ id: string; name: string; type: string; size: number; filePath: string }> | undefined;
+    let savedContent = displayOverride || modelPrompt;
+    let savedUserMessage: Message | null = null;
+    let fileMeta: Array<{ id: string; name: string; type: string; size: number; filePath: string; modelVisible?: boolean }> | undefined;
     if (!autoTrigger) {
       if (files && files.length > 0) {
         const workDir = session.working_directory;
@@ -144,45 +336,11 @@ export async function POST(request: NextRequest) {
           const filePath = path.join(uploadDir, `${Date.now()}-${safeName}`);
           const buffer = Buffer.from(f.data, 'base64');
           fs.writeFileSync(filePath, buffer);
-          return { id: f.id, name: f.name, type: f.type, size: buffer.length, filePath };
+          return { id: f.id, name: f.name, type: f.type, size: buffer.length, filePath, modelVisible: !(imagesAreOcrOnly && isImageFile(f.type)) };
         });
-        savedContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayOverride || content}`;
+        savedContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayOverride || modelPrompt}`;
       }
-      addMessage(session_id, 'user', savedContent);
-
-      // Auto-generate title from first message if still default
-      if (session.title === 'New Chat') {
-        const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
-        updateSessionTitle(session_id, title);
-      }
-    }
-
-    // Determine model: request override > session model > default setting
-    const effectiveModel = model || session.model || getSetting('default_model') || undefined;
-
-    // Persist model and provider to session so usage stats can group by model+provider.
-    // This runs on every message but the DB writes are cheap (single UPDATE by PK).
-    if (effectiveModel && effectiveModel !== session.model) {
-      updateSessionModel(session_id, effectiveModel);
-    }
-
-    // Resolve provider via unified resolver (same logic for chat, bridge, onboarding, etc.)
-    const effectiveProviderId = provider_id || session.provider_id || '';
-    const resolved = resolveProviderUnified({
-      providerId: effectiveProviderId || undefined,
-      sessionProviderId: session.provider_id || undefined,
-      model: model || undefined,
-      sessionModel: session.model || undefined,
-    });
-    const resolvedProvider = resolved.provider;
-
-    const providerName = resolvedProvider?.name || '';
-    if (providerName !== (session.provider_name || '')) {
-      updateSessionProvider(session_id, providerName);
-    }
-    const persistProviderId = effectiveProviderId || provider_id || '';
-    if (persistProviderId !== (session.provider_id || '')) {
-      updateSessionProviderId(session_id, persistProviderId);
+      savedUserMessage = addMessage(session_id, 'user', savedContent);
     }
 
     // Resolve permission mode from request body (sent by frontend on each message)
@@ -190,25 +348,29 @@ export async function POST(request: NextRequest) {
     // Request body mode takes priority to avoid race condition: user switches mode
     // then immediately sends — the PATCH may not have landed in DB yet.
     const effectiveMode = mode || session.mode || 'code';
-    const permissionMode = effectiveMode === 'plan' ? 'plan' : 'acceptEdits';
+    const permissionMode = effectiveMode === 'plan' ? 'explore' : 'trust';
 
     // Plan mode takes precedence over full_access: if the user explicitly chose
     // Plan, they expect no tool execution regardless of permission profile.
     const bypassPermissions = session.permission_profile === 'full_access' && effectiveMode !== 'plan';
-    const systemPromptOverride: string | undefined = undefined;
+
+    // [DISABLED] CodePilot 原生 /team 命令已停用，改由 OMC / Claude Code CLI
+    // 的原生 Agent orchestration 负责调度。此路由不再注入自定义 /team 编排提示。
 
     const abortController = new AbortController();
+    unregisterRequestController = registerRequestController(session_id, abortController);
 
     // Handle client disconnect
     request.signal.addEventListener('abort', () => {
-      abortController.abort();
+      abortController.abort('user_cancel');
     });
+    if (request.signal.aborted) abortController.abort('user_cancel');
 
     // Convert file attachments to the format expected by streamClaude.
     // Include filePath from the already-saved files so claude-client can
     // reference the on-disk copies instead of writing them again.
-    const fileAttachments: FileAttachment[] | undefined = files && files.length > 0
-      ? files.map((f, i) => {
+    const fileAttachments: FileAttachment[] | undefined = filesForModel && filesForModel.length > 0
+      ? filesForModel.map((f, i) => {
           const meta = fileMeta?.find((m: { id: string }) => m.id === f.id);
           return {
             id: f.id || `file-${Date.now()}-${i}`,
@@ -224,227 +386,333 @@ export async function POST(request: NextRequest) {
     // Load conversation history from DB as fallback context.
     // Fetch up to 200 messages (DB query is cheap); actual truncation is done
     // by buildFallbackContext using a token budget, not a fixed message count.
-    track('db_getMessages');
     const { messages: recentMsgs } = getMessages(session_id, { limit: 200, excludeHeartbeatAck: true });
+    // Load session summary for compression-aware fallback (needed before the
+    // compact-boundary filter below).
+    const sessionSummaryData = getSessionSummary(session_id);
+
     // Exclude the user message we just saved (last in the list) — it's already the prompt
-    const historyMsgs = recentMsgs.slice(0, -1).map(m => ({
+    const historyBeforeBoundary = recentMsgs.slice(0, -1);
+    // Drop history at-or-before the coverage boundary
+    // (context_summary_boundary_rowid — the rowid of the last message
+    // actually covered by the summary). Rowid, not timestamp: disambiguates
+    // same-second writes. See filterHistoryByCompactBoundary doc.
+    const { filterHistoryByCompactBoundary } = await import('@/lib/context-compressor');
+    const historyAfterBoundary = filterHistoryByCompactBoundary({
+      history: historyBeforeBoundary,
+      summary: sessionSummaryData.summary,
+      summaryBoundaryRowid: sessionSummaryData.boundaryRowid,
+    });
+    if (historyAfterBoundary.length < historyBeforeBoundary.length) {
+      console.log(`[chat API] Compact boundary filter: dropped ${historyBeforeBoundary.length - historyAfterBoundary.length} messages at-or-before rowid ${sessionSummaryData.boundaryRowid}, kept ${historyAfterBoundary.length}`);
+    }
+    // Preserve _rowid through to streamClaude: if a CONTEXT_TOO_LONG
+    // reactive compact fires inside streamClaude on this turn, it needs the
+    // rowids in conversationHistory to write a correct
+    // context_summary_boundary_rowid. Without this, reactive compact would
+    // fall back to the "preserve existing boundary" degraded path.
+    const historyMsgs = historyAfterBoundary.map(m => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
+      _rowid: m._rowid,
     }));
 
-    // Load session summary for compression-aware fallback
-    const sessionSummaryData = getSessionSummary(session_id);
+    // 中文注释：孤儿 user 消息修复 —— 轮次在上游卡死/进程被杀时可能没落库 assistant 回复，
+    // 留下两条相邻 user 消息；直接喂给模型会丢上一轮上下文。在历史组装入口统一插入
+    // 中断占位，保证 estimate / fallback context / streamClaude 看到的是修复后的历史。
+    const { repairOrphanUserMessages } = await import('@/lib/message-normalizer');
+    const repairedHistoryMsgs = repairOrphanUserMessages(historyMsgs);
 
     // Detect actual image agent mode by checking for the specific design agent prompt,
     // not just any systemPromptAppend (which could come from CLI badges or skills).
     const isImageAgentMode = !!systemPromptAppend && systemPromptAppend.includes('image-gen-request');
+    console.log('[chat API] isImageAgentMode:', isImageAgentMode, 'systemPromptAppend length:', systemPromptAppend?.length || 0);
 
-    if (isImageAgentMode && shouldBypassImagePlanner(content, fileAttachments)) {
-      const directText = buildImageAgentFallbackText(content);
-      if (directText) {
-        const directStream = new ReadableStream<string>({
-          start(controller) {
-            controller.enqueue(`data: ${JSON.stringify({ type: 'text', data: directText })}\n\n`);
-            controller.enqueue(`data: ${JSON.stringify({ type: 'done', data: '' })}\n\n`);
-            controller.close();
-          },
-        });
-        const [streamForClient, streamForCollect] = directStream.tee();
+    // OMC / Claude Code CLI owns orchestration now. Do not inject
+    // CodePilot-specific Team or search-routing reminders here.
+    const finalSystemPromptAppend = systemPromptAppend;
+    const pluginCwd = session.sdk_cwd || session.working_directory || process.cwd();
+    // 中文注释：功能名称「聊天上下文 OMC 检测」，用法是在组装系统提示前先判断当前
+    // 工作区是否启用了 OMC。后续会用这个标记减少 CodePilot 自己的技能目录摘要，
+    // 让终端版那套 hook/skill steering 更容易直接接管。
+    const omcPluginEnabled = hasEnabledOmcPlugin(getEnabledPluginConfigs(pluginCwd));
 
-        collectStreamResponse(streamForCollect, session_id, telegramNotifyOpts, () => {
-          releaseSessionLock(session_id, lockId);
-          setSessionRuntimeStatus(session_id, 'idle');
-        }, { isHeartbeatTurn: false, suppressNotifications: !!autoTrigger });
-
-        return new Response(streamForClient, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-          },
-        });
-      }
-    }
-
-    // Unified context assembly — extracts workspace, CLI tools, widget prompt
-    track('before_assembleContext');
-    const assembled = await assembleContext({
-      session,
-      entryPoint: 'desktop',
-      userPrompt: content,
-      systemPromptAppend,
-      conversationHistory: historyMsgs,
-      imageAgentMode: isImageAgentMode,
-      autoTrigger: !!autoTrigger,
-    });
-    track('after_assembleContext');
+    // Unified context assembly — extracts workspace, CLI tools, widget prompt.
+    // Run in parallel with MCP server loading (both are independent I/O operations).
+    // 中文注释：功能名称「上下文组装与 MCP 并行加载」，用法是将 assembleContext（含文件 I/O）
+    // 与 MCP 服务器配置加载并行执行，减少串行等待 ~5-10ms。
+    const projectCwd = session.sdk_cwd || session.working_directory || process.cwd();
+    const [assembled, mcpServers] = await Promise.all([
+      assembleContext({
+        session,
+        entryPoint: 'desktop',
+        userPrompt: modelPrompt,
+        systemPromptAppend: finalSystemPromptAppend,
+        conversationHistory: repairedHistoryMsgs,
+        imageAgentMode: isImageAgentMode,
+        autoTrigger: !!autoTrigger,
+        omcPluginEnabled,
+      }),
+      // 中文注释：只预载常用 MCP（白名单见 mcp-loader.COMMON_MCP_SERVERS），低频服务器改按需加载，加速冷启动/预热
+      Promise.resolve(loadCommonMcpServers(projectCwd)),
+    ]);
     const finalSystemPrompt = assembled.systemPrompt;
     const generativeUIEnabled = assembled.generativeUIEnabled;
-    const assistantProjectInstructions = assembled.assistantProjectInstructions;
-    const isAssistantProject = assembled.isAssistantProject;
-
-    // Load only MCP servers needing CodePilot-specific processing (${...} env placeholders).
-    // All other MCP servers are auto-loaded by the SDK via settingSources.
-    const mcpServers = loadCodePilotMcpServers();
+    const referencedContexts = assembled.referencedContexts;
+    const instructionSources = assembled.instructionSources;
 
     // ── Context compression check ───────────────────────────────────
     // Estimate next-turn context size and compress if over threshold.
     let activeSessionSummary = sessionSummaryData.summary || undefined;
     let fallbackTokenBudget: number | undefined;
-    let compressionOccurred = false;
 
-    try {
-      const { estimateContextTokens } = await import('@/lib/context-estimator');
-      const { getContextWindow } = await import('@/lib/model-context');
-      const { needsCompression, compressConversation } = await import('@/lib/context-compressor');
-      const { updateSessionSummary } = await import('@/lib/db');
+    // Stream handoff variables. Default to the resume path (use the stored SDK
+    // session, full history). When auto-compression succeeds below, these get
+    // switched to the fresh-session path via planStreamHandoffAfterCompaction:
+    // sdkSessionId = undefined (force fresh SDK session so our new summary is
+    // actually seen by the model) and conversationHistory = messagesToKeep
+    // (avoid feeding the summary + the turns that summary already covers).
+    let streamSdkSessionId: string | undefined = session.sdk_session_id || undefined;
+    let streamConversationHistory: typeof historyMsgs = repairedHistoryMsgs;
+    const userMessageAckFrame = !autoTrigger && client_message_id && savedUserMessage
+      ? `data: ${JSON.stringify({
+          type: 'user_message_ack',
+          data: JSON.stringify({
+            client_message_id,
+            server_message_id: savedUserMessage.id,
+            created_at: savedUserMessage.created_at,
+          }),
+        })}\n\n`
+      : '';
 
-      const modelForWindow = resolved.upstreamModel || resolved.model || effectiveModel || 'sonnet';
-      const contextWindow = getContextWindow(modelForWindow, { context1m: context_1m }) || 200000;
+    const responseStream = new ReadableStream<string>({
+      async start(controllerRaw) {
+        const controller = wrapController(controllerRaw);
 
-      // Estimate using normalized content (matches what buildFallbackContext actually sends).
-      // Raw transcript overestimates tool-heavy conversations because normalize + microcompact
-      // strip metadata and truncate old tool results significantly.
-      const { normalizeMessageContent, microCompactMessage } = await import('@/lib/message-normalizer');
-      const { roughTokenEstimate } = await import('@/lib/context-estimator');
-      const normalizedHistory = historyMsgs.map((m, i) => ({
-        role: m.role,
-        content: microCompactMessage(m.role, normalizeMessageContent(m.role, m.content), historyMsgs.length - 1 - i),
-      }));
-
-      const estimate = estimateContextTokens({
-        systemPrompt: finalSystemPrompt,
-        history: normalizedHistory,
-        currentUserMessage: content,
-        sessionSummary: activeSessionSummary,
-      });
-
-      // Budget for history = 70% of window minus system prompt, summary, and current user message.
-      // buildFallbackContext adds summary + prompt on top of the history, so we must account for them.
-      fallbackTokenBudget = Math.floor(
-        contextWindow * 0.7 - estimate.breakdown.system - estimate.breakdown.summary - estimate.breakdown.userMessage
-      );
-
-      if (needsCompression(estimate.total, contextWindow, session_id)) {
-        console.log(`[chat API] Context at ${((estimate.total / contextWindow) * 100).toFixed(1)}% — triggering compression`);
-
-        // Determine which messages to compress using normalized sizes (consistent with estimate)
-        const recentBudget = Math.floor(contextWindow * 0.5);
-        const messagesToKeep: typeof historyMsgs = [];
-        let keptTokens = 0;
-        for (let i = normalizedHistory.length - 1; i >= 0; i--) {
-          const msgTokens = roughTokenEstimate(normalizedHistory[i].content) + 10;
-          if (keptTokens + msgTokens > recentBudget) break;
-          messagesToKeep.unshift(historyMsgs[i]); // Keep raw msg for compression input
-          keptTokens += msgTokens;
+        if (userMessageAckFrame) {
+          controller.enqueue(userMessageAckFrame);
         }
-        const messagesToCompress = historyMsgs.slice(0, historyMsgs.length - messagesToKeep.length);
 
-        if (messagesToCompress.length > 0) {
-          try {
-            const result = await compressConversation({
-              sessionId: session_id,
-              messages: messagesToCompress,
-              existingSummary: activeSessionSummary,
-              providerId: effectiveProviderId || undefined,
-              sessionModel: effectiveModel || undefined,
-            });
-            activeSessionSummary = result.summary;
-            updateSessionSummary(session_id, result.summary);
-            // Recalculate budget with new (larger) summary
-            const newSummaryTokens = roughTokenEstimate(result.summary);
-            const userMsgTokens = roughTokenEstimate(content);
-            fallbackTokenBudget = Math.floor(
-              contextWindow * 0.7 - estimate.breakdown.system - newSummaryTokens - userMsgTokens
-            );
-            // Flag so we can notify frontend via a leading SSE event
-            compressionOccurred = true;
-            console.log(`[chat API] Compressed ${result.messagesCompressed} messages, saved ~${result.estimatedTokensSaved} tokens`);
-          } catch (compErr) {
-            console.warn('[chat API] Compression failed, proceeding without:', compErr);
+        let compressionOccurred = false;
+        let compressionStats: { messagesCompressed: number; tokensSaved: number } | null = null;
+
+        try {
+          const { estimateContextTokens } = await import('@/lib/context-estimator');
+          const { getContextWindow } = await import('@/lib/model-context');
+          const { needsCompression, compressConversation } = await import('@/lib/context-compressor');
+          const { updateSessionSummary } = await import('@/lib/db');
+
+          const modelForWindow = resolved.upstreamModel || resolved.model || effectiveModel || 'sonnet';
+          const contextWindow = getContextWindow(modelForWindow, {
+            context1m: context_1m,
+            upstream: resolved.upstreamModel,
+          }) || 200000;
+
+          const { normalizeMessageContent, microCompactMessage } = await import('@/lib/message-normalizer');
+          const { roughTokenEstimate } = await import('@/lib/context-estimator');
+          const normalizedHistory = repairedHistoryMsgs.map((m, i) => ({
+            role: m.role,
+            content: microCompactMessage(m.role, normalizeMessageContent(m.role, m.content), repairedHistoryMsgs.length - 1 - i),
+          }));
+
+          const estimate = estimateContextTokens({
+            systemPrompt: finalSystemPrompt,
+            history: normalizedHistory,
+            currentUserMessage: modelPrompt,
+            sessionSummary: activeSessionSummary,
+          });
+
+          fallbackTokenBudget = Math.floor(
+            contextWindow * 0.7 - estimate.breakdown.system - estimate.breakdown.summary - estimate.breakdown.userMessage
+          );
+
+          if (needsCompression(estimate.total, contextWindow, session_id)) {
+            console.log(`[chat API] Context at ${((estimate.total / contextWindow) * 100).toFixed(1)}% — triggering compression`);
+
+            const recentBudget = Math.floor(contextWindow * 0.5);
+            // 中文注释：keep/compress 切分走纯函数 —— 预算内一条都留不下时保底最近一轮，
+            // 避免"最近一轮"被整段吞进摘要（用户可感知的上下文丢失来源）。
+            const { selectRecentMessagesToKeep } = await import('@/lib/context-compressor');
+            const rowsToKeep = selectRecentMessagesToKeep({
+              history: historyAfterBoundary.map((row, i) => ({
+                row,
+                cost: roughTokenEstimate(normalizedHistory[i].content) + 10,
+              })),
+              tokensOf: (item) => item.cost,
+              budget: recentBudget,
+            }).map((item) => item.row);
+            const rowsToCompress = historyAfterBoundary.slice(0, historyAfterBoundary.length - rowsToKeep.length);
+            const messagesToKeep = rowsToKeep.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, _rowid: m._rowid }));
+            const messagesToCompress = rowsToCompress.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+
+            if (messagesToCompress.length > 0) {
+              // Notify frontend immediately BEFORE compression starts so it can show the loading state
+              controller.enqueue(`data: ${JSON.stringify({
+                type: 'status',
+                data: JSON.stringify({ notification: true, message: 'context_compressing_retry' })
+              })}\n\n`);
+
+              try {
+                const autoCompactCwd = session.sdk_cwd || session.working_directory || process.cwd();
+                const result = await compressConversation({
+                  sessionId: session_id,
+                  messages: messagesToCompress,
+                  existingSummary: activeSessionSummary,
+                  providerId: effectiveProviderId || undefined,
+                  sessionModel: effectiveModel || undefined,
+                  cwd: autoCompactCwd,
+                  // 中文注释：自动预压缩接上进度回调（与手动 /compact 相同的事件形状）——
+                  // 前端在「正在压缩上下文」分隔条上显示实时百分比，压缩不再是黑盒等待。
+                  onProgress: (progress) => {
+                    try {
+                      controller.enqueue(`data: ${JSON.stringify({
+                        type: 'status',
+                        data: JSON.stringify({ subtype: 'context_compressing', ...progress }),
+                      })}\n\n`);
+                    } catch { /* 流可能已关闭，忽略 */ }
+                  },
+                });
+                activeSessionSummary = result.summary;
+                const autoCompactBoundaryRowid = rowsToCompress[rowsToCompress.length - 1]._rowid ?? 0;
+                updateSessionSummary(session_id, result.summary, autoCompactBoundaryRowid);
+                const newSummaryTokens = roughTokenEstimate(result.summary);
+                const userMsgTokens = roughTokenEstimate(modelPrompt);
+                fallbackTokenBudget = Math.floor(
+                  contextWindow * 0.7 - estimate.breakdown.system - newSummaryTokens - userMsgTokens
+                );
+                compressionOccurred = true;
+                compressionStats = {
+                  messagesCompressed: result.messagesCompressed,
+                  tokensSaved: result.estimatedTokensSaved,
+                };
+
+                updateSdkSessionId(session_id, '');
+                const { planStreamHandoffAfterCompaction } = await import('@/lib/context-compressor');
+                const handoff = planStreamHandoffAfterCompaction({
+                  compressed: true,
+                  originalHistory: repairedHistoryMsgs,
+                  messagesToKeep,
+                  originalSdkSessionId: streamSdkSessionId,
+                });
+                streamSdkSessionId = handoff.sdkSessionId;
+                streamConversationHistory = handoff.conversationHistory;
+
+                console.log(`[chat API] Compressed ${result.messagesCompressed} messages, saved ~${result.estimatedTokensSaved} tokens; cleared SDK session, switching to fresh query with summary + ${messagesToKeep.length} recent turns`);
+              } catch (compErr) {
+                console.warn('[chat API] Compression failed, proceeding without:', compErr);
+              }
+            }
           }
+        } catch (estimateErr) {
+          console.warn('[chat API] Context estimation failed, proceeding without compression:', estimateErr);
+        }
+
+        if (compressionOccurred && compressionStats) {
+          const { buildContextCompressedStatus } = await import('@/lib/context-compressor');
+          controller.enqueue(`data: ${JSON.stringify({
+            type: 'status',
+            data: JSON.stringify(buildContextCompressedStatus({
+              messagesCompressed: compressionStats.messagesCompressed,
+              tokensSaved: compressionStats.tokensSaved,
+            })),
+          })}\n\n`);
+        }
+
+        // Start title generation early so the lightweight model call can run
+        // concurrently with the main stream. Store the promise so we can await
+        // it before falling back to response-extraction (avoiding race condition).
+        // Only on first turn (no prior history) — subsequent messages must not
+        // overwrite the AI-generated title with truncated user text.
+        let titleGenerationPromise: Promise<boolean> | null = null;
+        if (!autoTrigger && historyMsgs.length === 0) {
+          titleGenerationPromise = generateConversationTitle(session_id, content).catch(err => {
+            console.warn('[chat API] Title generation failed:', err);
+            return false;
+          });
+        }
+
+        console.log('[chat API] streamClaude params:', {
+          promptLength: modelPrompt.length,
+          promptFirst200: modelPrompt.slice(0, 200),
+          sdkSessionId: streamSdkSessionId || 'none',
+          compressionOccurred,
+          historyMessageCount: streamConversationHistory.length,
+          systemPromptLength: finalSystemPrompt?.length || 0,
+          systemPromptFirst200: finalSystemPrompt?.slice(0, 200) || 'none',
+        });
+
+        try {
+          const stream = streamClaude({
+            prompt: modelPrompt,
+            sessionId: session_id,
+            sdkSessionId: streamSdkSessionId,
+            model: resolved.upstreamModel || resolved.model || effectiveModel,
+            systemPrompt: finalSystemPrompt,
+            referencedContexts,
+            instructionSources,
+            workingDirectory: session.sdk_cwd || session.working_directory || undefined,
+            abortController,
+            permissionMode,
+            files: fileAttachments,
+            imageAgentMode: isImageAgentMode,
+            // 中文注释：语义已从「墙钟总时长」改为「无进度时长」——连续 N 秒没有任何进度上报才判卡死。
+            // 长构建/长测试只要仍在推进进度就不会被杀；默认 10 分钟无响应即中止。
+            toolTimeoutSeconds: toolTimeout || 600,
+            provider: resolvedProvider,
+            providerId: effectiveProviderId || undefined,
+            sessionProviderId: session.provider_id || undefined,
+            mcpServers,
+            conversationHistory: streamConversationHistory,
+            sessionSummary: activeSessionSummary,
+            sessionSummaryBoundaryRowid: sessionSummaryData.boundaryRowid,
+            fallbackTokenBudget,
+            bypassPermissions,
+            thinking: thinking as any,
+            effort: effort as any,
+            context1m: context_1m,
+            generativeUI: generativeUIEnabled,
+            enableFileCheckpointing: enableFileCheckpointing ?? true,
+            autoTrigger: !!autoTrigger,
+            onRuntimeStatusChange: (status: string) => {
+              try { setSessionRuntimeStatus(session_id, status); } catch { /* best effort */ }
+            },
+          });
+
+          const [streamForClient, streamForCollect] = stream.tee();
+
+          const lockRenewalInterval = setInterval(() => {
+            try { renewSessionLock(session_id, lockId, 600); } catch { /* best effort */ }
+          }, 60_000);
+
+          const isHeartbeatTurn = !!autoTrigger && content.includes('心跳检查');
+          collectStreamResponse(streamForCollect, session_id, telegramNotifyOpts, () => {
+            clearInterval(lockRenewalInterval);
+            releaseSessionLock(session_id, lockId);
+            setSessionRuntimeStatus(session_id, 'idle');
+            unregisterRequestController?.();
+          }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger, referencedContexts, persistProviderId, firstUserMessage: content, titleGenerationPromise, signal: abortController.signal });
+
+          const reader = streamForClient.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+            if (controller.closed) break;
+          }
+        } catch (err) {
+          if (abortController.signal.reason === 'user_cancel') {
+            controller.enqueue(`data: ${JSON.stringify({ type: 'aborted', data: JSON.stringify({ reason: 'user_cancel' }) })}\n\n`);
+          } else {
+            console.error('[chat API] streamClaude execution failed:', err);
+            controller.enqueue(`data: ${JSON.stringify({ type: 'error', data: err instanceof Error ? err.message : 'Internal Server Error' })}\n\n`);
+            controller.enqueue(`data: ${JSON.stringify({ type: 'aborted', data: JSON.stringify({ reason: 'error', message: err instanceof Error ? err.message : 'Internal Server Error' }) })}\n\n`);
+          }
+          unregisterRequestController?.();
+        } finally {
+          controller.close();
         }
       }
-    } catch (estimateErr) {
-      console.warn('[chat API] Context estimation failed, proceeding without compression:', estimateErr);
-    }
-
-    // Stream Claude response, using SDK session ID for resume if available
-    track('before_streamClaude');
-    console.log('[chat API] streamClaude params:', {
-      promptLength: content.length,
-      promptFirst200: content.slice(0, 200),
-      sdkSessionId: session.sdk_session_id || 'none',
-      systemPromptLength: finalSystemPrompt?.length || 0,
-      systemPromptFirst200: finalSystemPrompt?.slice(0, 200) || 'none',
     });
-    const stream = streamClaude({
-      prompt: content,
-      sessionId: session_id,
-      sdkSessionId: session.sdk_session_id || undefined,
-      model: resolved.upstreamModel || resolved.model || effectiveModel,
-      systemPrompt: finalSystemPrompt,
-      workingDirectory: session.sdk_cwd || session.working_directory || undefined,
-      abortController,
-      permissionMode,
-      files: fileAttachments,
-      imageAgentMode: isImageAgentMode,
-      toolTimeoutSeconds: toolTimeout || 300,
-      provider: resolvedProvider,
-      providerId: effectiveProviderId || undefined,
-      sessionProviderId: session.provider_id || undefined,
-      mcpServers,
-      conversationHistory: historyMsgs,
-      sessionSummary: activeSessionSummary,
-      fallbackTokenBudget,
-      bypassPermissions,
-      thinking: isImageAgentMode ? { type: 'disabled' } : thinking as ClaudeStreamOptions['thinking'],
-      effort: effort as ClaudeStreamOptions['effort'],
-      outputFormat: isImageAgentMode ? IMAGE_AGENT_OUTPUT_FORMAT : undefined,
-      context1m: context_1m,
-      generativeUI: generativeUIEnabled,
-      enableFileCheckpointing: enableFileCheckpointing ?? true,
-      autoTrigger: !!autoTrigger,
-      onRuntimeStatusChange: (status: string) => {
-        try { setSessionRuntimeStatus(session_id, status); } catch { /* best effort */ }
-      },
-    });
-    track('streamClaude_returned');
-
-    // Tee the stream: one for client, one for collecting the response
-    const [streamForClient, streamForCollect] = stream.tee();
-
-    // Periodically renew the session lock so long-running tasks don't expire
-    const lockRenewalInterval = setInterval(() => {
-      try { renewSessionLock(session_id, lockId, 600); } catch { /* best effort */ }
-    }, 60_000);
-
-    // Save assistant message in background, with cleanup callback to release lock
-    const isHeartbeatTurn = !!autoTrigger && content.includes('心跳检查');
-    collectStreamResponse(streamForCollect, session_id, telegramNotifyOpts, () => {
-      clearInterval(lockRenewalInterval);
-      releaseSessionLock(session_id, lockId);
-      setSessionRuntimeStatus(session_id, 'idle');
-    }, { isHeartbeatTurn, suppressNotifications: !!autoTrigger });
-
-    // If auto-compression happened, prepend a notification event to the stream
-    const responseStream = compressionOccurred
-      ? new ReadableStream<string>({
-          async start(controller) {
-            controller.enqueue(`data: ${JSON.stringify({ type: 'status', data: JSON.stringify({ notification: true, message: 'context_compressed' }) })}\n\n`);
-            const reader = streamForClient.getReader();
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                controller.enqueue(value);
-              }
-            } finally {
-              controller.close();
-            }
-          },
-        })
-      : streamForClient;
 
     return new Response(responseStream, {
       headers: {
@@ -454,6 +722,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    unregisterRequestController?.();
     // Release lock and reset status on error (only if lock was acquired)
     if (activeSessionId && activeLockId) {
       try {
@@ -475,18 +744,31 @@ async function collectStreamResponse(
   sessionId: string,
   telegramOpts: { sessionId?: string; sessionTitle?: string; workingDirectory?: string },
   onComplete?: () => void,
-  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean },
+  opts?: { isHeartbeatTurn?: boolean; suppressNotifications?: boolean; referencedContexts?: string[]; persistProviderId?: string; firstUserMessage?: string; titleGenerationPromise?: Promise<boolean> | null; signal?: AbortSignal },
 ) {
   const reader = stream.getReader();
   const contentBlocks: MessageContentBlock[] = [];
   let currentText = '';
   let thinkingText = '';
+  let subAgents: any[] = [];
+
+  const flushThinking = () => {
+    if (thinkingText.trim()) {
+      contentBlocks.push({ type: 'thinking', thinking: thinkingText.trim() });
+      thinkingText = '';
+    }
+  };
+  const startTime = Date.now();
   /** Tracks whether non-thinking content arrived since last thinking delta (for phase separation) */
   let thinkingPhaseEnded = false;
   let tokenUsage: TokenUsage | null = null;
   let hasError = false;
   let errorMessage = '';
+  let abortReason: string | null = null;
   let lastSavedAssistantMsgId: string | null = null;
+  // 中文注释：功能名称「工具文件收集」，用法是收集AI实际读取/写入的文件路径和网页URL，
+  // 从SSE tool_files事件中获取，持久化到DB的tool_files列
+  let collectedToolFiles: string[] = [];
   // Dedup layer: skip duplicate tool_result events by tool_use_id
   const seenToolResultIds = new Set<string>();
 
@@ -500,6 +782,12 @@ async function collectStreamResponse(
         if (line.startsWith('data: ')) {
           try {
             const event: SSEEvent = JSON.parse(line.slice(6));
+            if (opts?.signal?.reason === 'user_cancel' || abortReason === 'user_cancel') {
+              abortReason = 'user_cancel';
+              hasError = false;
+              errorMessage = '';
+              if (event.type === 'error' || event.type === 'result' || event.type === 'aborted') continue;
+            }
             if (event.type === 'permission_request' || event.type === 'tool_output') {
               // Skip permission_request and tool_output events - not saved as message content
             } else if (event.type === 'thinking') {
@@ -510,10 +798,12 @@ async function collectStreamResponse(
               }
               thinkingText += event.data;
             } else if (event.type === 'text') {
-              currentText += event.data;
               if (thinkingText) thinkingPhaseEnded = true;
+              flushThinking();
+              currentText += event.data;
             } else if (event.type === 'tool_use') {
               if (thinkingText) thinkingPhaseEnded = true;
+              flushThinking();
               // Flush any accumulated text before the tool use block
               if (currentText.trim()) {
                 contentBlocks.push({ type: 'text', text: currentText });
@@ -588,7 +878,12 @@ async function collectStreamResponse(
                 if (statusData.session_id) {
                   updateSdkSessionId(sessionId, statusData.session_id);
                 }
-                if (statusData.model) {
+                // 中文注释：不再用 SDK 上报的模型名覆盖 session 的 model 字段。
+                // SDK 可能返回别名或截断的模型名（如 "mimo-v2.5" 而非用户选择的 "mimo-v2.5-pro"），
+                // 导致切换会话后模型被重置。用户的显式选择应始终优先于 SDK 的内部报告。
+                // 仅当 session 没有已存储的 model 时才写入（首次使用场景）。
+                const session = getSession(sessionId);
+                if (statusData.model && (!session || !session.model)) {
                   updateSessionModel(sessionId, statusData.model);
                 }
               } catch {
@@ -607,6 +902,68 @@ async function collectStreamResponse(
             } else if (event.type === 'error') {
               hasError = true;
               errorMessage = event.data || 'Unknown error';
+            } else if (event.type === 'aborted') {
+              // 中文注释：上游卡死看门狗的中止（reason=stalled）—— 把原始的 JSON 载荷
+              // 换成可读中文，落库的 chat-error 块才能给出人话原因
+              try {
+                const abortData = JSON.parse(event.data);
+                abortReason = abortData?.reason || null;
+                if (abortData?.reason === 'stalled') {
+                  errorMessage = abortData.message || '模型上游长时间无响应，本轮任务已中止';
+                }
+              } catch { /* keep raw */ }
+              if (abortReason !== 'user_cancel') {
+                hasError = true;
+                errorMessage ||= event.data || 'Stream aborted';
+              }
+            } else if (event.type === 'subagent_start') {
+              try {
+                const data = JSON.parse(event.data);
+                subAgents.push({
+                  id: data.id,
+                  name: data.name,
+                  displayName: data.displayName,
+                  prompt: data.prompt,
+                  status: 'running',
+                  startedAt: Date.now()
+                });
+              } catch {}
+            } else if (event.type === 'subagent_progress') {
+              try {
+                const data = JSON.parse(event.data);
+                const idx = subAgents.findIndex(a => a.id === data.id);
+                if (idx >= 0) {
+                  // 中文注释：功能名称「子Agent进度追加」，用法是处理append模式的进度更新，
+                  // 追加而非替换进度文本，与agent.ts中emitSSE的append标志保持一致
+                  if (data.append) {
+                    const oldProgress = subAgents[idx].progress || '';
+                    const newProgress = oldProgress + (data.detail || '');
+                    subAgents[idx].progress = newProgress.length > 10000 ? '...' + newProgress.slice(-10000) : newProgress;
+                  } else {
+                    subAgents[idx].progress = data.detail;
+                  }
+                }
+              } catch {}
+            } else if (event.type === 'subagent_complete') {
+              try {
+                const data = JSON.parse(event.data);
+                const idx = subAgents.findIndex(a => a.id === data.id);
+                if (idx >= 0) {
+                  subAgents[idx].status = data.error ? 'error' : 'completed';
+                  subAgents[idx].report = data.report;
+                  subAgents[idx].error = data.error;
+                  subAgents[idx].completedAt = Date.now();
+                }
+              } catch {}
+            } else if (event.type === 'tool_files') {
+              // 中文注释：功能名称「工具文件事件捕获」，用法是从SSE流中捕获AI访问的文件/网页列表，
+              // 持久化到DB以解决会话切换后上下文统计丢失的问题
+              try {
+                const data = JSON.parse(event.data);
+                if (Array.isArray(data.files)) {
+                  collectedToolFiles = data.files.filter((f: unknown) => typeof f === 'string');
+                }
+              } catch {}
             } else if (event.type === 'result') {
               try {
                 const resultData = JSON.parse(event.data);
@@ -615,6 +972,10 @@ async function collectStreamResponse(
                 }
                 if (resultData.is_error) {
                   hasError = true;
+                  const resultErrors = Array.isArray(resultData.errors)
+                    ? resultData.errors.filter((message: unknown) => typeof message === 'string' && message.trim())
+                    : [];
+                  errorMessage = resultErrors.join('\n') || errorMessage || `模型服务返回错误：${resultData.subtype || '未知上游错误'}`;
                 }
                 // Also capture session_id from result if we missed it from init
                 if (resultData.session_id) {
@@ -641,10 +1002,51 @@ async function collectStreamResponse(
     if (currentText.trim()) {
       contentBlocks.push({ type: 'text', text: currentText });
     }
+    flushThinking();
 
-    // Prepend thinking block if accumulated during stream
-    if (thinkingText.trim()) {
-      contentBlocks.unshift({ type: 'thinking', thinking: thinkingText.trim() });
+    if (opts?.signal?.reason === 'user_cancel') abortReason = 'user_cancel';
+    if (abortReason === 'user_cancel') {
+      hasError = false;
+      errorMessage = '';
+      contentBlocks.push({ type: 'text', text: '\n\n*(任务已由用户手动中断)*' });
+    }
+    
+    if (subAgents.length > 0) {
+      // 中文注释：功能名称「子Agent超时清理」，用法是流结束时将所有仍在running状态的子Agent
+      // 标记为超时错误，避免前端渲染永远运行中的空智能体卡片
+      subAgents.forEach(sa => {
+        if (sa.status === 'running') {
+          sa.status = 'error';
+          sa.error = '流结束但子Agent未完成，已自动清理';
+          sa.completedAt = Date.now();
+        }
+      });
+      contentBlocks.push({ type: 'sub_agents', subAgents });
+    }
+
+    if (hasError && errorMessage) {
+      let rawErrorStr = '';
+      try {
+        const parsed = JSON.parse(errorMessage);
+        if (parsed.category && parsed.userMessage) {
+          rawErrorStr = parsed.userMessage;
+          if (parsed.details) rawErrorStr += `\n\nDetails: ${parsed.details}`;
+        } else {
+          rawErrorStr = errorMessage;
+        }
+      } catch {
+        rawErrorStr = errorMessage;
+      }
+      
+      let explain = '模型服务连接中断或遇到错误';
+      const lowerErr = rawErrorStr.toLowerCase();
+      if (lowerErr.includes('rate') && lowerErr.includes('limit')) explain = '触发了模型提供商的速率限制 (Rate Limit) 或限流，请稍后重试';
+      else if (lowerErr.includes('overloaded') || lowerErr.includes('503') || lowerErr.includes('502') || lowerErr.includes('timeout')) explain = '模型提供商的服务器当前拥堵或响应超时';
+      else if (lowerErr.includes('api_key') || lowerErr.includes('unauthorized') || lowerErr.includes('401')) explain = 'API 密钥无效或未授权';
+      else if (lowerErr.includes('fetch') || lowerErr.includes('network') || lowerErr.includes('econnrefused')) explain = '网络连接失败，请检查网络或系统代理设置';
+      
+      const errPayload = JSON.stringify({ explain, raw: rawErrorStr });
+      contentBlocks.push({ type: 'text', text: `\n\n\`\`\`chat-error\n${errPayload}\n\`\`\`` });
     }
 
     if (contentBlocks.length > 0) {
@@ -652,13 +1054,17 @@ async function collectStreamResponse(
       // for backward compatibility with existing message rendering.
       // Strip soft-heartbeat marker from text blocks before persisting (both paths)
       const heartbeatMarkerRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
-      const cleanedBlocks = contentBlocks.map(b =>
-        b.type === 'text' && 'text' in b ? { ...b, text: (b.text as string).replace(heartbeatMarkerRe, '') } : b
-      );
+      const cleanedBlocks = contentBlocks
+        .map(b =>
+          b.type === 'text' && 'text' in b
+            ? { ...b, text: stripLeakedTransportContent((b.text as string).replace(heartbeatMarkerRe, '')) }
+            : b
+        )
+        .filter((b) => b.type !== 'text' || b.text.trim());
 
       // If it contains tool calls or thinking blocks, store as structured JSON.
       const hasStructuredBlocks = cleanedBlocks.some(
-        (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
+        (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking' || b.type === 'sub_agents'
       );
 
       const content = hasStructuredBlocks
@@ -670,32 +1076,95 @@ async function collectStreamResponse(
             .trim();
 
       if (content) {
+        const durationSec = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+        const finalTokenUsage = tokenUsage ? { ...tokenUsage, duration_sec: durationSec } : { input_tokens: 0, output_tokens: 0, duration_sec: durationSec };
+
         const savedMsg = addMessage(
           sessionId,
           'assistant',
           content,
-          tokenUsage ? JSON.stringify(tokenUsage) : null,
+          JSON.stringify(finalTokenUsage),
+          opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined,
+          // 中文注释：功能名称「工具文件持久化」，用法是将AI访问的文件/网页列表保存到DB，
+          // 使会话切换后上下文统计仍能显示完整的文件和网页信息
+          collectedToolFiles.length > 0 ? JSON.stringify(collectedToolFiles) : undefined
         );
         lastSavedAssistantMsgId = savedMsg.id;
+
+        // Restore task completion notification
+        // 中文注释：对齐 cc-haha —— 标题「任务已完成」+ 耗时正文，notificationType=task_complete
+        // （前端走系统通知而非 toast），sound=true 触发提示音。
+        if (!opts?.suppressNotifications && !hasError && abortReason !== 'user_cancel') {
+          import('@/lib/notification-manager').then(({ enqueueNotification }) => {
+            const mins = Math.floor(durationSec / 60);
+            const secs = durationSec % 60;
+            const elapsedText = durationSec > 0
+              ? `耗时 ${mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`}`
+              : undefined;
+            enqueueNotification('任务已完成', elapsedText || '模型回复已就绪', 'normal', true, 'task_complete');
+          }).catch(e => console.warn('[chat API] Failed to enqueue completion notification:', e));
+        }
       }
     }
   } catch (e) {
-    hasError = true;
-    errorMessage = e instanceof Error ? e.message : 'Stream reading error';
+    if (opts?.signal?.reason === 'user_cancel' || abortReason === 'user_cancel') {
+      abortReason = 'user_cancel';
+      hasError = false;
+      errorMessage = '';
+    } else {
+      hasError = true;
+      errorMessage = e instanceof Error ? e.message : 'Stream reading error';
+    }
     // Stream reading error - best effort save (same structured-block handling as happy path)
     if (currentText.trim()) {
       contentBlocks.push({ type: 'text', text: currentText });
     }
-    if (thinkingText.trim()) {
-      contentBlocks.unshift({ type: 'thinking', thinking: thinkingText.trim() });
+    flushThinking();
+
+    if (abortReason === 'user_cancel') {
+      contentBlocks.push({ type: 'text', text: '\n\n*(任务已由用户手动中断)*' });
     }
+
+    if (hasError && errorMessage) {
+      let rawErrorStr = '';
+      try {
+        const parsed = JSON.parse(errorMessage);
+        if (parsed.category && parsed.userMessage) {
+          rawErrorStr = parsed.userMessage;
+          if (parsed.details) rawErrorStr += `\n\nDetails: ${parsed.details}`;
+        } else {
+          rawErrorStr = errorMessage;
+        }
+      } catch {
+        rawErrorStr = errorMessage;
+      }
+      
+      let explain = '模型服务连接中断或遇到错误';
+      const lowerErr = rawErrorStr.toLowerCase();
+      if (lowerErr.includes('rate') && lowerErr.includes('limit')) explain = '触发了模型提供商的速率限制 (Rate Limit) 或限流，请稍后重试';
+      else if (lowerErr.includes('overloaded') || lowerErr.includes('503') || lowerErr.includes('502') || lowerErr.includes('timeout')) explain = '模型提供商的服务器当前拥堵或响应超时';
+      else if (lowerErr.includes('api_key') || lowerErr.includes('unauthorized') || lowerErr.includes('401')) explain = 'API 密钥无效或未授权';
+      else if (lowerErr.includes('fetch') || lowerErr.includes('network') || lowerErr.includes('econnrefused')) explain = '网络连接失败，请检查网络或系统代理设置';
+      
+      const errPayload = JSON.stringify({ explain, raw: rawErrorStr });
+      contentBlocks.push({ type: 'text', text: `\n\n\`\`\`chat-error\n${errPayload}\n\`\`\`` });
+    }
+
+    if (subAgents.length > 0) {
+      contentBlocks.push({ type: 'sub_agents', subAgents });
+    }
+
     if (contentBlocks.length > 0) {
       const hbRe = /\s*<!--\s*heartbeat-done\s*-->\s*/g;
-      const errCleanedBlocks = contentBlocks.map(b =>
-        b.type === 'text' && 'text' in b ? { ...b, text: (b.text as string).replace(hbRe, '') } : b
-      );
+      const errCleanedBlocks = contentBlocks
+        .map(b =>
+          b.type === 'text' && 'text' in b
+            ? { ...b, text: stripLeakedTransportContent((b.text as string).replace(hbRe, '')) }
+            : b
+        )
+        .filter((b) => b.type !== 'text' || b.text.trim());
       const hasStructuredBlocks = errCleanedBlocks.some(
-        (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking'
+        (b) => b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'thinking' || b.type === 'sub_agents'
       );
       const content = hasStructuredBlocks
         ? JSON.stringify(errCleanedBlocks)
@@ -705,7 +1174,14 @@ async function collectStreamResponse(
             .join('')
             .trim();
       if (content) {
-        addMessage(sessionId, 'assistant', content);
+        addMessage(
+          sessionId,
+          'assistant',
+          content,
+          tokenUsage ? JSON.stringify(tokenUsage) : null,
+          opts?.referencedContexts && opts.referencedContexts.length > 0 ? JSON.stringify(opts.referencedContexts) : undefined,
+          collectedToolFiles.length > 0 ? JSON.stringify(collectedToolFiles) : undefined
+        );
       }
     }
   } finally {
@@ -718,6 +1194,58 @@ async function collectStreamResponse(
         .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
         .map((b) => b.text)
         .join('');
+
+      // 0. Title fallback — if the model-based title generation failed,
+      //    extract a title from the assistant's response text.
+      //    CRITICAL: Await the AI title generation first to avoid race condition.
+      //    Previously, the fire-and-forget generation would still be running when
+      //    this fallback executed, causing the fallback title to overwrite the AI result.
+      if (fullText.trim().length > 0) {
+        try {
+          // Wait for AI title generation to complete (if it was started)
+          let aiTitleSucceeded = false;
+          if (opts?.titleGenerationPromise) {
+            try {
+              aiTitleSucceeded = await opts.titleGenerationPromise;
+            } catch (err) {
+              console.warn('[chat API] titleGenerationPromise rejected:', err instanceof Error ? err.message : err);
+            }
+          }
+
+          const session = getSession(sessionId);
+          console.log('[chat API] Title decision point:', {
+            sessionId,
+            aiTitleSucceeded,
+            currentTitle: session?.title || '(no session)',
+            titleGenerationStarted: !!opts?.titleGenerationPromise,
+            fullTextLength: fullText.length,
+          });
+          if (session) {
+            // Only replace if the AI title generation didn't produce a title
+            // AND the title is still in its default state (not set by generator fallback either)
+            const needsReplacement = !aiTitleSucceeded && (
+              !session.title
+              || session.title === 'New Chat'
+            );
+            console.log('[chat API] Title needs replacement:', {
+              needsReplacement,
+              reason: aiTitleSucceeded ? 'AI title succeeded' : (session.title && session.title !== 'New Chat' ? 'title already set by generator fallback' : 'title is empty or default'),
+              currentTitle: session.title,
+            });
+            if (needsReplacement) {
+              const extracted = extractTitleFromResponse(fullText);
+              if (extracted && extracted !== session.title) {
+                updateSessionTitle(sessionId, extracted);
+                console.log('[chat API] Title extracted from response:', { from: session.title, to: extracted });
+              } else {
+                console.log('[chat API] Response extraction produced no new title:', { extracted: extracted || '(null)', currentTitle: session.title });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[chat API] Title extraction from response failed:', err);
+        }
+      }
 
       // 1. Check for onboarding-complete fence
       const completion = extractCompletion(fullText);
@@ -800,12 +1328,7 @@ async function collectStreamResponse(
         const workspacePath = getSetting('assistant_workspace_path');
         const session = getSession(sessionId);
         if (workspacePath && session && session.working_directory === workspacePath) {
-          const { shouldExtractMemory, hasMemoryWritesInResponse, extractMemories } = await import('@/lib/memory-extractor');
-
-          const fullTextForMemory = contentBlocks
-            .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
-            .map((b) => b.text)
-            .join('');
+          const { shouldExtractMemory, hasMemoryWritesInResponse } = await import('@/lib/memory-extractor');
 
           // For memory-write detection, serialize ALL blocks (including tool_use/tool_result)
           // so that hasMemoryWritesInResponse can see memory file paths in tool calls.
@@ -826,11 +1349,16 @@ async function collectStreamResponse(
             const recentForExtraction = recent.map(m => ({ role: m.role, content: m.content }));
 
             // Fire-and-forget: don't block the response
+            const { extractMemories } = await import('@/lib/memory-extractor');
             extractMemories(recentForExtraction, workspacePath).catch(() => {});
           }
         }
       } catch { /* best effort */ }
     }
+
+    // Title generation moved to pre-stream (see caller) to eliminate the
+    // race condition between collectStreamResponse (background) and
+    // the client's post-stream session fetch.
 
     // Telegram notifications: completion or error (fire-and-forget)
     // Suppressed for auto-trigger turns (onboarding/heartbeat) — invisible system flows
@@ -848,15 +1376,6 @@ async function collectStreamResponse(
     }
     onComplete?.();
   }
-}
-
-function shouldBypassImagePlanner(content: string, files?: FileAttachment[]): boolean {
-  if (files?.some(file => file.type && !file.type.startsWith('image/'))) {
-    return false;
-  }
-
-  const needsPlanning = /(批量|多张|多个|一组|分别|每个|列表|清单|文档|表格|表单|海报合集|批处理|batch|multiple|several|each|list|document|pdf|ppt|docx|csv)/i.test(content);
-  return !needsPlanning;
 }
 
 /**

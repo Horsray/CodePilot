@@ -180,8 +180,21 @@ export class FeishuGateway {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
-    // WSClient doesn't expose a clean stop — set refs to null
-    this.wsClient = null;
+    // WSClient.close({ force: true }) cancels ping + reconnect timers, removes
+    // all listeners, and terminates the underlying WebSocket. Without this,
+    // the old connection stayed alive after stop() — a problem during bridge
+    // restart or feishu "rebind" flows where the same app_id/secret got a
+    // fresh WSClient while the old one kept receiving events, causing
+    // duplicate message/permission card deliveries.
+    if (this.wsClient) {
+      try {
+        (this.wsClient as unknown as { close: (opts?: { force?: boolean }) => void }).close({ force: true });
+      } catch (err) {
+        console.warn(LOG_TAG, 'WSClient.close failed (continuing):', err);
+      }
+      this.wsClient = null;
+    }
+    this.client = null;
     console.log(LOG_TAG, 'Stopped');
   }
 

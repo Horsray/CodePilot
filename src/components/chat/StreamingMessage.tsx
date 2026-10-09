@@ -1,27 +1,43 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
   Message as AIMessage,
   MessageContent,
   MessageResponse,
 } from '@/components/ai-elements/message';
-import { ToolActionsGroup } from '@/components/ai-elements/tool-actions-group';
+import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
 import { Button } from '@/components/ui/button';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { BatchPlanInlinePreview } from './batch-image-gen/BatchPlanInlinePreview';
 import { WidgetRenderer } from './WidgetRenderer';
+import { ReferencedContexts } from './ReferencedContexts';
+import { McpStatusChip } from './McpStatusChip';
 import { parseAllShowWidgets, computePartialWidgetKey } from './MessageItem';
+import {
+  appendTimelineReasoning,
+  appendTimelineOutput,
+  appendTimelineToolResult,
+  appendTimelineToolUse,
+  cloneTimelineSteps,
+  completeTimelineStep,
+  updateTimelineStatus,
+  createTimelineAccumulator,
+} from '@/lib/agent-timeline';
+import { SubAgentStatusBar } from './SubAgentStatusBar';
+import { stripLeakedTransportContent } from '@/lib/message-content-sanitizer';
+import { splitStablePrefix } from '@/lib/streaming-text-split';
 import { PENDING_KEY, buildReferenceImages } from '@/lib/image-ref-store';
-import type { PlannerOutput, MediaBlock } from '@/types';
+import type { PlannerOutput, MediaBlock, TimelineStep } from '@/types';
 
 interface ImageGenRequest {
   prompt: string;
   aspectRatio: string;
   resolution: string;
+  model?: string;
   referenceImages?: string[];
   useLastGenerated?: boolean;
 }
@@ -51,6 +67,7 @@ function parseImageGenRequest(text: string): { beforeText: string; request: Imag
         prompt: String(json.prompt || ''),
         aspectRatio: String(json.aspectRatio || '1:1'),
         resolution: String(json.resolution || '1K'),
+        model: json.model ? String(json.model) : undefined,
         referenceImages: Array.isArray(json.referenceImages) ? json.referenceImages : undefined,
         useLastGenerated: json.useLastGenerated === true,
       },
@@ -93,6 +110,7 @@ interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  parentAgentId?: string;
 }
 
 interface ToolResultInfo {
@@ -100,81 +118,70 @@ interface ToolResultInfo {
   content: string;
   is_error?: boolean;
   media?: MediaBlock[];
+  parentAgentId?: string;
 }
 
 interface StreamingMessageProps {
   content: string;
   isStreaming: boolean;
   sessionId?: string;
+  rewindUserMessageId?: string;
+  startedAt: number;
   toolUses?: ToolUseInfo[];
   toolResults?: ToolResultInfo[];
   streamingToolOutput?: string;
+  referencedFiles?: string[];
   thinkingContent?: string;
   statusText?: string;
+  statusPayload?: Record<string, any>;
   onForceStop?: () => void;
+  // 中文注释：功能名称「子Agent快照数据」，用法是从streamSnapshot传入子Agent数据，
+  // 使SubAgentStatusBar在切换会话后能恢复渲染
+  subAgents?: any[];
+}
+
+function splitThinkingPhases(raw?: string): string[] {
+  if (!raw) return [];
+  // 中文注释：功能名称「思考分段器」，用法是把流式思考按阶段分段，
+  // 再与工具调用按顺序配对，避免整段思考被塞进同一个 Step。
+  return raw
+    .split('\n\n---\n\n')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function hasStepPayload(step?: TimelineStep): boolean {
+  if (!step) return false;
+  return Boolean(
+    step.reasoning.trim()
+      || step.output.trim()
+      || step.toolCalls.length > 0
+      || step.fileChanges.length > 0
+      || step.error,
+  );
+}
+
+function toVisibleSteps(steps: TimelineStep[]): TimelineStep[] {
+  return steps.filter((step) => (
+    step.reasoning.trim()
+    || step.output.trim()
+    || step.toolCalls.length > 0
+    || step.fileChanges.length > 0
+    || step.error
+  ));
 }
 
 /**
- * Smart content buffering — holds initial text until meaningful, but bypasses
- * for structured blocks (show-widget, batch-plan, image-gen-request).
+ * 中文注释：原来这里有一个「智能内容缓冲」（不足 40 个空白分词或 2500ms 不显示），
+ * 对中文场景 split(/\s+/) 永远只算 1 个词，导致首段必然延迟 2.5 秒整块闪现，
+ * 这是「一坨一坨」的直接元凶。移植 cc-haha 后改为：文本到达即展示，
+ * 由 stream-session-manager 的渐进揭示队列保证平滑，不再做前端扣留。
  */
-const BUFFER_WORD_THRESHOLD = 40;
-const BUFFER_MAX_MS = 2500;
-const STRUCTURED_BLOCK_RE = /```(show-widget|batch-plan|image-gen-request)/;
-
-function useBufferedContent(rawContent: string, isStreaming: boolean): string {
-  const [bypassed, setBypassed] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Derive whether bypass conditions are met (pure computation, no side effects)
-  const shouldBypass = !isStreaming
-    || bypassed
-    || (!!rawContent && STRUCTURED_BLOCK_RE.test(rawContent))
-    || (!!rawContent && rawContent.split(/\s+/).filter(Boolean).length >= BUFFER_WORD_THRESHOLD);
-
-  // Effect: sync bypass state when conditions are met (one-way latch, safe)
-  useEffect(() => {
-    if (shouldBypass && !bypassed && isStreaming && rawContent) {
-      setBypassed(true); // eslint-disable-line react-hooks/set-state-in-effect
-    }
-  }, [shouldBypass, bypassed, isStreaming, rawContent]);
-
-  // Effect: reset on new turn (content emptied)
-  useEffect(() => {
-    if (!rawContent && !isStreaming) {
-      setBypassed(false); // eslint-disable-line react-hooks/set-state-in-effect
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    }
-  }, [rawContent, isStreaming]);
-
-  // Effect: max timeout — starts once when content first arrives during streaming.
-  // Uses a boolean gate (hasContent) so the timer is created exactly once, not on every delta.
-  const hasContent = !!rawContent;
-  useEffect(() => {
-    if (!isStreaming || bypassed || !hasContent) return;
-    // Only start the timer if one isn't already running
-    if (timerRef.current) return;
-    timerRef.current = setTimeout(() => {
-      setBypassed(true);
-      timerRef.current = null;
-    }, BUFFER_MAX_MS);
-    // No cleanup — timer must survive rawContent changes.
-    // It is cleaned up by the reset effect (when content empties) or when bypassed is set.
-  }, [isStreaming, bypassed, hasContent]);
-
-  // Pure render: no side effects
-  if (!isStreaming) return rawContent;
-  if (shouldBypass) return rawContent;
-  return '';
-}
 
 /**
  * Thinking phase label that evolves over time to reduce perceived wait.
- * 0-5s: "准备回复中..." / "Preparing response..."
- * 5-15s: "生成中..." / "Generating..."
+ * 0-5s: "思考中..." / "Thinking..."
+ * 5-15s: "深度思考中..." / "Thinking deeply..."
  * 15s+: "组织回复中..." / "Preparing response..."
  */
 function ThinkingPhaseLabel() {
@@ -188,25 +195,28 @@ function ThinkingPhaseLabel() {
   }, []);
 
   const text = phase === 0
-    ? t('streaming.preparing')
+    ? t('streaming.thinking')
     : phase === 1
-      ? t('streaming.generating')
+      ? t('streaming.thinkingDeep')
       : t('streaming.preparing');
 
   return <Shimmer>{text}</Shimmer>;
 }
 
-function ElapsedTimer() {
-  const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef(0);
+function ElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startedAt) / 1000));
+
+  // Reset elapsed when the stream start time changes (e.g. new turn or session switch)
+  useEffect(() => {
+    setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+  }, [startedAt]);
 
   useEffect(() => {
-    startRef.current = Date.now();
     const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
     }, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [startedAt]);
 
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;
@@ -218,9 +228,8 @@ function ElapsedTimer() {
   );
 }
 
-function StreamingStatusBar({ statusText, onForceStop }: { statusText?: string; onForceStop?: () => void }) {
-  const { t } = useTranslation();
-  const displayText = statusText || t('streaming.preparing');
+function StreamingStatusBar({ statusText, onForceStop, startedAt }: { statusText?: string; onForceStop?: () => void; startedAt: number }) {
+  const displayText = statusText || 'Thinking';
 
   // Parse elapsed seconds from statusText like "Running bash... (45s)"
   const elapsedMatch = statusText?.match(/\((\d+)s\)/);
@@ -231,6 +240,8 @@ function StreamingStatusBar({ statusText, onForceStop }: { statusText?: string; 
   return (
     <div className="flex items-center gap-3 py-2 px-1 text-xs text-muted-foreground">
       <div className="flex items-center gap-2">
+        {/* 中文注释：移植 cc-haha 的流式星标（✦ 渐变呼吸 + 旋转）与渐变文字状态 */}
+        <span className="streaming-star text-base leading-none" aria-hidden="true">✦</span>
         <span className={isCritical ? 'text-status-error-foreground' : isWarning ? 'text-status-warning-foreground' : undefined}>
           <Shimmer duration={1.5}>{displayText}</Shimmer>
         </span>
@@ -242,7 +253,7 @@ function StreamingStatusBar({ statusText, onForceStop }: { statusText?: string; 
         )}
       </div>
       <span className="text-muted-foreground/50">|</span>
-      <ElapsedTimer />
+      <ElapsedTimer startedAt={startedAt} />
       {isCritical && onForceStop && (
         <Button
           variant="outline"
@@ -261,275 +272,521 @@ export function StreamingMessage({
   content,
   isStreaming,
   sessionId,
+  rewindUserMessageId,
+  startedAt,
   toolUses = [],
   toolResults = [],
   streamingToolOutput,
+  referencedFiles,
   thinkingContent,
   statusText,
+  statusPayload,
   onForceStop,
+  subAgents = [],
 }: StreamingMessageProps) {
   const { t } = useTranslation();
-  const bufferedContent = useBufferedContent(content, isStreaming);
-  const runningTools = toolUses.filter(
-    (tool) => !toolResults.some((r) => r.tool_use_id === tool.id)
-  );
+  const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
 
-  // Extract a human-readable summary of the running command
-  const getRunningCommandSummary = (): string | undefined => {
-    if (runningTools.length === 0) {
-      // All tools completed but still streaming — AI is generating text
-      if (toolUses.length > 0) return 'Generating response...';
-      return undefined;
+  // 中文注释：使用原始设计——所有工具（包括子Agent工具）都在主时间线中渲染，
+  // 不再按parentAgentId过滤，不使用SubAgentStatusBar。
+  const timelineTools = toolUses;
+  const timelineToolResults = toolResults;
+
+  // 中文注释：映射结果 memo 化 —— 配合快照的稳定数组引用与工具组的 React.memo，
+  // 纯文本流式（工具结构未变）时工具组完全跳过重渲染。
+  const mappedTimelineTools = useMemo(() => timelineTools.map((tool) => {
+    const result = timelineToolResults.find((r) => r.tool_use_id === tool.id);
+    return {
+      id: tool.id,
+      name: tool.name,
+      input: tool.input,
+      result: result?.content,
+      isError: result?.is_error,
+      media: result?.media,
+    };
+  }), [timelineTools, timelineToolResults]);
+
+  const [finalContentStart, setFinalContentStart] = useState(0);
+  const timelineStateRef = useRef<ReturnType<typeof createTimelineAccumulator> | null>(null);
+  const prevSnapshotRef = useRef<{
+    isStreaming: boolean;
+    thinking: string;
+    content: string;
+    activityContentLength: number;
+    toolUseIds: string[];
+    toolResults: Record<string, string>;
+    lastStatusPayload: any;
+  }>({
+    isStreaming: false,
+    thinking: '',
+    content: '',
+    activityContentLength: 0,
+    toolUseIds: [],
+    toolResults: {},
+    lastStatusPayload: null,
+  });
+  const mediaPreview = useMemo(() => {
+    const allMedia = toolResults.flatMap((result) => result.media || []);
+    return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
+  }, [toolResults]);
+
+  const completionInfo = useMemo(() => {
+    if (isStreaming || timelineTools.length === 0) return null;
+    const mappedTools = timelineTools.map((tool) => {
+      const result = timelineToolResults.find((r) => r.tool_use_id === tool.id);
+      return {
+        id: tool.id,
+        name: tool.name,
+        input: tool.input,
+        result: result?.content,
+        isError: result?.is_error,
+        media: result?.media,
+      };
+    });
+    const errCount = timelineToolResults.filter(t => t.is_error).length;
+    const changedFiles = mappedTools
+      .map(t => ({ tool: t as any, diff: extractDiff(t as any) }))
+      .filter((x): x is { tool: any; diff: NonNullable<ReturnType<typeof extractDiff>> } => x.diff !== null);
+
+    // Merge duplicate file edit statistics
+    const mergedFiles = new Map<string, typeof changedFiles[0]>();
+    changedFiles.forEach((item) => {
+      const path = item.diff.fullPath;
+      if (mergedFiles.has(path)) {
+        const existing = mergedFiles.get(path)!;
+        existing.diff.added += item.diff.added;
+        existing.diff.removed += item.diff.removed;
+      } else {
+        mergedFiles.set(path, { tool: item.tool, diff: { ...item.diff } });
+      }
+    });
+
+    const finalChangedFiles = Array.from(mergedFiles.values());
+    return finalChangedFiles.length > 0 || errCount > 0 ? { errCount, changedFiles: finalChangedFiles } : null;
+  }, [isStreaming, timelineTools, timelineToolResults]);
+
+  // 中文注释：功能名称「时间线增量更新优化」，用法是追踪是否有实质变化（新工具、新思考、状态变化），
+  // 纯文本流式过程中跳过 cloneTimelineSteps 深拷贝和 setLiveTimelineSteps state 更新，
+  // 避免 60fps 的深拷贝导致 UI 卡顿。finalContentStart 单独更新。
+  const hasStructuralChangeRef = useRef(false);
+
+  useEffect(() => {
+    const prev = prevSnapshotRef.current;
+    const now = Date.now();
+
+    if (!timelineStateRef.current) {
+      timelineStateRef.current = createTimelineAccumulator(now);
     }
-    const tool = runningTools[runningTools.length - 1];
-    const input = tool.input as Record<string, unknown>;
-    if (tool.name === 'Bash' && input.command) {
-      const cmd = String(input.command);
-      return cmd.length > 80 ? cmd.slice(0, 80) + '...' : cmd;
+
+    // 新一轮流式：重置增量状态，避免沿用上一轮缓存。
+    if (isStreaming && !prev.isStreaming) {
+      hasStructuralChangeRef.current = true;
+      timelineStateRef.current = createTimelineAccumulator(now);
+      // 中文注释：功能名称「重置流式时间线快照」，用法是在新一轮消息开始时同步清空状态与模型上下文。
+      prevSnapshotRef.current = {
+        isStreaming: true,
+        thinking: '',
+        content: '',
+        activityContentLength: 0,
+        toolUseIds: [],
+        toolResults: {},
+        lastStatusPayload: null,
+      };
+      setFinalContentStart(0);
     }
-    if (input.file_path) return `${tool.name}: ${String(input.file_path)}`;
-    if (input.path) return `${tool.name}: ${String(input.path)}`;
-    return `Running ${tool.name}...`;
-  };
+
+    const currentState = timelineStateRef.current!;
+    const currentPrev = prevSnapshotRef.current;
+
+    // status payload 增量：更新模型勋章和状态
+    if (statusPayload && statusPayload !== currentPrev.lastStatusPayload && statusPayload.subtype !== 'step_complete') {
+      hasStructuralChangeRef.current = true;
+      updateTimelineStatus(currentState, statusPayload as any, now);
+    }
+
+    // thinking 增量：不再整段重建，避免卡片位置固定只刷新旧内容。
+    const currentThinking = thinkingContent || '';
+    if (currentThinking && currentThinking !== currentPrev.thinking) {
+      hasStructuralChangeRef.current = true;
+      if (currentThinking.startsWith(currentPrev.thinking)) {
+        const delta = currentThinking.slice(currentPrev.thinking.length);
+        if (delta.trim()) {
+          appendTimelineReasoning(currentState, delta, now);
+        }
+      } else {
+        const phases = splitThinkingPhases(currentThinking);
+        const fallback = phases[phases.length - 1] || currentThinking;
+        appendTimelineReasoning(currentState, `\n${fallback}`, now);
+      }
+    }
+
+    const currentContent = content || '';
+    // 中文注释：使用过滤后的timelineTools/timelineToolResults（排除子Agent工具调用），
+    // 避免子Agent的工具调用污染主时间线
+    const completedToolIds = new Set(timelineToolResults.map((result) => result.tool_use_id));
+    const allToolsCompleted = timelineTools.length > 0 && timelineTools.every((tool) => completedToolIds.has(tool.id));
+    const hasNewTool = timelineTools.some((tool) => !currentPrev.toolUseIds.includes(tool.id));
+    if (hasNewTool || timelineToolResults.some((r) => currentPrev.toolResults[r.tool_use_id] === undefined)) {
+      hasStructuralChangeRef.current = true;
+    }
+    let activityContentLength = currentPrev.activityContentLength;
+    const consumeActivityContent = (toLength: number, timestamp: number) => {
+      if (toLength <= activityContentLength) return;
+      const delta = currentContent.slice(activityContentLength, toLength);
+      activityContentLength = toLength;
+      if (delta.trim()) {
+        appendTimelineOutput(currentState, delta, timestamp);
+        // 中文注释：功能名称「时间线输出实时刷新」，用法是在工具阶段或已有推理阶段时，
+        // 文本增量本身就属于可见时间线内容，不能被“纯正文优化”一起吞掉，否则步骤卡片会
+        // 一直等到下一个结构变化或流结束才刷新。
+        if (currentPrev.toolUseIds.length > 0 || currentPrev.thinking.length > 0) {
+          hasStructuralChangeRef.current = true;
+        }
+      }
+    };
+
+    // 文本如果发生在工具阶段之前或期间，属于过程说明，不属于最终结论。
+    if (hasNewTool) {
+      consumeActivityContent(currentContent.length, now);
+    }
+
+    // tool_use 增量：新工具直接接在当前事件后，不强行把思考和工具拆成两坨。
+    // 中文注释：使用过滤后的timelineTools，只渲染主Agent自己的工具调用
+    timelineTools.forEach((tool, index) => {
+      if (!currentPrev.toolUseIds.includes(tool.id)) {
+        appendTimelineToolUse(currentState, tool, now + index);
+      }
+    });
+
+    // tool_result 增量更新
+    // 中文注释：使用过滤后的timelineToolResults，只渲染主Agent自己的工具结果
+    timelineToolResults.forEach((result, index) => {
+      const key = result.tool_use_id;
+      const marker = `${result.content}::${result.is_error ? '1' : '0'}`;
+      if (currentPrev.toolResults[key] !== marker) {
+        appendTimelineToolResult(currentState, result, now + index);
+      }
+    });
+
+    if (timelineTools.length > 0 && !allToolsCompleted) {
+      consumeActivityContent(currentContent.length, now + timelineTools.length + timelineToolResults.length + 1);
+    }
+
+    if (!isStreaming && currentPrev.isStreaming) {
+      const latest = cloneTimelineSteps(currentState).at(-1);
+      if (hasStepPayload(latest)) {
+        completeTimelineStep(currentState, undefined, now + 3);
+      }
+    }
+
+    // 中文注释：功能名称「时间线跳过深拷贝」，用法是在纯文本流式更新时（无新工具/思考/状态变化），
+    // 跳过 cloneTimelineSteps 深拷贝和 setLiveTimelineSteps state 更新，减少 60fps 下的 GC 压力和 re-render。
+    setFinalContentStart(activityContentLength);
+    if (hasStructuralChangeRef.current || !isStreaming) {
+      hasStructuralChangeRef.current = false;
+      const nextSteps = toVisibleSteps(cloneTimelineSteps(currentState));
+      setLiveTimelineSteps(nextSteps);
+    }
+
+    prevSnapshotRef.current = {
+      isStreaming,
+      thinking: currentThinking,
+      content: currentContent,
+      activityContentLength,
+      toolUseIds: timelineTools.map((t) => t.id),
+      toolResults: Object.fromEntries(
+        timelineToolResults.map((r) => [r.tool_use_id, `${r.content}::${r.is_error ? '1' : '0'}`]),
+      ),
+      lastStatusPayload: statusPayload,
+    };
+  }, [content, isStreaming, thinkingContent, timelineToolResults, timelineTools, statusPayload]);
+
+  // Filter out leaked SSE raw data that wasn't properly parsed
+  const cleanContent = useMemo(() => {
+    if (!content) return '';
+    const finalContent = content.slice(finalContentStart);
+    return stripLeakedTransportContent(finalContent);
+  }, [content, finalContentStart]);
+
+  const renderedContent = useMemo(() => {
+    if (!cleanContent) return null;
+
+    const contentToRender = cleanContent;
+
+    const hasWidgetFence = /`{1,3}show-widget/.test(contentToRender);
+
+    if (hasWidgetFence && isStreaming) {
+      const lastMarkerMatch = [...contentToRender.matchAll(/`{1,3}show-widget/g)].pop();
+      if (!lastMarkerMatch) return <MessageResponse>{contentToRender}</MessageResponse>;
+
+      const lastFenceStart = lastMarkerMatch.index!;
+      const afterLastFence = contentToRender.slice(lastFenceStart);
+      const jsonStart = afterLastFence.indexOf('{');
+      let lastFenceClosed = false;
+      if (jsonStart !== -1) {
+        let depth = 0;
+        let inStr = false;
+        let esc = false;
+        for (let i = jsonStart; i < afterLastFence.length; i++) {
+          const ch = afterLastFence[i];
+          if (esc) { esc = false; continue; }
+          if (ch === '\\' && inStr) { esc = true; continue; }
+          if (ch === '"') { inStr = !inStr; continue; }
+          if (inStr) continue;
+          if (ch === '{') depth++;
+          else if (ch === '}') { depth--; if (depth === 0) { lastFenceClosed = true; break; } }
+        }
+      }
+
+      if (lastFenceClosed) {
+        const allSegments = parseAllShowWidgets(cleanContent);
+        return (
+          <>
+            {allSegments.map((seg, i) =>
+              seg.type === 'text'
+                ? <MessageResponse key={`t-${i}`}>{seg.content}</MessageResponse>
+                : <WidgetRenderer key={`w-${i}`} widgetCode={seg.data.widget_code} isStreaming={false} title={seg.data.title} />
+            )}
+          </>
+        );
+      }
+
+      const beforePart = cleanContent.slice(0, lastFenceStart).trim();
+      const hasCompletedFences = !!beforePart && /`{1,3}show-widget/.test(beforePart);
+      const completedSegments = hasCompletedFences ? parseAllShowWidgets(beforePart) : [];
+      const markerEnd = afterLastFence.match(/^`{1,3}show-widget`{0,3}\s*(?:\n\s*`{3}(?:json)?\s*)?\n?/);
+      const fenceBody = markerEnd ? afterLastFence.slice(markerEnd[0].length).trim() : afterLastFence.trim();
+      let partialCode: string | null = null;
+      const keyIdx = fenceBody.indexOf('"widget_code"');
+      if (keyIdx !== -1) {
+        const colonIdx = fenceBody.indexOf(':', keyIdx + 13);
+        if (colonIdx !== -1) {
+          const quoteIdx = fenceBody.indexOf('"', colonIdx + 1);
+          if (quoteIdx !== -1) {
+            let raw = fenceBody.slice(quoteIdx + 1);
+            raw = raw.replace(/"\s*\}\s*$/, '');
+            if (raw.endsWith('\\')) raw = raw.slice(0, -1);
+            try {
+              partialCode = raw
+                .replace(/\\\\/g, '\x00BACKSLASH\x00')
+                .replace(/\\n/g, '\n')
+                .replace(/\\t/g, '\t')
+                .replace(/\\r/g, '\r')
+                .replace(/\\"/g, '"')
+                .replace(/\\u([0-9a-fA-F]{4})/g, (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+                .replace(/\x00BACKSLASH\x00/g, '\\');
+            } catch {
+              partialCode = null;
+            }
+          }
+        }
+      }
+
+      let scriptsTruncated = false;
+      if (partialCode) {
+        const lastScript = partialCode.lastIndexOf('<script');
+        if (lastScript !== -1) {
+          const afterScript = partialCode.slice(lastScript);
+          if (!/<script[\s\S]*?<\/script>/i.test(afterScript)) {
+            partialCode = partialCode.slice(0, lastScript).trim() || null;
+            scriptsTruncated = true;
+          }
+        }
+      }
+
+      const titleMatch = fenceBody.match(/"title"\s*:\s*"([^"]*?)"/);
+      const partialTitle = titleMatch ? titleMatch[1] : undefined;
+      const partialWidgetKey = computePartialWidgetKey(cleanContent);
+
+      return (
+        <>
+          {!hasCompletedFences && beforePart && <MessageResponse key="pre-text">{beforePart}</MessageResponse>}
+          {completedSegments.map((seg, i) =>
+            seg.type === 'text'
+              ? <MessageResponse key={`t-${i}`}>{seg.content}</MessageResponse>
+              : <WidgetRenderer key={`w-${i}`} widgetCode={seg.data.widget_code} isStreaming={false} title={seg.data.title} />
+          )}
+          {partialCode && partialCode.length > 10 ? (
+            <WidgetRenderer key={partialWidgetKey} widgetCode={partialCode} isStreaming={true} title={partialTitle} showOverlay={scriptsTruncated} />
+          ) : (
+            <Shimmer>{t('widget.loading')}</Shimmer>
+          )}
+        </>
+      );
+    }
+
+    if (hasWidgetFence && !isStreaming) {
+      const widgetSegments = parseAllShowWidgets(contentToRender);
+      if (widgetSegments.length > 0) {
+        return (
+          <>
+            {widgetSegments.map((seg, i) =>
+              seg.type === 'text'
+                ? <MessageResponse key={`t-${i}`}>{seg.content}</MessageResponse>
+                : <WidgetRenderer key={`w-${i}`} widgetCode={seg.data.widget_code} isStreaming={false} title={seg.data.title} />
+            )}
+          </>
+        );
+      }
+    }
+
+    const batchPlanResult = parseBatchPlan(contentToRender);
+    if (batchPlanResult) {
+      return (
+        <>
+          {batchPlanResult.beforeText && <MessageResponse>{batchPlanResult.beforeText}</MessageResponse>}
+          <BatchPlanInlinePreview plan={batchPlanResult.plan} messageId="streaming-preview" />
+          {batchPlanResult.afterText && <MessageResponse>{batchPlanResult.afterText}</MessageResponse>}
+        </>
+      );
+    }
+
+    const parsed = parseImageGenRequest(contentToRender);
+    if (parsed) {
+      const refs = buildReferenceImages(
+        PENDING_KEY,
+        sessionId || '',
+        parsed.request.useLastGenerated || false,
+        parsed.request.referenceImages,
+      );
+      return (
+        <>
+          {parsed.beforeText && <MessageResponse>{parsed.beforeText}</MessageResponse>}
+          <ImageGenConfirmation
+            messageId="streaming"
+            sessionId={sessionId}
+            initialPrompt={parsed.request.prompt}
+            initialAspectRatio={parsed.request.aspectRatio}
+            initialResolution={parsed.request.resolution}
+            initialModel={parsed.request.model}
+            rawRequestBlock={parsed.rawBlock}
+            referenceImages={refs.length > 0 ? refs : undefined}
+          />
+          {parsed.afterText && <MessageResponse>{parsed.afterText}</MessageResponse>}
+        </>
+      );
+    }
+
+    if (isStreaming) {
+      const hasImageGenBlock = /```image-gen-request/.test(contentToRender);
+      const hasBatchPlanBlock = /```batch-plan/.test(contentToRender);
+      const stripped = contentToRender
+        .replace(/```image-gen-request[\s\S]*$/, '')
+        .replace(/```batch-plan[\s\S]*$/, '')
+        .replace(/```show-widget[\s\S]*$/, '')
+        .replace(/```chat-error[\s\S]*$/, '')
+        .replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '')
+        .trim();
+
+      // 中文注释：流式渲染分两段 —— 已定型的段落边界之前交给 Markdown 渲染（与最终形态
+      // 一致，收尾时不再变形），只有仍在增长的尾段用轻量 pre 纯文本兜底。
+      // MessageResponse 是 memo 的，稳定前缀不变时不会重解析，因此重解析次数从
+      // "每个 delta 一次"降到"每写完一段一次"，长文本下依旧不卡。
+      if (stripped) {
+        const { stable, tail } = splitStablePrefix(stripped);
+        return (
+          <div key="stream-text" className="streaming-blocks">
+            {stable && <MessageResponse key="stable-md">{stable}</MessageResponse>}
+            {tail.trim() && (
+              <pre key="tail-text" className="streaming-plain-text">{tail.replace(/^\n+/, '')}</pre>
+            )}
+          </div>
+        );
+      }
+      if ((hasImageGenBlock || hasBatchPlanBlock) && liveTimelineSteps.length === 0) {
+         return <Shimmer>{t('streaming.thinking')}</Shimmer>;
+      }
+      return null;
+    }
+
+    const stripped = contentToRender
+      .replace(/```image-gen-request[\s\S]*?```/g, '')
+      .replace(/```batch-plan[\s\S]*?```/g, '')
+      .replace(/```show-widget[\s\S]*?(```|$)/g, '')
+      .replace(/```chat-error[\s\S]*?(```|$)/g, '')
+      .replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '')
+      .trim();
+
+    return stripped ? <MessageResponse>{stripped}</MessageResponse> : null;
+  }, [cleanContent, isStreaming, sessionId, t]);
+
+  // 中文注释：总结阶段判定 —— 有工具执行过、全部工具已有结果、且最终结论文本已开始流出。
+  // 此时在总结正文前插入一条「任务已完成，开始总结」的过渡提示，柔和衔接工具阶段与总结阶段。
+  const hasTools = timelineTools.length > 0;
+  const allToolsCompleted = hasTools && timelineTools.every((tool) =>
+    timelineToolResults.some((r) => r.tool_use_id === tool.id),
+  );
+  const isSummarizing = isStreaming && allToolsCompleted && cleanContent.trim().length > 0;
+
+  /* 中文注释：功能名称「交付折叠」——流式期间**绝不折叠**。
+     过程块的收起只发生在任务彻底完成、这条消息交棒给 MessageItem 之后（见 MessageItem）。
+     这里曾经传 `delivered: isSummarizing`，是错的：isSummarizing 的真实含义是
+     「此刻没有工具正在跑」，多步任务里每两个步骤之间都成立，于是任务刚开头就收起，
+     而且收起边沿只认一次，之后再也弹不回来 —— 用户看到的就是「整轮任务一直折叠着」。
+     流式侧保持 flat 铺开，与「任务进行中步骤全可见」的要求一致。 */
 
   return (
-    <AIMessage from="assistant">
+    /* 中文注释：整条流式消息块的入场 —— 组件仅在流式开始挂载、结束卸载，
+       class 只会播一次；与用户消息的入场（MessageList 的 animate-message-enter）同语言。 */
+    <AIMessage from="assistant" className="animate-message-enter">
       <MessageContent>
-        {/* Tool calls + thinking — single collapsible group */}
-        {(toolUses.length > 0 || thinkingContent) && (
+        {/* 中文注释：MCP 状态徽标放在「参考了 N 个上下文」右侧（用户指定位置），两者独立显示 */}
+        <div className="flex items-center gap-2">
+          {referencedFiles && referencedFiles.length > 0 && (
+            <ReferencedContexts files={referencedFiles} />
+          )}
+          <McpStatusChip sessionId={sessionId} isStreaming={isStreaming} className="mb-3" />
+        </div>
+
+        {/* Render the timeline (tools and thoughts interleaved) — 原始设计，所有工具统一展示 */}
+        {(timelineTools.length > 0 || liveTimelineSteps.length > 0) && (
           <ToolActionsGroup
-            tools={toolUses.map((tool) => {
-              const result = toolResults.find((r) => r.tool_use_id === tool.id);
-              return {
-                id: tool.id,
-                name: tool.name,
-                input: tool.input,
-                result: result?.content,
-                isError: result?.is_error,
-                media: result?.media,
-              };
-            })}
+            tools={mappedTimelineTools}
+            steps={liveTimelineSteps}
             isStreaming={isStreaming}
             streamingToolOutput={streamingToolOutput}
-            thinkingContent={thinkingContent}
+            statusText={statusText}
+            sessionId={sessionId}
+            rewindUserMessageId={rewindUserMessageId}
+            flat
           />
         )}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
-        {(() => {
-          const allMedia = toolResults.flatMap(r => r.media || []);
-          return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
-        })()}
+        {mediaPreview}
+
+        {/* 中文注释：子 Agent 状态——流式期间只显示一行精简汇总（派发数/已返回结论数/进行中数），不再渲染大卡片时间线 */}
+        {subAgents && subAgents.length > 0 && (
+          <SubAgentStatusBar subAgents={subAgents} />
+        )}
 
         {/* Streaming text content rendered via Streamdown */}
-        {content && (() => {
-          // ── Show-widget handling ──
-          // During streaming: detect partial fences FIRST to avoid premature script execution.
-          // After streaming: use parseAllShowWidgets for completed fences only.
-          const hasWidgetFence = /`{1,3}show-widget/.test(content);
+        {renderedContent}
 
-          if (hasWidgetFence && isStreaming) {
-            // Fence-agnostic: find the last show-widget marker
-            const lastMarkerMatch = [...content.matchAll(/`{1,3}show-widget/g)].pop();
-            if (!lastMarkerMatch) return <MessageResponse>{content}</MessageResponse>;
-
-            const lastFenceStart = lastMarkerMatch.index!;
-            const afterLastFence = content.slice(lastFenceStart);
-            // Check if JSON is complete (has matching closing brace)
-            const jsonStart = afterLastFence.indexOf('{');
-            let lastFenceClosed = false;
-            if (jsonStart !== -1) {
-              let depth = 0, inStr = false, esc = false;
-              for (let i = jsonStart; i < afterLastFence.length; i++) {
-                const ch = afterLastFence[i];
-                if (esc) { esc = false; continue; }
-                if (ch === '\\' && inStr) { esc = true; continue; }
-                if (ch === '"') { inStr = !inStr; continue; }
-                if (inStr) continue;
-                if (ch === '{') depth++;
-                else if (ch === '}') { depth--; if (depth === 0) { lastFenceClosed = true; break; } }
-              }
-            }
-
-            if (lastFenceClosed) {
-              // All fences complete — parse and render the full content
-              const allSegments = parseAllShowWidgets(content);
-              return (
-                <>
-                  {allSegments.map((seg, i) =>
-                    seg.type === 'text'
-                      ? <MessageResponse key={`t-${i}`}>{seg.content}</MessageResponse>
-                      : <WidgetRenderer key={`w-${i}`} widgetCode={seg.data.widget_code} isStreaming={false} title={seg.data.title} />
-                  )}
-                </>
-              );
-            }
-
-            // Last fence is still being streamed.
-            // Parse everything BEFORE it (completed fences + interleaved text).
-            const beforePart = content.slice(0, lastFenceStart).trim();
-            const hasCompletedFences = beforePart && /`{1,3}show-widget/.test(beforePart);
-            const completedSegments = hasCompletedFences ? parseAllShowWidgets(beforePart) : [];
-
-            // Extract partial widget_code from the open fence (skip marker)
-            const markerEnd = afterLastFence.match(/^`{1,3}show-widget`{0,3}\s*(?:\n\s*`{3}(?:json)?\s*)?\n?/);
-            const fenceBody = markerEnd ? afterLastFence.slice(markerEnd[0].length).trim() : afterLastFence.trim();
-            let partialCode: string | null = null;
-            const keyIdx = fenceBody.indexOf('"widget_code"');
-            if (keyIdx !== -1) {
-              const colonIdx = fenceBody.indexOf(':', keyIdx + 13);
-              if (colonIdx !== -1) {
-                const quoteIdx = fenceBody.indexOf('"', colonIdx + 1);
-                if (quoteIdx !== -1) {
-                  let raw = fenceBody.slice(quoteIdx + 1);
-                  raw = raw.replace(/"\s*\}\s*$/, '');
-                  if (raw.endsWith('\\')) raw = raw.slice(0, -1);
-                  try {
-                    partialCode = raw
-                      .replace(/\\\\/g, '\x00BACKSLASH\x00')
-                      .replace(/\\n/g, '\n')
-                      .replace(/\\t/g, '\t')
-                      .replace(/\\r/g, '\r')
-                      .replace(/\\"/g, '"')
-                      .replace(/\\u([0-9a-fA-F]{4})/g, (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)))
-                      .replace(/\x00BACKSLASH\x00/g, '\\');
-                  } catch { partialCode = null; }
-                }
-              }
-            }
-
-            // Truncate at any unclosed <script> to prevent script content
-            // from showing as visible text during streaming preview.
-            // Scripts always come last per guidelines, so truncating is safe.
-            let scriptsTruncated = false;
-            if (partialCode) {
-              const lastScript = partialCode.lastIndexOf('<script');
-              if (lastScript !== -1) {
-                const afterScript = partialCode.slice(lastScript);
-                if (!/<script[\s\S]*?<\/script>/i.test(afterScript)) {
-                  partialCode = partialCode.slice(0, lastScript).trim() || null;
-                  scriptsTruncated = true;
-                }
-              }
-            }
-
-            let partialTitle: string | undefined;
-            const titleMatch = fenceBody.match(/"title"\s*:\s*"([^"]*?)"/);
-            if (titleMatch) partialTitle = titleMatch[1];
-
-            // Key must match the map-index key that parseAllShowWidgets will produce
-            // once the fence closes, so React preserves the WidgetRenderer instance.
-            // See computePartialWidgetKey() for the invariant explanation.
-            const partialWidgetKey = computePartialWidgetKey(content);
-
-            return (
-              <>
-                {/* Plain text before the first widget fence (no completed fences yet) */}
-                {!hasCompletedFences && beforePart && (
-                  <MessageResponse key="pre-text">{beforePart}</MessageResponse>
-                )}
-                {/* Completed widget fences + interleaved text */}
-                {completedSegments.map((seg, i) =>
-                  seg.type === 'text'
-                    ? <MessageResponse key={`t-${i}`}>{seg.content}</MessageResponse>
-                    : <WidgetRenderer key={`w-${i}`} widgetCode={seg.data.widget_code} isStreaming={false} title={seg.data.title} />
-                )}
-                {partialCode && partialCode.length > 10 ? (
-                  <WidgetRenderer key={partialWidgetKey} widgetCode={partialCode} isStreaming={true} title={partialTitle} showOverlay={scriptsTruncated} />
-                ) : (
-                  <Shimmer>{t('widget.loading')}</Shimmer>
-                )}
-              </>
-            );
-          }
-
-          if (hasWidgetFence && !isStreaming) {
-            // Non-streaming: all fences should be complete
-            const widgetSegments = parseAllShowWidgets(content);
-            if (widgetSegments.length > 0) {
-              return (
-                <>
-                  {widgetSegments.map((seg, i) =>
-                    seg.type === 'text'
-                      ? <MessageResponse key={`t-${i}`}>{seg.content}</MessageResponse>
-                      : <WidgetRenderer key={`w-${i}`} widgetCode={seg.data.widget_code} isStreaming={false} title={seg.data.title} />
-                  )}
-                </>
-              );
-            }
-          }
-
-          // Try batch-plan (Image Agent batch mode)
-          const batchPlanResult = parseBatchPlan(content);
-          if (batchPlanResult) {
-            return (
-              <>
-                {batchPlanResult.beforeText && <MessageResponse>{batchPlanResult.beforeText}</MessageResponse>}
-                <BatchPlanInlinePreview plan={batchPlanResult.plan} messageId="streaming-preview" />
-                {batchPlanResult.afterText && <MessageResponse>{batchPlanResult.afterText}</MessageResponse>}
-              </>
-            );
-          }
-
-          // Try image-gen-request
-          const parsed = parseImageGenRequest(content);
-          if (parsed) {
-            const refs = buildReferenceImages(
-              PENDING_KEY,
-              sessionId || '',
-              parsed.request.useLastGenerated || false,
-              parsed.request.referenceImages,
-            );
-            return (
-              <>
-                {parsed.beforeText && <MessageResponse>{parsed.beforeText}</MessageResponse>}
-                <ImageGenConfirmation
-                  sessionId={sessionId}
-                  initialPrompt={parsed.request.prompt}
-                  initialAspectRatio={parsed.request.aspectRatio}
-                  initialResolution={parsed.request.resolution}
-                  rawRequestBlock={parsed.rawBlock}
-                  referenceImages={refs.length > 0 ? refs : undefined}
-                />
-                {parsed.afterText && <MessageResponse>{parsed.afterText}</MessageResponse>}
-              </>
-            );
-          }
-          // Strip partial or unparseable code fence blocks to avoid Shiki errors
-          if (isStreaming) {
-            const hasImageGenBlock = /```image-gen-request/.test(content);
-            const hasBatchPlanBlock = /```batch-plan/.test(content);
-            // Use bufferedContent for plain text to avoid initial character flicker
-            const textToRender = bufferedContent || '';
-            const stripped = textToRender
-              .replace(/```image-gen-request[\s\S]*$/, '')
-              .replace(/```batch-plan[\s\S]*$/, '')
-              .replace(/```show-widget[\s\S]*$/, '')
-              .trim();
-            if (stripped) return <MessageResponse key="pre-text">{stripped}</MessageResponse>;
-            // Show shimmer while the structured block is being streamed
-            if (hasImageGenBlock || hasBatchPlanBlock) return <Shimmer>{t('streaming.thinking')}</Shimmer>;
-            return null;
-          }
-          const stripped = content
-            .replace(/```image-gen-request[\s\S]*?```/g, '')
-            .replace(/```batch-plan[\s\S]*?```/g, '')
-            .replace(/```show-widget[\s\S]*?(```|$)/g, '')
-            .trim();
-          return stripped ? <MessageResponse>{stripped}</MessageResponse> : null;
-        })()}
+        {/* Completion Bar rendered only once at the end of the message when done */}
+        {completionInfo && completionInfo.changedFiles.length > 0 && (
+          <CompletionBar
+            changedFiles={completionInfo.changedFiles}
+            errCount={completionInfo.errCount}
+            sessionId={sessionId}
+            rewindId={rewindUserMessageId}
+          />
+        )}
 
         {/* Loading indicator when no content yet and no thinking content — evolves over time */}
-        {isStreaming && !content && toolUses.length === 0 && !thinkingContent && (
+        {isStreaming && liveTimelineSteps.length === 0 && !content && timelineTools.length === 0 && !thinkingContent && (
           <div className="py-2">
             <ThinkingPhaseLabel />
           </div>
         )}
 
-        {/* Status bar during streaming — priority: tool status > widget > generating > thinking */}
+        {/* Status bar during streaming */}
         {isStreaming && <StreamingStatusBar statusText={
           statusText
-          || getRunningCommandSummary()
+          // 中文注释：工具全部跑完、最终结论开始流出时，状态栏改说「任务已完成，开始总结」，
+          // 而不是继续显示「生成中」——两者同屏会造成“已完成却仍在生成”的矛盾观感，
+          // 看起来像界面卡死。同一时刻这里只保留一条状态文案。
+          || (isSummarizing ? t('streaming.summarizing') : undefined)
           || (content && /```show-widget/.test(content) ? (() => {
             // Detect if scripts are being streamed (unclosed <script> in the last open fence)
             const lastFence = content.lastIndexOf('```show-widget');
@@ -543,7 +800,7 @@ export function StreamingMessage({
             return t('widget.streaming');
           })() : undefined)
           || (content && content.length > 0 ? t('streaming.generating') : undefined)
-        } onForceStop={onForceStop} />}
+        } onForceStop={onForceStop} startedAt={startedAt} />}
       </MessageContent>
     </AIMessage>
   );

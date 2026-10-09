@@ -5,7 +5,7 @@
  */
 
 export interface LogEntry {
-  level: 'log' | 'info' | 'warn' | 'error' | 'debug';
+  level: 'error' | 'warn' | 'log' | 'info';
   message: string;
   timestamp: string;
 }
@@ -16,11 +16,10 @@ const GLOBAL_KEY = '__codepilot_runtime_log__' as const;
 interface RuntimeLogState {
   buffer: LogEntry[];
   installed: boolean;
-  originalLog: typeof console.log;
-  originalInfo: typeof console.info;
   originalError: typeof console.error;
   originalWarn: typeof console.warn;
-  originalDebug: typeof console.debug;
+  originalLog: typeof console.log;
+  originalInfo: typeof console.info;
 }
 
 function getState(): RuntimeLogState {
@@ -29,11 +28,10 @@ function getState(): RuntimeLogState {
     g[GLOBAL_KEY] = {
       buffer: [] as LogEntry[],
       installed: false,
-      originalLog: console.log,
-      originalInfo: console.info,
       originalError: console.error,
       originalWarn: console.warn,
-      originalDebug: console.debug,
+      originalLog: console.log,
+      originalInfo: console.info,
     };
   }
   return g[GLOBAL_KEY] as RuntimeLogState;
@@ -85,22 +83,18 @@ function pushEntry(level: LogEntry['level'], args: unknown[]): void {
 }
 
 /**
- * Install console.error and console.warn intercepts.
+ * Install console intercepts.
  * Safe to call multiple times — only installs once per globalThis lifetime.
+ *
+ * error/warn are intercepted immediately.
+ * log/info are delayed by 15 s so Turbopack's startup compilation spam
+ * (thousands of console.log calls) doesn't saturate the CPU with
+ * JSON.stringify + regex scrubbing on every line.
  */
 export function initRuntimeLog(): void {
   const state = getState();
   if (state.installed) return;
-
-  console.log = (...args: unknown[]) => {
-    pushEntry('log', args);
-    state.originalLog.apply(console, args);
-  };
-
-  console.info = (...args: unknown[]) => {
-    pushEntry('info', args);
-    state.originalInfo.apply(console, args);
-  };
+  state.installed = true;
 
   console.error = (...args: unknown[]) => {
     pushEntry('error', args);
@@ -112,12 +106,20 @@ export function initRuntimeLog(): void {
     state.originalWarn.apply(console, args);
   };
 
-  console.debug = (...args: unknown[]) => {
-    pushEntry('debug', args);
-    state.originalDebug.apply(console, args);
-  };
+  // Delay log/info interception — Turbopack emits thousands of
+  // console.log lines during initial compile; intercepting them all
+  // with JSON.stringify + 6 regex passes maxes out the CPU.
+  setTimeout(() => {
+    console.log = (...args: unknown[]) => {
+      pushEntry('log', args);
+      state.originalLog.apply(console, args);
+    };
 
-  state.installed = true;
+    console.info = (...args: unknown[]) => {
+      pushEntry('info', args);
+      state.originalInfo.apply(console, args);
+    };
+  }, 15_000);
 }
 
 /**

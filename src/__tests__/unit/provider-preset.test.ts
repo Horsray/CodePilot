@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { VENDOR_PRESETS, PresetSchema } from '../../lib/provider-catalog';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { VENDOR_PRESETS, PresetSchema, getDefaultModelsForProvider, getEffectiveProviderProtocol, isValidProtocol } from '../../lib/provider-catalog';
 
 describe('Preset Schema Validation', () => {
   for (const preset of VENDOR_PRESETS) {
@@ -12,8 +15,8 @@ describe('Preset Schema Validation', () => {
         }
       });
 
-      it('has at least one default model (or is volcengine/ollama)', () => {
-        if (preset.key === 'volcengine' || preset.key === 'ollama') return;
+      it('has at least one default model (or is custom-media/bananarouter)', () => {
+        if (preset.key === 'custom-media' || preset.key === 'bananarouter') return;
         assert.ok(preset.defaultModels.length > 0, `Preset ${preset.key} expected at least one default model`);
       });
 
@@ -38,44 +41,52 @@ describe('Preset Schema Validation', () => {
 
   // ── Regression tests for the authStyle fixes ──
 
-  it('OpenRouter uses auth_token', () => {
-    const p = VENDOR_PRESETS.find(v => v.key === 'openrouter')!;
+  it('MiniMax presets use auth_token', () => {
+    for (const key of ['minimax-cn', 'minimax-global']) {
+      const p = VENDOR_PRESETS.find(v => v.key === key)!;
+      assert.equal(p.authStyle, 'auth_token', `${key} should use auth_token`);
+    }
+  });
+
+  it('DeepSeek uses auth_token', () => {
+    const p = VENDOR_PRESETS.find(v => v.key === 'deepseek')!;
     assert.equal(p.authStyle, 'auth_token');
   });
 
-  it('GLM CN uses auth_token', () => {
-    const p = VENDOR_PRESETS.find(v => v.key === 'glm-cn')!;
-    assert.equal(p.authStyle, 'auth_token');
+  it('MiMo presets use auth_token', () => {
+    for (const key of ['xiaomi-mimo', 'xiaomi-mimo-token-plan']) {
+      const p = VENDOR_PRESETS.find(v => v.key === key)!;
+      assert.equal(p.authStyle, 'auth_token', `${key} should use auth_token`);
+    }
   });
 
-  it('GLM Global uses auth_token', () => {
-    const p = VENDOR_PRESETS.find(v => v.key === 'glm-global')!;
-    assert.equal(p.authStyle, 'auth_token');
+  it('records verified image-input capability per MiniMax, DeepSeek, and MiMo model', () => {
+    const minimax = VENDOR_PRESETS.find(v => v.key === 'minimax-global')!;
+    assert.equal(minimax.defaultModels.find(m => m.modelId === 'MiniMax-M3')?.capabilities?.vision, true);
+
+    const deepseek = VENDOR_PRESETS.find(v => v.key === 'deepseek')!;
+    assert.equal(deepseek.defaultModels.find(m => m.modelId === 'deepseek-v4-pro')?.capabilities?.vision, false);
+    assert.equal(deepseek.defaultModels.find(m => m.modelId === 'deepseek-v4-flash')?.capabilities?.vision, true);
+
+    const mimo = VENDOR_PRESETS.find(v => v.key === 'xiaomi-mimo')!;
+    assert.equal(mimo.defaultModels.every(m => m.capabilities?.vision === true), true);
   });
 
-  it('Moonshot uses auth_token with ENABLE_TOOL_SEARCH disabled', () => {
-    const p = VENDOR_PRESETS.find(v => v.key === 'moonshot')!;
-    assert.equal(p.authStyle, 'auth_token');
-    assert.equal(p.defaultEnvOverrides.ENABLE_TOOL_SEARCH, 'false');
-  });
-
-  it('Kimi uses api_key with ENABLE_TOOL_SEARCH disabled', () => {
-    const p = VENDOR_PRESETS.find(v => v.key === 'kimi')!;
+  it('BananaRouter uses api_key with openai-compatible protocol', () => {
+    const p = VENDOR_PRESETS.find(v => v.key === 'bananarouter')!;
     assert.equal(p.authStyle, 'api_key');
-    assert.equal(p.defaultEnvOverrides.ENABLE_TOOL_SEARCH, 'false');
-  });
-
-  it('Bailian uses auth_token', () => {
-    const p = VENDOR_PRESETS.find(v => v.key === 'bailian')!;
-    assert.equal(p.authStyle, 'auth_token');
+    assert.equal(p.protocol, 'openai-compatible');
   });
 });
 
-describe('PROVIDER_MANAGED_BY_HOST', () => {
-  it('toClaudeCodeEnv always sets CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST', async () => {
+describe('toClaudeCodeEnv: env shape after CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST removal', () => {
+  // The flag was removed in the cc-switch credential bridge fix — SDK 0.2.62
+  // does not implement this variable, so setting it was dead code. These
+  // tests pin the current behavior so the flag doesn't get reintroduced
+  // accidentally, and verify the core env injection still works correctly.
+  it('with provider: cleans ANTHROPIC_* from baseEnv and injects the provider auth', async () => {
     const { toClaudeCodeEnv } = await import('../../lib/provider-resolver');
 
-    // With a provider
     const resolvedWithProvider = {
       provider: {
         id: 'test', name: 'Test', provider_type: 'anthropic', protocol: 'anthropic',
@@ -91,94 +102,239 @@ describe('PROVIDER_MANAGED_BY_HOST', () => {
       upstreamModel: 'sonnet',
       headers: {},
       envOverrides: {},
-      roleModels: {},
+      roleModels: { default: 'claude-sonnet-4-5' },
       hasCredentials: true,
       availableModels: [],
       settingSources: ['project', 'local'],
     };
-    const env = toClaudeCodeEnv({ PATH: '/usr/bin' }, resolvedWithProvider);
-    assert.equal(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, '1');
+    const env = toClaudeCodeEnv({
+      PATH: '/usr/bin',
+      ANTHROPIC_API_KEY: 'stale-key-should-be-removed',
+      ANTHROPIC_BASE_URL: 'https://stale-proxy.example.com',
+    }, resolvedWithProvider);
 
-    // Without a provider (env mode)
-    const resolvedWithoutProvider = {
-      provider: undefined,
-      protocol: 'anthropic' as const,
-      authStyle: 'api_key' as const,
-      model: undefined,
-      modelDisplayName: undefined,
-      upstreamModel: undefined,
-      headers: {},
-      envOverrides: {},
-      roleModels: {},
-      hasCredentials: false,
-      availableModels: [],
-      settingSources: ['user', 'project', 'local'],
-    };
-    const env2 = toClaudeCodeEnv({ PATH: '/usr/bin' }, resolvedWithoutProvider);
-    assert.equal(env2.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, '1');
+    // Dead-code flag must NOT be set
+    assert.equal(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, undefined);
+    // Provider auth correctly injected
+    assert.equal(env.ANTHROPIC_API_KEY, 'sk-test');
+    assert.equal(env.ANTHROPIC_BASE_URL, 'https://api.anthropic.com');
+    // Model injection
+    assert.equal(env.ANTHROPIC_MODEL, 'claude-sonnet-4-5');
+  });
+
+  it('without provider (env mode): preserves baseEnv ANTHROPIC_* for cc-switch compatibility', async () => {
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-provider-preset-'));
+    const { toClaudeCodeEnv } = await import('../../lib/provider-resolver');
+
+    try {
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      const resolvedWithoutProvider = {
+        provider: undefined,
+        protocol: 'anthropic' as const,
+        authStyle: 'api_key' as const,
+        model: undefined,
+        modelDisplayName: undefined,
+        upstreamModel: undefined,
+        headers: {},
+        envOverrides: {},
+        roleModels: {},
+        hasCredentials: false,
+        availableModels: [],
+        settingSources: [],
+      };
+      const env = toClaudeCodeEnv({
+        PATH: '/usr/bin',
+        ANTHROPIC_AUTH_TOKEN: 'cc-switch-token',
+        ANTHROPIC_BASE_URL: 'https://proxy.example.com',
+      }, resolvedWithoutProvider);
+
+      // Dead-code flag must NOT be set
+      assert.equal(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, undefined);
+      // Caller env is preserved when no ~/.claude/settings.json allowlist exists.
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'cc-switch-token');
+      assert.equal(env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
+    } finally {
+      if (previousHome !== undefined) process.env.HOME = previousHome; else delete process.env.HOME;
+      if (previousUserProfile !== undefined) process.env.USERPROFILE = previousUserProfile; else delete process.env.USERPROFILE;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 });
 
-describe('provider connection probe auth headers', () => {
-  it('MiniMax probe uses x-api-key for raw compatibility check', async () => {
-    const originalFetch = global.fetch;
-    let requestHeaders: HeadersInit | undefined;
-
-    global.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      requestHeaders = init?.headers;
-      return new Response('{}', { status: 200 });
-    }) as typeof fetch;
-
-    try {
-      const { testProviderConnection } = await import('../../lib/claude-client');
-      const result = await testProviderConnection({
-        apiKey: 'minimax-test-key',
-        baseUrl: 'https://api.minimaxi.com/anthropic',
-        protocol: 'anthropic',
-        authStyle: 'auth_token',
-        presetKey: 'minimax-cn',
-        providerName: 'MiniMax (CN)',
-      });
-
-      assert.equal(result.success, true);
-      assert.deepEqual(requestHeaders, {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'x-api-key': 'minimax-test-key',
-      });
-    } finally {
-      global.fetch = originalFetch;
-    }
+describe('getDefaultModelsForProvider — provider-catalog flow', () => {
+  it('bedrock with empty baseUrl resolves to BEDROCK_VERTEX_DEFAULT_MODELS (Opus 4.6 alias, no xhigh)', () => {
+    const models = getDefaultModelsForProvider('bedrock', '');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.ok(opus, 'bedrock catalog should include opus');
+    // Bedrock opus alias resolves to 4.6 upstream per official docs —
+    // label must not promise 4.7.
+    assert.ok(
+      !/4\.7/.test(opus.displayName),
+      `bedrock opus display should not claim 4.7 (got "${opus.displayName}")`,
+    );
+    assert.equal(
+      opus.upstreamModelId,
+      undefined,
+      'bedrock opus should stay alias-only (no first-party upstreamModelId leak)',
+    );
+    const levels = opus.capabilities?.supportedEffortLevels ?? [];
+    assert.ok(
+      !levels.includes('xhigh'),
+      `bedrock opus must not advertise xhigh effort (got [${levels.join(', ')}])`,
+    );
   });
 
-  it('non-MiniMax auth_token probe still uses Authorization header', async () => {
-    const originalFetch = global.fetch;
-    let requestHeaders: HeadersInit | undefined;
+  it('vertex with empty baseUrl resolves to BEDROCK_VERTEX_DEFAULT_MODELS (Opus 4.6 alias)', () => {
+    const models = getDefaultModelsForProvider('vertex', '');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.ok(opus, 'vertex catalog should include opus');
+    assert.ok(
+      !/4\.7/.test(opus.displayName),
+      `vertex opus display should not claim 4.7 (got "${opus.displayName}")`,
+    );
+    assert.equal(opus.upstreamModelId, undefined);
+  });
 
-    global.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      requestHeaders = init?.headers;
-      return new Response('{}', { status: 200 });
-    }) as typeof fetch;
+  it('anthropic protocol (unmatched baseUrl) returns alias-only catalog — no claude-opus-4-7 pin', () => {
+    // Third-party proxies fall through to this branch. Pinning first-party
+    // upstream here would break OpenRouter/LiteLLM/Ollama compatibility.
+    const models = getDefaultModelsForProvider('anthropic', 'https://unknown-proxy.example/v1');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.ok(opus);
+    assert.equal(
+      opus.upstreamModelId,
+      undefined,
+      'generic anthropic-protocol catalog should not leak first-party upstream ID',
+    );
+  });
 
-    try {
-      const { testProviderConnection } = await import('../../lib/claude-client');
-      const result = await testProviderConnection({
-        apiKey: 'glm-test-key',
-        baseUrl: 'https://open.bigmodel.cn/api/anthropic',
-        protocol: 'anthropic',
-        authStyle: 'auth_token',
-        presetKey: 'glm-cn',
-        providerName: 'GLM (CN)',
-      });
+  it('chat catalog contains only the intended fork providers (minimax/mimo/deepseek/bananarouter)', () => {
+    // Fork decision 2026-10: the chat quick-add list is trimmed to the five
+    // actively used providers. This lock prevents upstream merges from
+    // silently re-adding deleted presets.
+    const chatKeys = VENDOR_PRESETS.filter(p => (p.category || 'chat') === 'chat')
+      .map(p => p.key)
+      .sort();
+    assert.deepEqual(chatKeys, [
+      'bananarouter',
+      'deepseek',
+      'minimax-cn',
+      'minimax-global',
+      'xiaomi-mimo',
+      'xiaomi-mimo-token-plan',
+    ]);
+  });
 
-      assert.equal(result.success, true);
-      assert.deepEqual(requestHeaders, {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        Authorization: 'Bearer glm-test-key',
-      });
-    } finally {
-      global.fetch = originalFetch;
+  it('legacy anthropic provider (provider_type=anthropic, baseUrl="") resolves to first-party catalog', () => {
+    // Migrated Default providers from older settings end up with
+    // provider_type='anthropic' and empty base_url. The native runtime
+    // treats them as api.anthropic.com; without the providerType hint
+    // they'd fall through to the alias-only catalog and bypass Opus 4.7
+    // sanitizer / xhigh / 1M window.
+    const models = getDefaultModelsForProvider('anthropic', '', 'anthropic');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.equal(
+      opus?.upstreamModelId,
+      'claude-opus-4-7',
+      'legacy empty-baseUrl anthropic must pin opus to claude-opus-4-7',
+    );
+    const levels = opus?.capabilities?.supportedEffortLevels ?? [];
+    assert.ok(levels.includes('xhigh'), 'legacy first-party opus must advertise xhigh');
+  });
+
+  it('effective protocol: raw anthropic wins over inference', () => {
+    assert.equal(
+      getEffectiveProviderProtocol('custom', 'anthropic', ''),
+      'anthropic',
+      'non-empty valid raw protocol should be honored as-is',
+    );
+  });
+
+  it('effective protocol: empty raw protocol falls back to provider_type inference', () => {
+    // Legacy migrated rows have provider_type='anthropic' + protocol=''.
+    // They must resolve to 'anthropic' so write-path validation and doctor
+    // diagnostics treat them the same as an explicit 'anthropic' POST.
+    assert.equal(
+      getEffectiveProviderProtocol('anthropic', '', ''),
+      'anthropic',
+    );
+    assert.equal(
+      getEffectiveProviderProtocol('anthropic', undefined, ''),
+      'anthropic',
+    );
+  });
+
+  it('effective protocol: bedrock provider_type without raw protocol still classifies as bedrock', () => {
+    assert.equal(
+      getEffectiveProviderProtocol('bedrock', '', ''),
+      'bedrock',
+    );
+  });
+
+  it('effective protocol: unknown raw protocol falls back to inference', () => {
+    // A stray / legacy non-Protocol string in raw shouldn't pass through.
+    assert.equal(
+      getEffectiveProviderProtocol('anthropic', 'random-garbage', ''),
+      'anthropic',
+    );
+  });
+
+  it('isValidProtocol: accepts every Protocol union member and rejects garbage', () => {
+    // Used by POST/PUT to block invalid protocol strings from ever landing
+    // in the DB. If the Protocol union grows, this test will naturally
+    // pair with the VALID_PROTOCOLS set update in provider-catalog.ts.
+    const members: string[] = [
+      'anthropic', 'openai-compatible', 'openrouter',
+      'bedrock', 'vertex', 'google', 'gemini-image', 'openai-image',
+    ];
+    for (const m of members) {
+      assert.equal(isValidProtocol(m), true, `'${m}' must be valid`);
     }
+    assert.equal(isValidProtocol('random-garbage'), false);
+    assert.equal(isValidProtocol(''), false);
+    assert.equal(isValidProtocol(undefined), false);
+    assert.equal(isValidProtocol(null), false);
+    assert.equal(isValidProtocol(123), false);
+  });
+
+  it('openai-compatible chat provider at https://api.openai.com/v1 does NOT inherit GPT Image catalog', () => {
+    // Regression: adding the openai-image preset made api.openai.com/v1 an
+    // exact-match URL for a media preset. Without the protocol guard, any
+    // chat provider configured with the same URL (e.g. openai-compatible)
+    // would silently fetch the GPT Image model list into the chat model
+    // selector.
+    const chatModels = getDefaultModelsForProvider(
+      'openai-compatible',
+      'https://api.openai.com/v1',
+    );
+    const hasImageModel = chatModels.some(m => /^gpt-image/i.test(m.modelId));
+    assert.equal(hasImageModel, false, 'openai-compatible must not inherit GPT Image catalog');
+
+    // And the happy path — the same URL with protocol='openai-image' still
+    // resolves to GPT Image models.
+    const imageModels = getDefaultModelsForProvider(
+      'openai-image',
+      'https://api.openai.com/v1',
+    );
+    assert.ok(
+      imageModels.some(m => /^gpt-image/i.test(m.modelId)),
+      'openai-image at the canonical URL must still return GPT Image models',
+    );
+  });
+
+  it('missing providerType with empty baseUrl stays alias-only (no accidental first-party promotion)', () => {
+    // When provider_type is unknown or explicitly something else, the
+    // empty-baseUrl branch does NOT kick in — prevents, e.g., a third-
+    // party custom provider from being mis-labeled as first-party.
+    const models = getDefaultModelsForProvider('anthropic', '');
+    const opus = models.find(m => m.modelId === 'opus');
+    assert.equal(
+      opus?.upstreamModelId,
+      undefined,
+      'anthropic+empty baseUrl without providerType must remain alias-only',
+    );
   });
 });

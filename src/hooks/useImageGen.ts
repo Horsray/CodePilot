@@ -5,10 +5,6 @@ import { createContext, useContext, useState, useCallback, useRef } from 'react'
 export interface ImageGenResult {
   id: string;
   text?: string;
-  model?: string;
-  providerId?: string;
-  providerName?: string;
-  providerLabel?: string;
   images: Array<{ data: string; mimeType: string; localPath?: string }>;
 }
 

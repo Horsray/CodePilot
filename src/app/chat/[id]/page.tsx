@@ -2,11 +2,14 @@
 
 import { useEffect, useState, useRef, use } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import type { Message, MessagesResponse, ChatSession } from '@/types';
 import { ChatView } from '@/components/chat/ChatView';
 import { SpinnerGap } from "@/components/ui/icon";
 import { usePanel } from '@/hooks/usePanel';
 import { useTranslation } from '@/hooks/useTranslation';
+import { preloadFileTreePanel } from '@/components/layout/panels/fileTreePanelLoader';
+import { prefetchRootFileTree } from '@/lib/file-tree-cache';
 
 interface ChatSessionPageProps {
   params: Promise<{ id: string }>;
@@ -14,6 +17,7 @@ interface ChatSessionPageProps {
 
 export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   const { id } = use(params);
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -24,13 +28,25 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
   const [sessionPermissionProfile, setSessionPermissionProfile] = useState<'default' | 'full_access'>('default');
   const [sessionMode, setSessionMode] = useState<'code' | 'plan'>('code');
   const [sessionHasSummary, setSessionHasSummary] = useState(false);
-  const { setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
+  const [sessionSummaryBoundaryRowid, setSessionSummaryBoundaryRowid] = useState(0);
+  const { workingDirectory, setWorkingDirectory, setSessionId, setSessionTitle: setPanelSessionTitle, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen } = usePanel();
+  const targetFilePath = searchParams.get('file') || undefined;
   const { t } = useTranslation();
   const defaultPanelAppliedRef = useRef(false);
+
+  // Renew history only on entering this route, never on ChatView's background reads.
+  useEffect(() => {
+    void fetch('/api/chat/sessions', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opened_session_id: id }),
+    }).catch(() => { /* Best effort; loading the conversation remains independent. */ });
+  }, [id]);
 
   // Load session info and set working directory
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     // Clear stale state immediately so ChatView doesn't inherit previous session's values
     setWorkingDirectory('');
     setSessionModel('');
@@ -39,7 +55,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
     async function loadSession() {
       try {
-        const sessionRes = await fetch(`/api/chat/sessions/${id}`);
+        const sessionRes = await fetch(`/api/chat/sessions/${id}`, { signal: controller.signal });
         if (cancelled) return;
         if (sessionRes.ok) {
           const data: { session: ChatSession } = await sessionRes.json();
@@ -58,11 +74,18 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
           if (cancelled) return;
           const resolved = await resolveSessionModel(data.session.model || '', data.session.provider_id || '');
           if (cancelled) return;
+          console.log('[page.tsx] resolveSessionModel result:', {
+            sessionModel: data.session.model || '',
+            sessionProviderId: data.session.provider_id || '',
+            resolvedModel: resolved.model,
+            resolvedProviderId: resolved.providerId,
+          });
           setSessionModel(resolved.model);
           setSessionProviderId(resolved.providerId);
           setSessionPermissionProfile(data.session.permission_profile || 'default');
           setSessionMode((data.session.mode as 'code' | 'plan') || 'code');
           setSessionHasSummary(!!data.session.context_summary);
+          setSessionSummaryBoundaryRowid(data.session.context_summary_boundary_rowid || 0);
         }
       } catch {
         // Session info load failed - panel will still work without directory
@@ -72,8 +95,28 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     }
 
     loadSession();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [id, setWorkingDirectory, setSessionId, setPanelSessionTitle, t]);
+
+  useEffect(() => {
+    if (!sessionInfoLoaded || !id) return;
+
+    preloadFileTreePanel();
+  }, [id, sessionInfoLoaded]);
+
+  useEffect(() => {
+    if (!workingDirectory) return;
+
+    const controller = new AbortController();
+    void prefetchRootFileTree(workingDirectory, controller.signal);
+
+    return () => {
+      controller.abort();
+    };
+  }, [workingDirectory]);
 
   useEffect(() => {
     // Reset state when switching sessions
@@ -84,10 +127,11 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
     setHasMore(false);
 
     let cancelled = false;
+    const controller = new AbortController();
 
     async function loadMessages() {
       try {
-        const res = await fetch(`/api/chat/sessions/${id}/messages?limit=30`);
+        const res = await fetch(`/api/chat/sessions/${id}/messages?limit=30`, { signal: controller.signal });
         if (cancelled) return;
         if (!res.ok) {
           if (res.status === 404) {
@@ -110,8 +154,23 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
     loadMessages();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [id]);
+
+  // 中文注释：预热统一由 ChatView 管理（useEffect([sessionId, currentModel, currentProviderId])），
+  // 不在 page.tsx 重复触发。原因是 page.tsx 的 sessionModel/sessionProviderId 来自 DB，
+  // 用户在 ChatView 中切换模型后 DB 值可能未更新，导致 page.tsx 用旧 provider 预热，
+  // ChatView 用新 provider 预热，签名不匹配，旧 entry 被丢弃，预热白费。
+
+  // Auto-open file tree when jumping from a file search result
+  useEffect(() => {
+    if (targetFilePath) {
+      setFileTreeOpen(true);
+    }
+  }, [targetFilePath, setFileTreeOpen]);
 
   // Auto-open default panel the first time a session is ever opened.
   // Uses sessionStorage to track which sessions have already been initialized,
@@ -129,6 +188,11 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
     (async () => {
       try {
+        if (targetFilePath) {
+          // Preserve explicit deep-link intent from global search.
+          setFileTreeOpen(true);
+          return;
+        }
         const res = await fetch('/api/settings/app');
         if (!res.ok) return;
         const data = await res.json();
@@ -143,18 +207,21 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
           setDashboardPanelOpen(panel === 'dashboard');
         }
       } catch {
-        // Default to no panels open if settings load fails
-        setFileTreeOpen(false);
-        setGitPanelOpen(false);
-        setDashboardPanelOpen(false);
+        setFileTreeOpen(true);
       }
     })();
-  }, [id, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen]);
+  }, [id, targetFilePath, setFileTreeOpen, setGitPanelOpen, setDashboardPanelOpen]);
 
+  // 中文注释：仅在加载会话信息和消息时显示 loading，warmup 不阻塞 UI
   if (loading || !sessionInfoLoaded) {
     return (
       <div className="flex h-full items-center justify-center">
-        <SpinnerGap size={32} className="animate-spin text-muted-foreground" />
+        <div className="flex flex-col items-center gap-3">
+          <SpinnerGap size={32} className="animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
+            {t('chat.loadingMessages')}
+          </p>
+        </div>
       </div>
     );
   }
@@ -174,7 +241,7 @@ export default function ChatSessionPage({ params }: ChatSessionPageProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} />
+      <ChatView key={id} sessionId={id} initialMessages={messages} initialHasMore={hasMore} modelName={sessionModel} providerId={sessionProviderId} initialPermissionProfile={sessionPermissionProfile} initialMode={sessionMode} initialHasSummary={sessionHasSummary} initialSummaryBoundaryRowid={sessionSummaryBoundaryRowid} isLoading={loading} />
     </div>
   );
 }

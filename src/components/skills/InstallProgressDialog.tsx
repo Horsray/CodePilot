@@ -17,7 +17,6 @@ interface InstallProgressDialogProps {
   onOpenChange: (open: boolean) => void;
   action: "install" | "uninstall";
   source: string;
-  skillId: string;
   skillName: string;
   onComplete: () => void;
 }
@@ -29,7 +28,6 @@ export function InstallProgressDialog({
   onOpenChange,
   action,
   source,
-  skillId,
   skillName,
   onComplete,
 }: InstallProgressDialogProps) {
@@ -54,7 +52,7 @@ export function InstallProgressDialog({
 
       const body =
         action === "install"
-          ? { source, skillId, global: true }
+          ? { source, global: true }
           : { skill: skillName, global: true };
 
       const res = await fetch(endpoint, {
@@ -112,7 +110,7 @@ export function InstallProgressDialog({
         setLogs((prev) => [...prev, (err as Error).message]);
       }
     }
-  }, [action, source, skillId, skillName]);
+  }, [action, source, skillName]);
 
   useEffect(() => {
     if (open) {

@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { consumeSSEStream, type SSECallbacks } from '../../hooks/useSSEStream';
+import { buildContextCompressedStatus } from '../../lib/context-compressor';
 
 /**
  * Helper: create a mock ReadableStreamDefaultReader from SSE lines.
@@ -82,6 +83,73 @@ describe('SSE Stream — thinking events', () => {
 });
 
 describe('SSE Stream — is_error propagation', () => {
+  it('marks an EOF without a terminal event as upstream interruption', async () => {
+    const terminals: Array<string | undefined> = [];
+
+    const result = await consumeSSEStream(mockReader([
+      sseData({ type: 'text', data: 'Partial work' }),
+    ]), noopCallbacks({
+      onResult: (_usage, meta) => terminals.push(meta?.terminalReason),
+    }));
+
+    assert.equal(result.accumulated, 'Partial work');
+    assert.deepEqual(terminals, ['upstream_interrupted']);
+  });
+
+  it('renders result errors with the original billing message and an error terminal', async () => {
+    const errors: string[] = [];
+    const terminals: Array<string | undefined> = [];
+    const result = await consumeSSEStream(mockReader([
+      sseData({ type: 'text', data: 'Partial answer' }),
+      sseData({ type: 'result', data: JSON.stringify({ is_error: true, errors: ['余额不足，请充值'], usage: null }) }),
+      sseData({ type: 'done', data: '' }),
+    ]), noopCallbacks({
+      onError: (text) => errors.push(text),
+      onResult: (_usage, meta) => terminals.push(meta?.terminalReason),
+    }));
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].includes('余额不足，请充值'));
+    assert.ok(result.accumulated.startsWith('Partial answer'));
+    assert.deepEqual(terminals, ['error']);
+  });
+
+  it('does not duplicate an error card when error SSE is followed by an error result', async () => {
+    const errors: string[] = [];
+    await consumeSSEStream(mockReader([
+      sseData({ type: 'error', data: 'Credit balance is too low' }),
+      sseData({ type: 'result', data: JSON.stringify({ is_error: true, errors: ['Credit balance is too low'] }) }),
+    ]), noopCallbacks({ onError: (text) => errors.push(text) }));
+    assert.equal(errors.length, 1);
+  });
+
+  it('ignores late teardown errors and text after user cancellation', async () => {
+    const errors: string[] = [];
+    const terminals: Array<string | undefined> = [];
+    const result = await consumeSSEStream(mockReader([
+      sseData({ type: 'text', data: 'Already visible' }),
+      sseData({ type: 'aborted', data: JSON.stringify({ reason: 'user_cancel' }) }),
+      sseData({ type: 'error', data: 'CLI process exited' }),
+      sseData({ type: 'result', data: JSON.stringify({ is_error: true, errors: ['CLI process exited'] }) }),
+      sseData({ type: 'aborted', data: JSON.stringify({ reason: 'error' }) }),
+      sseData({ type: 'text', data: 'Late output' }),
+    ]), noopCallbacks({
+      onError: (text) => errors.push(text),
+      onResult: (_usage, meta) => terminals.push(meta?.terminalReason),
+    }));
+    assert.equal(result.accumulated, 'Already visible');
+    assert.deepEqual(errors, []);
+    assert.deepEqual(terminals, ['user_cancel']);
+  });
+
+  it('reports error results with no errors array using a readable fallback', async () => {
+    const errors: string[] = [];
+    await consumeSSEStream(mockReader([
+      sseData({ type: 'result', data: JSON.stringify({ is_error: true, subtype: 'error_max_budget_usd' }) }),
+    ]), noopCallbacks({ onError: (text) => errors.push(text) }));
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].includes('error_max_budget_usd'));
+  });
+
   it('extracts is_error from tool_result events', async () => {
     const results: Array<{ tool_use_id: string; content: string; is_error?: boolean }> = [];
     const reader = mockReader([
@@ -147,5 +215,217 @@ describe('SSE Stream — media in tool_result', () => {
     }));
 
     assert.equal(results[0].media, undefined);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// context_compressed SSE events
+// ────────────────────────────────────────────────────────────────
+
+describe('SSE Stream — context_compressed events', () => {
+  it('dispatches onContextCompressed for subtype=context_compressed status events', async () => {
+    const events: Array<{ message: string; messagesCompressed: number; tokensSaved: number }> = [];
+    const statusCalls: string[] = [];
+
+    const reader = mockReader([
+      sseData({
+        type: 'status',
+        data: JSON.stringify({
+          notification: true,
+          subtype: 'context_compressed',
+          message: 'Context compressed: 5 older messages summarized, ~1,200 tokens saved',
+          stats: { messagesCompressed: 5, tokensSaved: 1200 },
+        }),
+      }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onContextCompressed: (d) => events.push(d),
+      onStatus: (t) => { if (t) statusCalls.push(t); },
+    }));
+
+    // onContextCompressed should have been called
+    assert.equal(events.length, 1);
+    assert.equal(events[0].messagesCompressed, 5);
+    assert.equal(events[0].tokensSaved, 1200);
+    assert.ok(events[0].message.includes('Context compressed'));
+
+    // onStatus should NOT have been called (context_compressed is intercepted before notification branch)
+    assert.equal(statusCalls.length, 0, 'context_compressed must not leak into onStatus');
+  });
+
+  it('does NOT fire onContextCompressed for unrelated status events', async () => {
+    const events: unknown[] = [];
+    const reader = mockReader([
+      sseData({
+        type: 'status',
+        data: JSON.stringify({ notification: true, message: 'Some other notification' }),
+      }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onContextCompressed: (d) => events.push(d),
+    }));
+
+    assert.equal(events.length, 0);
+  });
+
+  it('reactive-compact retry payload (via buildContextCompressedStatus) reaches onContextCompressed', async () => {
+    // Regression guard for the stale-shape bug: the reactive-compact retry
+    // path in claude-client.ts used to emit { message: 'context_compressed' }
+    // without a subtype. After useSSEStream switched to subtype-based dispatch
+    // (useSSEStream.ts:204) that payload was silently dropped. Both the
+    // pre-compression wrapper and the retry path now route through the shared
+    // builder — this test pins the builder's output to the consumer contract.
+    const events: Array<{ message: string; messagesCompressed: number; tokensSaved: number }> = [];
+    const statusCalls: string[] = [];
+
+    const payload = buildContextCompressedStatus({
+      messagesCompressed: 12,
+      tokensSaved: 8500,
+    });
+
+    // Builder shape assertions (locked-in contract for useSSEStream consumer)
+    assert.equal(payload.notification, true);
+    assert.equal(payload.subtype, 'context_compressed');
+    assert.equal(payload.stats.messagesCompressed, 12);
+    assert.equal(payload.stats.tokensSaved, 8500);
+    assert.ok(payload.message.includes('12 older messages'));
+    assert.ok(payload.message.includes('8,500'));
+
+    const reader = mockReader([
+      sseData({ type: 'status', data: JSON.stringify(payload) }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onContextCompressed: (d) => events.push(d),
+      onStatus: (t) => { if (t) statusCalls.push(t); },
+    }));
+
+    assert.equal(events.length, 1, 'retry-path payload must dispatch onContextCompressed');
+    assert.equal(events[0].messagesCompressed, 12);
+    assert.equal(events[0].tokensSaved, 8500);
+    assert.equal(statusCalls.length, 0, 'must not leak into generic onStatus');
+  });
+
+  it('buildContextCompressedStatus omits tokens-saved phrasing when tokensSaved=0', () => {
+    const payload = buildContextCompressedStatus({ messagesCompressed: 3, tokensSaved: 0 });
+    assert.equal(payload.subtype, 'context_compressed');
+    assert.ok(payload.message.includes('3 older messages'));
+    assert.ok(!payload.message.includes('tokens saved'));
+    assert.equal(payload.stats.tokensSaved, 0);
+  });
+});
+
+describe('SSE Stream — upstream lifecycle events', () => {
+  it('surfaces CLI compaction lifecycle without inventing progress', async () => {
+    const events: Array<{ phase: string; source: string; trigger?: string }> = [];
+    const reader = mockReader([
+      sseData({ type: 'status', data: JSON.stringify({
+        subtype: 'context_compressing', source: 'cli', trigger: 'auto', message: 'CLI 正在整理上下文',
+      }) }),
+      sseData({ type: 'status', data: JSON.stringify({
+        subtype: 'context_compressed', source: 'cli', trigger: 'auto', message: 'CLI 已完成上下文整理',
+      }) }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onContextLifecycle: (event) => events.push(event),
+    }));
+
+    assert.deepEqual(events, [
+      { phase: 'started', source: 'cli', trigger: 'auto' },
+      { phase: 'completed', source: 'cli', trigger: 'auto' },
+    ]);
+  });
+
+  it('surfaces upstream retry separately from a successful completion', async () => {
+    const retries: string[] = [];
+    const reader = mockReader([
+      sseData({ type: 'status', data: JSON.stringify({
+        subtype: 'upstream_retry', message: '模型上游连接中断，正在重试（第 1 次）',
+      }) }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onUpstreamRetry: (event) => retries.push(event.message),
+    }));
+
+    assert.deepEqual(retries, ['模型上游连接中断，正在重试（第 1 次）']);
+  });
+});
+
+describe('SSE Stream — structured status payloads', () => {
+  it('routes structured status payloads without leaking raw JSON into onStatus', async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const statusCalls: Array<string | undefined> = [];
+
+    const reader = mockReader([
+      sseData({
+        type: 'status',
+        data: JSON.stringify({
+          subtype: 'step_start',
+          message: 'Reading file',
+          tool: 'Read',
+          path: '/tmp/example.ts',
+        }),
+      }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onStatusPayload: (payload) => payloads.push(payload),
+      onStatus: (text) => statusCalls.push(text),
+    }));
+
+    assert.equal(payloads.length, 1);
+    assert.equal(payloads[0].subtype, 'step_start');
+    assert.deepEqual(statusCalls, [undefined]);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// skill_nudge SSE events
+// ────────────────────────────────────────────────────────────────
+
+describe('SSE Stream — skill_nudge events', () => {
+  it('dispatches onSkillNudge for subtype=skill_nudge status events', async () => {
+    const events: Array<{ message: string; step: number; distinctToolCount: number; toolNames: string[] }> = [];
+    const statusCalls: string[] = [];
+
+    const reader = mockReader([
+      sseData({
+        type: 'status',
+        data: JSON.stringify({
+          notification: true,
+          subtype: 'skill_nudge',
+          message: 'This workflow involved 10 steps...',
+          payload: {
+            type: 'skill_nudge',
+            message: 'This workflow involved 10 steps...',
+            reason: { step: 10, distinctToolCount: 4, toolNames: ['Bash', 'Edit', 'Grep', 'Read'] },
+          },
+        }),
+      }),
+      sseData({ type: 'done', data: '' }),
+    ]);
+
+    await consumeSSEStream(reader, noopCallbacks({
+      onSkillNudge: (d) => events.push(d),
+      onStatus: (t) => { if (t) statusCalls.push(t); },
+    }));
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].step, 10);
+    assert.equal(events[0].distinctToolCount, 4);
+    assert.deepEqual(events[0].toolNames, ['Bash', 'Edit', 'Grep', 'Read']);
+
+    // Must not leak into onStatus
+    assert.equal(statusCalls.length, 0, 'skill_nudge must not leak into onStatus');
   });
 });

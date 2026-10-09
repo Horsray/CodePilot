@@ -2,31 +2,67 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, ReplyMode } from '@/types';
-import { perf } from '@/lib/performance-logger';
+import { getToolDisplayName } from '@/lib/tool-display-names';
+import type { Message, MessagesResponse, FileAttachment, SessionStreamSnapshot, MentionRef, ProviderModelGroup, ClaudeInitMeta } from '@/types';
 import { MessageList } from './MessageList';
+import { TerminalReasonChip } from './TerminalReasonChip';
+import { RateLimitBanner } from './RateLimitBanner';
 import { MessageInput } from './MessageInput';
 import { ChatComposerActionBar } from './ChatComposerActionBar';
-import { ModeIndicator } from './ModeIndicator';
-import { ChatPermissionSelector } from './ChatPermissionSelector';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
-import { ImageGenToggle } from './ImageGenToggle';
+import { RuntimeBadge } from './RuntimeBadge';
+import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { Button } from '@/components/ui/button';
+import { SpinnerGap } from '@/components/ui/icon';
 import { usePanel } from '@/hooks/usePanel';
+import { usePanelStore } from '@/store/usePanelStore';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useImageGen } from '@/hooks/useImageGen';
+import { showToast } from '@/hooks/useToast';
+import type { TranslationKey } from '@/i18n';
 import { PermissionPrompt } from './PermissionPrompt';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { BatchExecutionDashboard, BatchContextSync } from './batch-image-gen';
+import { ContextWidgetPortal } from './context-widget/ContextWidgetPortal';
+import { MemoryPanelPortal } from './context-widget/MemoryPanelPortal';
 import { setLastGeneratedImages, loadLastGenerated } from '@/lib/image-ref-store';
 import { useChatCommands } from '@/hooks/useChatCommands';
 import { useAssistantTrigger } from '@/hooks/useAssistantTrigger';
 import { useStreamSubscription } from '@/hooks/useStreamSubscription';
+import { consumePendingSessionMessage, peekPendingSessionMessage } from '@/lib/pending-session-message';
+import type { PendingSessionMessage } from '@/lib/pending-session-message';
+import {
+  getPendingFirstTurnStatusText,
+  getPendingFirstTurnRemainingDelayMs,
+  shouldReleasePendingFirstTurn,
+} from '@/lib/first-turn-warmup';
 import {
   startStream,
   stopStream,
   getSnapshot,
   getRewindPoints,
   respondToPermission,
+  adoptPendingPermission,
+  getUnpersistedAssistantMessages,
 } from '@/lib/stream-session-manager';
+
+interface QueuedMessage {
+  clientMessageId?: string;
+  content: string;
+  files?: FileAttachment[];
+  systemPromptAppend?: string;
+  displayOverride?: string;
+  mentions?: MentionRef[];
+}
 
 interface ChatViewProps {
   sessionId: string;
@@ -34,20 +70,40 @@ interface ChatViewProps {
   initialHasMore?: boolean;
   modelName?: string;
   providerId?: string;
+  warmupState?: 'idle' | 'warming' | 'ready' | 'failed';
   initialPermissionProfile?: 'default' | 'full_access';
   initialMode?: 'code' | 'plan';
   initialHasSummary?: boolean;
+  initialSummaryBoundaryRowid?: number;
+  isLoading?: boolean;
 }
 
 /** Maximum messages kept in React state. Older messages are trimmed and reloaded on scroll. */
 const MAX_MESSAGES_IN_MEMORY = 300;
-const REPLY_MODE_STORAGE_KEY = 'codepilot:last-reply-mode';
+const MESSAGE_RECONCILE_INTERVAL_MS = 10000;
 
-export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, initialPermissionProfile, initialMode, initialHasSummary }: ChatViewProps) {
-  const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setDashboardPanelOpen, setFileTreeOpen, setIsAssistantWorkspace } = usePanel();
+function stripLeadingFileComment(content: string): string {
+  return content.replace(/^<!--files:.*?-->/, '');
+}
+
+function isOptimisticUserMessage(message: Message): boolean {
+  return message.role === 'user' && message.id.startsWith('temp-');
+}
+
+function normalizedUserContent(content: string): string {
+  return stripLeadingFileComment(content).trim();
+}
+
+export function ChatView({ sessionId, initialMessages = [], initialHasMore = false, modelName, providerId, warmupState = 'idle', initialPermissionProfile, initialMode, initialHasSummary, initialSummaryBoundaryRowid, isLoading }: ChatViewProps) {
+  const { setStreamingSessionId, workingDirectory, setPendingApprovalSessionId, setIsAssistantWorkspace } = usePanel();
   const { t } = useTranslation();
+  const imageGen = useImageGen();
+  const imageAgentMode = imageGen.state.enabled;
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingSessionMessage | null>(() => peekPendingSessionMessage(sessionId));
+  const [pendingInitialReleaseTick, setPendingInitialReleaseTick] = useState(0);
+  const [runtimeWarmupState, setRuntimeWarmupState] = useState<'idle' | 'warming' | 'ready' | 'failed'>(warmupState);
   const [permissionProfile, setPermissionProfile] = useState<'default' | 'full_access'>(initialPermissionProfile || 'default');
 
   // Whether this session's working directory matches the configured assistant workspace
@@ -85,15 +141,57 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         const dbMessages: Message[] = data.messages;
         setMessages(current => {
           const localCommands = current.filter(m => m.id.startsWith('cmd-'));
-          if (localCommands.length === 0) return dbMessages;
-          const merged = [...dbMessages, ...localCommands];
+          const optimisticUsers = current.filter(isOptimisticUserMessage);
+          const pendingAssistants = getUnpersistedAssistantMessages(current, dbMessages);
+          const realMessages = current.filter(m => !m.id.startsWith('cmd-'));
+          const dbUserKeys = new Set(
+            dbMessages
+              .filter((m) => m.role === 'user')
+              .map((m) => normalizedUserContent(m.content))
+          );
+          const unmatchedOptimisticUsers = optimisticUsers.filter(
+            (m) => !dbUserKeys.has(normalizedUserContent(m.content))
+          );
+          
+          if (realMessages.length === 0) {
+            const merged = [...dbMessages, ...unmatchedOptimisticUsers, ...pendingAssistants, ...localCommands];
+            return merged.length > MAX_MESSAGES_IN_MEMORY
+              ? merged.slice(-MAX_MESSAGES_IN_MEMORY)
+              : merged;
+          }
+
+          // Check if we can safely merge by finding where dbMessages starts within current
+          const firstDbMessage = dbMessages[0];
+          if (firstDbMessage) {
+            const overlapIdx = current.findIndex(m => m.id === firstDbMessage.id);
+            if (overlapIdx !== -1) {
+              // Replace everything from overlapIdx onwards with the fresh dbMessages, 
+              // preserving local commands at the very end
+              const base = current.slice(0, overlapIdx);
+              const merged = [...base.filter((message) => !pendingAssistants.includes(message)), ...dbMessages, ...unmatchedOptimisticUsers, ...pendingAssistants, ...localCommands];
+              
+              // Optimization: Check if the merged array is actually different from current
+              // to avoid unnecessary React re-renders
+              const isDifferent = merged.length !== current.length || 
+                merged.some((m, i) => m.id !== current[i]?.id || m.content !== current[i]?.content);
+                
+              if (!isDifferent) return current;
+
+              return merged.length > MAX_MESSAGES_IN_MEMORY
+                ? merged.slice(-MAX_MESSAGES_IN_MEMORY)
+                : merged;
+            }
+          }
+
+          // If there's a huge gap or no overlap (e.g. tail was trimmed), replace entirely
+          const merged = [...dbMessages, ...unmatchedOptimisticUsers, ...pendingAssistants, ...localCommands];
           return merged.length > MAX_MESSAGES_IN_MEMORY
             ? merged.slice(-MAX_MESSAGES_IN_MEMORY)
             : merged;
         });
       })
       .catch(() => { /* keep current state as-is */ });
-  }, [sessionId]);
+  }, [sessionId, t]);
 
   const cappedSetMessages: typeof setMessages = useCallback((action) => {
     setMessages((prev) => {
@@ -105,25 +203,156 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       return next;
     });
   }, []);
-  const [mode, setMode] = useState<string>(initialMode || 'code');
-  const [currentModel, setCurrentModel] = useState(() => modelName || (typeof window !== 'undefined' ? localStorage.getItem('codepilot:last-model') : null) || 'sonnet');
-  const [currentProviderId, setCurrentProviderId] = useState(() => providerId || (typeof window !== 'undefined' ? localStorage.getItem('codepilot:last-provider-id') : null) || '');
-  const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
-  const [replyMode, setReplyMode] = useState<ReplyMode>('smart');
-  const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
+  const [mode, setMode] = useState<'code' | 'plan'>(initialMode || 'code');
+  // 中文注释：不从 localStorage 初始化 model/provider，避免用旧 session 的值触发错误预热。
+  // 由 sync effect（resolveSessionModel 完成后）或 handleProviderModelChange（用户切换）设置正确值。
+  const [currentModel, setCurrentModel] = useState(() => modelName || '');
+  const [currentProviderId, setCurrentProviderId] = useState(() => providerId || '');
+  const [selectedEffort, setSelectedEffort] = useState<string | undefined>('max');
+  const [thinkingMode, setThinkingMode] = useState<string>('enabled'); // Deepseek 默认开启思考
   const [context1m, setContext1m] = useState(false);
   const [hasSummary, setHasSummary] = useState(initialHasSummary || false);
+  const [summaryBoundaryRowid, setSummaryBoundaryRowid] = useState(initialSummaryBoundaryRowid || 0);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressionProgress, setCompressionProgress] = useState<{ percentage: number; charsGenerated: number } | null>(null);
 
-  // Sync model/provider when session data loads
-  useEffect(() => { if (modelName) setCurrentModel(modelName); }, [modelName]);
-  useEffect(() => { if (providerId) setCurrentProviderId(providerId); }, [providerId]);
+  const warmupAbortRef = useRef<AbortController | null>(null);
+  // 中文注释：用户手动切换模型后，阻止 sync effect 用 DB 旧值覆盖。
+  // ⚠️ 切换会话时必须重置为 false，否则新会话的 Sync effect 会被跳过，
+  // 导致 currentModel 停留在旧会话的值（如 mimo-v2.5-pro → mimo-v2.5）。
+  const userSelectedModelRef = useRef(false);
+  // 中文注释：去重——记录最近一次 warmup 的签名，避免 Sync effect 重复触发。
+  const lastWarmupKeyRef = useRef<string>('');
+  // 中文注释：用 ref 追踪 streaming 状态，供 triggerWarmup 在不重建回调的情况下检查。
+  const isStreamingRef = useRef(false);
+  // 中文注释：stream 活跃时被跳过的预热请求，stream 结束后补执行。
+  const pendingWarmupRef = useRef<{ model: string; providerId: string } | null>(null);
+
+  // 中文注释：切换会话时重置用户选择标记和预热去重 key。
+  // 不重置 userSelectedModelRef 会导致新会话的 Sync effect 被跳过，
+  // currentModel 停留在旧会话的模型名。
   useEffect(() => {
-    const stored = localStorage.getItem(REPLY_MODE_STORAGE_KEY) as ReplyMode | null;
-    if (stored === 'fast' || stored === 'smart' || stored === 'deep') {
-      setReplyMode(stored);
+    userSelectedModelRef.current = false;
+    lastWarmupKeyRef.current = '';
+  }, [sessionId]);
+
+  // 中文注释：统一的预热触发函数。
+  // 由 sync effect(初始挂载/session 切换) 和 handleProviderModelChange(用户切换模型) 共同调用。
+  const triggerWarmup = useCallback((model: string, providerId: string) => {
+    if (!sessionId || !model) return;
+
+    // 中文注释：有任务正在进行时，跳过预热，避免打断当前会话的 SDK 子进程。
+    // 预热会销毁并重建 persistent session，正在进行的 stream 会因此中断。
+    // 将请求暂存到 pendingWarmupRef，stream 完成后补执行。
+    if (isStreamingRef.current) {
+      console.log('[ChatView] triggerWarmup DEFERRED — stream is active, will warmup after completion');
+      pendingWarmupRef.current = { model, providerId };
+      return;
     }
-  }, []);
-  useEffect(() => { localStorage.setItem(REPLY_MODE_STORAGE_KEY, replyMode); }, [replyMode]);
+    pendingWarmupRef.current = null;
+
+    // 中文注释：去重——相同 model+provider+imageAgentMode 不重复触发
+    const warmupKey = `${model}|${providerId}|${imageAgentMode}`;
+    if (lastWarmupKeyRef.current === warmupKey) return;
+    lastWarmupKeyRef.current = warmupKey;
+
+    // 取消上一次预热请求
+    if (warmupAbortRef.current) {
+      warmupAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    warmupAbortRef.current = controller;
+
+    console.log('[ChatView] triggerWarmup:', { sessionId, model, providerId: providerId || '(empty)', imageAgentMode });
+    setRuntimeWarmupState('warming');
+
+    fetch('/api/chat/warmup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        model,
+        provider_id: providerId,
+        imageAgentMode: !!imageAgentMode,
+      }),
+      signal: controller.signal,
+    })
+      .then(res => {
+        if (controller.signal.aborted) return;
+        if (!res.ok) {
+          setRuntimeWarmupState('failed');
+          return;
+        }
+        return res.json();
+      })
+      .then(data => {
+        if (!data || controller.signal.aborted) return;
+        console.log('[ChatView] Warmup result:', {
+          warmed_up: data.warmed_up,
+          model: data.model,
+          provider_key: data.provider_key,
+        });
+        setRuntimeWarmupState(data.warmed_up ? 'ready' : 'failed');
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setRuntimeWarmupState('failed');
+        }
+      });
+  }, [sessionId, imageAgentMode]);
+
+  // 中文注释：用 ref 持有最新 triggerWarmup，避免它成为 Sync effect 的依赖。
+  // triggerWarmup 因 imageAgentMode 闭包变化而重建，导致 Sync effect 重复触发。
+  const triggerWarmupRef = useRef(triggerWarmup);
+  triggerWarmupRef.current = triggerWarmup;
+
+  // Sync model/provider when session data loads, and trigger warmup for the resolved values.
+  // 中文注释：当 session 信息加载完成（resolveSessionModel 解析出真实 model/provider），
+  // 同步到本地 state 并触发预热。这处理了初始挂载时 localStorage 有旧值、
+  // 但 session 实际使用不同 model/provider 的情况。
+  // ⚠️ 用户手动切换模型后（userSelectedModelRef），不再用 DB 旧值覆盖。
+  useEffect(() => {
+    console.log('[ChatView] Sync effect fired:', { modelName, providerId, sessionId, userSelected: userSelectedModelRef.current });
+    if (!modelName) return;
+    if (userSelectedModelRef.current) {
+      console.log('[ChatView] Sync effect SKIPPED — user already selected model');
+      return;
+    }
+    setCurrentModel(modelName);
+    if (sessionId) {
+      console.log('[ChatView] Sync effect → triggerWarmup:', { model: modelName, providerId: providerId || '(empty)' });
+      triggerWarmupRef.current(modelName, providerId || '');
+    }
+  }, [modelName, providerId, sessionId]);
+
+  // 中文注释：imageAgentMode 切换时触发新预热，确保 session 的 MCP 配置与模式匹配。
+  // imageAgentMode=true 时 warmup 会销毁旧 session 并创建不含 codepilot-image-gen 的新 session。
+  // 使用 ref 跳过首次挂载——初始预热已由 Sync effect 处理。
+  const imageAgentModeRef = useRef(imageAgentMode);
+  useEffect(() => {
+    if (imageAgentModeRef.current === imageAgentMode) {
+      imageAgentModeRef.current = imageAgentMode;
+      return; // 首次挂载或值未变，跳过
+    }
+    imageAgentModeRef.current = imageAgentMode;
+    if (!sessionId || !currentModel) return;
+    triggerWarmup(currentModel, currentProviderId || '');
+  }, [imageAgentMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 中文注释：预热完成后 2 秒自动隐藏成功 banner，失败后 5 秒隐藏
+  useEffect(() => {
+    if (runtimeWarmupState === 'ready') {
+      const timer = setTimeout(() => setRuntimeWarmupState('idle'), 2000);
+      return () => clearTimeout(timer);
+    }
+    if (runtimeWarmupState === 'failed') {
+      const timer = setTimeout(() => setRuntimeWarmupState('idle'), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [runtimeWarmupState]);
+
+  useEffect(() => { setRuntimeWarmupState(warmupState); }, [warmupState]);
+  useEffect(() => { setSummaryBoundaryRowid(initialSummaryBoundaryRowid || 0); }, [initialSummaryBoundaryRowid]);
 
   // Fetch provider-specific options (with abort to prevent stale responses on fast switch)
   useEffect(() => {
@@ -140,6 +369,31 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       .catch(() => {});
     return () => controller.abort();
   }, [currentProviderId]);
+
+  // Resolve model metadata for the current model/provider. The context
+  // indicator uses contextWindow when the provider declares it, and falls
+  // back to upstreamModelId for alias disambiguation.
+  const [currentModelMeta, setCurrentModelMeta] = useState<{
+    upstreamModelId?: string;
+    contextWindow?: number;
+  }>({});
+  useEffect(() => {
+    const pid = currentProviderId || 'env';
+    const controller = new AbortController();
+    fetch('/api/providers/models', { signal: controller.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (controller.signal.aborted) return;
+        const group = (data?.groups as ProviderModelGroup[] | undefined)?.find(g => g.provider_id === pid);
+        const model = group?.models?.find(m => m.value === currentModel);
+        setCurrentModelMeta({
+          upstreamModelId: model?.upstreamModelId,
+          contextWindow: model?.contextWindow,
+        });
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [currentProviderId, currentModel]);
   useEffect(() => { if (initialPermissionProfile) setPermissionProfile(initialPermissionProfile); }, [initialPermissionProfile]);
 
   // Restore session-scoped last-generated images from sessionStorage
@@ -150,25 +404,108 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     () => getSnapshot(sessionId)
   );
 
-  // Derive rendering state from snapshot — memoized to avoid unnecessary re-renders
+  // Derive rendering state from snapshot
   const isStreaming = streamSnapshot?.phase === 'active';
-  const streamingContent = useMemo(() => streamSnapshot?.streamingContent ?? '', [streamSnapshot?.streamingContent]);
-  const toolUses = useMemo(() => streamSnapshot?.toolUses ?? [], [streamSnapshot?.toolUses]);
-  const toolResults = useMemo(() => streamSnapshot?.toolResults ?? [], [streamSnapshot?.toolResults]);
-  const streamingToolOutput = useMemo(() => streamSnapshot?.streamingToolOutput ?? '', [streamSnapshot?.streamingToolOutput]);
-  const streamingThinkingContent = useMemo(() => streamSnapshot?.streamingThinkingContent ?? '', [streamSnapshot?.streamingThinkingContent]);
-  const statusText = useMemo(() => streamSnapshot?.statusText, [streamSnapshot?.statusText]);
-  const pendingPermission = useMemo(() => streamSnapshot?.pendingPermission ?? null, [streamSnapshot?.pendingPermission]);
-  const permissionResolved = useMemo(() => streamSnapshot?.permissionResolved ?? null, [streamSnapshot?.permissionResolved]);
-  const rewindPoints = useMemo(() => getRewindPoints(sessionId), [sessionId]);
+  // 中文注释：同步 isStreaming 到 ref，供 triggerWarmup 检查而不触发回调重建
+  useEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
+  const streamingContent = streamSnapshot?.streamingContent ?? '';
+  const toolUses = streamSnapshot?.toolUses ?? [];
+  const toolResults = streamSnapshot?.toolResults ?? [];
+  const streamingToolOutput = streamSnapshot?.streamingToolOutput ?? '';
+  const streamingThinkingContent = streamSnapshot?.streamingThinkingContent ?? '';
+  const referencedContexts = streamSnapshot?.referencedContexts;
+  const toolFiles = streamSnapshot?.toolFiles ?? [];
+  const statusText = streamSnapshot?.statusText;
+  const pendingPermission = streamSnapshot?.pendingPermission ?? null;
+  const permissionResolved = streamSnapshot?.permissionResolved ?? null;
+
+  // 中文注释：从 DB 恢复未答的交互卡片 —— 挂载时、以及窗口重新可见/聚焦时各查一次。
+  // 卡片此前只靠内存快照，用户切走再切回、或组件重挂载后会「凭空消失」；
+  // 服务端其实还挂着这条 pending（DB 里 status='pending'），这里把它找回来。
+  useEffect(() => {
+    let cancelled = false;
+
+    const restorePendingPermission = async () => {
+      // 本地已有 pending（正在作答中）就不打扰。
+      if (getSnapshot(sessionId)?.pendingPermission) return;
+      try {
+        const res = await fetch(`/api/chat/permission?sessionId=${encodeURIComponent(sessionId)}`);
+        if (!res.ok) return;
+        const data = await res.json() as { pending?: Record<string, unknown> | null };
+        const pending = data?.pending;
+        if (cancelled || !pending || pending.status !== 'pending') return;
+        let toolInput: Record<string, unknown> = {};
+        try {
+          toolInput = JSON.parse((pending.tool_input as string) || '{}');
+        } catch { /* 解析失败保留空对象，卡片仍可提示用户 */ }
+        adoptPendingPermission(sessionId, {
+          permissionRequestId: pending.id as string,
+          toolName: pending.tool_name as string,
+          toolInput,
+          toolUseId: (pending.tool_use_id as string) || '',
+          decisionReason: (pending.decision_reason as string) || undefined,
+        });
+      } catch { /* 恢复是尽力而为，失败不影响主流程 */ }
+    };
+
+    void restorePendingPermission();
+
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') void restorePendingPermission();
+    };
+    document.addEventListener('visibilitychange', handleVisible);
+    window.addEventListener('focus', handleVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.removeEventListener('focus', handleVisible);
+    };
+  }, [sessionId]);
+
+  const rewindPoints = getRewindPoints(sessionId);
+  const subAgents = streamSnapshot?.subAgents ?? [];
+  const pendingInitialStatusText = !isStreaming
+    ? getPendingFirstTurnStatusText(pendingInitialMessage, runtimeWarmupState)
+    : null;
+
+  // 中文注释：初始挂载预热由 sync effect（modelName 变化 → triggerWarmup）统一处理，
+  // 确保使用 resolveSessionModel 解析后的真实 model/provider，避免 localStorage 旧值导致预热错误。
+  // 用户切换模型的预热由 handleProviderModelChange → triggerWarmup 直接触发。
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId) {
+        showToast({
+          type: "success",
+          message: `检测到高价值工作流（${detail.step || 0} 步 / ${detail.distinctToolCount || 0} 个工具）`,
+          description: (detail.toolNames && detail.toolNames.length > 0)
+            ? `包含工具：${detail.toolNames.slice(0, 6).map((n: string) => getToolDisplayName(n)).join('、')}${detail.toolNames.length > 6 ? ` 等 ${detail.toolNames.length} 个` : ''}`
+            : "可将本次流程保存为 Skill，后续一键复用",
+          action: {
+            label: "保存为 Skill",
+            onClick: () => sendMessageRef.current?.(t('skillNudge.savePrompt')),
+          },
+        });
+      }
+    };
+    window.addEventListener('skill-nudge', handler);
+    return () => window.removeEventListener('skill-nudge', handler);
+  }, [sessionId, t]);
+
+  // ── Message queue — allows sending while AI is responding ──
+  const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
+  const dequeuingRef = useRef(false);
 
   // Pending image generation notices
   const pendingImageNoticesRef = useRef<string[]>([]);
-  const sendMessageRef = useRef<(content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => Promise<void>>(undefined);
-  const initMetaRef = useRef<{ tools?: unknown; slash_commands?: unknown; skills?: unknown } | null>(null);
+  const sendMessageRef = useRef<(content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => Promise<void>>(undefined);
+  const [sdkInitMeta, setSdkInitMeta] = useState<ClaudeInitMeta | null>(null);
+  const initMetaRef = useRef<ClaudeInitMeta | null>(null);
 
   const handleModeChange = useCallback((newMode: string) => {
-    setMode(newMode);
+    if (newMode === 'ask') return; // Not supported in this view yet
+    setMode(newMode as 'code' | 'plan');
     if (sessionId) {
       fetch(`/api/chat/sessions/${sessionId}`, {
         method: 'PATCH',
@@ -187,18 +524,29 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   }, [sessionId]);
 
   const handleProviderModelChange = useCallback((newProviderId: string, model: string) => {
+    console.log('[ChatView] handleProviderModelChange:', { newProviderId, model, sessionId });
+    userSelectedModelRef.current = true; // 阻止 sync effect 用 DB 旧值覆盖
     setCurrentProviderId(newProviderId);
     setCurrentModel(model);
     fetch(`/api/chat/sessions/${sessionId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, provider_id: newProviderId }),
-    }).catch(() => {});
-  }, [sessionId]);
+    }).then(r => {
+      console.log('[ChatView] PATCH session result:', { ok: r.ok, status: r.status });
+    }).catch(err => {
+      console.warn('[ChatView] PATCH session FAILED:', err);
+    });
+    // 中文注释：直接触发预热，不依赖 useEffect。
+    console.log('[ChatView] handleProviderModelChange → triggerWarmup:', { model, providerId: newProviderId });
+    triggerWarmup(model, newProviderId);
+  }, [sessionId, triggerWarmup]);
 
   // ── Extracted hooks ──
 
   const handleStreamCompleted = useCallback((phase: string) => {
+    // Clear compressing state when any stream completes (success or error)
+    setIsCompressing(false);
     // Only reconcile on normal completion — both messages are persisted.
     // Error/stopped/idle-timeout paths emit 'completed' before the server
     // has persisted partial output, so reconciliation would race.
@@ -206,7 +554,38 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       tailTrimmedRef.current = false;
       reconcileWithDb();
     }
-  }, [reconcileWithDb]);
+
+    // Refresh session title — server generates it during stream completion,
+    // so we need to wait for the AI title generation to finish before fetching.
+    // The title generation runs concurrently with the stream and is awaited in
+    // the completion handler, but the DB write may take a few seconds.
+    if (phase === 'completed' && sessionId) {
+      setTimeout(() => {
+        fetch(`/api/chat/sessions/${sessionId}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (data?.session?.title) {
+              usePanelStore.getState().setSessionTitle(data.session.title);
+              window.dispatchEvent(new CustomEvent('session-updated', {
+                detail: { id: sessionId, title: data.session.title }
+              }));
+            }
+          })
+          .catch(() => {});
+      }, 3000);
+    }
+
+    // 中文注释：stream 完成后，补执行之前被推迟的预热请求。
+    // triggerWarmup 在 stream 活跃时会将请求暂存到 pendingWarmupRef，
+    // 这里在 stream 结束后立即执行，确保预热不会打断正在进行的任务。
+    isStreamingRef.current = false;
+    if (pendingWarmupRef.current) {
+      const { model, providerId } = pendingWarmupRef.current;
+      pendingWarmupRef.current = null;
+      console.log('[ChatView] handleStreamCompleted → executing deferred warmup:', { model, providerId });
+      triggerWarmupRef.current(model, providerId);
+    }
+  }, [reconcileWithDb, sessionId]);
 
   useStreamSubscription({
     sessionId,
@@ -233,6 +612,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
   useEffect(() => {
     if (!hasSummary && messages.some(m => m.role === 'assistant' && m.content.includes('上下文已压缩'))) {
       setHasSummary(true);
+      setIsCompressing(false);
     }
   }, [messages, hasSummary]);
 
@@ -241,18 +621,242 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId) {
         setHasSummary(true);
+        setIsCompressing(false);
+        fetch(`/api/chat/sessions/${sessionId}`)
+          .then((res) => res.ok ? res.json() : null)
+          .then((data) => {
+            const boundary = data?.session?.context_summary_boundary_rowid;
+            if (typeof boundary === 'number') setSummaryBoundaryRowid(boundary);
+          })
+          .catch(() => {});
+        // Toast 提示用户上下文已被压缩
+        import('@/hooks/useToast').then(({ showToast }) => {
+          const { messagesCompressed = 0, tokensSaved = 0 } = detail || {};
+          showToast({
+            type: 'info',
+            message: tokensSaved > 0
+              ? `上下文已压缩：${messagesCompressed} 条旧消息已摘要，节省约 ${tokensSaved.toLocaleString()} tokens`
+              : `上下文已压缩：${messagesCompressed} 条旧消息已摘要`,
+            duration: 6000,
+          });
+        }).catch(() => { /* toast 系统不可用 */ });
+        // Phase 1b: if the user asked for "compress and retry", kick off
+        // the retry now that compression actually finished. Stored flag
+        // + last user message are consumed once so we can't replay
+        // twice. Staleness protection uses (a) the arming-flag gate in
+        // the sendMessage wrapper to clear pending state on any
+        // subsequent user action, (b) the 45s timeout on the arm, and
+        // (c) the session-switch clear — no per-request / compact run
+        // id is wired through the SSE contract, so we rely on those
+        // three clears rather than a correlation token.
+        if (pendingRetryAfterCompactRef.current && pendingRetryMessageRef.current) {
+          const msg = pendingRetryMessageRef.current;
+          clearPendingRetry();
+          // Small delay so compression SSE pipeline flushes before next send.
+          setTimeout(() => {
+            sendMessageRef.current?.(msg);
+          }, 100);
+        }
       }
     };
     window.addEventListener('context-compressed', handler);
     return () => window.removeEventListener('context-compressed', handler);
   }, [sessionId]);
 
+  // Listen for real-time compression progress from SSE
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId) {
+        // CLI auto-compaction has no progress percentage, but it must still
+        // activate the same in-chat loading divider as a manual /compact.
+        setIsCompressing(true);
+        setCompressionProgress({ percentage: detail.percentage ?? 0, charsGenerated: detail.charsGenerated ?? 0 });
+      }
+    };
+    window.addEventListener('context-compressing', handler);
+    return () => window.removeEventListener('context-compressing', handler);
+  }, [sessionId]);
+
+  // Clear compression progress when compression finishes
+  useEffect(() => {
+    if (!isCompressing) {
+      setCompressionProgress(null);
+    }
+  }, [isCompressing]);
+
+  const isContextCompressing = statusText === 'Compressing context...' || isCompressing;
+
+  // Phase 1b — TerminalReason action state
+  // Refs (not state) so the context-compressed handler above can read the
+  // latest value without re-subscribing.
+  const pendingRetryAfterCompactRef = useRef(false);
+  const pendingRetryMessageRef = useRef<string | null>(null);
+  /** Timeout handle so we don't leak a pending retry if /compact never
+   *  emits context-compressed (e.g. network error, user cancels). */
+  const pendingRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True for the synchronous window where compress_and_retry is arming
+   *  its own /compact call. Used by the sendMessage wrapper to avoid
+   *  clearing the pending state we just set. Resets to false right after
+   *  the sendMessageRef call returns (sendMessage runs its synchronous
+   *  prefix — including the wrapper's stale-retry check — before the
+   *  control returns here). */
+  const retryArmingInProgressRef = useRef(false);
+
+  const clearPendingRetry = useCallback(() => {
+    pendingRetryAfterCompactRef.current = false;
+    pendingRetryMessageRef.current = null;
+    if (pendingRetryTimerRef.current) {
+      clearTimeout(pendingRetryTimerRef.current);
+      pendingRetryTimerRef.current = null;
+    }
+  }, []);
+
+  // Safety: drop any pending retry state on session switch — stale
+  // cross-session replay would be nonsense.
+  useEffect(() => {
+    clearPendingRetry();
+  }, [sessionId, clearPendingRetry]);
+  const [pendingTerminalAction, setPendingTerminalAction] = useState<{
+    actionId: import('./TerminalReasonChip').TerminalActionId;
+    lastUserMessage: string;
+  } | null>(null);
+  // Phase 2 — user can dismiss the rate-limit banner; keeps it from
+  // re-rendering on snapshot updates within the same session. Resets on
+  // session switch because the snapshot state itself resets.
+  const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
+  useEffect(() => { setRateLimitDismissed(false); }, [sessionId]);
+
+  // Find the most recent user message — replay target for retry actions.
+  const findLastUserMessage = useCallback((): string | null => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messages[i].content;
+    }
+    return null;
+  }, [messages]);
+
+  // Execute an action after confirmation (or immediately for non-destructive ones).
+  const runTerminalAction = useCallback((actionId: import('./TerminalReasonChip').TerminalActionId, lastUserMessage: string | null) => {
+    switch (actionId) {
+      case 'compress_and_retry': {
+        if (!lastUserMessage) return;
+        // Arm the retry. Safety nets for stale-replay:
+        //   - 45s timeout (in case /compact never emits context-compressed)
+        //   - session switch clears it (useEffect with clearPendingRetry)
+        //   - any subsequent user-initiated sendMessage clears it
+        //     (including manual /compact or compress_only — per round-13
+        //     Codex review: we can't rely on content equality to
+        //     distinguish internal vs manual /compact since a user can
+        //     type /compact themselves)
+        pendingRetryAfterCompactRef.current = true;
+        pendingRetryMessageRef.current = lastUserMessage;
+        if (pendingRetryTimerRef.current) clearTimeout(pendingRetryTimerRef.current);
+        pendingRetryTimerRef.current = setTimeout(() => {
+          console.warn('[chat] compress-and-retry timed out — pending retry cleared');
+          clearPendingRetry();
+        }, 45_000);
+        // Mark the synchronous arming window so the sendMessage wrapper
+        // below skips its stale-retry clear on THIS call. The wrapper's
+        // check is synchronous (runs before the first await in
+        // sendMessage), so resetting the flag right after the call is
+        // sufficient — no microtask deferral needed.
+        retryArmingInProgressRef.current = true;
+        try {
+          sendMessageRef.current?.('/compact');
+        } finally {
+          retryArmingInProgressRef.current = false;
+        }
+        break;
+      }
+      case 'compress_only':
+        // User chose "just compress, don't replay" — drop any previously
+        // armed compress_and_retry so its pendingRetryMessage can't ride
+        // on THIS compact's context-compressed event.
+        clearPendingRetry();
+        sendMessageRef.current?.('/compact');
+        break;
+      case 'enable_1m_and_retry':
+        if (!lastUserMessage) return;
+        setContext1m(true);
+        // Persist per-provider so future sessions keep 1M until user opts out.
+        fetch(`/api/providers/options?providerId=${encodeURIComponent(currentProviderId || 'env')}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ options: { context_1m: true } }),
+        }).catch(() => {});
+        setTimeout(() => sendMessageRef.current?.(lastUserMessage), 50);
+        break;
+      case 'switch_to_sonnet':
+        if (!lastUserMessage) return;
+        setCurrentModel('sonnet');
+        setTimeout(() => sendMessageRef.current?.(lastUserMessage), 50);
+        break;
+      case 'continue_max_turns':
+        sendMessageRef.current?.('continue');
+        break;
+      case 'retry_simple':
+        if (!lastUserMessage) return;
+        sendMessageRef.current?.(lastUserMessage);
+        break;
+      case 'open_hook_settings':
+        router.push('/settings');
+        break;
+      case 'retry_image_upload':
+        // No attachments API exposure here yet — surface a toast nudging
+        // the user to re-drag the image. Full wire lands with Phase 2's
+        // attachment UX work.
+        import('@/hooks/useToast').then(({ showToast }) => {
+          showToast({ type: 'info', message: t('terminalAction.retryImageUpload' as TranslationKey), duration: 4000 });
+        }).catch(() => {});
+        break;
+    }
+  }, [currentProviderId, router, t]);
+
+  // Entry point from the chip. Destructive actions route through confirm
+  // dialog; non-destructive ones run immediately.
+  const CONFIRM_REQUIRED = new Set<import('./TerminalReasonChip').TerminalActionId>([
+    'compress_and_retry',
+    'enable_1m_and_retry',
+    'switch_to_sonnet',
+    'retry_simple',
+  ]);
+
+  const handleTerminalAction = useCallback((actionId: import('./TerminalReasonChip').TerminalActionId) => {
+    const lastUserMessage = findLastUserMessage();
+    if (CONFIRM_REQUIRED.has(actionId) && lastUserMessage) {
+      setPendingTerminalAction({ actionId, lastUserMessage });
+    } else {
+      runTerminalAction(actionId, lastUserMessage);
+    }
+  }, [findLastUserMessage, runTerminalAction]);
+
+  // Per-session thinking mode toggle (separate from provider-level thinking_mode option).
+  // When null/undefined, falls back to the provider-level thinking_mode from DB.
+  const [sessionThinkingMode, setSessionThinkingMode] = useState<'enabled' | 'disabled' | undefined>(undefined);
+
+  // Effective toggle display: per-session override or provider default.
+  // For Deepseek, 'adaptive' is not applicable — treated as 'enabled' (per API docs: 默认开启).
+  const resolvedThinkingMode = useMemo(() => {
+    if (sessionThinkingMode) return sessionThinkingMode;
+    if (thinkingMode === 'disabled') return 'disabled';
+    return 'enabled'; // adaptive or enabled → toggle ON
+  }, [thinkingMode, sessionThinkingMode]);
+
+  const handleToggleThinking = useCallback((mode: 'enabled' | 'disabled') => {
+    // When user explicitly toggles, store as per-session override
+    setSessionThinkingMode(mode);
+  }, []);
+
   const buildThinkingConfig = useCallback((): { type: string } | undefined => {
+    // Per-session toggle overrides provider-level setting
+    if (sessionThinkingMode === 'enabled') return { type: 'enabled' };
+    if (sessionThinkingMode === 'disabled') return { type: 'disabled' };
+    // Fall back to provider-level thinking_mode from DB
     if (!thinkingMode || thinkingMode === 'adaptive') return { type: 'adaptive' };
     if (thinkingMode === 'enabled') return { type: 'enabled' };
     if (thinkingMode === 'disabled') return { type: 'disabled' };
     return undefined;
-  }, [thinkingMode]);
+  }, [thinkingMode, sessionThinkingMode]);
 
   const checkAssistantTrigger = useAssistantTrigger({
     sessionId,
@@ -319,7 +923,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
       }
     })();
     return () => { cancelled = true; };
-  }, [workingDirectory]);
+  }, [workingDirectory, setIsAssistantWorkspace]);
 
   // Listen for workspace-switched events
   useEffect(() => {
@@ -382,7 +986,7 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     }
   }, [sessionId, messages, hasMore]);
 
-  const stopStreaming = useCallback(() => { stopStream(sessionId); }, [sessionId]);
+  const stopStreaming = useCallback(() => { stopStream(sessionId, currentModel, currentProviderId); }, [sessionId, currentModel, currentProviderId]);
 
   const handlePermissionResponse = useCallback(
     async (decision: 'allow' | 'allow_session' | 'deny', updatedInput?: Record<string, unknown>, denyMessage?: string) => {
@@ -392,76 +996,237 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     [sessionId, setPendingApprovalSessionId]
   );
 
-  const sendMessage = useCallback(
-    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string) => {
-      perf.init('ChatView.sendMessage');
-      perf.mark('sendMessage_start', { contentLength: content.length, fileCount: files?.length || 0 });
+  /** Start an API stream for the given content. Does NOT add a user message to the list. */
+  const doStartStream = useCallback(
+    (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[], clientMessageId?: string, autoTrigger = false) => {
+      console.log('[ChatView] doStartStream:', { model: currentModel, providerId: currentProviderId, content: content.slice(0, 30) });
+      const notices = pendingImageNoticesRef.current.length > 0
+        ? [...pendingImageNoticesRef.current]
+        : undefined;
+      if (notices) pendingImageNoticesRef.current = [];
 
-      if (isStreaming) {
-        perf.mark('sendMessage_rejected_streaming');
-        return;
-      }
+      startStream({
+        sessionId,
+        content,
+        clientMessageId,
+        mode,
+        model: currentModel,
+        providerId: currentProviderId,
+        files,
+        systemPromptAppend,
+        pendingImageNotices: notices,
+        // 'auto' sentinel means "no explicit effort" — filter it here so
+        // the CLI applies its per-model default (Opus 4.7 → xhigh, etc.)
+        effort: selectedEffort && selectedEffort !== 'auto' ? selectedEffort : undefined,
+        thinking: buildThinkingConfig(),
+        context1m,
+        displayOverride,
+        mentions,
+        autoTrigger,
+        onModeChanged: (sdkMode) => {
+          const uiMode = sdkMode === 'plan' ? 'plan' : 'code';
+          handleModeChange(uiMode);
+        },
+        sendMessageFn: (retryContent: string, retryFiles?: FileAttachment[], options?: { autoTrigger?: boolean }) => {
+          if (options?.autoTrigger) {
+            doStartStream(retryContent, retryFiles, undefined, undefined, undefined, undefined, true);
+            return;
+          }
+          sendMessageRef.current?.(retryContent, retryFiles);
+        },
+        onInitMeta: (meta) => {
+          initMetaRef.current = meta;
+          setSdkInitMeta(meta);
+        },
+      });
+    },
+    [sessionId, mode, currentModel, currentProviderId, selectedEffort, context1m, buildThinkingConfig, handleModeChange]
+  );
 
+  const sendMessageInternal = useCallback(
+    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[], clientMessageId?: string) => {
       const displayUserContent = displayOverride || content;
       let displayContent = displayUserContent;
       if (files && files.length > 0) {
-        const fileMeta = files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size }));
+        const fileMeta = files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, data: f.data }));
         displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
       }
 
+      // Phase 1b safety: if a compress_and_retry is armed, drop it
+      // whenever the user sends ANY new content — including a manual
+      // /compact typed themselves or a "仅压缩" click. Without this, a
+      // retry queued by Action Chip would piggyback on a later
+      // user-initiated /compact's context-compressed event and replay
+      // the old lastUserMessage out of order.
+      //
+      // The retryArmingInProgressRef flag excludes the one
+      // synchronous call the compress_and_retry action itself makes
+      // through this wrapper — that call must NOT clear the state it
+      // just set. runTerminalAction flips the flag on before calling
+      // sendMessageRef and off again right after.
+      if (pendingRetryAfterCompactRef.current && !retryArmingInProgressRef.current) {
+        clearPendingRetry();
+      }
+
+      // Detect /compact command — activate compression UI for both
+      // manual typing and button click paths.
+      if (content.trim() === '/compact' || content.trim().startsWith('/compact ')) {
+        setIsCompressing(true);
+      }
+
+      // Queue message if currently streaming — hold above input, send after completion
+      if (isStreaming) {
+        setMessageQueue((prev) => [...prev, { clientMessageId, content, files, systemPromptAppend, displayOverride, mentions }]);
+        return;
+      }
+
+      const messageId = clientMessageId || `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const userMessage: Message = {
-        id: 'temp-' + Date.now(),
+        id: messageId,
         session_id: sessionId,
         role: 'user',
         content: displayContent,
         created_at: new Date().toISOString(),
         token_usage: null,
       };
-      cappedSetMessages((prev) => [...prev, userMessage]);
-      perf.mark('userMessage_appended');
-
-      const notices = pendingImageNoticesRef.current.length > 0
-        ? [...pendingImageNoticesRef.current]
-        : undefined;
-      if (notices) pendingImageNoticesRef.current = [];
-      perf.mark('pendingNotices_cleared');
-
-      perf.mark('startStream_called');
-      startStream({
-        sessionId,
-        content,
-        mode,
-        model: currentModel,
-        providerId: currentProviderId,
-        replyMode,
-        files,
-        systemPromptAppend,
-        pendingImageNotices: notices,
-        effort: replyMode === 'deep' ? selectedEffort : undefined,
-        thinking: replyMode === 'deep' ? buildThinkingConfig() : undefined,
-        context1m,
-        displayOverride,
-        onModeChanged: (sdkMode) => {
-          const uiMode = sdkMode === 'plan' ? 'plan' : 'code';
-          handleModeChange(uiMode);
-        },
-        sendMessageFn: (retryContent: string, retryFiles?: FileAttachment[]) => {
-          sendMessageRef.current?.(retryContent, retryFiles);
-        },
-        onInitMeta: (meta) => {
-          initMetaRef.current = meta;
-          console.log('[ChatView] SDK init meta received:', meta);
-        },
+      cappedSetMessages((prev) => {
+        // 中文注释：防重复——快速连发或 pending 消息已添加过同 content 的 user 消息
+        if (prev.some((m) => m.id === messageId)) return prev;
+        return [...prev, userMessage];
       });
-
-      // If the message window is stale (tailTrimmedRef), reconciliation will
-      // happen on stream completion via onStreamCompleted — at that point both
-      // user and assistant messages are persisted, so no race is possible.
+      doStartStream(content, files, systemPromptAppend, displayOverride, mentions, messageId);
     },
-    [sessionId, isStreaming, mode, currentModel, currentProviderId, replyMode, selectedEffort, context1m, buildThinkingConfig, handleModeChange]
+    [sessionId, isStreaming, doStartStream, cappedSetMessages]
+  );
+
+  const sendMessage = useCallback(
+    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) =>
+      sendMessageInternal(content, files, systemPromptAppend, displayOverride, mentions),
+    [sendMessageInternal]
   );
 
   sendMessageRef.current = sendMessage;
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        sessionId?: string;
+        clientMessageId?: string;
+        serverMessageId?: string;
+        createdAt?: string;
+      } | undefined;
+      if (!detail || detail.sessionId !== sessionId || !detail.clientMessageId || !detail.serverMessageId) return;
+      setMessages((prev) => prev.map((message) => {
+        if (message.id !== detail.clientMessageId) return message;
+        return {
+          ...message,
+          id: detail.serverMessageId!,
+          created_at: detail.createdAt || message.created_at,
+        };
+      }));
+    };
+    window.addEventListener('chat:user-message-acked', handler);
+    return () => window.removeEventListener('chat:user-message-acked', handler);
+  }, [sessionId]);
+
+  useEffect(() => {
+    setPendingInitialMessage(peekPendingSessionMessage(sessionId));
+    setPendingInitialReleaseTick(0);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!pendingInitialMessage) return;
+    setMessages((prev) => {
+      if (prev.some((message) => message.id === pendingInitialMessage.clientMessageId)) {
+        return prev;
+      }
+      const displayUserContent = pendingInitialMessage.displayOverride || pendingInitialMessage.content;
+      const displayContent = pendingInitialMessage.files && pendingInitialMessage.files.length > 0
+        ? `<!--files:${JSON.stringify(
+            pendingInitialMessage.files.map((file) => ({ id: file.id, name: file.name, type: file.type, size: file.size, data: file.data })),
+          )}-->${displayUserContent}`
+        : displayUserContent;
+      const optimisticUserMessage: Message = {
+        id: pendingInitialMessage.clientMessageId,
+        session_id: sessionId,
+        role: 'user',
+        content: displayContent,
+        created_at: new Date(pendingInitialMessage.createdAt).toISOString(),
+        token_usage: null,
+      };
+      // 中文注释：防重复——ack 事件可能已经把 temp ID 改成 server ID，
+      // 导致 some(id) 检查失败。额外按 content 匹配已有的 user 消息。
+      const hasSimilar = prev.some(
+        (m) => m.role === 'user' && normalizedUserContent(m.content) === normalizedUserContent(displayContent),
+      );
+      if (hasSimilar) return prev;
+      return [...prev, optimisticUserMessage];
+    });
+  }, [pendingInitialMessage, sessionId]);
+
+  useEffect(() => {
+    if (!pendingInitialMessage || isStreaming) return;
+    if (shouldReleasePendingFirstTurn(pendingInitialMessage, runtimeWarmupState)) return;
+
+    const remainingDelayMs = getPendingFirstTurnRemainingDelayMs(
+      pendingInitialMessage,
+      runtimeWarmupState,
+    );
+
+    const timeoutId = window.setTimeout(() => {
+      setPendingInitialReleaseTick((current) => current + 1);
+    }, Math.max(50, remainingDelayMs));
+
+    return () => window.clearTimeout(timeoutId);
+  }, [pendingInitialMessage, runtimeWarmupState, isStreaming]);
+
+  useEffect(() => {
+    if (!pendingInitialMessage || isStreaming) return;
+    if (!shouldReleasePendingFirstTurn(pendingInitialMessage, runtimeWarmupState)) return;
+
+    const pending = consumePendingSessionMessage(sessionId) || pendingInitialMessage;
+    setPendingInitialMessage(null);
+    void sendMessageInternal(
+      pending.content,
+      pending.files,
+      pending.systemPromptAppend,
+      pending.displayOverride,
+      pending.mentions,
+      pending.clientMessageId,
+    );
+  }, [sessionId, pendingInitialMessage, pendingInitialReleaseTick, runtimeWarmupState, isStreaming, sendMessageInternal]);
+
+  // ── Dequeue: when streaming finishes and queue is non-empty, send next ──
+  useEffect(() => {
+    if (!isStreaming && messageQueue.length > 0 && !dequeuingRef.current) {
+      dequeuingRef.current = true;
+      const [next, ...rest] = messageQueue;
+      setMessageQueue(rest);
+      // Add the queued message to the conversation as a normal user message
+      const displayUserContent = next.displayOverride || next.content;
+      let displayContent = displayUserContent;
+      if (next.files && next.files.length > 0) {
+        const fileMeta = next.files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, data: f.data }));
+        displayContent = `<!--files:${JSON.stringify(fileMeta)}-->${displayUserContent}`;
+      }
+      const userMessage: Message = {
+        id: next.clientMessageId || `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        session_id: sessionId,
+        role: 'user',
+        content: displayContent,
+        created_at: new Date().toISOString(),
+        token_usage: null,
+      };
+      cappedSetMessages((prev) => {
+        if (prev.some((m) => m.id === userMessage.id)) return prev;
+        return [...prev, userMessage];
+      });
+      doStartStream(next.content, next.files, next.systemPromptAppend, next.displayOverride, next.mentions, next.clientMessageId || userMessage.id);
+    }
+    if (isStreaming) {
+      dequeuingRef.current = false;
+    }
+  }, [isStreaming, messageQueue, doStartStream, cappedSetMessages, sessionId]);
 
   // Expose widget drill-down bridge: widgets can call window.__widgetSendMessage(text)
   // to trigger follow-up questions (e.g. clicking a node to get deeper explanation)
@@ -530,6 +1295,19 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     return () => window.removeEventListener('dashboard-command', handler);
   }, []);
 
+  // Listen for chat retry events from timeline or error messages
+  useEffect(() => {
+    const handler = (_e: Event) => {
+      if (!sendMessageRef.current) return;
+      // The user wants to retry a failed step or message.
+      // We send a simple "继续" prompt to trigger the model to look at the
+      // previous context (which contains the tool error) and retry.
+      sendMessageRef.current("请根据上面的报错信息，重新尝试执行。", undefined, undefined, "重试");
+    };
+    window.addEventListener('chat-retry', handler);
+    return () => window.removeEventListener('chat-retry', handler);
+  }, []);
+
   const handleCommand = useChatCommands({ sessionId, messages, setMessages: cappedSetMessages, sendMessage });
 
   // Listen for image generation completion
@@ -560,8 +1338,22 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
     return () => window.removeEventListener('image-gen-completed', handler);
   }, [sessionId]);
 
+  // ── Mobile Bridge Real-time Polling ──
+  // Periodically polls the DB when local streaming is inactive.
+  // reconcileWithDb handles smart merging/truncating of new messages.
+  useEffect(() => {
+    if (isStreaming) return;
+    
+    const interval = setInterval(() => {
+      reconcileWithDb();
+    }, MESSAGE_RECONCILE_INTERVAL_MS);
+    
+    return () => clearInterval(interval);
+  }, [sessionId, isStreaming, reconcileWithDb]);
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    /* 中文注释：会话内容入场动画（切换/打开会话时淡入 + 轻微上移），由 key=sessionId 的重挂载触发 */
+    <div className="animate-chat-enter flex h-full min-h-0 flex-col">
       {/* Workspace mismatch banner */}
       {workspaceMismatchPath && (
         <div className="flex items-center justify-between gap-3 border-b border-status-warning/30 bg-status-warning-muted px-4 py-2">
@@ -576,6 +1368,24 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
           </Button>
         </div>
       )}
+
+      {/* Warmup status banner — top center, non-blocking */}
+      {runtimeWarmupState === 'warming' && (
+        <div className="flex items-center justify-center gap-2 py-2 bg-blue-50 dark:bg-blue-950/30 border-b border-blue-200 dark:border-blue-800">
+          <SpinnerGap size={14} className="animate-spin text-blue-600 dark:text-blue-400" />
+          <span className="text-sm font-medium text-blue-700 dark:text-blue-300">正在恢复会话...</span>
+        </div>
+      )}
+      {runtimeWarmupState === 'ready' && (
+        <div className="flex items-center justify-center gap-2 py-1.5 bg-green-50 dark:bg-green-950/30 border-b border-green-200 dark:border-green-800 transition-opacity duration-300">
+          <span className="text-xs text-green-600 dark:text-green-400">会话已就绪</span>
+        </div>
+      )}
+      {runtimeWarmupState === 'failed' && (
+        <div className="flex items-center justify-center gap-2 py-2 bg-red-50 dark:bg-red-950/30 border-b border-red-200 dark:border-red-800">
+          <span className="text-sm font-medium text-red-700 dark:text-red-300">会话恢复失败，首次消息可能较慢</span>
+        </div>
+      )}
       <MessageList
         messages={messages}
         streamingContent={streamingContent}
@@ -584,6 +1394,8 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         toolResults={toolResults}
         streamingToolOutput={streamingToolOutput}
         streamingThinkingContent={streamingThinkingContent}
+        referencedContexts={referencedContexts}
+        statusPayload={streamSnapshot?.statusPayload}
         statusText={statusText}
         onForceStop={stopStreaming}
         hasMore={hasMore}
@@ -591,9 +1403,22 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onLoadMore={loadEarlierMessages}
         rewindPoints={rewindPoints}
         sessionId={sessionId}
+        startedAt={streamSnapshot?.startedAt}
         isAssistantProject={isAssistantProject}
         assistantName={assistantName}
+        hasSummary={hasSummary}
+        summaryBoundaryRowid={summaryBoundaryRowid}
+        isContextCompressing={isContextCompressing}
+        compressionProgress={compressionProgress}
+        subAgents={subAgents}
       />
+      {/* End-of-turn terminal reason chip (only shown when stream is not active) */}
+      {!isStreaming && (
+        <TerminalReasonChip
+          reason={streamSnapshot?.terminalReason}
+          onAction={handleTerminalAction}
+        />
+      )}
       {/* Permission prompt */}
       <PermissionPrompt
         pendingPermission={pendingPermission}
@@ -602,16 +1427,113 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         toolUses={toolUses}
         permissionProfile={permissionProfile}
       />
+      {/* Phase 1b — confirmation dialog for destructive chip actions */}
+      <AlertDialog
+        open={pendingTerminalAction !== null}
+        onOpenChange={(open) => { if (!open) setPendingTerminalAction(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('terminalAction.confirmTitle' as TranslationKey)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingTerminalAction?.actionId === 'compress_and_retry' && t('terminalAction.confirmCompressAndRetry' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'enable_1m_and_retry' && t('terminalAction.confirmEnable1mAndRetry' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'switch_to_sonnet' && t('terminalAction.confirmSwitchToSonnet' as TranslationKey)}
+              {pendingTerminalAction?.actionId === 'retry_simple' && t('terminalAction.confirmRetry' as TranslationKey)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('terminalAction.confirmCancel' as TranslationKey)}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => {
+              if (pendingTerminalAction) {
+                runTerminalAction(pendingTerminalAction.actionId, pendingTerminalAction.lastUserMessage);
+                setPendingTerminalAction(null);
+              }
+            }}>
+              {t('terminalAction.confirmCta' as TranslationKey)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {/* Batch image generation panels */}
       <BatchExecutionDashboard />
       <BatchContextSync />
 
+      {/* 中文注释：FileReviewBar 已按 cc-haha 对齐移到提示词输入框上方（见 MessageInput） */}
+
+      <ContextWidgetPortal
+        messages={messages}
+        modelName={currentModel}
+        context1m={context1m}
+        hasSummary={hasSummary}
+        contextWindow={currentModelMeta.contextWindow}
+        upstreamModelId={currentModelMeta.upstreamModelId}
+        toolFiles={toolFiles}
+        onCompress={() => {
+          setIsCompressing(true);
+          setCompressionProgress({ percentage: 0, charsGenerated: 0 });
+          doStartStream('/compact');
+        }}
+        isCompressing={isCompressing}
+        compressionProgress={compressionProgress}
+        isLoading={isLoading}
+        contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
+      />
+      {workingDirectory && <MemoryPanelPortal workingDirectory={workingDirectory} />}
+
+      {/* Queued message banner — shown above input when messages are waiting */}
+      {messageQueue.length > 0 && (
+        <div className="mx-auto w-full max-w-3xl px-4 pb-1">
+          {messageQueue.map((qm, i) => (
+            <div key={i} className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 mb-1">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 256 256" className="shrink-0 text-muted-foreground"><path fill="currentColor" d="M128 24a104 104 0 1 0 104 104A104.11 104.11 0 0 0 128 24Zm0 192a88 88 0 1 1 88-88a88.1 88.1 0 0 1-88 88Zm64-88a8 8 0 0 1-8 8H128a8 8 0 0 1-8-8V72a8 8 0 0 1 16 0v48h56a8 8 0 0 1 0 16Z"/></svg>
+              <span className="flex-1 truncate text-sm text-muted-foreground">
+                {(qm.displayOverride || qm.content).length > 80
+                  ? (qm.displayOverride || qm.content).slice(0, 77) + '...'
+                  : (qm.displayOverride || qm.content)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setMessageQueue((prev) => prev.filter((_, idx) => idx !== i))}
+                className="shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors"
+                aria-label={t('messageQueue.cancel' as TranslationKey)}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Phase 2 — subscription rate-limit banner (allowed_warning / rejected) */}
+      {!rateLimitDismissed && streamSnapshot?.rateLimitInfo && streamSnapshot.rateLimitInfo.status !== 'allowed' && (
+        <RateLimitBanner
+          info={streamSnapshot.rateLimitInfo}
+          onRequestSwitchToSonnet={() => {
+            const lastUserMessage = findLastUserMessage();
+            if (lastUserMessage) {
+              setPendingTerminalAction({ actionId: 'switch_to_sonnet', lastUserMessage });
+            } else {
+              setCurrentModel('sonnet');
+            }
+          }}
+          onDismiss={() => setRateLimitDismissed(true)}
+        />
+      )}
+      {pendingInitialStatusText && (
+        <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+          <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <SpinnerGap size={14} className="animate-spin text-primary" />
+            <span>{pendingInitialStatusText}</span>
+          </div>
+        </div>
+      )}
       <MessageInput
         key={sessionId}
         onSend={sendMessage}
         onCommand={handleCommand}
         onStop={stopStreaming}
-        disabled={false}
+        disableSubmit={runtimeWarmupState === 'warming'}
         isStreaming={isStreaming}
         sessionId={sessionId}
         modelName={currentModel}
@@ -622,28 +1544,38 @@ export function ChatView({ sessionId, initialMessages = [], initialHasMore = fal
         onAssistantTrigger={checkAssistantTrigger}
         effort={selectedEffort}
         onEffortChange={setSelectedEffort}
-        replyMode={replyMode}
-        onReplyModeChange={setReplyMode}
-        sdkInitMeta={initMetaRef.current}
+        thinkingMode={resolvedThinkingMode}
+        onThinkingModeChange={handleToggleThinking}
+        sdkInitMeta={sdkInitMeta}
         isAssistantProject={isAssistantProject}
         hasMessages={messages.length > 0}
-      />
-      <ChatComposerActionBar
-        left={<><ModeIndicator mode={mode} onModeChange={handleModeChange} disabled={isStreaming} /><ImageGenToggle /></>}
-        center={
-          <ChatPermissionSelector
-            sessionId={sessionId}
-            permissionProfile={permissionProfile}
-            onPermissionChange={setPermissionProfile}
-          />
-        }
-        right={
+        toolUses={toolUses}
+        toolResults={toolResults}
+        /* 中文注释：上下文统计指示器收进输入框内（对齐 cc-haha 的位置） */
+        footerExtra={
           <ContextUsageIndicator
             messages={messages}
             modelName={currentModel}
             context1m={context1m}
             hasSummary={hasSummary}
+            contextWindow={currentModelMeta.contextWindow}
+            upstreamModelId={currentModelMeta.upstreamModelId}
+            contextUsageSnapshot={streamSnapshot?.contextUsageSnapshot}
           />
+        }
+      />
+      {/* 中文注释：输入框下方只保留会话状态与运行时徽标；代码/计划模式、权限选择器已按需求移除 */}
+      <ChatComposerActionBar
+        right={
+          <div className="flex items-center gap-3">
+            {/* 会话状态指示器：显示 agent 数量、工具调用数、技能调用数 */}
+            <SessionStatusIndicator
+              subAgents={subAgents}
+              toolUses={toolUses}
+              skillCount={toolUses.filter((t: any) => t.name === 'Skill').length}
+            />
+            <RuntimeBadge providerId={currentProviderId} />
+          </div>
         }
       />
     </div>

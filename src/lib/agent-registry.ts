@@ -1,0 +1,456 @@
+/**
+ * agent-registry.ts — Sub-agent definition registry.
+ *
+ * Stores built-in and custom agent definitions that can be spawned
+ * via the AgentTool. Each definition specifies tools, model, system prompt,
+ * and execution constraints.
+ */
+
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+export interface AgentDefinition {
+  /** Agent identifier */
+  id: string;
+  /** Human-readable name */
+  displayName: string;
+  /** Description (shown to the model) */
+  description: string;
+  /** Agent mode */
+  mode: 'subagent' | 'primary';
+  /** Allowed tools (empty = all except Agent itself) */
+  allowedTools?: string[];
+  /** Disallowed tools */
+  disallowedTools?: string[];
+  /** Model override (uses parent model if not set) */
+  model?: string;
+  /** Max steps for the sub-agent loop */
+  maxSteps?: number;
+  /** Custom system prompt (appended to base prompt) */
+  prompt?: string;
+}
+
+// ── Built-in agents ─────────────────────────────────────────────
+
+const BUILTIN_AGENTS: AgentDefinition[] = [
+  {
+    id: 'explore',
+    displayName: 'Explore',
+    description: 'Fast agent for codebase exploration. Read-only tools, quick searches.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'codepilot_kb_search', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory', 'mcp__MiniMax__web_search', 'mcp__bailian-web-search__bailian_web_search', 'webfetch__fetch_fetch_readable', 'mcp__fetch__fetch_html', 'codepilot_open_browser', 'web_search', 'WebSearch'],
+    maxSteps: 20,
+    prompt: 'You are a fast codebase exploration agent. Search efficiently, report findings concisely. Do not modify any files. You can use Grep, Glob, Bash, or Read tools to search the codebase. If you need to search the internet, use web_search, WebSearch, or available MCP web search tools.',
+  },
+  {
+    id: 'search',
+    displayName: 'Search',
+    description: 'Deep codebase research and retrieval. Uses AI tools to find context.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'codepilot_kb_search', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory', 'mcp__MiniMax__web_search', 'mcp__bailian-web-search__bailian_web_search', 'webfetch__fetch_fetch_readable', 'mcp__fetch__fetch_html', 'codepilot_open_browser', 'web_search', 'WebSearch'],
+    maxSteps: 25,
+    prompt: 'You are an expert codebase search agent. Find and summarize relevant context thoroughly. Do not modify any files. You can use Grep, Glob, Bash, or Read tools to search the codebase. If you need to search the internet, use web_search, WebSearch, or available MCP web search tools.',
+  },
+  {
+    id: 'analyst',
+    displayName: 'Analyst',
+    description: 'Deep logic and architecture analysis. Analyzes complex code flows.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'codepilot_kb_search', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory', 'mcp__MiniMax__web_search', 'mcp__bailian-web-search__bailian_web_search', 'webfetch__fetch_fetch_readable', 'mcp__fetch__fetch_html', 'codepilot_open_browser', 'web_search', 'WebSearch'],
+    maxSteps: 30,
+    prompt: 'You are an architecture analyst. Analyze code flows and system design deeply. Provide structural insights. Do not modify files. You can use Grep, Glob, Bash, or Read tools to search the codebase. If you need to search the internet, use web_search, WebSearch, or available MCP web search tools.',
+  },
+  {
+    id: 'planner',
+    displayName: 'Planner',
+    description: 'Task breakdown and planning agent. Creates structured plans.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep'],
+    maxSteps: 25,
+    prompt: 'You are a technical planner. Break down complex requests into actionable plans. You CANNOT update the global Todo list yourself. You must propose the plan in your final report so the Orchestrator can evaluate and apply it.',
+  },
+  {
+    id: 'executor',
+    displayName: 'Executor',
+    description: 'Heavy multi-file edit executor. Writes and edits code across files.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 40,
+    prompt: 'You are a code executor. Implement the requested changes across the codebase. Focus on writing and editing files efficiently.',
+  },
+  {
+    id: 'verifier',
+    displayName: 'Verifier',
+    description: 'Verification agent. Runs checks/tests and reviews changes for correctness.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 25,
+    prompt: `You are a code verifier. Your job is evidence-backed confidence, not ceremony.
+
+VERIFICATION PROTOCOL:
+1. Identify what proves the claim (test output, file checks, type checks, lint)
+2. Run the verification (tests, tsc --noEmit, lint, etc.)
+3. Read the actual output
+4. Report with CONCRETE EVIDENCE
+
+REQUIRED OUTPUT FORMAT:
+- Status: PASS or FAIL (explicit, unambiguous)
+- Evidence: specific file paths, line numbers, test output, error messages
+- If FAIL: list each failure item with its specific error
+- If PASS: list what was verified and any remaining risks
+
+SIZING:
+- Small changes (<5 files): run relevant tests + type check
+- Standard changes: run full test suite + type check + lint
+- Large/architectural changes (>20 files): add security review + integration tests
+
+Do NOT claim completion without evidence. Do NOT modify files unless required to fix a verified issue.`,
+  },
+  {
+    id: 'debugger',
+    displayName: 'Debugger',
+    description: 'Root-cause analysis and failure diagnosis agent.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 30,
+    prompt: 'You are a debugging expert. Trace errors to their root cause. Analyze logs, stack traces, and code to find the fix. Report your findings and suggested fix.',
+  },
+  {
+    id: 'architect',
+    displayName: 'Architect',
+    description: 'System design, architecture decisions, and long-horizon tradeoffs.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
+    maxSteps: 35,
+    prompt: 'You are a software architect. Design system architecture, evaluate trade-offs, and provide design recommendations. Do not write implementation code.',
+  },
+  {
+    id: 'general',
+    displayName: 'General Subagent',
+    description: 'General purpose subagent with full capabilities.',
+    mode: 'subagent',
+    maxSteps: 30,
+    prompt: 'You are a general-purpose coding sub-agent. Complete the assigned task effectively. Provide a clear final report when done.',
+  },
+  {
+    id: 'tracer',
+    displayName: 'Tracer',
+    description: 'Link tracing and evidence capturing agent.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
+    maxSteps: 25,
+    prompt: 'You are a tracing agent. Trace execution links, collect logs, and capture evidence of system behavior.',
+  },
+  {
+    id: 'security-reviewer',
+    displayName: 'Security Reviewer',
+    description: 'Trust boundary review and vulnerability check agent.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
+    maxSteps: 25,
+    prompt: 'You are a security reviewer. Inspect code for vulnerabilities, trust boundary issues, and security best practices. Do not modify files.',
+  },
+  {
+    id: 'code-reviewer',
+    displayName: 'Code Reviewer',
+    description: 'Comprehensive deep code review agent.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
+    maxSteps: 30,
+    prompt: `You are an independent code reviewer. You review code that OTHERS wrote — you did not write it yourself.
+
+REVIEW PROTOCOL:
+1. Read the changed files and understand what was modified
+2. Check for: logic defects, security issues, error handling, type safety, performance
+3. Check for: naming conventions, code style, unnecessary complexity
+4. Verify the change actually solves the stated problem
+
+REQUIRED OUTPUT FORMAT:
+- Verdict: APPROVE, REQUEST_CHANGES, or NEEDS_DISCUSSION
+- Issues: list each issue with severity (P0/P1/P2) and specific file:line
+- Suggestions: optional improvements (not blocking)
+- Summary: one-line overall assessment
+
+REVIEW PRINCIPLES:
+- Be specific: cite file paths and line numbers
+- Be constructive: suggest fixes, not just complaints
+- Flag breaking changes as P0
+- Flag security issues (hardcoded secrets, injection, XSS) as P0
+- Do NOT approve your own work — you are an independent reviewer`,
+  },
+  {
+    id: 'test-engineer',
+    displayName: 'Test Engineer',
+    description: 'Test strategy formulation and regression testing agent.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 30,
+    prompt: 'You are a test engineer. Write unit tests, integration tests, and regression tests. Focus on maximizing test coverage and ensuring stability.',
+  },
+  {
+    id: 'designer',
+    displayName: 'UX/UI Designer',
+    description: 'User experience and interaction design agent.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 25,
+    prompt: 'You are a UX/UI designer. Evaluate interaction design, propose UI improvements, and write styling code to match design guidelines.',
+  },
+  {
+    id: 'writer',
+    displayName: 'Writer',
+    description: 'Documentation writing and concise content creation agent.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 20,
+    prompt: 'You are a technical writer. Create, edit, and format documentation clearly and concisely.',
+  },
+  {
+    id: 'qa-tester',
+    displayName: 'QA Tester',
+    description: 'Runtime check and manual feature verification agent.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 25,
+    prompt: 'You are a QA tester. Perform runtime checks, verify features behave as expected, and report bugs.',
+  },
+  {
+    id: 'scientist',
+    displayName: 'Data Scientist',
+    description: 'Data analysis and statistical reasoning agent.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 30,
+    prompt: 'You are a data scientist. Analyze data, apply statistical reasoning, and build data models.',
+  },
+  {
+    id: 'document-specialist',
+    displayName: 'Document Specialist',
+    description: 'SDK/API/Framework documentation lookup and interpretation agent.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'webfetch__fetch_fetch_readable', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
+    maxSteps: 25,
+    prompt: 'You are a document specialist. Look up official SDK/API/Framework documentation and provide correct, context-aware usage instructions.',
+  },
+  {
+    id: 'git-master',
+    displayName: 'Git Master',
+    description: 'Commit strategy management and Git history agent.',
+    mode: 'subagent',
+    allowedTools: ['Bash', 'Read', 'Glob', 'Grep'],
+    maxSteps: 20,
+    prompt: 'You are a Git master. Manage commits, resolve conflicts, and maintain a clean git history. You can use bash to run git commands.',
+  },
+  {
+    id: 'code-simplifier',
+    displayName: 'Code Simplifier',
+    description: 'Simplifies code while maintaining functionality.',
+    mode: 'subagent',
+    disallowedTools: ['Agent'],
+    maxSteps: 30,
+    prompt: 'You are a code simplifier. Refactor and simplify code to be more readable and maintainable without changing its behavior.',
+  },
+  {
+    id: 'critic',
+    displayName: 'Critic',
+    description: 'Questions and reviews plans and design choices.',
+    mode: 'subagent',
+    allowedTools: ['Read', 'Glob', 'Grep', 'mcp__filesystem__read_file', 'mcp__filesystem__read_text_file', 'mcp__filesystem__search_files', 'mcp__filesystem__list_directory'],
+    maxSteps: 25,
+    prompt: 'You are a technical critic. Question plans, find edge cases, point out flaws in architecture, and ensure high standards.',
+  }
+];
+
+// ── Registry ────────────────────────────────────────────────────
+
+const agents = new Map<string, AgentDefinition>();
+
+const AGENT_ALIASES: Record<string, string> = {
+  tester: 'qa-tester',
+  testing: 'qa-tester',
+  test: 'qa-tester',
+  qa: 'qa-tester',
+  reviewer: 'code-reviewer',
+  review: 'code-reviewer',
+  'code-review': 'code-reviewer',
+  security: 'security-reviewer',
+  'security-review': 'security-reviewer',
+  doc: 'document-specialist',
+  docs: 'document-specialist',
+  document: 'document-specialist',
+  researcher: 'search',
+  finder: 'search',
+  developer: 'executor',
+  coder: 'executor',
+  engineer: 'executor',
+};
+
+export function normalizeAgentId(id: string): string {
+  const normalized = id.trim().toLowerCase().replace(/_/g, '-').replace(/\s+/g, '-');
+  return AGENT_ALIASES[normalized] || normalized;
+}
+
+// Register built-ins
+for (const agent of BUILTIN_AGENTS) {
+  agents.set(agent.id, agent);
+}
+
+// ── Dynamic Plugin/OMC Agent Discovery ─────────────────────────
+// Scans filesystem for agent definitions from OMC and other plugins.
+// This bridges the gap between CodePilot's closed agent registry and
+// the terminal Claude Code's open agent discovery system.
+
+/**
+ * Parse an agent markdown file into an AgentDefinition.
+ * Supports both frontmatter format and <Agent_Prompt> format.
+ */
+function parseAgentMdFile(filePath: string, pluginPrefix?: string): AgentDefinition | null {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const baseName = path.basename(filePath, '.md');
+
+    // Try <Agent_Prompt> format first (OMC style)
+    const promptMatch = content.match(/<Agent_Prompt>([\s\S]*?)<\/Agent_Prompt>/);
+    if (promptMatch) {
+      const agentId = pluginPrefix ? `${pluginPrefix}:${baseName}` : baseName;
+      return {
+        id: normalizeAgentId(agentId),
+        displayName: baseName.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        description: `Plugin agent: ${baseName}`,
+        mode: 'subagent',
+        maxSteps: 30,
+        prompt: promptMatch[1].trim(),
+      };
+    }
+
+    // Try frontmatter format
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+    if (fmMatch) {
+      const meta: Record<string, string> = {};
+      for (const line of fmMatch[1].split('\n')) {
+        const kv = line.match(/^(\w+):\s*(.+)$/);
+        if (kv) meta[kv[1].trim()] = kv[2].trim();
+      }
+      const agentId = pluginPrefix ? `${pluginPrefix}:${baseName}` : baseName;
+      return {
+        id: normalizeAgentId(agentId),
+        displayName: meta.name || baseName.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        description: meta.description || `Plugin agent: ${baseName}`,
+        mode: 'subagent',
+        maxSteps: parseInt(meta.maxSteps || '30', 10) || 30,
+        prompt: fmMatch[2].trim(),
+      };
+    }
+
+    // Plain markdown — use entire content as prompt
+    if (content.trim().length > 20) {
+      const agentId = pluginPrefix ? `${pluginPrefix}:${baseName}` : baseName;
+      return {
+        id: normalizeAgentId(agentId),
+        displayName: baseName.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        description: `Plugin agent: ${baseName}`,
+        mode: 'subagent',
+        maxSteps: 30,
+        prompt: content.trim(),
+      };
+    }
+  } catch {
+    // ignore read errors
+  }
+  return null;
+}
+
+/**
+ * Discover and register agents from plugin directories and ~/.claude/agents/.
+ * Called once at startup. Merges discovered agents with built-in ones.
+ */
+export function discoverPluginAgents(workingDirectory?: string): void {
+  const searchDirs: Array<{ dir: string; prefix?: string }> = [];
+
+  // 1. ~/.claude/agents/ — user-level agent definitions (same as terminal Claude Code)
+  const homeAgentsDir = path.join(os.homedir(), '.claude', 'agents');
+  if (fs.existsSync(homeAgentsDir)) {
+    searchDirs.push({ dir: homeAgentsDir });
+  }
+
+  // 2. Project-level .agents/ directory
+  if (workingDirectory) {
+    const projectAgentsDir = path.join(workingDirectory, '.agents');
+    if (fs.existsSync(projectAgentsDir)) {
+      searchDirs.push({ dir: projectAgentsDir });
+    }
+  }
+
+  // 3. Enabled plugin agents/ directories
+  try {
+    const pluginsDir = path.join(os.homedir(), '.claude', 'plugins');
+    if (fs.existsSync(pluginsDir)) {
+      // Scan marketplaces
+      const marketplacesDir = path.join(pluginsDir, 'marketplaces');
+      if (fs.existsSync(marketplacesDir)) {
+        for (const marketplace of fs.readdirSync(marketplacesDir)) {
+          const mktDir = path.join(marketplacesDir, marketplace);
+          // Root plugin layout (e.g., oh-my-claudecode)
+          const agentsDir = path.join(mktDir, 'agents');
+          if (fs.existsSync(agentsDir)) {
+            searchDirs.push({ dir: agentsDir, prefix: marketplace });
+          }
+          // Nested plugins layout
+          const pluginsSubdir = path.join(mktDir, 'plugins');
+          if (fs.existsSync(pluginsSubdir)) {
+            for (const plugin of fs.readdirSync(pluginsSubdir)) {
+              const pluginAgentsDir = path.join(pluginsSubdir, plugin, 'agents');
+              if (fs.existsSync(pluginAgentsDir)) {
+                searchDirs.push({ dir: pluginAgentsDir, prefix: `${marketplace}:${plugin}` });
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore plugin scan errors
+  }
+
+  // Scan all directories and register discovered agents
+  let discovered = 0;
+  for (const { dir, prefix } of searchDirs) {
+    try {
+      const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+      for (const file of files) {
+        const agentDef = parseAgentMdFile(path.join(dir, file), prefix);
+        if (agentDef && !agents.has(agentDef.id)) {
+          agents.set(agentDef.id, agentDef);
+          discovered++;
+          console.log(`[agent-registry] Discovered plugin agent: ${agentDef.id} (${agentDef.description})`);
+        }
+      }
+    } catch {
+      // ignore per-directory errors
+    }
+  }
+
+  if (discovered > 0) {
+    console.log(`[agent-registry] Registered ${discovered} plugin agents (total: ${agents.size})`);
+  }
+}
+
+export function registerAgent(definition: AgentDefinition): void {
+  agents.set(normalizeAgentId(definition.id), {
+    ...definition,
+    id: normalizeAgentId(definition.id),
+  });
+}
+
+export function getAgent(id: string): AgentDefinition | undefined {
+  return agents.get(normalizeAgentId(id));
+}
+
+export function getAllAgents(): AgentDefinition[] {
+  return Array.from(agents.values());
+}
+
+export function getSubAgents(): AgentDefinition[] {
+  return getAllAgents().filter(a => a.mode === 'subagent');
+}

@@ -23,11 +23,17 @@
 | memory-system-v3.md | 记忆系统 V3/V3.1：对话式 Onboarding、HEARTBEAT_OK 心跳协议、Memory Search MCP、时间衰减、Obsidian 感知、渐进式文件更新、Telegram 静默、transcript 裁剪 |
 | buddy-gamification.md | Buddy 游戏化系统：生成/进化/3D 视觉、心跳双模式（完整 tick + 软 hint）、定时任务调度器健壮性、通知队列/轮询/Electron IPC、symlink 安全、cron 4 年扫描 |
 | context-management.md | 上下文管理系统：token 预估、自动压缩（80% 阈值）、消息归一化 + microcompaction、PTL reactive compact、前端双指标可视化 |
+| compact-coverage-boundary.md | 压缩覆盖边界不变量：rowid 而非时间戳、boundary 只前进不后退、slash-command 反馈不入 DB、三条压缩路径的 boundary 写入规则、`_rowid` 端到端透传 |
 | cli-upgrade-proxy.md | CLI 版本检测 + 一键升级 + 系统代理透传 + WinGet 支持 + Git for Windows 自动安装 |
 | tool-call-ux.md | 工具调用 UX 优化：thinking 展示全链路、工具注册表、上下文归组、状态动画、流式缓冲/节流 |
+| delivery-collapse.md | 交付折叠：任务完成后才收起过程块、触发时机为何从"第一个结论字"返工成"任务彻底完成"、`delivered` 挂载即定型、双缓动曲线 |
 | performance-memory.md | v0.45.0 内存优化：LRU 缓存、消息 300 条上限双向修剪、面板懒加载、流式文件读取、定时器追踪 |
 | provider-architecture.md | 服务商架构全景：18 服务商配置对比、与 Claude Code 关系、认证/协议/模型矩阵、已知问题、优化建议 |
 | provider-governance.md | 服务商治理系统：Zod Schema 防护、authStyle 修正 6 preset、宿主接管、连通性验证、引导 UX、错误恢复、模型 CRUD |
 | sentry-error-reporting.md | Sentry 匿名错误上报：三层覆盖（browser/server/electron）、opt-out 机制、隐私保护、上报策略 |
-| planning-with-files-skill.md | 全局技能模块：拉取并安装 planning-with-files Skill，统一初始化接口、错误码与测试 |
-| console-search-copy.md | 控制台模糊检索 + 高亮 + 快捷键 + 单行/批量复制 + 虚拟滚动 + 兼容性降级复制 |
+| decouple-native-runtime.md | Native Agent Runtime：双 Runtime 架构、AI SDK agent-loop、OpenAI Codex 集成、文件快照 rewind、MCP 全链路、验证边界与剩余风险 |
+| fork-sync-playbook.md | Fork 与官方同步维护手册：差异清单、冲突热点、AI 自动读取记忆方式、上游合并流程与验收清单 |
+| fork-sync-mechanism.md | Fork 长期追官方的同步机制：ownership map、patch manifest、sync report、bootstrap 工作流与边界检查 |
+| sdk-injected-turn-suppression.md | SDK 内部轮次抑制：后台任务 `<task-notification>` 注入轮次的识别、状态机（挂起→接管→退出）、下游影响核对、已知边界；附带 MCP 徽标 pending 语义修正 |
+| bridge-final-response.md | 桥接只发最终结论 + 未完成自动续跑：过程叙述被整轮拼接的根因、`extractFinalResponseText` / `detectIncompleteTurn` 纯函数、续跑上限与不落库策略、错误提示不再被文本吞掉、thinking 落库剔除 |
+| interactive-permission-ux.md | 交互式权限/提问卡片生命周期：三把「铡刀」超时根因、`isAlwaysAskTool` 分流、`waitingPermissionDepth` 暂停看门狗、`adoptPendingPermission` 卡片恢复、SDK 与 Native 双路径 |

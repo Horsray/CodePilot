@@ -1,32 +1,37 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   Folder,
   FolderOpen,
   File,
   FileCode,
-  Image,
+  Image as ImageIcon,
   FileZip,
   Plus,
   FolderPlus,
   MagnifyingGlass,
   ArrowsClockwise,
   Copy,
+  ClipboardText,
   Trash,
   PencilSimple,
-  ArrowSquareOut,
   ChatCircleText,
-  Check,
-  X,
   Play,
+  TerminalWindow,
+  Code,
 } from "@/components/ui/icon";
+import { usePanelStore } from "@/store/usePanelStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/hooks/useTranslation";
 import { showToast } from "@/hooks/useToast";
+import { openInFinder, openInTrae, pasteFile } from "@/lib/open-in-finder";
+import { setFileClipboard, getFileClipboard, type FileClipboardEntry } from "@/lib/file-clipboard";
 import type { FileTreeNode } from "@/types";
+import { getCachedRootFileTree, setCachedRootFileTree } from "@/lib/file-tree-cache";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -47,6 +52,9 @@ interface EnhancedFileTreeProps {
   workingDirectory: string;
   onFileSelect: (path: string) => void;
   onFileAdd?: (path: string) => void;
+  highlightPath?: string;
+  highlightSeek?: string;
+  topSlot?: ReactNode;
 }
 
 // 文件图标映射
@@ -101,7 +109,7 @@ const getFileIcon = (name: string, isDirectory: boolean, isOpen?: boolean) => {
     case "gif":
     case "svg":
     case "webp":
-      return <Image size={size} className={cn(iconClass, "text-purple-400")} />;
+      return <ImageIcon size={size} className={cn(iconClass, "text-purple-400")} />;
     case "mp3":
     case "wav":
     case "ogg":
@@ -152,12 +160,47 @@ const getFileIcon = (name: string, isDirectory: boolean, isOpen?: boolean) => {
   }
 };
 
-// 树节点组件
-interface TreeNodeProps {
+// 可执行文件扩展名
+const EXECUTABLE_EXTENSIONS = new Set([
+  "sh", "bash", "zsh", "command", "fish", "csh",
+  "py", "rb", "pl", "pm",
+]);
+
+function isExecutableFile(node: FileTreeNode): boolean {
+  // 中文注释：与 cc-haha 对齐——只认脚本扩展名，不再把「无扩展名」一律当可执行
+  if (node.type !== "file") return false;
+  return !!node.extension && EXECUTABLE_EXTENSIONS.has(node.extension);
+}
+
+// 扁平化节点类型
+interface FlatNode {
   node: FileTreeNode;
   level: number;
-  searchQuery: string;
-  expanded: Set<string>;
+  isExpanded: boolean;
+}
+
+type CacheEntry<T> = { value: T; ts: number };
+
+const FILE_TREE_CACHE_TTL_MS = 30_000;
+const directoryChildrenCache = new Map<string, CacheEntry<FileTreeNode[]>>();
+
+function getCached<T>(cache: Map<string, CacheEntry<T>>, key: string): T | null {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > FILE_TREE_CACHE_TTL_MS) {
+    cache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setCached<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T) {
+  cache.set(key, { value, ts: Date.now() });
+}
+
+// 树节点组件
+interface TreeNodeProps {
+  flatNode: FlatNode;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
   selectedPath: string | null;
@@ -167,14 +210,17 @@ interface TreeNodeProps {
   onDelete: (path: string, isDirectory: boolean) => void;
   onCopyPath: (path: string) => void;
   onOpenInFinder: (path: string) => void;
+  onOpenInTrae: (path: string) => void;
+  onCopyFile: (path: string, isDirectory: boolean) => void;
+  onPaste: (destDir: string) => void;
+  hasClipboard: boolean;
   onAddToChat: (path: string) => void;
+  isLoading?: boolean;
+  isHighlighted?: boolean;
 }
 
 function TreeNode({
-  node,
-  level,
-  searchQuery,
-  expanded,
+  flatNode,
   onToggle,
   onSelect,
   selectedPath,
@@ -184,25 +230,19 @@ function TreeNode({
   onDelete,
   onCopyPath,
   onOpenInFinder,
+  onOpenInTrae,
+  onCopyFile,
+  onPaste,
+  hasClipboard,
   onAddToChat,
+  isLoading,
+  isHighlighted,
 }: TreeNodeProps) {
-  const isExpanded = expanded.has(node.path);
+  const { node, level, isExpanded } = flatNode;
   const isSelected = selectedPath === node.path;
   const isDirectory = node.type === "directory";
   const paddingLeft = level * 12 + 8;
-
-  // 搜索过滤
-  if (searchQuery && !node.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-    // 如果是文件夹，检查子节点是否匹配
-    if (isDirectory && node.children) {
-      const hasMatchingChild = node.children.some((child) =>
-        child.name.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      if (!hasMatchingChild) return null;
-    } else {
-      return null;
-    }
-  }
+  const executable = isExecutableFile(node);
 
   const handleClick = () => {
     if (isDirectory) {
@@ -210,6 +250,29 @@ function TreeNode({
     } else {
       onSelect(node.path);
     }
+  };
+
+  // 中文注释：打开/执行前先关闭文件树等右侧面板，再打开终端（与 FileTree / QuickScriptMenu 互斥逻辑对齐）
+  const closeOtherPanelsAndOpenTerminal = (store: ReturnType<typeof usePanelStore.getState>) => {
+    store.setFileTreeOpen(false);
+    store.setGitPanelOpen(false);
+    store.setDashboardPanelOpen(false);
+    store.setAssistantPanelOpen(false);
+    store.setPreviewOpen(false);
+    store.setBottomPanelTab("terminal");
+    store.setBottomPanelOpen(true);
+  };
+
+  const handleOpenInTerminal = (targetPath: string) => {
+    closeOtherPanelsAndOpenTerminal(usePanelStore.getState());
+    window.dispatchEvent(new CustomEvent('terminal:execute-command', { detail: { command: `cd "${targetPath}"` } }));
+  };
+
+  // 中文注释：对齐 cc-haha——先 cd 到脚本所在目录再执行，保证运行 cwd 是项目路径
+  const handleExecuteInTerminal = (targetPath: string) => {
+    closeOtherPanelsAndOpenTerminal(usePanelStore.getState());
+    const dirPath = targetPath.substring(0, targetPath.lastIndexOf('/'));
+    window.dispatchEvent(new CustomEvent('terminal:execute-command', { detail: { command: `cd "${dirPath}" && "${targetPath}"` } }));
   };
 
   return (
@@ -222,79 +285,119 @@ function TreeNode({
             className={cn(
               "flex items-center gap-1.5 py-1 pr-2 text-[13px] cursor-pointer select-none",
               "hover:bg-accent/50 transition-colors",
-              isSelected && "bg-accent text-accent-foreground"
+              isSelected && "bg-accent text-accent-foreground",
+              isHighlighted && "file-tree-flash"
             )}
+            id={isHighlighted ? "file-tree-highlight" : undefined}
           >
-            {/* 展开/折叠指示器 */}
-            {isDirectory && (
-              <span className="w-3 h-3 flex items-center justify-center text-muted-foreground">
-                {isExpanded ? (
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
-                    <path d="M0 2 L4 6 L8 2 Z" />
-                  </svg>
-                ) : (
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
-                    <path d="M2 0 L6 4 L2 8 Z" />
-                  </svg>
-                )}
-              </span>
+            {/* 文件夹图标同时作为展开/折叠按钮 */}
+            {isDirectory ? (
+              isExpanded ? (
+                <FolderOpen size={16} className="shrink-0 text-blue-400" weight="fill" />
+              ) : (
+                <Folder size={16} className="shrink-0 text-blue-400" weight="fill" />
+              )
+            ) : (
+              getFileIcon(node.name, isDirectory, isExpanded)
             )}
-            {!isDirectory && <span className="w-3" />}
-
-            {/* 图标 */}
-            {getFileIcon(node.name, isDirectory, isExpanded)}
 
             {/* 文件名 */}
             <span className="truncate flex-1">{node.name}</span>
+            {isDirectory && isExpanded && isLoading ? (
+              <ArrowsClockwise size={13} className="shrink-0 animate-spin text-muted-foreground" />
+            ) : null}
           </div>
         </ContextMenuTrigger>
 
+        {/* 中文注释：右键菜单项序/分隔/文案与 cc-haha FileTreePanel 对齐 */}
         <ContextMenuContent className="w-48">
           {isDirectory ? (
             <>
-              <ContextMenuItem onClick={() => onSelect(node.path)}>
+              <ContextMenuItem onSelect={() => onSelect(node.path)}>
                 <FolderOpen size={14} className="mr-2" />
-                打开文件夹
+                打开
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => onNewFile(node.path)}>
+              <ContextMenuItem onSelect={() => onNewFile(node.path)}>
                 <Plus size={14} className="mr-2" />
                 新建文件
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => onNewFolder(node.path)}>
+              <ContextMenuItem onSelect={() => onNewFolder(node.path)}>
                 <FolderPlus size={14} className="mr-2" />
                 新建文件夹
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => handleOpenInTerminal(node.path)}>
+                <TerminalWindow size={14} className="mr-2" />
+                在终端中打开
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              {/* 中文注释：复制=拷贝文件/目录供粘贴；粘贴=拷到当前目录 */}
+              <ContextMenuItem onSelect={() => onCopyFile(node.path, true)}>
+                <Copy size={14} className="mr-2" />
+                复制
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => onPaste(node.path)} disabled={!hasClipboard}>
+                <ClipboardText size={14} className="mr-2" />
+                粘贴
               </ContextMenuItem>
               <ContextMenuSeparator />
             </>
           ) : (
             <>
-              <ContextMenuItem onClick={() => onSelect(node.path)}>
+              <ContextMenuItem onSelect={() => onSelect(node.path)}>
                 <File size={14} className="mr-2" />
-                打开文件
+                打开
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => onAddToChat(node.path)}>
+              <ContextMenuItem onSelect={() => onAddToChat(node.path)}>
                 <ChatCircleText size={14} className="mr-2" />
                 添加到对话
+              </ContextMenuItem>
+              {executable && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onSelect={() => handleExecuteInTerminal(node.path)}>
+                    <TerminalWindow size={14} className="mr-2" />
+                    在终端中运行
+                  </ContextMenuItem>
+                </>
+              )}
+              <ContextMenuSeparator />
+              {/* 中文注释：复制=拷贝文件供粘贴；粘贴=拷到该文件所在目录 */}
+              <ContextMenuItem onSelect={() => onCopyFile(node.path, false)}>
+                <Copy size={14} className="mr-2" />
+                复制
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() => onPaste(node.path.substring(0, node.path.lastIndexOf('/')))}
+                disabled={!hasClipboard}
+              >
+                <ClipboardText size={14} className="mr-2" />
+                粘贴
               </ContextMenuItem>
               <ContextMenuSeparator />
             </>
           )}
-          <ContextMenuItem onClick={() => onRename(node.path, isDirectory)}>
+          <ContextMenuItem onSelect={() => onRename(node.path, isDirectory)}>
             <PencilSimple size={14} className="mr-2" />
             重命名
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => onCopyPath(node.path)}>
+          <ContextMenuItem onSelect={() => onCopyPath(node.path)}>
             <Copy size={14} className="mr-2" />
             复制路径
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => onOpenInFinder(node.path)}>
-            <ArrowSquareOut size={14} className="mr-2" />
+          <ContextMenuItem onSelect={() => onOpenInFinder(node.path)}>
+            <FolderOpen size={14} className="mr-2" />
             在 Finder 中打开
           </ContextMenuItem>
+          <ContextMenuItem onSelect={() => onOpenInTrae(node.path)}>
+            <Code size={14} className="mr-2" />
+            在 Trae 中打开
+          </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem 
-            onClick={() => onDelete(node.path, isDirectory)}
+          {/* 中文注释：Radix ContextMenu 用 onSelect 而非 onClick，否则菜单关闭后事件可能丢失 */}
+          <ContextMenuItem
+            onSelect={() => onDelete(node.path, isDirectory)}
             className="text-red-600"
           >
             <Trash size={14} className="mr-2" />
@@ -302,36 +405,23 @@ function TreeNode({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-
-      {/* 子节点 */}
-      {isDirectory && isExpanded && node.children && (
-        <div>
-          {node.children.map((child) => (
-            <TreeNode
-              key={child.path}
-              node={child}
-              level={level + 1}
-              searchQuery={searchQuery}
-              expanded={expanded}
-              onToggle={onToggle}
-              onSelect={onSelect}
-              selectedPath={selectedPath}
-              onNewFile={onNewFile}
-              onNewFolder={onNewFolder}
-              onRename={onRename}
-              onDelete={onDelete}
-              onCopyPath={onCopyPath}
-              onOpenInFinder={onOpenInFinder}
-              onAddToChat={onAddToChat}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
-export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: EnhancedFileTreeProps) {
+function getParentPaths(filePath: string): string[] {
+  const parents: string[] = [];
+  let current = filePath;
+  while (true) {
+    const parent = current.substring(0, current.lastIndexOf('/'));
+    if (!parent || parent === current) break;
+    parents.push(parent);
+    current = parent;
+  }
+  return parents;
+}
+
+export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd, highlightPath, highlightSeek, topSlot }: EnhancedFileTreeProps) {
   const { t } = useTranslation();
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
@@ -340,6 +430,13 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  const seekKeyRef = useRef<string | null>(null);
+  const treeRef = useRef<FileTreeNode[]>([]);
+  const expandedRef = useRef<Set<string>>(new Set());
+  const loadingDirectoriesRef = useRef<Set<string>>(new Set());
+  // 中文注释：用于渲染“目录展开加载中”的占位状态，避免用户误以为点击无响应。
+  const [loadingDirectories, setLoadingDirectories] = useState<Set<string>>(new Set());
 
   // 新建文件/文件夹对话框状态
   const [newItemDialog, setNewItemDialog] = useState<{
@@ -390,6 +487,108 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
     return new Set();
   }, [workingDirectory]);
 
+  useEffect(() => {
+    treeRef.current = tree;
+  }, [tree]);
+
+  useEffect(() => {
+    expandedRef.current = expanded;
+  }, [expanded]);
+
+  const updateTreeChildren = useCallback((nodes: FileTreeNode[], targetPath: string, children: FileTreeNode[]): FileTreeNode[] => {
+    let changed = false;
+    const next = nodes.map((node) => {
+      if (node.path === targetPath) {
+        if (node.type !== "directory") return node;
+        changed = true;
+        return { ...node, children };
+      }
+      if (node.type === "directory" && node.children) {
+        const updatedChildren = updateTreeChildren(node.children, targetPath, children);
+        if (updatedChildren !== node.children) {
+          changed = true;
+          return { ...node, children: updatedChildren };
+        }
+      }
+      return node;
+    });
+    return changed ? next : nodes;
+  }, []);
+
+  const findNode = useCallback((nodes: FileTreeNode[], targetPath: string): FileTreeNode | null => {
+    for (const node of nodes) {
+      if (node.path === targetPath) return node;
+      if (node.type === "directory" && node.children) {
+        const found = findNode(node.children, targetPath);
+        if (found) return found;
+      }
+    }
+    return null;
+  }, []);
+
+  const ensureDirectoryChildrenLoaded = useCallback(
+    async (dirPath: string, signal?: AbortSignal) => {
+      if (!workingDirectory) return;
+
+      const cached = getCached(directoryChildrenCache, dirPath);
+      if (cached) {
+        setTree((prev) => {
+          const next = updateTreeChildren(prev, dirPath, cached);
+          treeRef.current = next;
+          return next;
+        });
+        return;
+      }
+
+      if (loadingDirectoriesRef.current.has(dirPath)) return;
+      loadingDirectoriesRef.current.add(dirPath);
+      setLoadingDirectories((prev) => {
+        const next = new Set(prev);
+        next.add(dirPath);
+        return next;
+      });
+      try {
+        const res = await fetch(
+          `/api/files?dir=${encodeURIComponent(dirPath)}&baseDir=${encodeURIComponent(workingDirectory)}&depth=1`,
+          signal ? { signal } : undefined
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const children = (data.tree || []) as FileTreeNode[];
+        setCached(directoryChildrenCache, dirPath, children);
+        setTree((prev) => {
+          const next = updateTreeChildren(prev, dirPath, children);
+          treeRef.current = next;
+          return next;
+        });
+      } finally {
+        loadingDirectoriesRef.current.delete(dirPath);
+        setLoadingDirectories((prev) => {
+          const next = new Set(prev);
+          next.delete(dirPath);
+          return next;
+        });
+      }
+    },
+    [workingDirectory, updateTreeChildren]
+  );
+
+  const hydrateExpandedDirectories = useCallback(
+    async (expandedSet: Set<string>, signal?: AbortSignal) => {
+      if (!workingDirectory) return;
+      const paths = Array.from(expandedSet);
+      paths.sort((a, b) => a.split("/").length - b.split("/").length);
+
+      for (const dirPath of paths) {
+        const node = findNode(treeRef.current, dirPath);
+        if (!node || node.type !== "directory") continue;
+        if (node.children !== undefined) continue;
+        await ensureDirectoryChildrenLoaded(dirPath, signal);
+      }
+    },
+    [workingDirectory, findNode, ensureDirectoryChildrenLoaded]
+  );
+
   // 获取文件树
   const fetchTree = useCallback(async () => {
     if (abortRef.current) {
@@ -398,6 +597,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
 
     if (!workingDirectory) {
       abortRef.current = null;
+      treeRef.current = [];
       setTree([]);
       setError(null);
       setLoading(false);
@@ -410,25 +610,46 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
     setLoading(true);
     setError(null);
     try {
+      const cachedRoot = getCachedRootFileTree(workingDirectory);
+      if (cachedRoot && treeRef.current.length === 0) {
+        treeRef.current = cachedRoot;
+        setTree(cachedRoot);
+      }
+
       const res = await fetch(
-        `/api/files?dir=${encodeURIComponent(workingDirectory)}&baseDir=${encodeURIComponent(workingDirectory)}&depth=4&_t=${Date.now()}`,
+        `/api/files?dir=${encodeURIComponent(workingDirectory)}&baseDir=${encodeURIComponent(workingDirectory)}&depth=1`,
         { signal: controller.signal }
       );
       if (controller.signal.aborted) return;
       if (res.ok) {
         const data = await res.json();
         if (controller.signal.aborted) return;
-        setTree(data.tree || []);
-        // 加载保存的展开状态，默认所有文件夹都是折叠的
+        const nextTree = (data.tree || []) as FileTreeNode[];
+        treeRef.current = nextTree;
+        setTree(nextTree);
+        setCachedRootFileTree(workingDirectory, nextTree);
+
         const savedExpanded = loadExpandedState();
-        setExpanded(savedExpanded);
+        if (highlightPath) {
+          const next = new Set(savedExpanded);
+          for (const parent of getParentPaths(highlightPath)) {
+            next.add(parent);
+          }
+          setExpanded(next);
+          void hydrateExpandedDirectories(next, controller.signal);
+        } else {
+          setExpanded(savedExpanded);
+          void hydrateExpandedDirectories(savedExpanded, controller.signal);
+        }
       } else {
         const errData = await res.json().catch(() => ({ error: res.statusText }));
+        treeRef.current = [];
         setTree([]);
         setError(errData.error || `Failed to load (${res.status})`);
       }
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
+      treeRef.current = [];
       setTree([]);
       setError("Failed to load file tree");
     } finally {
@@ -436,11 +657,56 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
         setLoading(false);
       }
     }
-  }, [workingDirectory, loadExpandedState]);
+  }, [workingDirectory, loadExpandedState, highlightPath, hydrateExpandedDirectories]);
 
   useEffect(() => {
     fetchTree();
   }, [fetchTree]);
+
+  // File Watcher SSE connection
+  useEffect(() => {
+    if (!workingDirectory) return;
+
+    let eventSource: EventSource | null = null;
+    let retryCount = 0;
+    let retryTimeout: NodeJS.Timeout | null = null;
+
+    const connect = () => {
+      eventSource = new EventSource(`/api/workspace/events?cwd=${encodeURIComponent(workingDirectory)}`);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "change") {
+            fetchTree();
+            // Optional: Also trigger git-refresh if needed, since file changes often affect git
+            window.dispatchEvent(new CustomEvent('git-refresh'));
+          }
+        } catch {
+          // Ignore
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource?.close();
+        // Exponential backoff retry (max 30s)
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+        retryCount++;
+        retryTimeout = setTimeout(connect, delay);
+      };
+
+      eventSource.onopen = () => {
+        retryCount = 0;
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (retryTimeout) clearTimeout(retryTimeout);
+      eventSource?.close();
+    };
+  }, [workingDirectory, fetchTree]);
 
   useEffect(() => {
     return () => {
@@ -450,20 +716,40 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
     };
   }, []);
 
-  // 展开/折叠
-  const handleToggle = useCallback((path: string) => {
+  const handleToggle = useCallback(
+    (path: string) => {
+      const shouldExpand = !expandedRef.current.has(path);
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        saveExpandedState(next);
+        return next;
+      });
+
+      if (!shouldExpand) return;
+      const node = findNode(treeRef.current, path);
+      if (!node || node.type !== "directory") return;
+      if (node.children !== undefined) return;
+      void ensureDirectoryChildrenLoaded(path, abortRef.current?.signal);
+    },
+    [saveExpandedState, findNode, ensureDirectoryChildrenLoaded]
+  );
+
+  useEffect(() => {
+    if (!highlightPath) return;
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
+      for (const parent of getParentPaths(highlightPath)) {
+        next.add(parent);
       }
-      // 保存展开状态
-      saveExpandedState(next);
       return next;
     });
-  }, [saveExpandedState]);
+    setSelectedPath(highlightPath);
+  }, [highlightPath, highlightSeek]);
 
   // 选择文件
   const handleSelect = useCallback(
@@ -498,7 +784,8 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
   const handleCreateItem = useCallback(async () => {
     if (!newItemDialog.name.trim()) return;
 
-    const fullPath = `${newItemDialog.parentPath}/${newItemDialog.name}`;
+    const basePath = newItemDialog.parentPath || workingDirectory;
+    const fullPath = `${basePath}/${newItemDialog.name}`;
     try {
       const res = await fetch("/api/files/create", {
         method: "POST",
@@ -527,7 +814,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
         message: err instanceof Error ? err.message : "创建失败",
       });
     }
-  }, [newItemDialog, fetchTree]);
+  }, [newItemDialog, fetchTree, workingDirectory]);
 
   // 重命名
   const handleRename = useCallback((path: string, isDirectory: boolean) => {
@@ -543,18 +830,20 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
   // 执行重命名
   const handleDoRename = useCallback(async () => {
     if (!renameDialog.newName.trim()) return;
+    if (!renameDialog.path) {
+      showToast({ type: "error", message: "缺少文件路径" });
+      return;
+    }
 
     const oldPath = renameDialog.path;
-    const parentPath = oldPath.split("/").slice(0, -1).join("/");
-    const newPath = `${parentPath}/${renameDialog.newName}`;
 
     try {
       const res = await fetch("/api/files/rename", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          oldPath,
-          newPath,
+          path: oldPath,
+          newName: renameDialog.newName,
         }),
       });
 
@@ -635,26 +924,57 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
     }
   }, []);
 
-  // 在 Finder 中打开
+  // 中文注释：必须走 reveal（open -R）定位到文件，不能用默认应用打开——否则 .md/.html 会被浏览器抢走
   const handleOpenInFinder = useCallback(async (path: string) => {
     try {
-      const res = await fetch("/api/files/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "打开失败");
-      }
+      await openInFinder(path);
     } catch (err) {
       showToast({
         type: "error",
-        message: err instanceof Error ? err.message : "打开失败",
+        message: err instanceof Error ? err.message : "在 Finder 中打开失败",
       });
     }
   }, []);
+
+  // 在 Trae（国际版）中打开
+  const handleOpenInTrae = useCallback(async (path: string) => {
+    try {
+      await openInTrae(path);
+    } catch (err) {
+      showToast({
+        type: "error",
+        message: err instanceof Error ? err.message : "在 Trae 中打开失败",
+      });
+    }
+  }, []);
+
+  // 文件树复制/粘贴剪贴板（与 FileTree 共享 module 单例）
+  const [fileClipboard, setFileClipboardState] = useState<FileClipboardEntry | null>(getFileClipboard());
+
+  const handleCopyFile = useCallback((path: string, isDirectory: boolean) => {
+    const entry = { path, isDirectory };
+    setFileClipboard(entry);
+    setFileClipboardState(entry);
+    showToast({ type: "success", message: "已复制，右键目标文件夹粘贴" });
+  }, []);
+
+  const handlePaste = useCallback(async (destDir: string) => {
+    const entry = getFileClipboard();
+    if (!entry) {
+      showToast({ type: "error", message: "剪贴板为空，请先复制文件" });
+      return;
+    }
+    try {
+      await pasteFile(entry.path, destDir);
+      showToast({ type: "success", message: "粘贴成功" });
+      fetchTree();
+    } catch (err) {
+      showToast({
+        type: "error",
+        message: err instanceof Error ? err.message : "粘贴失败",
+      });
+    }
+  }, [fetchTree]);
 
   // 添加到对话
   const handleAddToChat = useCallback((path: string) => {
@@ -666,6 +986,58 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
       });
     }
   }, [onFileAdd]);
+
+  // 计算扁平化列表
+  const flatNodes = useMemo(() => {
+    const filterNodes = (nodesList: FileTreeNode[]): FileTreeNode[] => {
+      if (!searchQuery) return nodesList;
+      const q = searchQuery.toLowerCase();
+      return nodesList.reduce<FileTreeNode[]>((acc, node) => {
+        const isMatch = node.name.toLowerCase().includes(q);
+        if (node.type === "directory" && node.children) {
+          const filteredChildren = filterNodes(node.children);
+          if (isMatch || filteredChildren.length > 0) {
+            acc.push({ ...node, children: filteredChildren });
+          }
+        } else if (isMatch) {
+          acc.push(node);
+        }
+        return acc;
+      }, []);
+    };
+
+    const flattenNodes = (nodes: FileTreeNode[], level = 0): FlatNode[] => {
+      const result: FlatNode[] = [];
+      for (const node of nodes) {
+        // 如果有搜索词，强制展开包含匹配项的文件夹
+        const isExpanded = searchQuery ? true : expanded.has(node.path);
+        result.push({ node, level, isExpanded });
+        if (node.type === "directory" && isExpanded && node.children) {
+          result.push(...flattenNodes(node.children, level + 1));
+        }
+      }
+      return result;
+    };
+
+    const filteredTree = filterNodes(tree);
+    return flattenNodes(filteredTree);
+  }, [tree, searchQuery, expanded]);
+
+  useEffect(() => {
+    if (!workingDirectory || !highlightPath || flatNodes.length === 0) return;
+    const seekTargetKey = `${workingDirectory}::${highlightPath}::${highlightSeek || ''}`;
+    if (seekKeyRef.current === seekTargetKey) return;
+
+    const index = flatNodes.findIndex((item) => item.node.path === highlightPath);
+    if (index < 0) return;
+
+    virtuosoRef.current?.scrollToIndex({
+      index,
+      align: 'center',
+      behavior: 'smooth',
+    });
+    seekKeyRef.current = seekTargetKey;
+  }, [workingDirectory, highlightPath, highlightSeek, flatNodes]);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
@@ -706,6 +1078,12 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
         </div>
       </div>
 
+      {topSlot ? (
+        <div className="border-b border-border/40 px-2.5 py-2.5 shrink-0">
+          {topSlot}
+        </div>
+      ) : null}
+
       {/* Search */}
       <div className="px-3 py-2 border-b border-border/40 shrink-0">
         <div className="relative">
@@ -723,7 +1101,7 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-auto py-1">
+      <div className="flex-1 overflow-hidden py-1">
         {loading && tree.length === 0 ? (
           <div className="flex items-center justify-center py-8">
             <ArrowsClockwise size={16} className="animate-spin text-muted-foreground" />
@@ -732,15 +1110,19 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
           <p className="py-4 text-center text-xs text-muted-foreground">
             {error ? error : workingDirectory ? t("fileTree.noFiles") : t("fileTree.selectFolder")}
           </p>
+        ) : flatNodes.length === 0 ? (
+          <p className="py-4 text-center text-xs text-muted-foreground">
+            没有找到匹配的文件
+          </p>
         ) : (
-          <div>
-            {tree.map((node) => (
+          <Virtuoso
+            ref={virtuosoRef}
+            style={{ height: '100%', width: '100%' }}
+            data={flatNodes}
+            itemContent={(_index: number, flatNode: any) => (
               <TreeNode
-                key={node.path}
-                node={node}
-                level={0}
-                searchQuery={searchQuery}
-                expanded={expanded}
+                key={flatNode.node.path}
+                flatNode={flatNode}
                 onToggle={handleToggle}
                 onSelect={handleSelect}
                 selectedPath={selectedPath}
@@ -750,10 +1132,16 @@ export function EnhancedFileTree({ workingDirectory, onFileSelect, onFileAdd }: 
                 onDelete={handleDelete}
                 onCopyPath={handleCopyPath}
                 onOpenInFinder={handleOpenInFinder}
+                onOpenInTrae={handleOpenInTrae}
+                onCopyFile={handleCopyFile}
+                onPaste={handlePaste}
+                hasClipboard={!!fileClipboard}
                 onAddToChat={handleAddToChat}
+                isLoading={loadingDirectories.has(flatNode.node.path)}
+                isHighlighted={flatNode.node.path === highlightPath}
               />
-            ))}
-          </div>
+            )}
+          />
         )}
       </div>
 

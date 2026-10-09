@@ -12,6 +12,7 @@ export const COMMAND_PROMPTS: Record<string, string> = {
   '/doctor': 'Run diagnostic checks on this project. Check system health, dependencies, configuration files, and report any issues.',
   '/terminal-setup': 'Help me configure my terminal for optimal use with Claude Code. Check current setup and suggest improvements.',
   '/memory': 'Show the current CLAUDE.md project memory file and help me review or edit it.',
+  '/team': '启用多agent模式，并行执行',
 };
 
 /** Built-in slash commands shown in the popover (without icons — see command-icons.ts). */
@@ -25,4 +26,5 @@ export const BUILT_IN_COMMANDS: PopoverItem[] = [
   { label: 'review', value: '/review', description: 'Review code quality', descriptionKey: 'messageInput.reviewDesc', builtIn: true, kind: 'sdk_command' },
   { label: 'terminal-setup', value: '/terminal-setup', description: 'Configure terminal settings', descriptionKey: 'messageInput.terminalSetupDesc', builtIn: true, kind: 'codepilot_command' },
   { label: 'memory', value: '/memory', description: 'Edit project memory file', descriptionKey: 'messageInput.memoryDesc', builtIn: true, kind: 'codepilot_command' },
+  { label: 'team', value: '/team', description: 'Enable multi-agent team mode for parallel execution', descriptionKey: 'messageInput.teamDesc', builtIn: true, kind: 'codepilot_command' },
 ];

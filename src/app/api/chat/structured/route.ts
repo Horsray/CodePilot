@@ -1,6 +1,12 @@
+/**
+ * Structured output route — generates JSON conforming to a schema.
+ *
+ * Uses Vercel AI SDK generateText with output option.
+ * No Claude Code SDK dependency.
+ */
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { Options, SDKResultSuccess } from '@anthropic-ai/claude-agent-sdk';
+import { generateText, Output, jsonSchema } from 'ai';
+import { createModel } from '@/lib/ai-provider';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,57 +34,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const queryOptions: Partial<Options> = {
-      cwd: options?.cwd || process.cwd(),
+    // Create model via unified provider factory
+    const { languageModel } = createModel({
+      providerId: options?.providerId,
       model: options?.model,
-      outputFormat,
-    };
+    });
 
-    // Collect the result message which contains structured_output
-    let structuredOutput: unknown = undefined;
-    let resultText = '';
-
-    for await (const message of query({
+    // Use generateText with structured output
+    const result = await generateText({
+      model: languageModel,
       prompt,
-      options: queryOptions as Options,
-    })) {
-      if (message.type === 'result' && message.subtype === 'success') {
-        const successResult = message as SDKResultSuccess;
-        // Primary path: read structured_output directly from the SDK result
-        if (successResult.structured_output !== undefined) {
-          structuredOutput = successResult.structured_output;
-        }
-        // Also capture result text as fallback
-        if (successResult.result) {
-          resultText = successResult.result;
-        }
-      } else if (message.type === 'assistant') {
-        // Fallback: accumulate assistant text in case structured_output is absent
-        const msg = message.message as { content?: Array<{ type: string; text?: string }> } | string;
-        if (typeof msg === 'string') {
-          resultText += msg;
-        } else if (msg && Array.isArray(msg.content)) {
-          for (const block of msg.content) {
-            if (block.type === 'text' && block.text) {
-              resultText += block.text;
-            }
-          }
-        }
-      }
+      output: Output.object({ schema: jsonSchema(outputFormat.schema) }),
+      maxOutputTokens: options?.maxTokens || 4096,
+    });
+
+    // Return structured output
+    if (result.output !== undefined) {
+      return NextResponse.json({ result: result.output });
     }
 
-    // Prefer structured_output from the SDK result message
-    if (structuredOutput !== undefined) {
-      return NextResponse.json({ result: structuredOutput });
-    }
-
-    // Fallback: try to parse accumulated text as JSON
-    if (resultText) {
+    // Fallback: try to parse text as JSON
+    if (result.text) {
       try {
-        const parsed = JSON.parse(resultText);
+        const parsed = JSON.parse(result.text);
         return NextResponse.json({ result: parsed });
       } catch {
-        return NextResponse.json({ result: resultText });
+        return NextResponse.json({ result: result.text });
       }
     }
 

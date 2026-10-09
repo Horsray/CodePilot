@@ -40,7 +40,7 @@ interface UsageStatsResponse {
 // Recharts v3 Payload — only the fields we actually read
 interface RechartsPayloadItem {
   name?: string | number;
-  dataKey?: string | number;
+  dataKey?: string | number | ((obj: any) => any);
   value?: number;
   color?: string;
   fill?: string;
@@ -134,7 +134,7 @@ function getModelColor(_model: string, idx: number): string {
 
 function ChartTooltip({ active, payload, label }: {
   active?: boolean;
-  payload?: ReadonlyArray<RechartsPayloadItem>;
+  payload?: ReadonlyArray<RechartsPayloadItem & { dataKey?: string | number | ((obj: any) => any) }>;
   label?: string | number;
 }) {
   if (!active || !payload?.length) return null;
@@ -342,7 +342,7 @@ export function UsageStatsSection() {
                 width={54}
               />
               <Tooltip
-                content={(props) => <ChartTooltip {...props} />}
+                content={(props: any) => <ChartTooltip {...props} />}
                 cursor={{ fill: "var(--color-accent)", opacity: 0.3 }}
               />
               <Legend

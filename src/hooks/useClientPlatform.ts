@@ -17,7 +17,6 @@ const DEFAULT: ClientPlatform = {
 };
 
 export function useClientPlatform(): ClientPlatform {
-  /* eslint-disable react-hooks/set-state-in-effect */
   const [platform, setPlatform] = useState<ClientPlatform>(DEFAULT);
 
   useEffect(() => {
@@ -36,7 +35,6 @@ export function useClientPlatform(): ClientPlatform {
       fileManagerName: isWindows ? 'Explorer' : isMac ? 'Finder' : 'File Manager',
     });
   }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   return platform;
 }

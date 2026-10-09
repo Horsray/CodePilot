@@ -6,7 +6,7 @@
  */
 
 import { BUILT_IN_COMMANDS, COMMAND_PROMPTS } from '@/lib/constants/commands';
-import type { PopoverItem, PopoverMode, CommandBadge, CliBadge } from '@/types';
+import type { PopoverItem, PopoverMode, CommandBadge, CliBadge, MentionNodeType, MentionRef } from '@/types';
 
 // ─── Result types ────────────────────────────────────────────────
 
@@ -20,6 +20,8 @@ export interface InsertResult {
 export interface BadgeDispatchResult {
   prompt: string;
   displayLabel: string;
+  /** Skill body content to inject into system prompt (for agent_skill badges) */
+  skillContent?: string;
 }
 
 export type KeyAction =
@@ -58,7 +60,12 @@ export function detectPopoverTrigger(
     };
   }
 
-  // Check for / trigger (only at start of line or after space)
+  // Check for / trigger. Only fires when `/` is at the start of input or
+  // immediately after whitespace — regex alone can't tell "hello/skill" from
+  // "src/app" or "foo/bar", so we accept the trade-off: typing `/` mid-word
+  // does NOT open the picker (it would false-positive on every single-slash
+  // path). Users who want to invoke a command mid-sentence use the slash
+  // button, which auto-inserts a leading space (see handleInsertSlash).
   const slashMatch = beforeCursor.match(/(^|\s)\/([^\s]*)$/);
   if (slashMatch) {
     return {
@@ -85,6 +92,21 @@ export function filterItems(items: PopoverItem[], filter: string): PopoverItem[]
 }
 
 /**
+ * Splits input text around a popover trigger, removing the trigger character
+ * and any filter text that was typed after it.
+ */
+function splitAroundTrigger(
+  inputValue: string,
+  triggerPos: number,
+  popoverFilter: string,
+): { before: string; after: string } {
+  const before = inputValue.slice(0, triggerPos);
+  const cursorEnd = triggerPos + popoverFilter.length + 1; // +1 to consume the trigger character
+  const after = inputValue.slice(cursorEnd);
+  return { before, after };
+}
+
+/**
  * Determines what happens when an item is selected from the popover.
  * Used by insertItem in useSlashCommands.
  */
@@ -100,8 +122,9 @@ export function resolveItemSelection(
     return { action: 'immediate_command', commandValue: item.value };
   }
 
-  // Non-immediate commands: show as badge
+  // Non-immediate commands: show as badge, preserving any text outside the trigger
   if (popoverMode === 'skill') {
+    const { before, after } = splitAroundTrigger(inputValue, triggerPos, popoverFilter);
     return {
       action: 'set_badge',
       badge: {
@@ -110,14 +133,14 @@ export function resolveItemSelection(
         description: item.description || '',
         kind: item.kind || 'slash_command',
         installedSource: item.installedSource,
+        content: item.content,
       },
+      newInputValue: before + after,
     };
   }
 
   // File mention: insert into text
-  const before = inputValue.slice(0, triggerPos);
-  const cursorEnd = triggerPos + popoverFilter.length + 1;
-  const after = inputValue.slice(cursorEnd);
+  const { before, after } = splitAroundTrigger(inputValue, triggerPos, popoverFilter);
   const insertText = `@${item.value} `;
   return {
     action: 'insert_file_mention',
@@ -128,10 +151,43 @@ export function resolveItemSelection(
 /**
  * Badge dispatch logic — what prompt is sent for each badge kind.
  * Used by handleSubmit in MessageInput.
+ *
+ * Accepts a single badge or an array. Multi-badge is only meaningful for
+ * `agent_skill` kind (user can stack multiple skills); other kinds always
+ * arrive as a single-element array because addBadge() replaces on non-skill.
  */
-export function dispatchBadge(badge: CommandBadge, userContent: string): BadgeDispatchResult {
+export function dispatchBadge(
+  badgeOrBadges: CommandBadge | CommandBadge[],
+  userContent: string,
+): BadgeDispatchResult {
+  const badges = Array.isArray(badgeOrBadges) ? badgeOrBadges : [badgeOrBadges];
+  if (badges.length === 0) {
+    return { prompt: userContent, displayLabel: userContent };
+  }
+
+  // Helper: collect skill content from agent_skill badges
+  const collectSkillContent = (bs: CommandBadge[]): string | undefined => {
+    const contents = bs
+      .filter((b) => b.kind === 'agent_skill' && b.content)
+      .map((b) => b.content!);
+    if (contents.length === 0) return undefined;
+    return contents.join('\n\n---\n\n');
+  };
+
+  // Multi-skill path: combine labels into one prompt, join display labels.
+  if (badges.length > 1 && badges.every((b) => b.kind === 'agent_skill')) {
+    const skillNames = badges.map((b) => b.label).join(', ');
+    const displayLabel = userContent
+      ? `${badges.map((b) => `/${b.label}`).join(' ')}\n${userContent}`
+      : badges.map((b) => `/${b.label}`).join(' ');
+    const agentPrompt = userContent
+      ? `Use the ${skillNames} skills. User context: ${userContent}`
+      : `Please use the ${skillNames} skills.`;
+    return { prompt: agentPrompt, displayLabel, skillContent: collectSkillContent(badges) };
+  }
+
+  const badge = badges[0];
   const baseLabel = `/${badge.label}`;
-  // Show user's text in the chat bubble so it's not "swallowed"
   const displayLabel = userContent ? `${baseLabel}\n${userContent}` : baseLabel;
 
   switch (badge.kind) {
@@ -139,7 +195,7 @@ export function dispatchBadge(badge: CommandBadge, userContent: string): BadgeDi
       const agentPrompt = userContent
         ? `Use the ${badge.label} skill. User context: ${userContent}`
         : `Please use the ${badge.label} skill.`;
-      return { prompt: agentPrompt, displayLabel };
+      return { prompt: agentPrompt, displayLabel, skillContent: collectSkillContent(badges) };
     }
     case 'slash_command':
     case 'sdk_command': {
@@ -271,4 +327,46 @@ export function resolveDirectSlash(content: string): DirectSlashResult {
 export function buildCliAppend(cliBadge: CliBadge | null): string | undefined {
   if (!cliBadge) return undefined;
   return `The user wants to use the installed CLI tool "${cliBadge.name}" if appropriate for this task. Prefer using "${cliBadge.name}" when suitable.`;
+}
+
+/**
+ * Parse @mentions from raw input text and return structured mention refs.
+ * Mentions keep source ranges so the caller can reconcile edits/deletions.
+ */
+export function parseMentionRefs(
+  input: string,
+  nodeTypeLookup?: Record<string, MentionNodeType>,
+): MentionRef[] {
+  const refs: MentionRef[] = [];
+  if (!input) return refs;
+
+  const mentionRegex = /(^|\s)@([^\s@]+)/g;
+  for (const match of input.matchAll(mentionRegex)) {
+    const rawPath = (match[2] || '').replace(/[.,!?;:)\]}]+$/, '');
+    if (!rawPath) continue;
+    const full = match[0] || '';
+    const start = input.indexOf(full, match.index ?? 0) + full.lastIndexOf('@');
+    const end = start + rawPath.length + 1;
+    refs.push({
+      path: rawPath,
+      nodeType: nodeTypeLookup?.[rawPath] || 'file',
+      display: rawPath,
+      sourceRange: { start, end },
+    });
+  }
+  return refs;
+}
+
+/**
+ * Dedupe mentions by path (first mention wins).
+ */
+export function dedupeMentionsByPath(mentions: MentionRef[]): MentionRef[] {
+  const seen = new Set<string>();
+  const out: MentionRef[] = [];
+  for (const mention of mentions) {
+    if (seen.has(mention.path)) continue;
+    seen.add(mention.path);
+    out.push(mention);
+  }
+  return out;
 }

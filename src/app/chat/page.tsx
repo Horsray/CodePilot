@@ -2,13 +2,11 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Message, SSEEvent, SessionResponse, TokenUsage, PermissionRequestEvent, ReplyMode } from '@/types';
+import type { Message, SessionResponse, PermissionRequestEvent, FileAttachment, MentionRef } from '@/types';
 import { MessageList } from '@/components/chat/MessageList';
 import { MessageInput } from '@/components/chat/MessageInput';
 import { ChatComposerActionBar } from '@/components/chat/ChatComposerActionBar';
-import { ModeIndicator } from '@/components/chat/ModeIndicator';
-import { ChatPermissionSelector } from '@/components/chat/ChatPermissionSelector';
-import { ImageGenToggle } from '@/components/chat/ImageGenToggle';
+import { CaretRight, CaretDown } from '@/components/ui/icon';
 import { PermissionPrompt } from '@/components/chat/PermissionPrompt';
 import { ChatEmptyState } from '@/components/chat/ChatEmptyState';
 import { OnboardingWizard } from '@/components/assistant/OnboardingWizard';
@@ -17,20 +15,209 @@ import { FolderPicker } from '@/components/chat/FolderPicker';
 import { useNativeFolderPicker } from '@/hooks/useNativeFolderPicker';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePanel } from '@/hooks/usePanel';
+import { createClientMessageId, stagePendingSessionMessage } from '@/lib/pending-session-message';
 
 interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  parentAgentId?: string;
 }
 
 interface ToolResultInfo {
   tool_use_id: string;
   content: string;
   is_error?: boolean;
+  parentAgentId?: string;
 }
 
-const REPLY_MODE_STORAGE_KEY = 'codepilot:last-reply-mode';
+interface ChatPerfEntry {
+  name: string;
+  atMs: number;
+  source: 'frontend' | 'route' | 'native';
+  durationMs?: number;
+  detail?: Record<string, unknown>;
+}
+
+interface ChatPerfTrace {
+  id: string;
+  createdAt: string;
+  entries: ChatPerfEntry[];
+  memorySamples: Array<{ atMs: number; usedJSHeapSize: number; totalJSHeapSize: number }>;
+  longTasks: Array<{ startMs: number; durationMs: number; name: string }>;
+  metadata: Record<string, unknown>;
+  finishReason?: string;
+}
+
+function getPerfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? Number(performance.now().toFixed(2))
+    : Date.now();
+}
+
+function createChatPerfTrace(metadata: Record<string, unknown>) {
+  const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `chat-${Date.now()}`;
+  const markPrefix = `codepilot-chat-${id}`;
+  const trace: ChatPerfTrace = {
+    id,
+    createdAt: new Date().toISOString(),
+    entries: [],
+    memorySamples: [],
+    longTasks: [],
+    metadata,
+  };
+  const startMarks = new Map<string, number>();
+  const perfWithMemory = performance as Performance & {
+    memory?: {
+      usedJSHeapSize: number;
+      totalJSHeapSize: number;
+    };
+  };
+  let memoryTimer: ReturnType<typeof setInterval> | null = null;
+  let longTaskObserver: PerformanceObserver | null = null;
+
+  const storeTrace = () => {
+    if (typeof window === 'undefined') return;
+    const w = window as typeof window & {
+      __codepilotChatPerf?: { traces: ChatPerfTrace[] };
+    };
+    if (!w.__codepilotChatPerf) {
+      w.__codepilotChatPerf = { traces: [] };
+    }
+    w.__codepilotChatPerf.traces.push({
+      ...trace,
+      entries: [...trace.entries],
+      memorySamples: [...trace.memorySamples],
+      longTasks: [...trace.longTasks],
+    });
+    if (w.__codepilotChatPerf.traces.length > 20) {
+      w.__codepilotChatPerf.traces.splice(0, w.__codepilotChatPerf.traces.length - 20);
+    }
+  };
+
+  const record = (
+    name: string,
+    source: ChatPerfEntry['source'],
+    detail?: Record<string, unknown>,
+    durationMs?: number,
+  ) => {
+    trace.entries.push({
+      name,
+      source,
+      atMs: getPerfNow(),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(detail ? { detail } : {}),
+    });
+  };
+
+  // 中文注释：记录前端阶段起点，并同步写入 Performance Timeline。
+  const start = (name: string, detail?: Record<string, unknown>) => {
+    startMarks.set(name, getPerfNow());
+    if (typeof window !== 'undefined' && performance) {
+      performance.mark(`${markPrefix}:${name}:start`);
+    }
+    record(`${name}:start`, 'frontend', detail);
+  };
+
+  // 中文注释：记录前端阶段终点，输出 duration 便于和后端阶段对齐分析。
+  const end = (name: string, detail?: Record<string, unknown>) => {
+    const startAt = startMarks.get(name);
+    if (startAt === undefined) return;
+    const durationMs = Number((getPerfNow() - startAt).toFixed(2));
+    if (typeof window !== 'undefined' && performance) {
+      performance.mark(`${markPrefix}:${name}:end`);
+      try {
+        performance.measure(`${markPrefix}:${name}`, `${markPrefix}:${name}:start`, `${markPrefix}:${name}:end`);
+      } catch { /* ignore duplicate measure errors */ }
+    }
+    record(name, 'frontend', detail, durationMs);
+    startMarks.delete(name);
+  };
+
+  // 中文注释：接收服务端 perf 事件，统一收敛到同一条前端链路中。
+  const addServerPerf = (source: 'route' | 'native', payload: Record<string, unknown>) => {
+    const snapshot = payload.snapshot as {
+      totalDurationMs?: number;
+      events?: Array<{ name?: string; durationMs?: number; detail?: Record<string, unknown> }>;
+      metadata?: Record<string, unknown>;
+    } | undefined;
+
+    if (snapshot?.events?.length) {
+      for (const event of snapshot.events) {
+        record(event.name || `${source}.event`, source, event.detail, event.durationMs);
+      }
+      return;
+    }
+
+    record(String(payload.name || `${source}.event`), source, (payload.detail as Record<string, unknown> | undefined), typeof payload.totalDurationMs === 'number' ? payload.totalDurationMs : undefined);
+    if (typeof payload.durationMs === 'number') {
+      trace.entries[trace.entries.length - 1].durationMs = payload.durationMs;
+    }
+  };
+
+  // 中文注释：采样堆内存和长任务，排查前端阻塞与潜在内存泄漏。
+  const beginMonitoring = () => {
+    if (perfWithMemory.memory) {
+      memoryTimer = setInterval(() => {
+        if (!perfWithMemory.memory) return;
+        trace.memorySamples.push({
+          atMs: getPerfNow(),
+          usedJSHeapSize: perfWithMemory.memory.usedJSHeapSize,
+          totalJSHeapSize: perfWithMemory.memory.totalJSHeapSize,
+        });
+      }, 500);
+    }
+
+    if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+      longTaskObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          trace.longTasks.push({
+            startMs: Number(entry.startTime.toFixed(2)),
+            durationMs: Number(entry.duration.toFixed(2)),
+            name: entry.name,
+          });
+        }
+      });
+      longTaskObserver.observe({ entryTypes: ['longtask'] });
+    }
+  };
+
+  const finish = (finishReason: string, detail?: Record<string, unknown>) => {
+    trace.finishReason = finishReason;
+    if (memoryTimer) clearInterval(memoryTimer);
+    memoryTimer = null;
+    longTaskObserver?.disconnect();
+    longTaskObserver = null;
+    record('trace.finish', 'frontend', {
+      finishReason,
+      ...(detail || {}),
+    });
+    storeTrace();
+    console.groupCollapsed(`[chat-perf] ${trace.id} ${finishReason}`);
+    console.table(trace.entries.map((entry) => ({
+      source: entry.source,
+      name: entry.name,
+      durationMs: entry.durationMs ?? '',
+      atMs: entry.atMs,
+    })));
+    if (trace.memorySamples.length > 0) console.table(trace.memorySamples);
+    if (trace.longTasks.length > 0) console.table(trace.longTasks);
+    console.groupEnd();
+  };
+
+  beginMonitoring();
+
+  return {
+    id,
+    start,
+    end,
+    record,
+    addServerPerf,
+    finish,
+  };
+}
 
 export default function NewChatPage() {
   const router = useRouter();
@@ -40,11 +227,12 @@ export default function NewChatPage() {
     const params = new URLSearchParams(window.location.search);
     return params.get('prefill') || '';
   }, []);
-  const { setPendingApprovalSessionId } = usePanel();
+  const { setPendingApprovalSessionId, bottomPanelOpen, setBottomPanelOpen, setBottomPanelTab } = usePanel();
   const { t } = useTranslation();
   const { isElectron, openNativePicker } = useNativeFolderPicker();
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingContent, setStreamingContent] = useState('');
+  const [streamingThinkingContent, setStreamingThinkingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolUses, setToolUses] = useState<ToolUseInfo[]>([]);
   const [toolResults, setToolResults] = useState<ToolResultInfo[]>([]);
@@ -87,18 +275,9 @@ export default function NewChatPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
   // Effort level — lifted here so the first message includes it
   const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
-  const [replyMode, setReplyMode] = useState<ReplyMode>('smart');
   // Provider options (thinking mode + 1M context)
-  const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
-  const [context1m, setContext1m] = useState(false);
-
-  useEffect(() => {
-    const stored = localStorage.getItem(REPLY_MODE_STORAGE_KEY) as ReplyMode | null;
-    if (stored === 'fast' || stored === 'smart' || stored === 'deep') {
-      setReplyMode(stored);
-    }
-  }, []);
-  useEffect(() => { localStorage.setItem(REPLY_MODE_STORAGE_KEY, replyMode); }, [replyMode]);
+  const [, setThinkingMode] = useState<string>('adaptive');
+  const [, setContext1m] = useState(false);
 
   // Fetch provider-specific options (with abort to prevent stale responses on fast switch)
   useEffect(() => {
@@ -374,6 +553,34 @@ export default function NewChatPage() {
     return () => window.removeEventListener('provider-changed', checkProvider);
   }, []);
 
+  useEffect(() => {
+    if (!modelReady || !hasProvider || !workingDir.trim() || !currentModel) return;
+
+    const controller = new AbortController();
+    fetch('/api/chat/warmup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        working_directory: workingDir.trim(),
+        model: currentModel,
+        provider_id: currentProviderId,
+      }),
+      signal: controller.signal,
+    }).then(res => res.ok ? res.json() : null).then(data => {
+      if (data) {
+        console.log('[warmup] Blank page warmup completed:', {
+          warmed_up: data.warmed_up,
+          from_cache: data.from_cache,
+          session_id: data.warmup_session_id,
+          model: data.model,
+          mcp_count: data.mcp_count,
+        });
+      }
+    }).catch(() => {});
+
+    return () => controller.abort();
+  }, [modelReady, hasProvider, workingDir, currentModel, currentProviderId]);
+
   const handleSelectFolder = useCallback(async () => {
     if (isElectron) {
       const path = await openNativePicker({ title: t('folderPicker.title') });
@@ -438,7 +645,7 @@ export default function NewChatPage() {
   }, [pendingPermission, setPendingApprovalSessionId]);
 
   const sendFirstMessage = useCallback(
-    async (content: string, _files?: unknown, systemPromptAppend?: string, displayOverride?: string) => {
+    async (content: string, files?: FileAttachment[], systemPromptAppend?: string, displayOverride?: string, mentions?: MentionRef[]) => {
       if (isStreaming) return;
 
       // Wait for model/provider to be resolved from the global default before allowing send
@@ -467,8 +674,16 @@ export default function NewChatPage() {
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      const perfTrace = createChatPerfTrace({
+        mode,
+        workingDir: workingDir.trim(),
+        model: currentModel,
+        providerId: currentProviderId,
+        contentLength: content.length,
+      });
 
       let sessionId = '';
+      let shouldResetUi = true;
 
       try {
         // Create a new session with working directory + model/provider
@@ -481,11 +696,14 @@ export default function NewChatPage() {
           provider_id: currentProviderId,
         };
 
+        perfTrace.start('session.create.fetch');
         const createRes = await fetch('/api/chat/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(createBody),
+          signal: controller.signal,
         });
+        perfTrace.end('session.create.fetch', { status: createRes.status });
 
         if (!createRes.ok) {
           const errBody = await createRes.json().catch(() => ({}));
@@ -495,226 +713,93 @@ export default function NewChatPage() {
         const { session }: SessionResponse = await createRes.json();
         sessionId = session.id;
         setCreatedSessionId(sessionId);
+        setStatusText('Preparing session...');
 
-        // Notify ChatListPanel to refresh immediately
-        window.dispatchEvent(new CustomEvent('session-created'));
-
-        // Add user message to UI — use displayOverride for chat bubble if provided
+        const clientMessageId = createClientMessageId();
+        const displayUserContent = displayOverride || content;
+        const contentWithFileMeta = files && files.length > 0
+          ? `<!--files:${JSON.stringify(files.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size })))}-->${displayUserContent}`
+          : displayUserContent;
         const userMessage: Message = {
-          id: 'temp-' + Date.now(),
+          id: clientMessageId,
           session_id: session.id,
           role: 'user',
-          content: displayOverride || content,
+          content: contentWithFileMeta,
           created_at: new Date().toISOString(),
           token_usage: null,
         };
         setMessages([userMessage]);
 
-        // Build thinking config from settings
-        const thinkingConfig = replyMode === 'deep' && thinkingMode && thinkingMode !== 'adaptive'
-          ? { type: thinkingMode }
-          : replyMode === 'deep' && thinkingMode === 'adaptive' ? { type: 'adaptive' } : undefined;
+        stagePendingSessionMessage({
+          sessionId: session.id,
+          clientMessageId,
+          content,
+          ...(files && files.length > 0 ? { files } : {}),
+          ...(mentions && mentions.length > 0 ? { mentions } : {}),
+          ...(systemPromptAppend ? { systemPromptAppend } : {}),
+          ...(displayOverride ? { displayOverride } : {}),
+          createdAt: Date.now(),
+        });
 
-        // Send the message via streaming API
-        const response = await fetch('/api/chat', {
+        perfTrace.record('session.warmup.kickoff', 'frontend');
+        // 中文注释：不要在首轮发送路径同步等待 warmup。空白页已有按 cwd/model
+        // 的预热进程，chat route 会按签名接管；这里最多做一次非阻塞接力。
+        fetch('/api/chat/warmup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            session_id: session.id,
-            content,
-            mode,
+            session_id: sessionId,
             model: currentModel,
             provider_id: currentProviderId,
-            reply_mode: replyMode,
-            ...(systemPromptAppend ? { systemPromptAppend } : {}),
-            ...(replyMode === 'deep' && selectedEffort ? { effort: selectedEffort } : {}),
-            ...(thinkingConfig ? { thinking: thinkingConfig } : {}),
-            ...(context1m ? { context_1m: true } : {}),
-            ...(displayOverride ? { displayOverride } : {}),
           }),
-          signal: controller.signal,
+        }).then(res => res.ok ? res.json() : null).then(data => {
+          if (data) {
+            console.log('[warmup] sendFirstMessage warmup completed:', {
+              warmed_up: data.warmed_up,
+              from_cache: data.from_cache,
+              session_id: data.warmup_session_id,
+              model: data.model,
+              mcp_count: data.mcp_count,
+            });
+          }
+        }).catch(() => {
+          // 预热失败不阻塞跳转
         });
 
-        if (!response.ok) {
-          const err = await response.json();
-          throw new Error(err.error || 'Failed to send message');
-        }
+        window.dispatchEvent(new CustomEvent('session-created'));
 
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('No response stream');
-
-        const decoder = new TextDecoder();
-        let accumulated = '';
-        let tokenUsage: TokenUsage | null = null;
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-
-            try {
-              const event: SSEEvent = JSON.parse(line.slice(6));
-
-              switch (event.type) {
-                case 'text': {
-                  accumulated += event.data;
-                  setStreamingContent(accumulated);
-                  break;
-                }
-                case 'tool_use': {
-                  try {
-                    const toolData = JSON.parse(event.data);
-                    setStreamingToolOutput('');
-                    setToolUses((prev) => {
-                      if (prev.some((t) => t.id === toolData.id)) return prev;
-                      return [...prev, { id: toolData.id, name: toolData.name, input: toolData.input }];
-                    });
-                  } catch { /* skip */ }
-                  break;
-                }
-                case 'tool_result': {
-                  try {
-                    const resultData = JSON.parse(event.data);
-                    setStreamingToolOutput('');
-                    setToolResults((prev) => [...prev, { tool_use_id: resultData.tool_use_id, content: resultData.content }]);
-                  } catch { /* skip */ }
-                  break;
-                }
-                case 'tool_output': {
-                  try {
-                    const parsed = JSON.parse(event.data);
-                    if (parsed._progress) {
-                      setStatusText(`Running ${parsed.tool_name}... (${Math.round(parsed.elapsed_time_seconds)}s)`);
-                      break;
-                    }
-                  } catch {
-                    // Not JSON — raw stderr output
-                  }
-                  setStreamingToolOutput((prev) => {
-                    const next = prev + (prev ? '\n' : '') + event.data;
-                    return next.length > 5000 ? next.slice(-5000) : next;
-                  });
-                  break;
-                }
-                case 'status': {
-                  try {
-                    const statusData = JSON.parse(event.data);
-                    if (statusData.session_id) {
-                      setStatusText(`Connected (${statusData.model || 'claude'})`);
-                      setTimeout(() => setStatusText(undefined), 2000);
-                    } else if (statusData.notification) {
-                      setStatusText(statusData.message || statusData.title || undefined);
-                    } else {
-                      setStatusText(event.data || undefined);
-                    }
-                  } catch {
-                    setStatusText(event.data || undefined);
-                  }
-                  break;
-                }
-                case 'result': {
-                  try {
-                    const resultData = JSON.parse(event.data);
-                    if (resultData.usage) tokenUsage = resultData.usage;
-                  } catch { /* skip */ }
-                  setStatusText(undefined);
-                  break;
-                }
-                case 'permission_request': {
-                  try {
-                    const permData: PermissionRequestEvent = JSON.parse(event.data);
-                    setPendingPermission(permData);
-                    setPermissionResolved(null);
-                    setPendingApprovalSessionId(sessionId);
-                  } catch {
-                    // skip malformed permission_request data
-                  }
-                  break;
-                }
-                case 'error': {
-                  // Try to parse structured error JSON from classifier
-                  let errorDisplay: string;
-                  try {
-                    const parsed = JSON.parse(event.data);
-                    if (parsed.category && parsed.userMessage) {
-                      errorDisplay = parsed.userMessage;
-                      if (parsed.actionHint) errorDisplay += `\n\n**What to do:** ${parsed.actionHint}`;
-                      if (parsed.details) errorDisplay += `\n\nDetails: ${parsed.details}`;
-                      // Add diagnostic guidance for provider/auth related errors
-                      const diagCategories = new Set([
-                        'AUTH_REJECTED', 'AUTH_FORBIDDEN', 'AUTH_STYLE_MISMATCH',
-                        'NO_CREDENTIALS', 'PROVIDER_NOT_APPLIED', 'MODEL_NOT_AVAILABLE',
-                        'NETWORK_UNREACHABLE', 'ENDPOINT_NOT_FOUND', 'PROCESS_CRASH',
-                        'CLI_NOT_FOUND', 'UNSUPPORTED_FEATURE',
-                      ]);
-                      if (diagCategories.has(parsed.category)) {
-                        errorDisplay += '\n\n💡 [Run Provider Diagnostics](/settings#providers) to troubleshoot, or check the [Provider Setup Guide](https://www.codepilot.sh/docs/providers).';
-                      }
-                    } else {
-                      errorDisplay = event.data;
-                    }
-                  } catch {
-                    errorDisplay = event.data;
-                  }
-                  accumulated += '\n\n**Error:** ' + errorDisplay;
-                  setStreamingContent(accumulated);
-                  break;
-                }
-                case 'done':
-                  break;
-              }
-            } catch {
-              // skip
-            }
-          }
-        }
-
-        // Add the completed assistant message
-        if (accumulated.trim()) {
-          const assistantMessage: Message = {
-            id: 'temp-assistant-' + Date.now(),
-            session_id: session.id,
-            role: 'assistant',
-            content: accumulated.trim(),
-            created_at: new Date().toISOString(),
-            token_usage: tokenUsage ? JSON.stringify(tokenUsage) : null,
-          };
-          setMessages((prev) => [...prev, assistantMessage]);
-        }
-
-        // Navigate to the session page after response is complete
+        perfTrace.finish('redirected', {
+          sessionId: session.id,
+          model: currentModel,
+          providerId: currentProviderId,
+        });
+        shouldResetUi = false;
         router.push(`/chat/${session.id}`);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') {
-          // User stopped - navigate to session if we have one
-          if (sessionId) {
-            router.push(`/chat/${sessionId}`);
-          }
+          perfTrace.finish('aborted', { sessionId });
         } else {
           const errMsg = error instanceof Error ? error.message : 'Unknown error';
+          perfTrace.finish('failed', { sessionId, message: errMsg });
           setErrorBanner({ message: t('error.sessionCreateFailed'), description: errMsg });
         }
       } finally {
-        setIsStreaming(false);
-        setStreamingContent('');
-        setToolUses([]);
-        setToolResults([]);
-        setStreamingToolOutput('');
-        setStatusText(undefined);
-        setPendingPermission(null);
-        setPermissionResolved(null);
-        setPendingApprovalSessionId('');
-        abortControllerRef.current = null;
+        if (shouldResetUi) {
+          setIsStreaming(false);
+          setStreamingContent('');
+          setStreamingThinkingContent('');
+          setToolUses([]);
+          setToolResults([]);
+          setStreamingToolOutput('');
+          setStatusText(undefined);
+          setPendingPermission(null);
+          setPermissionResolved(null);
+          setPendingApprovalSessionId('');
+          abortControllerRef.current = null;
+        }
       }
     },
-    [isStreaming, router, workingDir, mode, currentModel, currentProviderId, permissionProfile, replyMode, selectedEffort, thinkingMode, context1m, setPendingApprovalSessionId, t, hasProvider, modelReady]
+    [isStreaming, router, workingDir, mode, currentModel, currentProviderId, permissionProfile, setPendingApprovalSessionId, t, hasProvider, modelReady]
   );
 
   const handleCommand = useCallback((command: string) => {
@@ -783,6 +868,7 @@ export default function NewChatPage() {
         <MessageList
           messages={messages}
           streamingContent={streamingContent}
+          streamingThinkingContent={streamingThinkingContent}
           isStreaming={isStreaming}
           sessionId={createdSessionId}
           toolUses={toolUses}
@@ -826,17 +912,21 @@ export default function NewChatPage() {
         workingDirectory={workingDir}
         effort={selectedEffort}
         onEffortChange={setSelectedEffort}
-        replyMode={replyMode}
-        onReplyModeChange={setReplyMode}
         initialValue={prefillText}
       />
+      {/* 中文注释：与聊天页保持一致 —— 代码/计划模式、权限选择器已移除此处，只保留控制台日志快捷入口 */}
       <ChatComposerActionBar
-        left={<><ModeIndicator mode={mode} onModeChange={setMode} disabled={isStreaming} /><ImageGenToggle /></>}
-        center={
-          <ChatPermissionSelector
-            permissionProfile={permissionProfile}
-            onPermissionChange={setPermissionProfile}
-          />
+        right={
+          <button
+            onClick={() => {
+              setBottomPanelTab('console');
+              setBottomPanelOpen(!bottomPanelOpen);
+            }}
+            className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors h-4"
+          >
+            {bottomPanelOpen ? <CaretDown size={14} /> : <CaretRight size={14} />}
+            <span>控制台日志</span>
+          </button>
         }
       />
       <FolderPicker

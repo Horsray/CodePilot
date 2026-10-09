@@ -60,7 +60,7 @@ describe('Assistant Workspace', () => {
       const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
       assert.equal(state.onboardingComplete, false);
       assert.equal(state.lastHeartbeatDate, null);
-      assert.equal(state.schemaVersion, 5);
+      assert.equal(state.schemaVersion, 8);
     });
 
     it('should create all 4 template files', () => {
@@ -124,18 +124,18 @@ describe('Assistant Workspace', () => {
 
   describe('daily check-in respects onboarding state', () => {
     it('should not trigger check-in if onboarding not complete', () => {
-      const state = { onboardingComplete: false, lastHeartbeatDate: null, lastCheckInDate: null, heartbeatEnabled: false, schemaVersion: 5 };
+      const state = { onboardingComplete: false, lastHeartbeatDate: null, lastCheckInDate: null, heartbeatEnabled: false, schemaVersion: 8 };
       assert.equal(needsDailyCheckIn(state), false);
     });
 
     it('should trigger check-in if onboarding done and no check-in today', () => {
-      const state = { onboardingComplete: true, lastHeartbeatDate: '2020-01-01', lastCheckInDate: '2020-01-01', heartbeatEnabled: true, dailyCheckInEnabled: true, schemaVersion: 5 };
+      const state = { onboardingComplete: true, lastHeartbeatDate: '2020-01-01', lastCheckInDate: '2020-01-01', heartbeatEnabled: true, dailyCheckInEnabled: true, schemaVersion: 8 };
       assert.equal(needsDailyCheckIn(state), true);
     });
 
     it('should not trigger check-in if already done today', () => {
       const today = getLocalDateString();
-      const state = { onboardingComplete: true, lastHeartbeatDate: today, lastCheckInDate: today, heartbeatEnabled: true, dailyCheckInEnabled: true, schemaVersion: 5 };
+      const state = { onboardingComplete: true, lastHeartbeatDate: today, lastCheckInDate: today, heartbeatEnabled: true, dailyCheckInEnabled: true, schemaVersion: 8 };
       assert.equal(needsDailyCheckIn(state), false);
     });
 
@@ -146,7 +146,7 @@ describe('Assistant Workspace', () => {
     });
 
     it('should not trigger check-in if heartbeatEnabled is not set (default off)', () => {
-      const state = { onboardingComplete: true, lastHeartbeatDate: '2020-01-01', lastCheckInDate: '2020-01-01', heartbeatEnabled: false, schemaVersion: 5 };
+      const state = { onboardingComplete: true, lastHeartbeatDate: '2020-01-01', lastCheckInDate: '2020-01-01', heartbeatEnabled: false, schemaVersion: 8 };
       assert.equal(needsDailyCheckIn(state), false);
     });
   });
@@ -268,20 +268,20 @@ describe('Assistant Workspace', () => {
       migrateStateV1ToV2(workDir);
 
       const state = loadState(workDir);
-      assert.equal(state.schemaVersion, 5);
+      assert.equal(state.schemaVersion, 8);
       assert.ok(fs.existsSync(path.join(workDir, 'memory', 'daily')));
       assert.ok(fs.existsSync(path.join(workDir, 'Inbox')));
     });
 
-    it('should not re-migrate v5 state', () => {
+    it('should not re-migrate v6 state', () => {
       initializeWorkspace(workDir);
       const state = loadState(workDir);
-      assert.equal(state.schemaVersion, 5);
+      assert.equal(state.schemaVersion, 8);
 
       // Should not throw or change anything
       migrateStateV1ToV2(workDir);
       const reloaded = loadState(workDir);
-      assert.equal(reloaded.schemaVersion, 5);
+      assert.equal(reloaded.schemaVersion, 8);
     });
   });
 
@@ -433,6 +433,44 @@ describe('incremental indexWorkspace', () => {
     indexWorkspace(wsDir);
     const result = indexWorkspace(wsDir, { force: true });
     assert.equal(result.fileCount, 2);
+  });
+});
+
+describe('scheduleWorkspaceIndex', () => {
+  const { scheduleWorkspaceIndex, loadManifest } = require('../../lib/workspace-indexer') as typeof import('../../lib/workspace-indexer');
+  let wsDir: string;
+
+  beforeEach(() => {
+    wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'idx-bg-test-'));
+    fs.writeFileSync(path.join(wsDir, 'note1.md'), '# Note 1\nHello', 'utf-8');
+  });
+
+  afterEach(() => {
+    fs.rmSync(wsDir, { recursive: true, force: true });
+  });
+
+  it('should schedule indexing asynchronously without blocking the caller', async () => {
+    const originalSetTimeout = global.setTimeout;
+    let scheduledCallback: (() => void) | null = null;
+
+    global.setTimeout = ((fn: (...args: any[]) => void) => {
+      scheduledCallback = () => fn();
+      return { unref() {} } as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+
+    try {
+      // 中文注释：功能名称「后台索引调度测试」，用法是拦截 setTimeout，
+      // 验证 scheduleWorkspaceIndex 只登记异步任务，不在调用点同步执行索引。
+      scheduleWorkspaceIndex(wsDir);
+      assert.ok(scheduledCallback, 'should register a background indexing callback');
+      assert.equal(loadManifest(wsDir).length, 0);
+
+      const runScheduled = scheduledCallback as () => void;
+      runScheduled();
+      assert.equal(loadManifest(wsDir).length, 1);
+    } finally {
+      global.setTimeout = originalSetTimeout;
+    }
   });
 });
 

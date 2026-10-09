@@ -2,15 +2,28 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useTheme } from "next-themes";
-import { X, Copy, Check, SpinnerGap } from "@/components/ui/icon";
+import {
+  X,
+  Copy,
+  Check,
+  SpinnerGap,
+  PencilSimple,
+  FloppyDisk,
+  DeviceMobile,
+} from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
-import { useThemeFamily } from "@/lib/theme/context";
-import { resolveCodeTheme, resolveHljsStyle } from "@/lib/theme/code-themes";
+import { resolveHljsStyle } from "@/lib/theme/code-themes";
 import { usePanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview as FilePreviewType } from "@/types";
+// We'll stub this out for now until the artifact-export module is fully ported
+const downloadArtifactImage = async (html: string, ext: string, filename: string) => {
+  console.log("downloadArtifactImage stub:", { ext, filename });
+  alert("Image export feature is coming soon!");
+};
 
 // Lazy-load Streamdown and plugins — only loaded when rendered markdown is needed
 let _StreamdownComponent: typeof import("streamdown").Streamdown | null = null;
@@ -20,13 +33,13 @@ let _streamdownPromise: Promise<void> | null = null;
 function loadStreamdown(): Promise<void> {
   if (_streamdownPromise) return _streamdownPromise;
   _streamdownPromise = Promise.all([
-    import("streamdown"),
+    import("streamdown").then(sd => sd.Streamdown as any),
     import("@streamdown/cjk"),
     import("@streamdown/code"),
     import("@streamdown/math"),
     import("@streamdown/mermaid"),
   ]).then(([sd, cjkMod, codeMod, mathMod, mermaidMod]) => {
-    _StreamdownComponent = sd.Streamdown;
+    _StreamdownComponent = sd;
     _streamdownPlugins = {
       cjk: cjkMod.cjk,
       code: codeMod.code,
@@ -50,6 +63,12 @@ const RENDERABLE_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".avif", ".ico"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".webm", ".mkv", ".avi"]);
 const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".flac", ".aac"]);
+
+import dynamic from 'next/dynamic';
+
+const SandpackPreview = dynamic(() => import('@/components/editor/SandpackPreview').then(mod => mod.SandpackPreview), {
+  ssr: false,
+});
 
 function getExtension(filePath: string): string {
   const dot = filePath.lastIndexOf(".");
@@ -85,7 +104,13 @@ const PREVIEW_MIN_WIDTH = 320;
 const PREVIEW_MAX_WIDTH = 800;
 const PREVIEW_DEFAULT_WIDTH = 480;
 
-export function PreviewPanel() {
+interface PreviewPanelProps {
+  standalone?: boolean;
+  filePath?: string;
+  onClose?: () => void;
+}
+
+export function PreviewPanel({ standalone = false, filePath: filePathOverride, onClose }: PreviewPanelProps = {}) {
   const { resolvedTheme } = useTheme();
   const { workingDirectory, sessionId, previewFile, setPreviewFile, previewViewMode, setPreviewViewMode, setPreviewOpen } = usePanel();
   const isDark = resolvedTheme === "dark";
@@ -94,15 +119,30 @@ export function PreviewPanel() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [width, setWidth] = useState(PREVIEW_DEFAULT_WIDTH);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState("");
+  const [isExporting, setIsExporting] = useState(false);
 
   const handleResize = useCallback((delta: number) => {
-    // Left-side handle: dragging left (negative delta) = wider
     setWidth((w) => Math.min(PREVIEW_MAX_WIDTH, Math.max(PREVIEW_MIN_WIDTH, w - delta)));
   }, []);
 
-  const filePath = previewFile || "";
+  const handleExportImage = async () => {
+    if (!preview?.content) return;
+    setIsExporting(true);
+    try {
+      await downloadArtifactImage(preview.content, getExtension(filePath) || ".html", filePath);
+    } catch (e) {
+      console.error("Export image failed:", e);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const filePath = filePathOverride || previewFile || "";
 
   useEffect(() => {
+    setIsEditing(false); // Reset editing mode when file changes
     if (!filePath || isMediaPreview(filePath)) {
       setLoading(false);
       return;
@@ -114,7 +154,7 @@ export function PreviewPanel() {
       setError(null);
       try {
         const res = await fetch(
-          `/api/files/preview?path=${encodeURIComponent(filePath)}&maxLines=500${workingDirectory ? `&baseDir=${encodeURIComponent(workingDirectory)}` : ''}`
+          `/api/files/preview?path=${encodeURIComponent(filePath)}${workingDirectory ? `&baseDir=${encodeURIComponent(workingDirectory)}` : ''}`
         );
         if (!res.ok) {
           const data = await res.json();
@@ -123,6 +163,7 @@ export function PreviewPanel() {
         const data = await res.json();
         if (!cancelled) {
           setPreview(data.preview);
+          setEditedContent(data.preview.content);
         }
       } catch (err) {
         if (!cancelled) {
@@ -142,13 +183,41 @@ export function PreviewPanel() {
   }, [filePath, workingDirectory]);
 
   const handleCopyContent = async () => {
-    const text = preview?.content || filePath;
+    const text = isEditing ? editedContent : (preview?.content || filePath);
     await navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleSave = async () => {
+    if (!preview) return;
+    try {
+      const res = await fetch("/api/files/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: filePath,
+          content: editedContent,
+          cwd: workingDirectory,
+          sessionId,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || "Save failed");
+      }
+      setPreview((p) => (p ? { ...p, content: editedContent } : p));
+      setIsEditing(false);
+    } catch (e) {
+      console.error("Save error:", e);
+    }
+  };
+
   const handleClose = () => {
+    if (onClose) {
+      onClose();
+      return;
+    }
     setPreviewFile(null);
     setPreviewOpen(false);
   };
@@ -175,9 +244,12 @@ export function PreviewPanel() {
     : '';
 
   return (
-    <div className="flex h-full shrink-0 overflow-hidden">
-      <ResizeHandle side="left" onResize={handleResize} />
-      <div className="flex h-full flex-1 flex-col overflow-hidden border-r border-border/40 bg-background" style={{ width }}>
+    <div className="flex h-full overflow-hidden">
+      {!standalone && <ResizeHandle side="left" onResize={handleResize} />}
+      <div
+        className="flex h-full flex-1 flex-col overflow-hidden bg-transparent"
+        style={standalone ? undefined : { width }}
+      >
       {/* Header */}
       <div className="flex h-10 shrink-0 items-center gap-2 px-3">
         <div className="min-w-0 flex-1">
@@ -188,6 +260,25 @@ export function PreviewPanel() {
           <ViewModeToggle value={previewViewMode} onChange={setPreviewViewMode} />
         )}
 
+        {!isMedia && preview && (
+          <>
+              {isEditing ? (
+                <Button variant="ghost" size="icon-sm" onClick={handleSave} disabled={isExporting} className="text-primary">
+                  {isExporting ? <SpinnerGap size={14} className="animate-spin" /> : <FloppyDisk size={14} />}
+                  <span className="sr-only">Save</span>
+                </Button>
+              ) : (
+              <Button variant="ghost" size="icon-sm" onClick={() => {
+                setEditedContent(preview.content);
+                setIsEditing(true);
+              }}>
+                <PencilSimple size={14} />
+                <span className="sr-only">Edit</span>
+              </Button>
+            )}
+          </>
+        )}
+
         {!isMedia && (
           <Button variant="ghost" size="icon-sm" onClick={handleCopyContent}>
             {copied ? (
@@ -196,6 +287,13 @@ export function PreviewPanel() {
               <Copy size={14} />
             )}
             <span className="sr-only">Copy content</span>
+          </Button>
+        )}
+
+        {isHtml(filePath) && (
+          <Button variant="ghost" size="icon-sm" onClick={handleExportImage} disabled={isExporting || !preview}>
+            {isExporting ? <SpinnerGap size={14} className="animate-spin" /> : <DeviceMobile size={14} />}
+            <span className="sr-only">Export Image</span>
           </Button>
         )}
 
@@ -230,10 +328,30 @@ export function PreviewPanel() {
             <p className="text-sm text-destructive">{error}</p>
           </div>
         ) : preview ? (
-          previewViewMode === "rendered" && canRender ? (
-            <RenderedView content={preview.content} filePath={filePath} />
+          isEditing ? (
+            <div className="h-full flex flex-col">
+              <textarea
+                value={editedContent}
+                onChange={(e) => setEditedContent(e.target.value)}
+                className="flex-1 w-full p-4 font-mono text-xs bg-muted/5 focus:outline-none resize-none border-0"
+                spellCheck={false}
+                autoFocus
+              />
+              <div className="p-2 border-t border-border/30 bg-muted/10 flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)} className="h-7 text-[10px]">
+                  Cancel
+                </Button>
+                <Button variant="default" size="sm" onClick={handleSave} className="h-7 text-[10px]">
+                  Save Changes
+                </Button>
+              </div>
+            </div>
           ) : (
-            <SourceView preview={preview} isDark={isDark} />
+            previewViewMode === "rendered" && canRender ? (
+              <RenderedView content={preview.content} filePath={filePath} />
+            ) : (
+              <SourceView preview={preview} isDark={isDark} />
+            )
           )
         ) : null}
       </div>
@@ -280,11 +398,9 @@ function ViewModeToggle({
   );
 }
 
-/** Resolve hljs style from the current theme family + mode. */
+/** 中文注释：多主题家族已移除，文档代码高亮固定使用默认亮/暗配色。 */
 function useDocCodeTheme(isDark: boolean) {
-  const { family, families } = useThemeFamily();
-  const codeTheme = resolveCodeTheme(families, family);
-  return resolveHljsStyle(codeTheme, isDark);
+  return resolveHljsStyle(undefined, isDark);
 }
 
 /** Source code view using react-syntax-highlighter */
@@ -376,6 +492,16 @@ function RenderedView({
         sandbox=""
         className="h-full w-full border-0"
         title={t('docPreview.htmlPreview')}
+      />
+    );
+  }
+
+  const ext = getExtension(filePath);
+  if (ext === '.jsx' || ext === '.tsx' || ext === '.vue') {
+    return (
+      <SandpackPreview 
+        filePath={filePath} 
+        content={content} 
       />
     );
   }

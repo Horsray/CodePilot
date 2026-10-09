@@ -2,10 +2,37 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import type { ProviderModelGroup } from '@/types';
 
 // Default Claude model options — used as fallback when API is unavailable
-export const DEFAULT_MODEL_OPTIONS = [
-  { value: 'sonnet', label: 'Sonnet 4.6' },
-  { value: 'opus', label: 'Opus 4.6' },
-  { value: 'haiku', label: 'Haiku 4.5' },
+// 中文注释：模型描述对齐 cc-haha modelCatalog 的官方描述文案。
+export interface DefaultModelOption {
+  value: string;
+  label: string;
+  description?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: string[];
+}
+
+export const DEFAULT_MODEL_OPTIONS: DefaultModelOption[] = [
+  {
+    value: 'sonnet',
+    label: 'Sonnet 4.6',
+    description: 'Most efficient for everyday tasks',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+  },
+  {
+    value: 'opus',
+    label: 'Opus 4.7',
+    description: 'Most capable for ambitious work',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
+    value: 'haiku',
+    label: 'Haiku 4.5',
+    description: 'Fastest for quick answers',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high'],
+  },
 ];
 
 export interface UseProviderModelsReturn {
@@ -22,6 +49,7 @@ export interface UseProviderModelsReturn {
 export function useProviderModels(
   providerId?: string,
   modelName?: string,
+  includeMedia?: boolean,
 ): UseProviderModelsReturn {
   const [providerGroups, setProviderGroups] = useState<ProviderModelGroup[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState<string>('');
@@ -29,7 +57,7 @@ export function useProviderModels(
   const [globalDefaultProvider, setGlobalDefaultProvider] = useState<string | undefined>();
 
   const fetchAll = useCallback(() => {
-    fetch('/api/providers/models')
+    fetch(`/api/providers/models?includeMedia=${!!includeMedia}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.groups && data.groups.length > 0) {

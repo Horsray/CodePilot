@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import path from 'path';
-import type { GitStatus, GitChangedFile, GitBranch, GitLogEntry, GitCommitDetail, GitWorktree } from '@/types';
+import type { GitStatus, GitChangedFile, GitBranch, GitLogEntry, GitCommitDetail, GitWorktree, GitStashEntry } from '@/types';
 
 function runGit(args: string[], opts: { cwd: string; timeoutMs?: number }): Promise<string> {
   if (!path.isAbsolute(opts.cwd)) {
@@ -11,12 +11,7 @@ function runGit(args: string[], opts: { cwd: string; timeoutMs?: number }): Prom
       cwd: opts.cwd,
       timeout: opts.timeoutMs ?? 10000,
       maxBuffer: 10 * 1024 * 1024,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-        // Ensure SSH agent is available for push/pull/fetch
-        SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK || '',
-      },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
     }, (err, stdout, stderr) => {
       if (err) {
         const msg = stderr?.trim() || err.message;
@@ -81,6 +76,42 @@ export async function getStatus(cwd: string): Promise<GitStatus> {
     // no upstream
   }
 
+  // Get diff numstat for additions/deletions counts
+  const stagedNumstat = new Map<string, { additions: number; deletions: number }>();
+  const unstagedNumstat = new Map<string, { additions: number; deletions: number }>();
+
+  try {
+    // Staged changes: git diff --cached --numstat
+    const stagedOutput = await runGit(['diff', '--cached', '--numstat'], { cwd });
+    for (const line of stagedOutput.split('\n')) {
+      if (!line) continue;
+      const parts = line.split('\t');
+      if (parts.length >= 3) {
+        const additions = parts[0] === '-' ? 0 : parseInt(parts[0], 10) || 0;
+        const deletions = parts[1] === '-' ? 0 : parseInt(parts[1], 10) || 0;
+        stagedNumstat.set(parts[2], { additions, deletions });
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    // Unstaged changes: git diff --numstat
+    const unstagedOutput = await runGit(['diff', '--numstat'], { cwd });
+    for (const line of unstagedOutput.split('\n')) {
+      if (!line) continue;
+      const parts = line.split('\t');
+      if (parts.length >= 3) {
+        const additions = parts[0] === '-' ? 0 : parseInt(parts[0], 10) || 0;
+        const deletions = parts[1] === '-' ? 0 : parseInt(parts[1], 10) || 0;
+        unstagedNumstat.set(parts[2], { additions, deletions });
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   // Get changed files using porcelain v2
   const changedFiles: GitChangedFile[] = [];
   try {
@@ -99,17 +130,23 @@ export async function getStatus(cwd: string): Promise<GitStatus> {
         const worktreeStatus = xy[1];
 
         if (indexStatus !== '.' && indexStatus !== '?') {
+          const stats = stagedNumstat.get(pathPart.trim());
           changedFiles.push({
             path: pathPart.trim(),
             status: parseStatusChar(indexStatus),
             staged: true,
+            additions: stats?.additions,
+            deletions: stats?.deletions,
           });
         }
         if (worktreeStatus !== '.' && worktreeStatus !== '?') {
+          const stats = unstagedNumstat.get(pathPart.trim());
           changedFiles.push({
             path: pathPart.trim(),
             status: parseStatusChar(worktreeStatus),
             staged: false,
+            additions: stats?.additions,
+            deletions: stats?.deletions,
           });
         }
       } else if (line.startsWith('? ')) {
@@ -151,7 +188,7 @@ function parseStatusChar(c: string): GitChangedFile['status'] {
 
 export async function getBranches(cwd: string): Promise<GitBranch[]> {
   const output = await runGit(
-    ['branch', '-a', '--format=%(refname:short)\t%(upstream:short)\t%(worktreepath)'],
+    ['branch', '-a', '--format=%(refname:short)\t%(upstream:short)\t%(worktreepath)\t%(committerdate:iso8601)\t%(objectname:short)'],
     { cwd }
   );
 
@@ -167,7 +204,7 @@ export async function getBranches(cwd: string): Promise<GitBranch[]> {
   const branches: GitBranch[] = [];
   for (const line of output.split('\n')) {
     if (!line.trim()) continue;
-    const [name, upstream, worktreePath] = line.split('\t');
+    const [name, upstream, worktreePath, lastCommitDate, commitSha] = line.split('\t');
     const trimmedName = name.trim();
     // A branch is remote only if it starts with "origin/" (or other remote prefix)
     // AND is NOT in the local branch list
@@ -177,13 +214,15 @@ export async function getBranches(cwd: string): Promise<GitBranch[]> {
       isRemote,
       upstream: upstream?.trim() || '',
       worktreePath: worktreePath?.trim() || '',
+      lastCommitDate: lastCommitDate?.trim() || '',
+      commitSha: commitSha?.trim() || '',
     });
   }
 
   return branches;
 }
 
-export async function checkout(cwd: string, branch: string): Promise<void> {
+export async function checkout(cwd: string, branch: string, create = false): Promise<void> {
   // Validate branch name — reject suspicious characters
   if (!/^[\w.\-/]+$/.test(branch)) {
     throw new Error(`Invalid branch name: ${branch}`);
@@ -195,7 +234,20 @@ export async function checkout(cwd: string, branch: string): Promise<void> {
     throw new Error('Cannot checkout: dirty working tree. Commit or stash changes first.');
   }
 
-  await runGit(['checkout', branch], { cwd, timeoutMs: 15000 });
+  if (create) {
+    await runGit(['checkout', '-b', branch], { cwd, timeoutMs: 15000 });
+  } else {
+    await runGit(['checkout', branch], { cwd, timeoutMs: 15000 });
+  }
+}
+
+export async function deleteBranch(cwd: string, branch: string, force = false): Promise<void> {
+  // Validate branch name — reject suspicious characters
+  if (!/^[\w.\-/]+$/.test(branch)) {
+    throw new Error(`Invalid branch name: ${branch}`);
+  }
+
+  await runGit(['branch', force ? '-D' : '-d', branch], { cwd, timeoutMs: 10000 });
 }
 
 export async function getLog(cwd: string, limit = 50): Promise<GitLogEntry[]> {
@@ -224,9 +276,7 @@ export async function getLog(cwd: string, limit = 50): Promise<GitLogEntry[]> {
 }
 
 export async function commit(cwd: string, message: string): Promise<string> {
-  // Stage all changes
-  await runGit(['add', '-A'], { cwd, timeoutMs: 15000 });
-
+  // Commit only explicitly-staged changes (matches cc-haha's stage→commit workflow).
   // Check if there are staged changes.
   // `git diff --cached --quiet` exits 0 = clean, exits 1 = has staged changes.
   // runGit rejects on any non-zero exit. We treat rejection as "has changes".
@@ -277,56 +327,6 @@ export async function push(cwd: string): Promise<void> {
       }
 
       // Provide clearer error messages for common failures
-      if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
-        throw new Error('无法连接到远程仓库，请检查网络连接');
-      }
-      if (msg.includes('Authentication failed') || msg.includes('Permission denied') || msg.includes('could not read Username')) {
-        throw new Error('认证失败，请检查 SSH key 或登录凭证是否配置正确');
-      }
-      if (msg.includes('rejected') || msg.includes('non-fast-forward')) {
-        throw new Error('远程有新的提交，请先拉取合并再推送');
-      }
-      if (msg.includes('timed out') || msg.includes('SIGTERM')) {
-        throw new Error('推送超时，请检查网络或稍后重试');
-      }
-
-      throw err;
-    }
-  }
-}
-
-/**
- * Push current HEAD to a specific remote branch.
- * If targetBranch differs from current branch, creates/updates the remote branch.
- * Workflow: local HEAD -> origin/<targetBranch>
- */
-export async function pushToBranch(cwd: string, targetBranch: string): Promise<void> {
-  // Validate branch name
-  if (!/^[\w.\-/]+$/.test(targetBranch)) {
-    throw new Error(`Invalid branch name: ${targetBranch}`);
-  }
-
-  const PUSH_TIMEOUT = 120000;
-  const MAX_RETRIES = 2;
-  const localBranch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      // Push local branch to the specified remote branch: git push origin localBranch:targetBranch
-      await runGit(
-        ['-c', 'http.version=HTTP/1.1', 'push', '-u', 'origin', `${localBranch}:${targetBranch}`],
-        { cwd, timeoutMs: PUSH_TIMEOUT },
-      );
-      return;
-    } catch (err) {
-      if (!(err instanceof Error)) throw err;
-      const msg = err.message;
-
-      // HTTP2 / network flake — retry
-      if (attempt < MAX_RETRIES && (msg.includes('HTTP2') || msg.includes('HTTP/2') || msg.includes('framing layer') || msg.includes('unexpected disconnect'))) {
-        continue;
-      }
-
       if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
         throw new Error('无法连接到远程仓库，请检查网络连接');
       }
@@ -609,25 +609,44 @@ export async function stashSave(cwd: string, message?: string): Promise<string> 
   return output;
 }
 
-export async function stashPop(cwd: string): Promise<string> {
-  const output = await runGit(['stash', 'pop'], { cwd, timeoutMs: 10000 });
+export async function stashPop(cwd: string, index?: number): Promise<string> {
+  if (index !== undefined && (!Number.isInteger(index) || index < 0)) {
+    throw new Error(`Invalid stash index: ${index}`);
+  }
+  const ref = index !== undefined ? `stash@{${index}}` : 'stash@{0}';
+  const output = await runGit(['stash', 'pop', ref], { cwd, timeoutMs: 10000 });
   return output;
 }
 
-export async function stashList(cwd: string): Promise<Array<{ index: number; message: string }>> {
-  const output = await runGit(['stash', 'list'], { cwd, timeoutMs: 10000 });
+export async function stashApply(cwd: string, index: number): Promise<string> {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`Invalid stash index: ${index}`);
+  }
+  const output = await runGit(['stash', 'apply', `stash@{${index}}`], { cwd, timeoutMs: 10000 });
+  return output;
+}
 
-  const entries: Array<{ index: number; message: string }> = [];
+export async function stashList(cwd: string): Promise<GitStashEntry[]> {
+  // Use --format with a NUL delimiter so messages containing newlines don't break parsing.
+  const output = await runGit(
+    ['stash', 'list', '--format=%gd%x00%gs%x00%ci'],
+    { cwd, timeoutMs: 10000 }
+  );
+
+  const entries: GitStashEntry[] = [];
   for (const line of output.split('\n')) {
     if (!line.trim()) continue;
-    // Format: stash@{0}: WIP on main: abc1234 some message
-    const match = line.match(/^stash@\{(\d+)\}:\s*(.+)$/);
-    if (match) {
-      entries.push({
-        index: parseInt(match[1], 10),
-        message: match[2],
-      });
-    }
+    const [refname, subject, timestamp] = line.split('\x00');
+    const indexMatch = refname?.match(/^stash@\{(\d+)\}/);
+    if (!indexMatch) continue;
+    const index = parseInt(indexMatch[1], 10);
+
+    // subject like "WIP on main: abc1234 some message" or "On main: message"
+    const branchMatch = subject?.match(/^(?:WIP )?on ([^:]+):/i);
+    const branch = branchMatch ? branchMatch[1].trim() : '';
+    const message = subject?.replace(/^(?:WIP )?on [^:]+:\s*/i, '').trim() || subject?.trim() || 'WIP';
+
+    entries.push({ index, message, branch, timestamp: timestamp?.trim() || '' });
   }
   return entries;
 }
@@ -637,4 +656,54 @@ export async function stashDrop(cwd: string, index: number): Promise<void> {
     throw new Error(`Invalid stash index: ${index}`);
   }
   await runGit(['stash', 'drop', `stash@{${index}}`], { cwd, timeoutMs: 10000 });
+}
+
+/**
+ * Push current HEAD to a specific remote branch.
+ * If targetBranch differs from current branch, creates/updates the remote branch.
+ * Workflow: local HEAD -> origin/<targetBranch>
+ */
+export async function pushToBranch(cwd: string, targetBranch: string): Promise<void> {
+  // Validate branch name
+  if (!/^[\w.\-/]+$/.test(targetBranch)) {
+    throw new Error(`Invalid branch name: ${targetBranch}`);
+  }
+
+  const PUSH_TIMEOUT = 120000;
+  const MAX_RETRIES = 2;
+  const localBranch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 })).trim();
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Push local branch to the specified remote branch: git push origin localBranch:targetBranch
+      await runGit(
+        ['-c', 'http.version=HTTP/1.1', 'push', '-u', 'origin', `${localBranch}:${targetBranch}`],
+        { cwd, timeoutMs: PUSH_TIMEOUT },
+      );
+      return;
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      const msg = err.message;
+
+      // HTTP2 / network flake — retry
+      if (attempt < MAX_RETRIES && (msg.includes('HTTP2') || msg.includes('HTTP/2') || msg.includes('framing layer') || msg.includes('unexpected disconnect'))) {
+        continue;
+      }
+
+      if (msg.includes('Could not resolve hostname') || msg.includes('unable to access')) {
+        throw new Error('无法连接到远程仓库，请检查网络连接');
+      }
+      if (msg.includes('Authentication failed') || msg.includes('Permission denied') || msg.includes('could not read Username')) {
+        throw new Error('认证失败，请检查 SSH key 或登录凭证是否配置正确');
+      }
+      if (msg.includes('rejected') || msg.includes('non-fast-forward')) {
+        throw new Error('远程有新的提交，请先拉取合并再推送');
+      }
+      if (msg.includes('timed out') || msg.includes('SIGTERM')) {
+        throw new Error('推送超时，请检查网络或稍后重试');
+      }
+
+      throw err;
+    }
+  }
 }

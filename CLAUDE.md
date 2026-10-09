@@ -1,8 +1,32 @@
 # CLAUDE.md
 
 CodePilot — 多模型 AI Agent 桌面客户端，基于 Electron + Next.js。
+本项目是https://github.com/op7418/CodePilot的fork分支版本
+与原始版本的主要差异在：
+- 新增了对cc switch的支持，用以切换本地/api/中转平台的模型调用
+- 新增了对中转平台的媒体渠道生成支持
+- 修改了文件树功能的ui和交互
+- 新增了增强的Git面板（暂存、diff、stash、分支创建、AI commit等）
+
+## Fork 同步须知
+
+- 处理 upstream 同步、官方更新合并、冲突解决前，必须先阅读 `fork-sync-playbook.md`
+- 同步前必须同时查看 `fork-ownership-map.json`，并优先运行 `npm run sync:report`
+- 同步时同时参考 `fork-patches.manifest.json`，并优先运行 `npm run sync:bootstrap`
+- 合并目标是“优先继承官方演进，再保留并适配 fork 定制能力”
+- 不允许用整文件覆盖的方式粗暴解决冲突
+
 
 > 架构细节见 [ARCHITECTURE.md](./ARCHITECTURE.md)，本文件只包含规则和流程。
+
+## 文件索引优先查询规则
+
+**执行任何涉及代码定位的任务前，必须先读取 `FILEMAP.md`。**
+
+- 该文件是项目结构的快速索引表，包含：功能→文件映射、页面→组件映射、UI 组件→文件映射、API 路由速查、核心 lib 文件速查
+- **查询顺序**：先读 `FILEMAP.md` 定位目标文件 → 再读具体文件了解实现细节
+- 只有当索引中找不到目标时，才使用 Grep/Glob 在全项目中搜索
+- 每次修改了页面、组件、API 路由、lib 文件的新增或删除后，**必须同步更新 `FILEMAP.md`**
 
 ## 开发规则
 

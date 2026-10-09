@@ -2,13 +2,29 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import type { IPty } from 'node-pty';
+import { app } from 'electron';
+import path from 'path';
 
 let pty: typeof import('node-pty') | null = null;
 
 function getPty() {
   if (!pty) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    pty = require('node-pty');
+    try {
+      // 优先尝试从 asar.unpacked 目录加载
+      const asarPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'node-pty');
+      if (fs.existsSync(asarPath)) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        pty = require(asarPath);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        pty = require('node-pty');
+      }
+    } catch (e) {
+      console.error('[terminal-manager] Failed to load node-pty', e);
+      // fallback...
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      pty = require('node-pty');
+    }
   }
   return pty as typeof import('node-pty');
 }
@@ -109,7 +125,13 @@ export class TerminalManager {
       console.error('[terminal-manager] node-pty spawn failed, fallback to child_process.spawn:', err);
     }
 
-    const child = spawn(shell, shellArgs, {
+    let fallbackShell = shell;
+    let fallbackArgs = shellArgs;
+    
+    // For non-PTY fallback, just use -i to force interactive shell
+    fallbackArgs = ['-i'];
+
+    const child = spawn(fallbackShell, fallbackArgs, {
       cwd: resolvedCwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -147,7 +169,20 @@ export class TerminalManager {
       (terminal.process as IPty).write(data);
       return;
     }
-    (terminal.process as ChildProcessWithoutNullStreams).stdin.write(data);
+    
+    // Fallback: manually echo typed characters because a raw pipe shell won't echo them.
+    let echoData = data;
+    let writeData = data;
+    
+    if (data === '\r') {
+      echoData = '\r\n'; // Echo newline
+      writeData = '\n';  // Send LF to shell
+    } else if (data === '\x7f' || data === '\b') {
+      echoData = '\b \b'; // Visually erase character
+    }
+    
+    this.onData?.(id, echoData);
+    (terminal.process as ChildProcessWithoutNullStreams).stdin.write(writeData);
   }
 
   resize(id: string, cols: number, rows: number): void {

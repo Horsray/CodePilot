@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  createPtySession,
+  ensurePtySession,
+  ensurePtyOutputBuffered,
   writePtySession,
   resizePtySession,
   killPtySession,
@@ -8,10 +9,8 @@ import {
   listPtySessions,
 } from '@/lib/pty-manager';
 import {
-  appendTerminalOutput,
   clearTerminalOutput,
   drainTerminalOutput,
-  resetTerminalOutput,
 } from '@/lib/terminal-output-store';
 
 export const runtime = 'nodejs';
@@ -27,23 +26,14 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, id, cwd, cols, rows, data } = body;
+    const { action, id, cwd, cols, rows, data, customId } = body;
 
     switch (action) {
       case 'create': {
-        if (!id) {
-          return NextResponse.json({ error: 'id is required' }, { status: 400 });
-        }
-        const session = createPtySession(id, cwd || process.cwd(), cols || 120, rows || 30);
-
-        // Wire up output buffering
-        resetTerminalOutput(id);
-        session.process.onData((chunk: string) => {
-          appendTerminalOutput(id, chunk);
-        });
-        session.process.onExit(({ exitCode }: { exitCode: number }) => {
-          appendTerminalOutput(id, `\r\n[Process exited with code ${exitCode}]\r\n`);
-        });
+        // Allow custom ID for AI tools
+        const sessionId = customId || id || 'default';
+        const session = ensurePtySession(sessionId, cwd || process.cwd(), cols || 120, rows || 30);
+        ensurePtyOutputBuffered(sessionId);
 
         return NextResponse.json({ success: true, id: session.id, cwd: session.cwd });
       }

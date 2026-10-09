@@ -15,23 +15,21 @@ import {
   inferProtocolFromLegacy,
   inferAuthStyleFromLegacy,
   getDefaultModelsForProvider,
+  getEffectiveProviderProtocol,
   findPresetForLegacy,
 } from './provider-catalog';
 import {
   getProvider,
   getDefaultProviderId,
   getActiveProvider,
+  getAllProviders,
   getSetting,
-  setSetting,
   getModelsForProvider,
   getProviderOptions,
 } from './db';
-import {
-  readCCSwitchConfig,
-  readCCSwitchClaudeSettings,
-  type CCSwitchConfig,
-  type CCSwitchResolvedConfig,
-} from './cc-switch';
+import { ensureTokenFresh } from './openai-oauth-manager';
+import { CODEX_API_ENDPOINT } from './openai-oauth';
+import { hasClaudeSettingsCredentials, readClaudeSettingsEnv, readClaudeSettingsCredentials } from './claude-settings';
 
 // ── Resolution result ───────────────────────────────────────────
 
@@ -60,6 +58,15 @@ export interface ResolvedProvider {
   availableModels: CatalogModel[];
   /** Settings sources for Claude Code SDK */
   settingSources: string[];
+  /** Parent tier model — for multi_head, the target model for the parent's tier.
+   *  Used by toClaudeCodeEnv() to set ANTHROPIC_MODEL correctly so SDK
+   *  subprocesses and their sub-agents use the right model instead of the
+   *  multi_head default. */
+  parentTierModel?: string;
+  /** Internal: true when resolved as OpenAI OAuth (Codex API) virtual provider */
+  _openaiOAuth?: boolean;
+  /** Internal: true when original provider was multi_head (preserved across recursive resolution) */
+  _isMultiHead?: boolean;
 }
 
 // ── Public API ──────────────────────────────────────────────────
@@ -74,7 +81,7 @@ export interface ResolveOptions {
   /** Session's stored model */
   sessionModel?: string;
   /** Use case — affects which role model to pick */
-  useCase?: 'default' | 'reasoning' | 'small';
+  useCase?: 'default' | 'reasoning' | 'small' | 'sonnet' | 'opus' | 'haiku';
 }
 
 /**
@@ -93,22 +100,65 @@ export function resolveProvider(opts: ResolveOptions = {}): ResolvedProvider {
 
   let provider: ApiProvider | undefined;
 
+  // Determine if the ID came from an explicit request (providerId) or
+  // from the session — only explicit requests should skip the inactive check.
+  const isExplicitRequest = !!opts.providerId;
+
+  // Special virtual provider: OpenAI OAuth (Codex API)
+  if (effectiveProviderId === 'openai-oauth') {
+    return buildOpenAIOAuthResolution(opts);
+  }
+
   if (effectiveProviderId && effectiveProviderId !== 'env') {
-    // Explicit provider — look it up
+    // Look up the requested provider
     provider = getProvider(effectiveProviderId);
+
+    // For non-explicit sources (session provider, fallback chain), skip
+    // inactive providers — a stale session may point to a deactivated
+    // provider (e.g. Google Gemini Image that was turned off).
+    if (provider && !provider.is_active && !isExplicitRequest) {
+      console.warn(`[provider-resolver] Provider "${provider.name}" (${effectiveProviderId}) is inactive, falling back`);
+      provider = undefined;
+    }
+
     if (!provider) {
-      // Requested provider not found, fall back to default
+      // Requested provider not found (or inactive session provider),
+      // fall back to default → any active.
+      //
+      // NOTE: We intentionally do NOT check default_provider's is_active here.
+      // is_active is a "currently selected" marker (see activateProvider in
+      // db.ts — radio-button style, only one provider can have is_active=1),
+      // NOT an enabled/disabled flag. A user setting default_provider_id is
+      // an explicit choice that must be honored regardless of is_active.
+      // Ignoring it here is the root cause of "Default provider X is inactive,
+      // falling back" warnings that surface as "No provider credentials" for
+      // users who set a default but never clicked Activate.
       const defaultId = getDefaultProviderId();
-      if (defaultId) provider = getProvider(defaultId);
+      if (defaultId && defaultId !== effectiveProviderId) {
+        const defaultProvider = getProvider(defaultId);
+        if (defaultProvider) provider = defaultProvider;
+      }
+      if (!provider) {
+        provider = getActiveProvider();
+      }
     }
   } else if (!effectiveProviderId) {
-    // No provider specified — use global default
+    // No provider specified — use global default.
+    // See NOTE above: is_active is a UI selection marker, not an enable flag.
+    // The user's default_provider_id is an explicit choice; honor it even if
+    // the provider isn't currently the "active" one.
     const defaultId = getDefaultProviderId();
-    if (defaultId) provider = getProvider(defaultId);
-    // Note: stale default (provider deleted but setting remains) is NOT
-    // auto-healed here — resolver is a read path that may run during
-    // diagnostics. Auto-heal happens in: DELETE /api/providers/[id],
-    // POST /api/doctor/repair, and startup migration in chat/page.tsx.
+    if (defaultId) {
+      const defaultProvider = getProvider(defaultId);
+      if (defaultProvider) {
+        provider = defaultProvider;
+      }
+    }
+    // If no default configured, fall back to any provider that happens to be
+    // marked active (backwards compat with pre-default_provider_id installs)
+    if (!provider) {
+      provider = getActiveProvider();
+    }
   }
   // effectiveProviderId === 'env' → provider stays undefined
 
@@ -121,6 +171,14 @@ export function resolveProvider(opts: ResolveOptions = {}): ResolvedProvider {
  *
  * Important: if resolveProvider() intentionally returned provider=undefined (e.g. user
  * selected 'env'), we respect that and do NOT fall back to getActiveProvider().
+ *
+ * NOTE: When the caller already resolved a provider upstream and hands it to
+ * us, we trust it unconditionally. `is_active` is a radio-button "currently
+ * selected" marker in the DB (see activateProvider in db.ts), not an
+ * enable/disable flag — second-guessing the caller here would undo the
+ * upstream resolution and surface false-positive "inactive, re-resolving"
+ * warnings in doctor logs. Stale-session defense lives in resolveProvider()'s
+ * session-provider branch, not here.
  */
 export function resolveForClaudeCode(
   explicitProvider?: ApiProvider,
@@ -152,13 +210,11 @@ export function resolveForClaudeCode(
  *
  * @param baseEnv - Process environment (usually { ...process.env })
  * @param resolved - Output from resolveProvider/resolveForClaudeCode
- * @param model - Model to use (for cc-switch resolution)
  * @returns Clean env suitable for the SDK subprocess
  */
 export function toClaudeCodeEnv(
   baseEnv: Record<string, string>,
   resolved: ResolvedProvider,
-  model?: string,
 ): Record<string, string> {
   const env = { ...baseEnv };
 
@@ -170,6 +226,8 @@ export function toClaudeCodeEnv(
     'CLAUDE_CODE_SKIP_BEDROCK_AUTH',
     'CLAUDE_CODE_SKIP_VERTEX_AUTH',
     'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+    'CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK',
+    'CLAUDE_CODE_EFFORT_LEVEL',
     'ENABLE_TOOL_SEARCH',
     'AWS_REGION',
     'AWS_ACCESS_KEY_ID',
@@ -209,27 +267,61 @@ export function toClaudeCodeEnv(
 
     // Inject base URL
     if (resolved.provider.base_url) {
-      env.ANTHROPIC_BASE_URL = resolved.provider.base_url;
+      // 中文注释：OpenAI 兼容协议（只提供 /v1/chat/completions 的中转站，如 bananarouter）
+      // 不能被 Claude Code CLI 直连 —— CLI 只会说 Anthropic Messages 格式。
+      // 此时把 BASE_URL 指向本地转换代理 /api/proxy/<providerId>，由它做
+      // Anthropic ⇄ OpenAI 双向转换（对齐 cc-haha 的 open 代理转换）；
+      // 认证令牌用进程级随机令牌（代理校验后注入真实上游 Key，CLI 拿不到真实 Key）。
+      if (resolved.protocol === 'openai-compatible' || resolved.protocol === 'openrouter') {
+        const port = process.env.PORT || '3000';
+        env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}/api/proxy/${resolved.provider.id}`;
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { getProxyToken } = require('./proxy/token') as typeof import('./proxy/token');
+        env.ANTHROPIC_AUTH_TOKEN = getProxyToken();
+        env.ANTHROPIC_API_KEY = '';
+      } else {
+        env.ANTHROPIC_BASE_URL = resolved.provider.base_url;
+      }
     }
 
     // Inject role models as env vars
+    // 多头路由的 roleModels 格式为 "providerId:modelId"，需要去掉 providerId 前缀
+    // 只保留 modelId 部分，因为 Claude Code SDK 不认识 provider:model 格式
+    // 统一转小写：API 端点通常要求小写模型 ID（如 mimo-v2.5-pro），大写会导致 400 错误
+    const stripProviderPrefix = (v: string) => {
+      const modelId = v.includes(':') ? v.split(':').slice(1).join(':') : v;
+      return modelId.toLowerCase();
+    };
+    // 优先使用 roleModels.default（完整的上游模型 ID，如 "claude-sonnet-4-5"）
+    // 其次使用 parentTierModel（多头路由目标模型，如 "MiMo-V2.5-Pro"）
+    // 最后使用 upstreamModel（catalog 解析后的模型 ID）
     if (resolved.roleModels.default) {
-      env.ANTHROPIC_MODEL = resolved.roleModels.default;
+      env.ANTHROPIC_MODEL = stripProviderPrefix(resolved.roleModels.default);
+    } else if (resolved.parentTierModel) {
+      env.ANTHROPIC_MODEL = resolved.parentTierModel.toLowerCase();
+    } else if (resolved.upstreamModel) {
+      env.ANTHROPIC_MODEL = resolved.upstreamModel;
     }
     if (resolved.roleModels.reasoning) {
-      env.ANTHROPIC_REASONING_MODEL = resolved.roleModels.reasoning;
+      env.ANTHROPIC_REASONING_MODEL = stripProviderPrefix(resolved.roleModels.reasoning);
+    } else if (resolved.roleModels.opus) {
+      // Claude Code SDK uses ANTHROPIC_REASONING_MODEL for opus-equivalent agents (architect, planner, etc.)
+      // Fallback to opus when reasoning is not explicitly configured
+      env.ANTHROPIC_REASONING_MODEL = stripProviderPrefix(resolved.roleModels.opus);
     }
     if (resolved.roleModels.small) {
-      env.ANTHROPIC_SMALL_FAST_MODEL = resolved.roleModels.small;
+      env.ANTHROPIC_SMALL_FAST_MODEL = stripProviderPrefix(resolved.roleModels.small);
     }
     if (resolved.roleModels.haiku) {
-      env.ANTHROPIC_DEFAULT_HAIKU_MODEL = resolved.roleModels.haiku;
+      env.ANTHROPIC_DEFAULT_HAIKU_MODEL = stripProviderPrefix(resolved.roleModels.haiku);
+      // Claude Code SDK uses ANTHROPIC_SMALL_FAST_MODEL for haiku-equivalent agents
+      env.ANTHROPIC_SMALL_FAST_MODEL = stripProviderPrefix(resolved.roleModels.haiku);
     }
     if (resolved.roleModels.sonnet) {
-      env.ANTHROPIC_DEFAULT_SONNET_MODEL = resolved.roleModels.sonnet;
+      env.ANTHROPIC_DEFAULT_SONNET_MODEL = stripProviderPrefix(resolved.roleModels.sonnet);
     }
     if (resolved.roleModels.opus) {
-      env.ANTHROPIC_DEFAULT_OPUS_MODEL = resolved.roleModels.opus;
+      env.ANTHROPIC_DEFAULT_OPUS_MODEL = stripProviderPrefix(resolved.roleModels.opus);
     }
 
     // Inject extra headers
@@ -241,18 +333,10 @@ export function toClaudeCodeEnv(
     // Skip auth-related keys — they were already correctly injected above based on authStyle.
     // Legacy extra_env often contains placeholder entries like {"ANTHROPIC_AUTH_TOKEN":""} or
     // {"ANTHROPIC_API_KEY":""} that would delete the freshly-injected credentials.
-    // Also skip Claude Code mode flags that conflict with API-key authentication.
     const AUTH_ENV_KEYS = new Set([
       'ANTHROPIC_API_KEY',
       'ANTHROPIC_AUTH_TOKEN',
       'ANTHROPIC_BASE_URL',
-      'CLAUDE_CODE_USE_BEDROCK',
-      'CLAUDE_CODE_USE_VERTEX',
-      'CLAUDE_CODE_SKIP_BEDROCK_AUTH',
-      'CLAUDE_CODE_SKIP_VERTEX_AUTH',
-      'AWS_ACCESS_KEY_ID',
-      'AWS_SECRET_ACCESS_KEY',
-      'AWS_SESSION_TOKEN',
     ]);
     for (const [key, value] of Object.entries(resolved.envOverrides)) {
       if (AUTH_ENV_KEYS.has(key)) continue; // already handled by auth injection
@@ -265,67 +349,35 @@ export function toClaudeCodeEnv(
       }
     }
   } else if (!resolved.provider) {
-    const ccSwitchEnabled = getSetting('cc_switch_enabled') === 'true';
-    // 中文注释：仅在用户明确启用 cc-switch 时才允许它接管 env 模式，
-    // 避免 fork 或本机遗留 ~/.claude/settings.json / ~/.cc-switch/config.json 意外覆盖已配置服务商。
-    const ccConfig = ccSwitchEnabled ? readCCSwitchConfig() : null;
-    const ccSettings = ccSwitchEnabled ? readCCSwitchClaudeSettings() : null;
-    
-    let modelConfig: CCSwitchConfig[string] | undefined;
-    let ccResolvedConfig: CCSwitchResolvedConfig | null = null;
-    
-    if (ccConfig && Object.keys(ccConfig).length > 0) {
-      // Legacy format
-      const modelName = model || 'sonnet';
-      modelConfig = ccConfig[modelName] || ccConfig['claude-sonnet-4-20250514'] || Object.values(ccConfig)[0];
-    } else if (ccSettings && typeof ccSettings === 'object' && 'models' in ccSettings) {
-      // New resolved format
-      ccResolvedConfig = ccSettings as CCSwitchResolvedConfig;
-    }
-    
-    if (ccResolvedConfig) {
-      // Use new resolved config format
-      if (ccResolvedConfig.apiKey) env.ANTHROPIC_AUTH_TOKEN = ccResolvedConfig.apiKey;
-      if (ccResolvedConfig.baseUrl) env.ANTHROPIC_BASE_URL = ccResolvedConfig.baseUrl;
-      if (model && ccResolvedConfig.models.includes(model)) {
-        env.ANTHROPIC_MODEL = model;
-      } else if (ccResolvedConfig.currentModel) {
-        env.ANTHROPIC_MODEL = ccResolvedConfig.currentModel;
+    // No provider — preserve existing env, layer legacy DB settings, then
+    // layer the Claude Code settings env allowlist. This keeps cc-switch auth
+    // and model routing working even though the SDK fast path no longer
+    // enables settingSources just to read ~/.claude/settings.json.
+    const appToken = getSetting('anthropic_auth_token');
+    const appBaseUrl = getSetting('anthropic_base_url');
+    if (appToken) env.ANTHROPIC_AUTH_TOKEN = appToken;
+    if (appBaseUrl) env.ANTHROPIC_BASE_URL = appBaseUrl;
+    const claudeSettingsEnv = readClaudeSettingsEnv();
+    if (claudeSettingsEnv) {
+      for (const [key, value] of Object.entries(claudeSettingsEnv)) {
+        if (value) env[key] = value;
       }
-    } else if (modelConfig) {
-      // Legacy format
-      if (modelConfig.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = modelConfig.ANTHROPIC_API_KEY;
-      if (modelConfig.ANTHROPIC_AUTH_TOKEN) env.ANTHROPIC_AUTH_TOKEN = modelConfig.ANTHROPIC_AUTH_TOKEN;
-      if (modelConfig.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = modelConfig.ANTHROPIC_BASE_URL;
-      if (modelConfig.ANTHROPIC_MODEL) env.ANTHROPIC_MODEL = modelConfig.ANTHROPIC_MODEL;
-      if (modelConfig.ANTHROPIC_DEFAULT_HAIKU_MODEL) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = modelConfig.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-      if (modelConfig.ANTHROPIC_DEFAULT_SONNET_MODEL) env.ANTHROPIC_DEFAULT_SONNET_MODEL = modelConfig.ANTHROPIC_DEFAULT_SONNET_MODEL;
-      if (modelConfig.ANTHROPIC_DEFAULT_OPUS_MODEL) env.ANTHROPIC_DEFAULT_OPUS_MODEL = modelConfig.ANTHROPIC_DEFAULT_OPUS_MODEL;
-      if (modelConfig.ANTHROPIC_REASONING_MODEL) env.ANTHROPIC_REASONING_MODEL = modelConfig.ANTHROPIC_REASONING_MODEL;
-      if (modelConfig.ANTHROPIC_SMALL_FAST_MODEL) env.ANTHROPIC_SMALL_FAST_MODEL = modelConfig.ANTHROPIC_SMALL_FAST_MODEL;
-      
-      // Add other env vars from cc-switch config
-      for (const [key, value] of Object.entries(modelConfig)) {
-        if (key.startsWith('CLAUDE_CODE_') && value) {
-          env[key] = value;
-        }
-      }
-    } else {
-      // Legacy DB settings, then fall back to existing env
-      const appToken = getSetting('anthropic_auth_token');
-      const appBaseUrl = getSetting('anthropic_base_url');
-      if (appToken) env.ANTHROPIC_AUTH_TOKEN = appToken;
-      if (appBaseUrl) env.ANTHROPIC_BASE_URL = appBaseUrl;
-      
-      // Prevent ~/.claude/settings.json from overriding CodePilot's provider configuration.
-      env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
     }
-  } else {
-    // Has provider - prevent ~/.claude/settings.json from overriding
-    env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   }
 
-  env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  // NOTE: We previously set CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 here in an attempt
+  // to tell the Agent SDK to strip ~/.claude/settings.json env overrides. That flag
+  // does not exist in the current SDK (@anthropic-ai/claude-agent-sdk 0.2.62) — it
+  // was either aspirational or came from an older SDK spec. Removing it avoids
+  // shipping misleading dead code. The SDK already filters its own env blocklist
+  // (model aliases, AWS/OTEL/Bedrock keys — see rG6 in cli.js), and when CodePilot
+  // has an active provider, toClaudeCodeEnv() already deletes all ANTHROPIC_* keys
+  // from baseEnv above before injecting the provider's values, so settings.json
+  // env cannot override the provider's auth/baseUrl for authenticated users.
+  // For env-mode (no active provider) users, we explicitly inject an allowlist
+  // from settings.json above — that's how cc-switch integration works without
+  // paying the first-turn cost of SDK settingSources.
+
   return env;
 }
 
@@ -333,7 +385,7 @@ export function toClaudeCodeEnv(
 
 export interface AiSdkConfig {
   /** Which AI SDK factory to use */
-  sdkType: 'anthropic' | 'openai' | 'google' | 'bedrock' | 'vertex';
+  sdkType: 'anthropic' | 'openai' | 'google' | 'bedrock' | 'vertex' | 'claude-code-compat';
   /** API key to pass to the SDK (mutually exclusive with authToken for Anthropic) */
   apiKey: string | undefined;
   /** Auth token (Bearer) for Anthropic auth_token providers (mutually exclusive with apiKey) */
@@ -346,6 +398,8 @@ export interface AiSdkConfig {
   headers: Record<string, string>;
   /** Extra env vars to inject into process.env before SDK call */
   processEnvInjections: Record<string, string>;
+  /** Use OpenAI Responses API instead of Chat Completions (for Codex API) */
+  useResponsesApi?: boolean;
 }
 
 /**
@@ -362,10 +416,53 @@ export function toAiSdkConfig(
   // the internal/UI model ID when the upstream API expects a different name.
   let modelId: string;
   if (modelOverride) {
+    // 1. Try availableModels catalog (upstreamModelId)
     const catalogEntry = resolved.availableModels.find(m => m.modelId === modelOverride);
     modelId = catalogEntry?.upstreamModelId || modelOverride;
+
+    // 2. If still a short alias, try roleModels (user-configured model mapping)
+    const SHORT_ALIASES = new Set(['sonnet', 'opus', 'haiku']);
+    if (SHORT_ALIASES.has(modelId)) {
+      const roleMap: Record<string, string | undefined> = {
+        sonnet: resolved.roleModels.sonnet,
+        opus: resolved.roleModels.opus,
+        haiku: resolved.roleModels.haiku,
+      };
+      const mapped = roleMap[modelId];
+      if (mapped && !SHORT_ALIASES.has(mapped)) {
+        modelId = mapped;
+      }
+    }
+
+    // 3. Last resort for SINGLE-MODEL third-party providers: short alias →
+    //    that single model. Third-party proxies (Kimi, GLM, OpenRouter relays,
+    //    custom enterprise endpoints) usually do NOT accept bare "sonnet" /
+    //    "opus" / "haiku" — they want fully-qualified model IDs. Sending the
+    //    alias produces "model 'sonnet' not found" errors from the upstream
+    //    (Sentry: HTTP 400/404/502 across multiple fingerprints, 310+ events
+    //    over 14d).
+    //
+    //    IMPORTANT: We only fall back when the provider has EXACTLY ONE model
+    //    in its catalog. Multi-model providers (e.g. OpenRouter with dozens
+    //    of models) must NOT silently rewrite the user's chosen alias to
+    //    "first model in list" — that's a hard-to-diagnose behavior change
+    //    affecting both correctness and cost. For multi-model providers
+    //    without a role mapping, we keep the alias and let upstream return
+    //    its real "model not found" error so the user can see the problem
+    //    and configure role_models_json properly.
+    if (
+      resolved.provider &&
+      SHORT_ALIASES.has(modelId) &&
+      resolved.availableModels.length === 1
+    ) {
+      const only = resolved.availableModels[0];
+      const onlyUpstream = only.upstreamModelId || only.modelId;
+      if (onlyUpstream && !SHORT_ALIASES.has(onlyUpstream)) {
+        modelId = onlyUpstream;
+      }
+    }
   } else {
-    modelId = resolved.upstreamModel || resolved.model || 'claude-sonnet-4-20250514';
+    modelId = resolved.upstreamModel || resolved.model || 'claude-sonnet-4-5-20250929';
   }
   const provider = resolved.provider;
   const protocol = resolved.protocol;
@@ -382,6 +479,25 @@ export function toAiSdkConfig(
 
   const headers = resolved.headers;
 
+  // OpenAI OAuth (Codex API) — special path using OAuth Bearer token.
+  // The actual OAuth token is resolved in ai-provider.ts at model creation time
+  // (via getOAuthCredentialsSync) because token refresh is async.
+  if (resolved._openaiOAuth) {
+    // Derive base URL: CODEX_API_ENDPOINT is the full /responses URL,
+    // but @ai-sdk/openai appends /responses itself, so strip it.
+    const codexBase = CODEX_API_ENDPOINT.replace(/\/responses\/?$/, '');
+    return {
+      sdkType: 'openai',
+      apiKey: undefined,  // resolved at call time in ai-provider.ts
+      authToken: undefined,
+      baseUrl: codexBase,
+      modelId,
+      headers,
+      processEnvInjections,
+      useResponsesApi: true,
+    };
+  }
+
   // Resolve Anthropic auth credentials.
   // @ai-sdk/anthropic supports apiKey (x-api-key header) and authToken (Bearer header),
   // and they are mutually exclusive. We must pick the right one based on authStyle.
@@ -389,19 +505,34 @@ export function toAiSdkConfig(
     if (provider) {
       // Configured provider — use authStyle to decide
       if (resolved.authStyle === 'auth_token') {
-        return { apiKey: undefined, authToken: provider.api_key || undefined };
+        const token = provider.api_key || undefined;
+        // 多头路由的目标 provider 可能没有自己的 api_key，fallback 到 settings.json / 环境变量
+        if (!token) return resolveFallbackAuth();
+        return { apiKey: undefined, authToken: token };
       }
-      return { apiKey: provider.api_key || undefined, authToken: undefined };
+      const key = provider.api_key || undefined;
+      if (!key) return resolveFallbackAuth();
+      return { apiKey: key, authToken: undefined };
     }
-    // Env mode — check env vars and legacy DB settings.
+    return resolveFallbackAuth();
+  };
+
+  // Fallback auth: 环境变量 → ~/.claude/settings.json → legacy DB settings
+  const resolveFallbackAuth = (): { apiKey: string | undefined; authToken: string | undefined } => {
     // ANTHROPIC_AUTH_TOKEN takes precedence (it's the Claude Code SDK auth path).
     const envAuthToken = process.env.ANTHROPIC_AUTH_TOKEN || getSetting('anthropic_auth_token');
     if (envAuthToken) {
-      // If we also have an API key, prefer auth_token (matches Claude Code SDK behavior)
       return { apiKey: undefined, authToken: envAuthToken };
     }
     const envApiKey = process.env.ANTHROPIC_API_KEY;
-    return { apiKey: envApiKey || undefined, authToken: undefined };
+    if (envApiKey) {
+      return { apiKey: envApiKey, authToken: undefined };
+    }
+    // 多头路由子Agent: 从 ~/.claude/settings.json 读取 cc-switch 管理的凭证
+    const creds = readClaudeSettingsCredentials();
+    if (creds?.authToken) return { apiKey: undefined, authToken: creds.authToken };
+    if (creds?.apiKey) return { apiKey: creds.apiKey, authToken: undefined };
+    return { apiKey: undefined, authToken: undefined };
   };
 
   // @ai-sdk/anthropic builds request URLs as `${baseURL}/messages`.
@@ -420,8 +551,29 @@ export function toAiSdkConfig(
     case 'anthropic': {
       const auth = resolveAnthropicAuth();
       const rawBaseUrl = provider?.base_url || process.env.ANTHROPIC_BASE_URL || getSetting('anthropic_base_url') || undefined;
+
+      // Route third-party Anthropic proxies through ClaudeCodeCompatAdapter.
+      // Only official api.anthropic.com uses @ai-sdk/anthropic directly.
+      // All others go through the adapter because:
+      // 1. sdkProxyOnly proxies (Zhipu, Kimi, etc.) require Claude Code wire format
+      // 2. Unknown proxies are safer with the adapter (it's a superset of standard Messages API)
+      // 3. @ai-sdk/anthropic has subtle incompatibilities with many proxies (URL handling, beta headers)
+      let sdkType: AiSdkConfig['sdkType'] = 'anthropic';
+      const effectiveBaseUrl = provider?.base_url || process.env.ANTHROPIC_BASE_URL;
+      if (effectiveBaseUrl) {
+        try {
+          const hostname = new URL(effectiveBaseUrl).hostname;
+          const isOfficial = hostname === 'api.anthropic.com' || hostname.endsWith('.anthropic.com');
+          if (!isOfficial) {
+            sdkType = 'claude-code-compat';
+          }
+        } catch {
+          sdkType = 'claude-code-compat'; // malformed URL → safer with adapter
+        }
+      }
+
       return {
-        sdkType: 'anthropic',
+        sdkType,
         ...auth,
         baseUrl: normaliseAnthropicBaseUrl(rawBaseUrl),
         modelId,
@@ -510,6 +662,17 @@ export function toAiSdkConfig(
         processEnvInjections,
       };
 
+    case 'openai-image':
+      return {
+        sdkType: 'openai',
+        apiKey: provider?.api_key || undefined,
+        authToken: undefined,
+        baseUrl: provider?.base_url || undefined,
+        modelId,
+        headers,
+        processEnvInjections,
+      };
+
     default: {
       const auth = resolveAnthropicAuth();
       return {
@@ -526,72 +689,106 @@ export function toAiSdkConfig(
 
 // ── Internal helpers ────────────────────────────────────────────
 
+// OpenAI Codex API models available through ChatGPT Plus/Pro OAuth
+// GPT-5.6 GA on 2026-07-09; gpt-5.5/5.4/5.3-codex retired from Codex (ChatGPT sign-in).
+const OPENAI_CODEX_MODELS: CatalogModel[] = [
+  { modelId: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol' },
+  { modelId: 'gpt-5.6-terra', displayName: 'GPT-5.6 Terra' },
+  { modelId: 'gpt-5.6-luna', displayName: 'GPT-5.6 Luna' },
+];
+
+/**
+ * Build resolution for the virtual OpenAI OAuth provider.
+ * Uses OAuth Bearer token + Codex API endpoint.
+ */
+function buildOpenAIOAuthResolution(opts: ResolveOptions): ResolvedProvider {
+  const model = opts.model || opts.sessionModel || 'gpt-5.6-sol';
+
+  const catalogEntry = OPENAI_CODEX_MODELS.find(m => m.modelId === model);
+
+  return {
+    provider: undefined,
+    protocol: 'openai-compatible',
+    authStyle: 'api_key',
+    model,
+    upstreamModel: model,
+    modelDisplayName: catalogEntry?.displayName || model,
+    headers: {},
+    envOverrides: {},
+    roleModels: { default: model },
+    hasCredentials: true, // OAuth token checked at call time
+    availableModels: OPENAI_CODEX_MODELS,
+    settingSources: [],
+    _openaiOAuth: true, // marker for toAiSdkConfig
+  } as ResolvedProvider;
+}
+
 function buildResolution(
   provider: ApiProvider | undefined,
   opts: ResolveOptions,
 ): ResolvedProvider {
   if (!provider) {
-  const ccSwitchEnabled = getSetting('cc_switch_enabled') === 'true';
-  // 中文注释：解析 env provider 时尊重显式开关，关闭后不再自动读取本机 cc-switch 配置。
-  const ccSwitchConfig = ccSwitchEnabled ? readCCSwitchConfig() : null;
-  const ccSwitchSettingsRaw = ccSwitchEnabled ? readCCSwitchClaudeSettings() : null;
-  
-  let ccSwitchModels: CatalogModel[] = [];
-  let ccSwitchHasCredentials = false;
-  let ccSwitchBaseUrl = '';
-  let ccSwitchCurrentModel = '';
-  
-  // Handle new resolved config format
-  if (ccSwitchSettingsRaw && typeof ccSwitchSettingsRaw === 'object' && 'models' in ccSwitchSettingsRaw) {
-    const settings = ccSwitchSettingsRaw as CCSwitchResolvedConfig;
-    ccSwitchHasCredentials = !!settings.apiKey;
-    ccSwitchBaseUrl = settings.baseUrl;
-    ccSwitchCurrentModel = settings.currentModel;
-    ccSwitchModels = settings.models.map(modelName => ({
-      modelId: modelName,
-      upstreamModelId: modelName,
-      displayName: modelName,
-    }));
-  } else if (ccSwitchConfig !== null) {
-    // Legacy format
-    if (ccSwitchConfig) {
-      ccSwitchHasCredentials = Object.values(ccSwitchConfig).some((c: unknown) => {
-        const conf = c as Record<string, string>;
-        return conf.ANTHROPIC_API_KEY || conf.ANTHROPIC_AUTH_TOKEN;
-      });
-      ccSwitchModels = Object.keys(ccSwitchConfig).map(modelName => ({
-        modelId: modelName,
-        upstreamModelId: modelName,
-        displayName: modelName,
-      }));
-    }
-  }
-    
-    // Environment-based provider (no DB record) — credentials come from shell env or legacy DB settings
+    // Environment-based provider (no DB record) — credentials come from shell env,
+    // legacy DB settings, or ~/.claude/settings.json (managed by cc-switch etc.).
+    // When only settings.json has creds, we must still flag hasCredentials=true
+    // so ai-provider.ts's guard doesn't preemptively abort before the SDK
+    // subprocess receives the allowlisted settings env.
     const envHasCredentials = !!(
       process.env.ANTHROPIC_API_KEY ||
       process.env.ANTHROPIC_AUTH_TOKEN ||
-      getSetting('anthropic_auth_token')
+      getSetting('anthropic_auth_token') ||
+      hasClaudeSettingsCredentials()
     );
-    
-    // Use cc-switch models if available, otherwise fall back to env models
-    const useCCSwitch = ccSwitchModels.length > 0;
-    const availableModels = useCCSwitch ? ccSwitchModels : [
-      { modelId: 'sonnet', upstreamModelId: 'claude-sonnet-4-20250514', displayName: 'Sonnet 4.6' },
-      { modelId: 'opus', upstreamModelId: 'claude-opus-4-20250514', displayName: 'Opus 4.6' },
-      { modelId: 'haiku', upstreamModelId: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5' },
-    ];
-    
     // Read user-configured global default model — only use it if it's an env-provider model
     const globalDefaultModel = getSetting('global_default_model') || undefined;
     const globalDefaultProvider = getSetting('global_default_model_provider') || undefined;
     // Only apply global default when it belongs to the env provider (or no provider is specified)
-    const applicableGlobalDefault = (globalDefaultModel && (!globalDefaultProvider || globalDefaultProvider === 'env' || globalDefaultProvider === 'cc-switch' || globalDefaultProvider === ''))
+    const applicableGlobalDefault = (globalDefaultModel && (!globalDefaultProvider || globalDefaultProvider === 'env'))
       ? globalDefaultModel : undefined;
     const model = opts.model || opts.sessionModel || applicableGlobalDefault || getSetting('default_model') || undefined;
 
-    // Resolve upstream model from the available models
-    const catalogEntry = model ? availableModels.find(m => m.modelId === model) : undefined;
+    // Env mode uses short aliases (sonnet/opus/haiku) in the UI.
+    // Map them to full Anthropic model IDs so toAiSdkConfig can resolve correctly.
+    const envModels: CatalogModel[] = [
+      {
+        modelId: 'sonnet',
+        upstreamModelId: 'claude-sonnet-4-20250514',
+        displayName: 'Sonnet 4.6',
+        capabilities: {
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+          supportsAdaptiveThinking: true,
+        },
+      },
+      {
+        modelId: 'opus',
+        upstreamModelId: 'claude-opus-4-7',
+        displayName: 'Opus 4.7',
+        capabilities: {
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          supportsAdaptiveThinking: true,
+        },
+      },
+      {
+        modelId: 'haiku',
+        upstreamModelId: 'claude-haiku-4-5-20251001',
+        displayName: 'Haiku 4.5',
+        capabilities: {
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'medium', 'high'],
+        },
+      },
+    ];
+
+    // Resolve upstream model from the alias table
+    const catalogEntry = model ? envModels.find(m => m.modelId === model) : undefined;
+
+    // 中文注释：功能名称「env 模式完整能力对齐」，用法是让 env/cc-switch 用户在
+    // 默认情况下也进入 Claude Code Full Capabilities 主路径，不再因为凭证来自
+    // ~/.claude/settings.json 就被强制打回 `settingSources=[]` / `--bare`。
+    // 这样桌面端的 rules、skills、hooks、OMC 与原生 WebSearch 发现链才能更接近终端版。
+    const envSettingSources = ['user', 'project', 'local'];
 
     return {
       provider: undefined,
@@ -603,9 +800,9 @@ function buildResolution(
       headers: {},
       envOverrides: {},
       roleModels: {},
-      hasCredentials: envHasCredentials || ccSwitchHasCredentials,
-      availableModels,
-      settingSources: ['user', 'project', 'local'],
+      hasCredentials: envHasCredentials,
+      availableModels: envModels,
+      settingSources: envSettingSources,
     };
   }
 
@@ -630,17 +827,41 @@ function buildResolution(
   }
 
   // Get available models: DB provider_models take priority, then catalog defaults
-  let availableModels = getDefaultModelsForProvider(protocol, provider.base_url);
+  let availableModels = getDefaultModelsForProvider(protocol, provider.base_url, provider.provider_type);
   try {
     const dbModels = getModelsForProvider(provider.id);
     if (dbModels.length > 0) {
       // Convert DB rows to CatalogModel and merge (DB models override catalog by modelId)
-      const dbCatalog: CatalogModel[] = dbModels.map(m => ({
+      let dbCatalog: CatalogModel[] = dbModels.map(m => ({
         modelId: m.model_id,
         upstreamModelId: m.upstream_model_id || undefined,
         displayName: m.display_name || m.model_id,
         capabilities: safeParseCapabilities(m.capabilities_json),
       }));
+      // 中文注释：过滤 DB 中的过期别名——如果 DB 模型的 upstreamModelId 与 catalog 中某个条目相同，
+      // 说明它是同一底层模型的旧 ID（如 "mimo-v2.5" 是 "MiMo-V2.5-Pro" 的旧别名）。
+      // 这种情况下用 catalog 的 canonical modelId，避免旧别名污染模型列表和签名。
+      const catalogUpstreamSet = new Set(availableModels.filter(m => m.upstreamModelId).map(m => m.upstreamModelId));
+      dbCatalog = dbCatalog.filter(m => {
+        if (m.upstreamModelId && catalogUpstreamSet.has(m.upstreamModelId)) {
+          console.log(`[provider-resolver] Skipping stale DB model "${m.modelId}" — upstream "${m.upstreamModelId}" already in catalog`);
+          return false;
+        }
+        return true;
+      });
+      // Persisted model rows predate capability metadata in many existing
+      // installations. Preserve explicit user values, while filling absent
+      // capability keys from the verified catalog so vision routing remains
+      // correct after an upgrade.
+      const catalogById = new Map(availableModels.map(model => [model.modelId, model]));
+      dbCatalog = dbCatalog.map(model => {
+        const catalogModel = catalogById.get(model.modelId);
+        if (!catalogModel?.capabilities) return model;
+        return {
+          ...model,
+          capabilities: { ...catalogModel.capabilities, ...(model.capabilities || {}) },
+        };
+      });
       // Merge: DB models first, then catalog models not already in DB
       const dbIds = new Set(dbCatalog.map(m => m.modelId));
       availableModels = [...dbCatalog, ...availableModels.filter(m => !dbIds.has(m.modelId))];
@@ -666,10 +887,86 @@ function buildResolution(
   let model = requestedModel;
   let upstreamModel: string | undefined;
   let modelDisplayName: string | undefined;
+  // 多头路由：追踪父级实际使用的模型，用于 toClaudeCodeEnv() 设置 ANTHROPIC_MODEL
+  let parentTierModel: string | undefined;
 
   // If a use case is specified, check role models for that use case
   if (opts.useCase && opts.useCase !== 'default' && roleModels[opts.useCase]) {
     model = roleModels[opts.useCase];
+  }
+
+  // Handle Multi-Head Router Logic
+  if (protocol === 'multi_head') {
+    // Since the UI now sends the actual mapped string (e.g. "providerId:modelId")
+    // or falls back to 'orchestrator'/'default' if nothing was selected.
+    if (!model || model === 'orchestrator') {
+      model = roleModels.default;
+    }
+    
+    // The "model" at this point is a mapped string like "providerId:modelId"
+    // e.g. "anthropic:claude-3-5-sonnet"
+    if (model && model.includes(':')) {
+      const [targetProviderId, ...targetModelParts] = model.split(':');
+      const targetModelId = targetModelParts.join(':');
+
+      // Prevent infinite recursion by removing providerId and setting explicitly
+      const newOpts: ResolveOptions = {
+        providerId: targetProviderId,
+        model: targetModelId,
+      };
+
+      // 递归解析目标 provider，但保留多头路由的 roleModels
+      // 这样 toClaudeCodeEnv() 能正确设置每个层级的模型映射（sonnet→MiniMax, haiku→oLMX 等）
+      const targetResolved = resolveProvider(newOpts);
+
+      // 保留 roleModels 的 providerId:modelId 格式
+      // toClaudeCodeEnv() 用 stripProviderPrefix() 会自动去掉 providerId 前缀
+      // resolveAgentModel() 需要 providerId:modelId 格式来提取目标 provider
+      targetResolved.roleModels = {
+        default: targetResolved.upstreamModel || roleModels.default,
+        reasoning: roleModels.reasoning,
+        small: roleModels.small,
+        haiku: roleModels.haiku,
+        sonnet: roleModels.sonnet,
+        opus: roleModels.opus,
+      };
+      // 保存父级实际使用的模型，让 toClaudeCodeEnv() 设置正确的 ANTHROPIC_MODEL
+      // 这样 SDK 子进程及其子 agent 会使用正确的模型，而不是多头路由的默认模型
+      targetResolved.parentTierModel = targetModelId;
+      targetResolved._isMultiHead = true;
+      return targetResolved;
+    } else {
+      // 模型名称不包含 ':'，可能是直接的模型名（如 "MiMo-V2.5-Pro"）
+      // 从 roleModels 中找到匹配的 tier，递归解析到目标 provider
+      // 这样子Agent能拿到目标 provider 的 api_key 和 base_url
+      if (model) {
+        for (const v of Object.values(roleModels)) {
+          if (v && v.includes(':')) {
+            const mId = v.split(':').slice(1).join(':');
+            if (mId === model) {
+              // 找到匹配的 tier，提取目标 provider 信息并递归解析
+              const [targetProviderId, ...targetModelParts] = v.split(':');
+              const targetModelId = targetModelParts.join(':');
+              console.log(`[provider-resolver] multi_head direct model "${model}" matched tier → provider=${targetProviderId.slice(0,12)}... model=${targetModelId}`);
+              const targetResolved = resolveProvider({ providerId: targetProviderId, model: targetModelId });
+              // 保留 roleModels 的 providerId:modelId 格式（同 model.includes(':') 分支）
+              targetResolved.roleModels = {
+                default: targetResolved.upstreamModel || roleModels.default,
+                reasoning: roleModels.reasoning,
+                small: roleModels.small,
+                haiku: roleModels.haiku,
+                sonnet: roleModels.sonnet,
+                opus: roleModels.opus,
+              };
+              targetResolved.parentTierModel = targetModelId;
+              targetResolved._isMultiHead = true;
+              return targetResolved;
+            }
+          }
+        }
+      }
+      console.warn('[provider-resolver] multi_head provider requested but no valid provider:model mapping found for model:', model);
+    }
   }
 
   // Find display name and upstream model ID from catalog
@@ -694,12 +991,46 @@ function buildResolution(
     roleModels = { ...roleModels, default: upstreamModel };
   }
 
-  // Has credentials?
-  const hasCredentials = !!(provider.api_key) || authStyle === 'env_only';
+  // 多头路由：将所有 roleModels 值解析为 upstream model ID
+  // roleModels 格式为 "providerId:modelId"，需要：
+  // 1. 去掉 providerId 前缀
+  // 2. 查找目标 provider 的 catalog，解析为 upstream model ID（小写格式）
+  // 这样 toClaudeCodeEnv() 设置 ANTHROPIC_DEFAULT_*_MODEL 时使用正确的 API 模型 ID
+  const resolveRoleModelUpstream = (value: string | undefined): string | undefined => {
+    if (!value || typeof value !== 'string') return value;
+    let modelId = value;
+    if (modelId.includes(':')) {
+      const parts = modelId.split(':');
+      const targetProviderId = parts[0];
+      modelId = parts.slice(1).join(':');
+      try {
+        // 通过 resolveProvider 获取目标 provider 的 upstreamModel
+        // 它会自动查 provider_models 表和 catalog
+        const targetResolved = resolveProvider({ providerId: targetProviderId, model: modelId });
+        if (targetResolved.upstreamModel) return targetResolved.upstreamModel;
+      } catch { /* fallback to original modelId */ }
+    }
+    return modelId;
+  };
+  roleModels = {
+    default: resolveRoleModelUpstream(roleModels.default),
+    reasoning: resolveRoleModelUpstream(roleModels.reasoning),
+    small: resolveRoleModelUpstream(roleModels.small),
+    haiku: resolveRoleModelUpstream(roleModels.haiku),
+    sonnet: resolveRoleModelUpstream(roleModels.sonnet),
+    opus: resolveRoleModelUpstream(roleModels.opus),
+  };
 
-  // Settings sources — always include 'user' so SDK can load skills from
-  // ~/.claude/skills/. Env override conflicts are handled by envOverrides.
-  const settingSources = ['user', 'project', 'local'];
+  // Has credentials?
+  // 多头路由的目标 provider 可能没有自己的 api_key，但环境变量中可能有凭证
+  // 当 provider 有 base_url 时（说明是有效的目标端点），也检查环境变量
+  const hasCredentials = !!(provider.api_key) || authStyle === 'env_only' ||
+    (!!provider.base_url && !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || hasClaudeSettingsCredentials()));
+
+  // 中文注释：功能名称「Claude Code 全能力固定开启」，用法是在单一 Claude Code CLI
+  // 产品路径下始终加载 user/project/local settings，避免再出现可选裁剪模式导致的
+  // skills、hooks、OMC 与联网能力表现不一致。
+  const settingSources: string[] = ['user', 'project', 'local'];
 
   return {
     provider,
@@ -714,20 +1045,23 @@ function buildResolution(
     hasCredentials,
     availableModels,
     settingSources,
+    parentTierModel,
   };
 }
 
 /**
  * Determine protocol from a provider record.
- * Uses the new `protocol` field if present, otherwise infers from legacy fields.
+ * Delegates to the shared getEffectiveProviderProtocol() so raw values that
+ * aren't valid Protocol union members (legacy garbage, future unknown
+ * strings) fall back to legacy inference instead of silently poisoning
+ * downstream capability lookups.
  */
 function inferProtocolFromProvider(provider: ApiProvider): Protocol {
-  // New field takes precedence
-  if (provider.protocol) {
-    return provider.protocol as Protocol;
-  }
-  // Legacy inference
-  return inferProtocolFromLegacy(provider.provider_type, provider.base_url);
+  return getEffectiveProviderProtocol(
+    provider.provider_type,
+    provider.protocol,
+    provider.base_url,
+  );
 }
 
 function inferAuthStyleFromProvider(provider: ApiProvider): AuthStyle {
@@ -759,3 +1093,263 @@ function safeParseCapabilities(json: string | undefined | null): CatalogModel['c
 
 // ApiProvider now includes protocol, headers_json, env_overrides_json, role_models_json
 // directly — no type augmentation needed.
+
+// ── Auxiliary model routing ─────────────────────────────────────
+//
+// Auxiliary tasks (context compression, short summaries, vision,
+// web extract, etc.) should use a small/fast model to save cost.
+// This section implements the 5-step resolution chain documented in
+// docs/research/hermes-agent-analysis.md §3.2:
+//
+//   1. Per-task env override (AUXILIARY_<TASK>_PROVIDER + _MODEL)
+//   2. Main provider's roleModels.small (if not sdkProxyOnly)
+//   3. Main provider's roleModels.haiku (if not sdkProxyOnly)
+//   4. First other non-sdkProxyOnly provider with .small or .haiku
+//   5. Main provider + main model (ultimate floor — never returns null)
+//
+// CodePilot background: provider preset's roleModels.small slot is
+// already populated for many providers (see provider-catalog.ts) and
+// already consumed by toClaudeCodeEnv() to set ANTHROPIC_SMALL_FAST_MODEL
+// for the SDK path. This routing extends the same slot to Native Runtime
+// auxiliary tasks without hardcoding provider-specific model names.
+
+export type AuxiliaryTask = 'compact' | 'vision' | 'summarize' | 'web_extract';
+
+export type AuxiliaryResolutionSource =
+  | 'env_override'
+  | 'main_small'
+  | 'main_haiku'
+  | 'fallback_provider_small'
+  | 'fallback_provider_haiku'
+  | 'main_floor';
+
+export interface AuxiliaryModelResolution {
+  /** Provider ID — 'env' when no DB provider is configured (environment mode). */
+  providerId: string;
+  /** Upstream model ID to send to the API. May be empty string if nothing is configured. */
+  modelId: string;
+  /** Which resolution tier produced this result — for telemetry / debugging. */
+  source: AuxiliaryResolutionSource;
+}
+
+/**
+ * Context required by the pure routing function.
+ * Everything is pre-fetched by resolveAuxiliaryModel() so the routing logic
+ * itself performs no IO and is trivial to unit test.
+ */
+export interface AuxiliaryRoutingContext {
+  /** Result of resolveProvider() — may have provider=undefined in env mode. */
+  main: ResolvedProvider;
+  /** Whether main provider is flagged sdkProxyOnly via its preset. */
+  isMainSdkProxyOnly: boolean;
+  /** Other configured providers with their roleModels and sdkProxyOnly flag. */
+  others: ReadonlyArray<{
+    id: string;
+    roleModels: RoleModels;
+    isSdkProxyOnly: boolean;
+  }>;
+  /** Per-task env override — env_override tier only applies when BOTH are set. */
+  envOverride?: { providerId?: string; modelId?: string };
+}
+
+/**
+ * Pure routing function — implements the 5-step resolution chain.
+ *
+ * Separated from the live wrapper so unit tests can feed in fixtures
+ * without mocking DB / env. All dependencies come in via `ctx`.
+ */
+export function routeAuxiliaryModel(
+  task: AuxiliaryTask,
+  ctx: AuxiliaryRoutingContext,
+): AuxiliaryModelResolution {
+  void task; // per-task logic currently limited to env var name (handled in wrapper)
+
+  // Tier 1: Per-task env override — requires both provider and model set.
+  const env = ctx.envOverride;
+  if (env?.providerId && env?.modelId) {
+    return {
+      providerId: env.providerId,
+      modelId: env.modelId,
+      source: 'env_override',
+    };
+  }
+
+  const main = ctx.main;
+  const mainId = main.provider?.id ?? 'env';
+
+  // Tier 2: Main provider's small slot (if not sdkProxyOnly).
+  if (!ctx.isMainSdkProxyOnly && main.roleModels.small) {
+    return {
+      providerId: mainId,
+      modelId: main.roleModels.small,
+      source: 'main_small',
+    };
+  }
+
+  // Tier 3: Main provider's haiku slot (if not sdkProxyOnly).
+  if (!ctx.isMainSdkProxyOnly && main.roleModels.haiku) {
+    return {
+      providerId: mainId,
+      modelId: main.roleModels.haiku,
+      source: 'main_haiku',
+    };
+  }
+
+  // Tier 4: Scan other providers for first non-sdkProxyOnly with small or haiku.
+  for (const other of ctx.others) {
+    if (other.isSdkProxyOnly) continue;
+    if (other.roleModels.small) {
+      return {
+        providerId: other.id,
+        modelId: other.roleModels.small,
+        source: 'fallback_provider_small',
+      };
+    }
+    if (other.roleModels.haiku) {
+      return {
+        providerId: other.id,
+        modelId: other.roleModels.haiku,
+        source: 'fallback_provider_haiku',
+      };
+    }
+  }
+
+  // Tier 5: Ultimate floor — main provider + main model.
+  // This is the "never return null" guarantee: if no cheap model is available,
+  // the auxiliary task simply uses the same model as the main conversation.
+  // Callers treat this as "auxiliary optimization unavailable, run on primary".
+  return {
+    providerId: mainId,
+    modelId: main.upstreamModel || main.model || '',
+    source: 'main_floor',
+  };
+}
+
+/**
+ * Live entry point — fetches the main provider, enumerates other configured
+ * providers, reads per-task env overrides, and delegates to routeAuxiliaryModel.
+ *
+ * **Never returns null.** When no cheap auxiliary model is available, falls
+ * back to the main provider + main model (source: 'main_floor') so callers
+ * can always make a valid model call — even if it doesn't save cost.
+ *
+ * **Session context**: callers MUST pass the session's provider context
+ * (providerId / sessionProviderId / sessionModel) so that "main" means
+ * "the provider backing this chat session", not "the global default".
+ * Without this, an auxiliary task from a session that overrides the
+ * default provider would compress against unrelated credentials/models.
+ * See exec plan decision log 2026-04-12 ~04:00 for the Codex review
+ * that caught this.
+ *
+ * @param task The auxiliary task type (compact, vision, summarize, web_extract)
+ * @param opts Session context forwarded to `resolveProvider()`. Omitting
+ *   this falls back to the global default provider — intentionally kept
+ *   for callers that don't have a session (e.g. background jobs).
+ */
+export function resolveAuxiliaryModel(
+  task: AuxiliaryTask,
+  opts: ResolveOptions = {},
+): AuxiliaryModelResolution {
+  // Resolve the main provider with session context. Passing opts through
+  // is critical — otherwise auxiliary routing targets the global default
+  // instead of the session's active provider.
+  const main = resolveProvider(opts);
+
+  // Determine if main provider is sdkProxyOnly via preset lookup.
+  let isMainSdkProxyOnly = false;
+  if (main.provider) {
+    const preset = findPresetForLegacy(
+      main.provider.base_url,
+      main.provider.provider_type,
+      main.protocol,
+    );
+    isMainSdkProxyOnly = preset?.sdkProxyOnly ?? false;
+  }
+
+  // Enumerate other providers and compute their roleModels + sdkProxyOnly.
+  const others: Array<{ id: string; roleModels: RoleModels; isSdkProxyOnly: boolean }> = [];
+  if (main.provider) {
+    try {
+      const allProviders = getAllProviders();
+      for (const p of allProviders) {
+        if (p.id === main.provider.id) continue;
+        // Match the main-path resolver: fall back through legacy inference
+        // whenever raw protocol isn't a valid Protocol union member, so a
+        // stray 'random-garbage' row can't silently drive preset / role-model
+        // lookup into a different code path than the main provider got.
+        const protocol = getEffectiveProviderProtocol(p.provider_type, p.protocol, p.base_url);
+        const preset = findPresetForLegacy(p.base_url, p.provider_type, protocol);
+        others.push({
+          id: p.id,
+          roleModels: computeEffectiveRoleModels(p, preset, protocol),
+          isSdkProxyOnly: preset?.sdkProxyOnly ?? false,
+        });
+      }
+    } catch (err) {
+      // getAllProviders may fail in test environments or on fresh DBs.
+      // Degrade gracefully — the routing still returns a usable result via
+      // the main_floor tier.
+      console.warn('[resolveAuxiliaryModel] getAllProviders failed:', err);
+    }
+  }
+
+  // Per-task env override — read e.g. AUXILIARY_COMPACT_PROVIDER + _MODEL.
+  const envKey = task.toUpperCase();
+  const envProvider = process.env[`AUXILIARY_${envKey}_PROVIDER`];
+  const envModel = process.env[`AUXILIARY_${envKey}_MODEL`];
+
+  return routeAuxiliaryModel(task, {
+    main,
+    isMainSdkProxyOnly,
+    others,
+    envOverride: {
+      providerId: envProvider,
+      modelId: envModel,
+    },
+  });
+}
+
+/**
+ * Merge a provider's persisted `role_models_json` with its catalog
+ * preset's `defaultRoleModels`, matching the same "fallback when no
+ * default/sonnet is set" rule used by `buildResolution()` (see :664-675).
+ *
+ * Extracting this ensures the tier-4 auxiliary fallback sees the same
+ * effective role models as the main provider resolution — without it,
+ * providers that rely on preset defaults (instead of user-persisted JSON)
+ * would appear to have no small/haiku slot, silently downgrading the
+ * auxiliary fallback chain to `main_floor`.
+ *
+ * **Exported for unit testing.** The merge rule is simple but the logic
+ * is load-bearing — the pre-fix auxiliary path diverged from the main
+ * path by skipping this merge, and a direct unit test is the cheapest
+ * way to lock the contract down. Callers inside this file use this
+ * helper at the tier-4 scan site; external callers should prefer the
+ * higher-level `resolveAuxiliaryModel()` unless they specifically need
+ * to replicate the merge.
+ */
+export function computeEffectiveRoleModels(
+  provider: ApiProvider,
+  preset: ReturnType<typeof findPresetForLegacy>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _protocol: Protocol,
+): RoleModels {
+  let roleModels = safeParseRoleModels(provider.role_models_json);
+  // Same fallback condition as buildResolution(): only pull preset defaults
+  // when the user hasn't persisted a default or sonnet slot. Avoids
+  // overriding user customizations while still giving preset-backed
+  // providers their documented slots.
+  if (!roleModels.default && !roleModels.sonnet && preset?.defaultRoleModels) {
+    roleModels = { ...preset.defaultRoleModels, ...roleModels };
+  }
+  return roleModels;
+}
+
+function safeParseRoleModels(json: string | undefined | null): RoleModels {
+  if (!json) return {};
+  try {
+    const parsed = JSON.parse(json);
+    if (typeof parsed === 'object' && parsed !== null) return parsed as RoleModels;
+  } catch { /* ignore */ }
+  return {};
+}

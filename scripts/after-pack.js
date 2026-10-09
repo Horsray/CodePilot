@@ -1,20 +1,21 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * electron-builder afterPack hook.
  *
  * The standard @electron/rebuild step only rebuilds native modules found
- * in the `files` config. Since better-sqlite3 enters the app through
- * extraResources (via .next/standalone/), it gets skipped.
+ * in the `files` config. Since native modules enter the app through
+ * extraResources (via .next/standalone/), they get skipped.
  *
  * This hook:
  * 1. Explicitly rebuilds native modules for the target Electron ABI
- * 2. Copies rebuilt binaries into standalone resources
+ * 2. Copies the rebuilt .node into all locations within standalone resources
+ * 3. Restores the project node_modules build so local Node-based tests keep working
  */
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-
 module.exports = async function afterPack(context) {
+  const fs = await import('fs');
+  const os = await import('os');
+  const path = await import('path');
+  const { execSync } = await import('child_process');
+
   const appOutDir = context.appOutDir;
   const arch = context.arch;
   // electron-builder arch enum: 1=x64, 3=arm64, etc.
@@ -25,170 +26,168 @@ module.exports = async function afterPack(context) {
   const electronVersion =
     context.electronVersion ||
     context.packager?.config?.electronVersion ||
-    require(path.join(process.cwd(), 'node_modules', 'electron', 'package.json')).version;
+    JSON.parse(fs.readFileSync(path.join(process.cwd(), 'node_modules', 'electron', 'package.json'), 'utf8')).version;
 
   console.log(`[afterPack] Electron ${electronVersion}, arch=${archName}, platform=${platform}`);
 
-  const nativeModules = ['better-sqlite3', 'node-pty'];
-
-  // Step 1: Explicitly rebuild native modules for the target Electron version
   const projectDir = process.cwd();
-  console.log(`[afterPack] Rebuilding native modules for Electron ABI: ${nativeModules.join(', ')}`);
 
-  try {
-    // Use @electron/rebuild via npx (it's a dependency of electron-builder)
-    const rebuildCmd = `npx electron-rebuild -f ${nativeModules.map((mod) => `-o ${mod}`).join(' ')} -v ${electronVersion} -a ${archName}`;
-    console.log(`[afterPack] Running: ${rebuildCmd}`);
-    execSync(rebuildCmd, {
-      cwd: projectDir,
-      stdio: 'inherit',
-      timeout: 120000,
-    });
-    console.log('[afterPack] Native module rebuild completed successfully');
-  } catch (err) {
-    console.error('[afterPack] Failed to rebuild native modules:', err.message);
-    // Try alternative: use @electron/rebuild programmatically
-    try {
-      const { rebuild } = require('@electron/rebuild');
-      await rebuild({
-        buildPath: projectDir,
-        electronVersion: electronVersion,
-        arch: archName,
-        onlyModules: nativeModules,
-        force: true,
-      });
-      console.log('[afterPack] Rebuild via @electron/rebuild API succeeded');
-    } catch (err2) {
-      console.error('[afterPack] @electron/rebuild API also failed:', err2.message);
-      throw new Error(`Cannot rebuild native modules for Electron ABI: ${nativeModules.join(', ')}`);
-    }
-  }
-
-  // Step 2: Verify rebuilt .node files
-  const rebuiltSource = path.join(
-    projectDir, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'
-  );
-  const rebuiltPtySource = path.join(
-    projectDir, 'node_modules', 'node-pty', 'build', 'Release', 'pty.node'
-  );
-
-  if (!fs.existsSync(rebuiltSource)) {
-    throw new Error(`[afterPack] Rebuilt better_sqlite3.node not found at ${rebuiltSource}`);
-  }
-  if (!fs.existsSync(rebuiltPtySource)) {
-    throw new Error(`[afterPack] Rebuilt pty.node not found at ${rebuiltPtySource}`);
-  }
-
-  const sourceStats = fs.statSync(rebuiltSource);
-  console.log(`[afterPack] Rebuilt .node file: ${rebuiltSource} (${sourceStats.size} bytes, mtime: ${sourceStats.mtime.toISOString()})`);
-  const ptySourceStats = fs.statSync(rebuiltPtySource);
-  console.log(`[afterPack] Rebuilt .node file: ${rebuiltPtySource} (${ptySourceStats.size} bytes, mtime: ${ptySourceStats.mtime.toISOString()})`);
-
-  // Step 3: Find and replace native binaries in standalone resources
-  // macOS: <appOutDir>/CodePilot.app/Contents/Resources/standalone/...
-  // Windows/Linux: <appOutDir>/resources/standalone/...
-  const searchRoots = [
-    path.join(appOutDir, 'CodePilot.app', 'Contents', 'Resources', 'standalone'),
-    path.join(appOutDir, 'Contents', 'Resources', 'standalone'),
-    path.join(appOutDir, 'resources', 'standalone'),
+  // Define native modules to rebuild and copy
+  const nativeModules = [
+    {
+      name: 'better-sqlite3',
+      binaryName: 'better_sqlite3.node',
+      sourcePath: path.join(projectDir, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
+    },
+    {
+      name: 'node-pty',
+      binaryName: 'pty.node',
+      sourcePath: path.join(projectDir, 'node_modules', 'node-pty', 'build', 'Release', 'pty.node'),
+    },
+    {
+      name: 'zlib-sync',
+      binaryName: 'zlib_sync.node',
+      sourcePath: path.join(projectDir, 'node_modules', 'zlib-sync', 'build', 'Release', 'zlib_sync.node'),
+    },
   ];
 
-  let replacedSqlite = 0;
-  let replacedPty = 0;
-  let replacedSpawnHelper = 0;
-  let injectedPty = 0;
-  let injectedSpawnHelper = 0;
+  for (const moduleInfo of nativeModules) {
+    const { name, binaryName, sourcePath } = moduleInfo;
 
-  function walkAndReplace(dir) {
-    if (!fs.existsSync(dir)) return;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walkAndReplace(fullPath);
-      } else if (entry.name === 'better_sqlite3.node') {
-        const beforeSize = fs.statSync(fullPath).size;
-        fs.copyFileSync(rebuiltSource, fullPath);
-        const afterSize = fs.statSync(fullPath).size;
-        console.log(`[afterPack] Replaced ${fullPath} (${beforeSize} -> ${afterSize} bytes)`);
-        replacedSqlite++;
-      } else if (entry.name === 'pty.node') {
-        const beforeSize = fs.statSync(fullPath).size;
-        fs.copyFileSync(rebuiltPtySource, fullPath);
-        const afterSize = fs.statSync(fullPath).size;
-        console.log(`[afterPack] Replaced ${fullPath} (${beforeSize} -> ${afterSize} bytes)`);
-        replacedPty++;
-      } else if (entry.name === 'spawn-helper') {
-        const helperSource = path.join(projectDir, 'node_modules', 'node-pty', 'build', 'Release', 'spawn-helper');
-        if (fs.existsSync(helperSource)) {
-          const beforeSize = fs.statSync(fullPath).size;
-          fs.copyFileSync(helperSource, fullPath);
-          fs.chmodSync(fullPath, 0o755);
-          const afterSize = fs.statSync(fullPath).size;
-          console.log(`[afterPack] Replaced ${fullPath} (${beforeSize} -> ${afterSize} bytes)`);
-          replacedSpawnHelper++;
+    const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), `codepilot-${name}-backup-`));
+    const backupNodePath = path.join(backupDir, binaryName);
+
+    if (fs.existsSync(sourcePath)) {
+      fs.copyFileSync(sourcePath, backupNodePath);
+    }
+
+    try {
+      console.log(`[afterPack] Rebuilding ${name} for Electron ABI...`);
+
+      try {
+        const rebuildCmd = `npx electron-rebuild -f -o ${name} -v ${electronVersion} -a ${archName}`;
+        console.log(`[afterPack] Running: ${rebuildCmd}`);
+        execSync(rebuildCmd, {
+          cwd: projectDir,
+          stdio: 'inherit',
+          timeout: 120000,
+        });
+        console.log(`[afterPack] Rebuild of ${name} completed successfully`);
+      } catch (err) {
+        console.error(`[afterPack] Failed to rebuild ${name}:`, err.message);
+        try {
+          const { rebuild } = await import('@electron/rebuild');
+          await rebuild({
+            buildPath: projectDir,
+            electronVersion: electronVersion,
+            arch: archName,
+            onlyModules: [name],
+            force: true,
+          });
+          console.log(`[afterPack] Rebuild of ${name} via @electron/rebuild API succeeded`);
+        } catch (err2) {
+          console.error(`[afterPack] @electron/rebuild API also failed for ${name}:`, err2.message);
+          // throw new Error(`Cannot rebuild ${name} for Electron ABI`);
         }
       }
-    }
-  }
 
-  for (const root of searchRoots) {
-    walkAndReplace(root);
-  }
+      // Fallback: If build/Release is missing (common for prebuilt-only modules like node-pty),
+      // try to find it in prebuilds/ or run a manual node-gyp rebuild.
+      if (!fs.existsSync(sourcePath)) {
+        console.log(`[afterPack] ${binaryName} not found at ${sourcePath} after rebuild. Searching fallbacks...`);
+        
+        const platformMap = { 'mac': 'darwin', 'windows': 'win32', 'linux': 'linux' };
+        const nodePtyPrebuildPath = path.join(projectDir, 'node_modules', name, 'prebuilds', `${platformMap[platform] || platform}-${archName}`, binaryName);
+        
+        if (fs.existsSync(nodePtyPrebuildPath)) {
+          console.log(`[afterPack] Found ${binaryName} in prebuilds: ${nodePtyPrebuildPath}`);
+          // Copy prebuild to sourcePath so the rest of the script works
+          fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+          fs.copyFileSync(nodePtyPrebuildPath, sourcePath);
+        } else {
+          console.log(`[afterPack] No prebuild found. Attempting manual node-gyp rebuild for ${name}...`);
+          try {
+            const modDir = path.join(projectDir, 'node_modules', name);
+            // We use the electron headers to ensure ABI compatibility
+            const manualBuildCmd = `npx node-gyp rebuild --target=${electronVersion} --arch=${archName} --dist-url=https://electronjs.org/headers`;
+            console.log(`[afterPack] Running: ${manualBuildCmd}`);
+            execSync(manualBuildCmd, { cwd: modDir, stdio: 'inherit' });
+          } catch (e) {
+            console.error(`[afterPack] Manual rebuild failed: ${e.message}`);
+          }
+        }
+      }
 
-  // 中文注释：注入 node-pty 原生二进制到指定包目录（支持 node-pty 和 node-pty-哈希目录）。
-  function injectNodePtyBinary(packageDir) {
-    const releaseDir = path.join(packageDir, 'build', 'Release');
-    fs.mkdirSync(releaseDir, { recursive: true });
+      if (!fs.existsSync(sourcePath)) {
+        throw new Error(`[afterPack] CRITICAL: Rebuilt ${binaryName} not found at ${sourcePath} after all attempts`);
+      }
 
-    const ptyTarget = path.join(releaseDir, 'pty.node');
-    fs.copyFileSync(rebuiltPtySource, ptyTarget);
-    injectedPty++;
-    console.log(`[afterPack] Injected ${ptyTarget}`);
+      const sourceStats = fs.statSync(sourcePath);
+      console.log(`[afterPack] Rebuilt .node file for ${name}: ${sourcePath} (${sourceStats.size} bytes)`);
 
-    const helperSource = path.join(projectDir, 'node_modules', 'node-pty', 'build', 'Release', 'spawn-helper');
-    if (fs.existsSync(helperSource)) {
-      const helperTarget = path.join(releaseDir, 'spawn-helper');
-      fs.copyFileSync(helperSource, helperTarget);
-      fs.chmodSync(helperTarget, 0o755);
-      injectedSpawnHelper++;
-      console.log(`[afterPack] Injected ${helperTarget}`);
-    }
-  }
+      const searchRoots = [
+        path.join(appOutDir, 'CodePilot.app', 'Contents', 'Resources', 'standalone'),
+        path.join(appOutDir, 'Contents', 'Resources', 'standalone'),
+        path.join(appOutDir, 'resources', 'standalone'),
+        path.join(appOutDir, 'CodePilot.app', 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules'),
+        path.join(appOutDir, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules'),
+        path.join(appOutDir, 'resources', 'app.asar.unpacked', 'node_modules'),
+        path.join(appOutDir, 'CodePilot.app', 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', name),
+        path.join(appOutDir, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', name),
+        path.join(appOutDir, 'resources', 'app.asar.unpacked', 'node_modules', name)
+      ];
 
-  // 中文注释：扫描 node_modules 与 .next/node_modules，覆盖 Next 打包后的哈希目录。
-  function injectNodePtyUnder(baseDir) {
-    if (!fs.existsSync(baseDir)) return;
-    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (!/^node-pty($|-)/.test(entry.name)) continue;
-      injectNodePtyBinary(path.join(baseDir, entry.name));
-    }
-  }
+      let replaced = 0;
 
-  for (const root of searchRoots) {
-    injectNodePtyUnder(path.join(root, 'node_modules'));
-    injectNodePtyUnder(path.join(root, '.next', 'node_modules'));
-  }
+      // Handle Next.js nft omission: copy the .node file if it's completely missing in standalone/node_modules
+      for (const root of searchRoots) {
+        if (fs.existsSync(root) && path.basename(root) === 'standalone') {
+          const expectedDir = path.join(root, 'node_modules', name, 'build', 'Release');
+          const expectedDest = path.join(expectedDir, binaryName);
+          if (!fs.existsSync(expectedDest)) {
+            console.log(`[afterPack] Forcing copy of ${binaryName} into ${expectedDir} (missed by Next.js trace)`);
+            fs.mkdirSync(expectedDir, { recursive: true });
+            fs.copyFileSync(sourcePath, expectedDest);
+            replaced++;
+          }
+        }
+      }
 
-  if (replacedSqlite > 0 || replacedPty > 0 || injectedPty > 0) {
-    console.log(
-      `[afterPack] Successfully replaced better_sqlite3.node=${replacedSqlite}, pty.node=${replacedPty}, spawn-helper=${replacedSpawnHelper}; injected pty.node=${injectedPty}, injected spawn-helper=${injectedSpawnHelper}`
-    );
-  } else {
-    console.warn('[afterPack] WARNING: No rebuilt native binaries were found in standalone resources!');
-    for (const root of searchRoots) {
-      if (fs.existsSync(root)) {
-        console.log(`[afterPack] Contents of ${root}:`, fs.readdirSync(root).slice(0, 20));
+      function walkAndReplace(dir) {
+        if (!fs.existsSync(dir)) return;
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walkAndReplace(fullPath);
+          } else if (entry.name === binaryName) {
+            const beforeSize = fs.statSync(fullPath).size;
+            fs.copyFileSync(sourcePath, fullPath);
+            const afterSize = fs.statSync(fullPath).size;
+            console.log(`[afterPack] Replaced ${fullPath} (${beforeSize} -> ${afterSize} bytes)`);
+            replaced++;
+          }
+        }
+      }
+
+      for (const root of searchRoots) {
+        walkAndReplace(root);
+      }
+
+      if (replaced > 0) {
+        console.log(`[afterPack] Successfully replaced/copied ${replaced} ${binaryName} file(s) with Electron ABI build`);
       } else {
-        console.log(`[afterPack] Path does not exist: ${root}`);
+        console.warn(`[afterPack] WARNING: No ${binaryName} files found in standalone resources!`);
+      }
+    } finally {
+      try {
+        if (fs.existsSync(backupNodePath)) {
+          fs.copyFileSync(backupNodePath, sourcePath);
+          console.log(`[afterPack] Restored Node ABI ${binaryName} in project node_modules`);
+        }
+      } finally {
+        fs.rmSync(backupDir, { recursive: true, force: true });
       }
     }
   }
-
-  // Note: Ad-hoc code signing moved to scripts/after-sign.js (afterSign hook).
-  // afterSign runs after electron-builder's own signing step (which is a no-op
-  // with CSC_IDENTITY_AUTO_DISCOVERY=false), ensuring the signature is the last
-  // modification before DMG/ZIP creation.
 };

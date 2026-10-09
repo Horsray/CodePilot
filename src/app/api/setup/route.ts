@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSetting, setSetting, getDb } from '@/lib/db';
+import { getSetting, setSetting } from '@/lib/db';
 import { findClaudeBinary } from '@/lib/platform';
+import { hasCodePilotProvider } from '@/lib/provider-presence';
 
 export async function GET() {
   try {
     // Check if setup was already completed
     const completedRaw = getSetting('setup_completed');
-    const completed = completedRaw === 'true';
+    let completed = completedRaw === 'true';
 
     // Claude status
     let claude: 'not-configured' | 'completed' | 'skipped' | 'needs-fix' = 'not-configured';
@@ -22,36 +23,20 @@ export async function GET() {
       }
     }
 
-    // Provider status — always check real credentials first, skipped is only a fallback
+    // Provider status — MUST stay in lockstep with /api/chat's precheck
+    // (hasCodePilotProvider). If SetupCenter tells a user "provider: completed"
+    // while the chat entry is 412-blocking them, the wizard is lying.
+    //
+    // Specifically: Claude CLI existence is NOT a provider source for CodePilot —
+    // it's the Claude card's concern. A user who only has the CLI installed
+    // (no DB provider, no env, no OAuth) falls into "not-configured" here so
+    // the Provider card can surface the "Add provider" CTA.
     let provider: 'not-configured' | 'completed' | 'skipped' | 'needs-fix' = 'not-configured';
-    const db = getDb();
-    const row = db.prepare('SELECT COUNT(*) as cnt FROM api_providers').get() as { cnt: number } | undefined;
-    if (row && row.cnt > 0) {
+    if (hasCodePilotProvider()) {
       provider = 'completed';
     } else {
-      // Check env-based or app-settings-based credentials
-      const appToken = getSetting('anthropic_auth_token');
-      if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || appToken) {
-        provider = 'completed';
-      } else {
-        // Check if Claude Code CLI is available — it acts as a provider via SDK proxy
-        // (the built-in 'env' provider in /api/providers/models always lists Claude Code,
-        // so we must recognise the CLI as a valid provider to keep the UI consistent)
-        try {
-          const binary = findClaudeBinary();
-          if (binary) {
-            provider = 'completed';
-          }
-        } catch {
-          // CLI not found — continue to fallback
-        }
-
-        if (provider === 'not-configured') {
-          // No real provider found — check if user previously skipped setup
-          const providerSkipped = getSetting('setup_provider_skipped');
-          provider = providerSkipped === 'true' ? 'skipped' : 'not-configured';
-        }
-      }
+      const providerSkipped = getSetting('setup_provider_skipped');
+      provider = providerSkipped === 'true' ? 'skipped' : 'not-configured';
     }
 
     // Project status
@@ -69,6 +54,20 @@ export async function GET() {
       } catch {
         project = 'needs-fix';
       }
+    }
+
+    // Normalize stale per-card state: if every card is already completed or
+    // skipped but the top-level setup_completed flag never got written, write
+    // it now. Fixes users whose three cards landed at 3/3 without ever
+    // triggering the frontend auto-close path (e.g. initial GET returned 3/3,
+    // so SetupCenter's `initialCompletedCount < 3` gate never fired).
+    const allCardsDone =
+      (claude === 'completed' || claude === 'skipped') &&
+      (provider === 'completed' || provider === 'skipped') &&
+      (project === 'completed' || project === 'skipped');
+    if (allCardsDone && !completed) {
+      setSetting('setup_completed', 'true');
+      completed = true;
     }
 
     return NextResponse.json({

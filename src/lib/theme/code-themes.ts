@@ -136,28 +136,11 @@ export const SHIKI_DEFAULT_DARK: BundledTheme = 'github-dark';
 
 // ── Resolution helpers ──────────────────────────────────────────────────
 
-import type { ThemeFamilyMeta, CodeThemeMapping } from './types';
-
-/**
- * Resolve a code-theme mapping from the current family metadata.
- * Returns `undefined` if family has no `codeTheme`.
- */
-export function resolveCodeTheme(
-  families: ThemeFamilyMeta[],
-  familyId: string,
-): CodeThemeMapping | undefined {
-  return families.find((f) => f.id === familyId)?.codeTheme;
-}
-
-/**
- * Resolve a shiki-theme mapping from the current family metadata.
- * Returns `undefined` if family has no `shikiTheme`.
- */
-export function resolveShikiTheme(
-  families: ThemeFamilyMeta[],
-  familyId: string,
-): CodeThemeMapping | undefined {
-  return families.find((f) => f.id === familyId)?.shikiTheme;
+// 中文注释：多主题家族系统已移除，代码高亮固定走默认映射；
+// 保留 CodeThemeMapping 类型供调用方传入显式映射（当前均为 undefined）。
+export interface CodeThemeMapping {
+  light?: string;
+  dark?: string;
 }
 
 /** Pick a Prism style for the given mode. Falls back to oneDark / oneLight. */

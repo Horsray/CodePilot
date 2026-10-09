@@ -3,22 +3,12 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
-import type { ChatSession, Message, SettingsMap, TaskItem, TaskStatus, ApiProvider, CreateProviderRequest, UpdateProviderRequest, MediaJob, MediaJobStatus, MediaJobItem, MediaJobItemStatus, MediaContextEvent, BatchConfig, CustomCliTool, ScheduledTask } from '@/types';
+import type { ChatSession, Message, SettingsMap, TaskItem, TaskStatus, ApiProvider, CreateProviderRequest, UpdateProviderRequest, MediaJob, MediaJobStatus, MediaJobItem, MediaJobItemStatus, MediaContextEvent, BatchConfig, CustomCliTool, ScheduledTask, CustomRule, BackgroundJob, BackgroundJobStatus } from '@/types';
 import type { ChannelType, ChannelBinding } from './bridge/types';
 import { getLocalDateString, localDayStartAsUTC } from './utils';
+import { inferProtocolFromLegacy } from './provider-catalog';
 
-const isTestRuntime = (
-  process.env.NODE_ENV === 'test' ||
-  process.argv.includes('--test') ||
-  process.env.npm_lifecycle_event === 'test' ||
-  process.env.npm_lifecycle_event === 'test:unit'
-);
-const hasCustomDataDir = !!process.env.CLAUDE_GUI_DATA_DIR;
-const dataDir = process.env.CLAUDE_GUI_DATA_DIR || (
-  isTestRuntime
-    ? path.join(os.tmpdir(), `codepilot-test-${process.pid}`)
-    : path.join(os.homedir(), '.codepilot')
-);
+const dataDir = process.env.CLAUDE_GUI_DATA_DIR || path.join(os.homedir(), '.codepilot');
 const DB_PATH = path.join(dataDir, 'codepilot.db');
 
 let db: Database.Database | null = null;
@@ -67,7 +57,7 @@ export function getDb(): Database.Database {
     }
 
     // Migrate from old locations if the new DB doesn't exist yet
-    if (!hasCustomDataDir && !isTestRuntime && !fs.existsSync(DB_PATH)) {
+    if (!fs.existsSync(DB_PATH)) {
       const home = os.homedir();
       const oldPaths = [
         // Old Electron userData paths (app.getPath('userData'))
@@ -115,7 +105,10 @@ function initDb(db: Database.Database): void {
       model TEXT NOT NULL DEFAULT '',
       system_prompt TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
-      sdk_session_id TEXT NOT NULL DEFAULT ''
+      sdk_session_id TEXT NOT NULL DEFAULT '',
+      team_mode TEXT NOT NULL DEFAULT 'on' CHECK(team_mode IN ('off', 'on', 'auto')),
+      orchestration_tier TEXT NOT NULL DEFAULT 'multi' CHECK(orchestration_tier IN ('single', 'multi')),
+      orchestration_profile_id TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -323,6 +316,46 @@ function initDb(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_perm_links_request ON channel_permission_links(permission_request_id);
+
+    -- Custom Context Rules
+    CREATE TABLE IF NOT EXISTS custom_rules (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK(type IN ('personal', 'project')),
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      project_ids TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Background Jobs: persisted state for tool calls moved to background
+    CREATE TABLE IF NOT EXISTS background_jobs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      tool_input TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'timeout')),
+      output TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS file_checkpoints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      message_id TEXT NOT NULL DEFAULT 'session-wide',
+      file_path TEXT NOT NULL,
+      original_content TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      UNIQUE(session_id, file_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_session ON file_checkpoints(session_id);
+    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_message ON file_checkpoints(message_id);
   `);
 
   // Run migrations for existing databases
@@ -399,7 +432,55 @@ function migrateDb(db: Database.Database): void {
   if (!colNames.includes('context_summary_updated_at')) {
     safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN context_summary_updated_at TEXT NOT NULL DEFAULT ''");
   }
+  // Coverage boundary (legacy, timestamp-based): created_at string of the
+  // last covered message. Superseded by context_summary_boundary_rowid
+  // because second-precision wall-clock timestamps can't distinguish a
+  // last-compressed message from a first-kept message written in the same
+  // second. Kept as a column for migration / UI-debug compatibility; NO
+  // CODE PATH should read or write it for filtering decisions.
+  if (!colNames.includes('context_summary_boundary_at')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN context_summary_boundary_at TEXT NOT NULL DEFAULT ''");
+  }
+  // Coverage boundary (authoritative): SQLite rowid of the last message
+  // actually covered by the current summary. rowid is monotonic per insert,
+  // so it can disambiguate same-second writes the timestamp column cannot.
+  // 0 = "no boundary" (legacy rows, reactive-compact paths with no DB rowid
+  // metadata, sessions whose summary predates this column). Filter passes
+  // history through unchanged when boundaryRowid is 0.
+  if (!colNames.includes('context_summary_boundary_rowid')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN context_summary_boundary_rowid INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!colNames.includes('team_mode')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN team_mode TEXT NOT NULL DEFAULT 'off'");
+  }
+  if (!colNames.includes('orchestration_tier')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN orchestration_tier TEXT NOT NULL DEFAULT 'single'");
+  }
+  if (!colNames.includes('orchestration_profile_id')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN orchestration_profile_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (!colNames.includes('last_opened_at')) {
+    safeAddColumn(db, "ALTER TABLE chat_sessions ADD COLUMN last_opened_at TEXT NOT NULL DEFAULT ''");
+    // Give existing history seven full days before it can become eligible.
+    db.exec("UPDATE chat_sessions SET last_opened_at = datetime('now') WHERE last_opened_at = ''");
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_last_opened_at ON chat_sessions(last_opened_at)');
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_runtime_status ON chat_sessions(runtime_status)");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS file_checkpoints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      message_id TEXT NOT NULL DEFAULT 'session-wide',
+      file_path TEXT NOT NULL,
+      original_content TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      UNIQUE(session_id, file_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_session ON file_checkpoints(session_id);
+    CREATE INDEX IF NOT EXISTS idx_file_checkpoints_message ON file_checkpoints(message_id);
+  `);
 
   // Migrate is_active provider to default_provider_id setting
   const defaultProviderSetting = db.prepare("SELECT value FROM settings WHERE key = 'default_provider_id'").get() as { value: string } | undefined;
@@ -421,6 +502,16 @@ function migrateDb(db: Database.Database): void {
 
   if (!msgColNames.includes('is_heartbeat_ack')) {
     safeAddColumn(db, "ALTER TABLE messages ADD COLUMN is_heartbeat_ack INTEGER NOT NULL DEFAULT 0");
+  }
+
+  if (!msgColNames.includes('referenced_contexts')) {
+    safeAddColumn(db, "ALTER TABLE messages ADD COLUMN referenced_contexts TEXT");
+  }
+
+  // 中文注释：功能名称「工具文件追踪列」，用法是持久化AI实际读取/写入的文件和访问的网页URL，
+  // 解决会话切换后上下文统计丢失文件/网页信息的问题
+  if (!msgColNames.includes('tool_files')) {
+    safeAddColumn(db, "ALTER TABLE messages ADD COLUMN tool_files TEXT");
   }
 
   // Ensure tasks table exists for databases created before this migration
@@ -767,6 +858,12 @@ function migrateDb(db: Database.Database): void {
     safeAddColumn(db, "ALTER TABLE channel_permission_links ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Add provider_id to channel_bindings for per-binding provider override
+  const bindingCols = db.prepare("PRAGMA table_info(channel_bindings)").all() as { name: string }[];
+  if (bindingCols.length > 0 && !bindingCols.map(c => c.name).includes('provider_id')) {
+    safeAddColumn(db, "ALTER TABLE channel_bindings ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''");
+  }
+
   // Channel configs table (structured config for channel plugins)
   db.exec(`
     CREATE TABLE IF NOT EXISTS channel_configs (
@@ -853,13 +950,16 @@ function migrateDb(db: Database.Database): void {
     }
   }
 
-  // Migration: remove explicitly openai-compatible providers (SDK does not support them)
-  // and backfill empty protocol for legacy custom providers using URL-based inference.
+  // Migration: backfill empty protocol for legacy custom providers using URL-based inference.
+  // 中文注释：原先这里有一条「DELETE FROM api_providers WHERE protocol = 'openai-compatible'」，
+  // 理由写的是"SDK 不支持 openai-compatible"。该理由已过时 —— 现在通过本地转换代理
+  // (/api/proxy/<providerId>，见 src/lib/proxy/handler.ts) 把 Anthropic Messages 转成
+  // OpenAI 格式转发，bananarouter 等 OpenAI 兼容中转可以正常使用。
+  // 这条删除导致用户每次重启应用后 openai-compatible 服务商配置都会被清空（"维护不进去"），
+  // 因此移除；否则再次被删只能重新添加。
   try {
     const providerCols = db.prepare("PRAGMA table_info(api_providers)").all() as { name: string }[];
     if (providerCols.some(c => c.name === 'protocol')) {
-      db.exec("DELETE FROM api_providers WHERE protocol = 'openai-compatible'");
-
       // Backfill empty protocol for legacy custom providers — infer from base_url.
       // These are valid Anthropic-compatible providers (GLM, Kimi, MiniMax, etc.)
       // that were created before the protocol column existed.
@@ -867,8 +967,9 @@ function migrateDb(db: Database.Database): void {
         "SELECT id, base_url FROM api_providers WHERE provider_type = 'custom' AND (protocol = '' OR protocol IS NULL)"
       ).all() as { id: string; base_url: string }[];
       if (legacyCustom.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic require to avoid circular import at module load
-        const { inferProtocolFromLegacy } = require('./provider-catalog');
+        // Use the top-level static import; no circular-import risk since
+        // provider-catalog doesn't depend on db. The previous dynamic
+        // require tripped Turbopack's NFT into tracing the whole project.
         const updateStmt = db.prepare("UPDATE api_providers SET protocol = ? WHERE id = ?");
         for (const row of legacyCustom) {
           const protocol = inferProtocolFromLegacy('custom', row.base_url || '');
@@ -898,8 +999,15 @@ function migrateDb(db: Database.Database): void {
       session_id TEXT,
       working_directory TEXT,
       permanent INTEGER NOT NULL DEFAULT 0,
+      group_id TEXT,
+      group_name TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      notification_channels TEXT NOT NULL DEFAULT '["toast"]',
+      session_binding TEXT,
+      tool_authorization TEXT,
+      active_hours_start TEXT,
+      active_hours_end TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status ON scheduled_tasks(status);
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run);
@@ -907,6 +1015,18 @@ function migrateDb(db: Database.Database): void {
 
   // Migration: add permanent column for existing databases
   safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN permanent INTEGER NOT NULL DEFAULT 0");
+  // Migration: add group columns for task grouping (同组任务折叠显示)
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN group_id TEXT");
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN group_name TEXT");
+  // Migration: add notification_channels (多选通知渠道)
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN notification_channels TEXT NOT NULL DEFAULT '[\"toast\"]'");
+  // Migration: add session_binding (会话绑定)
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN session_binding TEXT");
+  // Migration: add tool_authorization (工具授权)
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN tool_authorization TEXT");
+  // Migration: add active hours
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN active_hours_start TEXT");
+  safeAddColumn(db, "ALTER TABLE scheduled_tasks ADD COLUMN active_hours_end TEXT");
 
   // Migration: set default_panel to 'file_tree' only if not already configured
   db.prepare(
@@ -953,23 +1073,95 @@ export function getSession(id: string): ChatSession | undefined {
   return db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSession | undefined;
 }
 
-export function getSessionSummary(sessionId: string): { summary: string; updatedAt: string } {
+/** Only an explicit user visit renews retention; background GETs do not. */
+export function markSessionOpened(id: string, now: Date = new Date()): boolean {
+  const timestamp = now.toISOString().replace('T', ' ').split('.')[0];
+  return getDb().prepare('UPDATE chat_sessions SET last_opened_at = ? WHERE id = ?')
+    .run(timestamp, id).changes > 0;
+}
+
+/** Keep each project's newest ten plus any recent or still-used sessions. */
+export function cleanupStaleSessions(now: Date = new Date()): number {
+  const db = getDb();
+  const timestamp = now.toISOString().replace('T', ' ').split('.')[0];
+  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    .toISOString().replace('T', ' ').split('.')[0];
+  return db.transaction(() => {
+    const scheduledSessions = new Set<string>();
+    const tasks = db.prepare('SELECT session_id, session_binding FROM scheduled_tasks').all() as {
+      session_id: string | null; session_binding: string | null;
+    }[];
+    for (const task of tasks) {
+      if (task.session_id) scheduledSessions.add(task.session_id);
+      if (task.session_binding) {
+        try {
+          const binding = JSON.parse(task.session_binding) as { session_id?: string } | null;
+          if (binding?.session_id) scheduledSessions.add(binding.session_id);
+        } catch { /* Invalid bindings cannot reference a runnable session. */ }
+      }
+    }
+    const candidates = db.prepare(`
+      WITH ranked AS (
+        SELECT id, last_opened_at, runtime_status,
+          ROW_NUMBER() OVER (PARTITION BY working_directory ORDER BY updated_at DESC, id DESC) AS position
+        FROM chat_sessions
+      )
+      SELECT id FROM ranked s
+      WHERE position > 10 AND last_opened_at != '' AND last_opened_at < ?
+        AND runtime_status NOT IN ('running', 'waiting_permission')
+        AND NOT EXISTS (SELECT 1 FROM channel_bindings b WHERE b.codepilot_session_id = s.id)
+        AND NOT EXISTS (SELECT 1 FROM session_runtime_locks l WHERE l.session_id = s.id AND l.expires_at >= ?)
+        AND NOT EXISTS (SELECT 1 FROM permission_requests p WHERE p.session_id = s.id AND p.status = 'pending')
+    `).all(cutoff, timestamp) as { id: string }[];
+    let deleted = 0;
+    for (const { id } of candidates) {
+      if (!scheduledSessions.has(id) && deleteSession(id)) deleted++;
+    }
+    return deleted;
+  })();
+}
+
+export function getSessionSummary(sessionId: string): {
+  summary: string;
+  /** Wall-clock time the summary row was written (UI/debug only — do NOT use as coverage boundary) */
+  updatedAt: string;
+  /** SQLite rowid of the last message covered by the summary; 0 = no boundary known */
+  boundaryRowid: number;
+} {
   const db = getDb();
   const row = db.prepare(
-    'SELECT context_summary, context_summary_updated_at FROM chat_sessions WHERE id = ?'
-  ).get(sessionId) as { context_summary: string; context_summary_updated_at: string } | undefined;
+    'SELECT context_summary, context_summary_updated_at, context_summary_boundary_rowid FROM chat_sessions WHERE id = ?'
+  ).get(sessionId) as { context_summary: string; context_summary_updated_at: string; context_summary_boundary_rowid: number } | undefined;
   return {
     summary: row?.context_summary || '',
     updatedAt: row?.context_summary_updated_at || '',
+    boundaryRowid: row?.context_summary_boundary_rowid ?? 0,
   };
 }
 
-export function updateSessionSummary(sessionId: string, summary: string): void {
+/**
+ * Write a new context summary together with its coverage boundary.
+ *
+ * `boundaryRowid` MUST be the SQLite rowid of the last message actually
+ * covered by this summary (i.e. the last entry in messagesToCompress for the
+ * auto pre-compression path, or the last row of allMsgs for manual /compact).
+ * Pass 0 only when the caller has no DB rowid available (reactive compact
+ * inside streamClaude receives {role, content} pairs with no DB metadata);
+ * 0 causes filterHistoryByCompactBoundary to passthrough — degraded but safe.
+ *
+ * Do NOT pass `new Date()` or any wall-clock time here: write time and
+ * coverage boundary diverge on the auto pre-compression path (see
+ * filterHistoryByCompactBoundary doc). And do NOT reuse an earlier timestamp
+ * column for filtering — second-precision timestamps can't distinguish a
+ * last-compressed message from a first-kept message written in the same
+ * second. rowid is the only robust boundary.
+ */
+export function updateSessionSummary(sessionId: string, summary: string, boundaryRowid: number): void {
   const db = getDb();
   const now = new Date().toISOString().replace('T', ' ').split('.')[0];
   db.prepare(
-    'UPDATE chat_sessions SET context_summary = ?, context_summary_updated_at = ? WHERE id = ?'
-  ).run(summary, now, sessionId);
+    'UPDATE chat_sessions SET context_summary = ?, context_summary_updated_at = ?, context_summary_boundary_rowid = ? WHERE id = ?'
+  ).run(summary, now, boundaryRowid, sessionId);
 }
 
 export function createSession(
@@ -980,6 +1172,9 @@ export function createSession(
   mode?: string,
   providerId?: string,
   permissionProfile?: string,
+  teamMode?: 'off' | 'on' | 'auto',
+  orchestrationTier?: 'single' | 'multi',
+  orchestrationProfileId?: string,
 ): ChatSession {
   const db = getDb();
   const id = crypto.randomBytes(16).toString('hex');
@@ -987,9 +1182,29 @@ export function createSession(
   const wd = workingDirectory || '';
   const projectName = path.basename(wd);
 
+  // 中文注释：功能名称「创建会话并持久化编排配置」，用法是在新会话创建时同时保存 team_mode 和 orchestration_tier。
   db.prepare(
-    'INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, sdk_session_id, project_name, status, mode, sdk_cwd, provider_id, permission_profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, title || 'New Chat', now, now, model || '', systemPrompt || '', wd, '', projectName, 'active', mode || 'code', wd, providerId || '', permissionProfile || 'default');
+    'INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, sdk_session_id, project_name, status, mode, sdk_cwd, provider_id, permission_profile, team_mode, orchestration_tier, orchestration_profile_id, last_opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    id,
+    title || 'New Chat',
+    now,
+    now,
+    model || '',
+    systemPrompt || '',
+    wd,
+    '',
+    projectName,
+    'active',
+    mode || 'code',
+    wd,
+    providerId || '',
+    permissionProfile || 'default',
+    teamMode || 'on',
+    orchestrationTier || 'multi',
+    orchestrationProfileId || '',
+    now,
+  );
 
   return getSession(id)!;
 }
@@ -1003,8 +1218,14 @@ export function getLatestSessionByWorkingDirectory(workingDirectory: string): Ch
 
 export function deleteSession(id: string): boolean {
   const db = getDb();
-  const result = db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
-  return result.changes > 0;
+  // Wrap in transaction: clean up tables without CASCADE before deleting session.
+  // channel_outbound_refs has codepilot_session_id but no FK CASCADE constraint,
+  // causing FK errors when foreign_keys=ON (#Sentry 40x SqliteError).
+  const txn = db.transaction(() => {
+    db.prepare('DELETE FROM channel_outbound_refs WHERE codepilot_session_id = ?').run(id);
+    return db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id).changes > 0;
+  });
+  return txn();
 }
 
 export function updateSessionTimestamp(id: string): void {
@@ -1074,6 +1295,53 @@ export function updateSessionPermissionProfile(id: string, profile: string): voi
   db.prepare('UPDATE chat_sessions SET permission_profile = ? WHERE id = ?').run(profile, id);
 }
 
+export function updateSessionTeamMode(id: string, mode: 'off' | 'on' | 'auto'): void {
+  const db = getDb();
+  db.prepare('UPDATE chat_sessions SET team_mode = ? WHERE id = ?').run(mode, id);
+}
+
+export function updateSessionOrchestrationTier(id: string, tier: 'single' | 'multi'): void {
+  const db = getDb();
+  db.prepare('UPDATE chat_sessions SET orchestration_tier = ? WHERE id = ?').run(tier, id);
+}
+
+export function updateSessionOrchestrationProfileId(id: string, profileId: string): void {
+  const db = getDb();
+  db.prepare('UPDATE chat_sessions SET orchestration_profile_id = ? WHERE id = ?').run(profileId, id);
+}
+
+/**
+ * Find a provider ID that supports a specific model ID.
+ * Useful for multi-model orchestration when routing to specialized agents.
+ */
+export function findProviderIdByModel(modelId: string): string | undefined {
+  const db = getDb();
+  // Check provider_models table first (user-configured models)
+  const pm = db.prepare('SELECT provider_id FROM provider_models WHERE model_id = ? OR upstream_model_id = ?').get(modelId, modelId) as { provider_id: string } | undefined;
+  if (pm) return pm.provider_id;
+
+  // Fallback: check vendors by name (fuzzy match)
+  const providers = db.prepare('SELECT id, name FROM api_providers WHERE is_active = 1').all() as Array<{ id: string, name: string }>;
+  const lowerModel = modelId.toLowerCase();
+  
+  if (lowerModel.includes('qwen') || lowerModel.includes('olmx')) {
+    const olmx = providers.find(p => p.name.toLowerCase().includes('olmx'));
+    if (olmx) return olmx.id;
+  }
+  
+  if (lowerModel.includes('minimax')) {
+    const mm = providers.find(p => p.name.toLowerCase().includes('minimax') || p.name.toLowerCase().includes('cc-switch'));
+    if (mm) return mm.id;
+  }
+
+  if (lowerModel.includes('claude') || lowerModel.includes('opus') || lowerModel.includes('sonnet')) {
+    const anthropic = providers.find(p => p.name.toLowerCase().includes('anthropic') || p.name.toLowerCase().includes('cc-switch'));
+    if (anthropic) return anthropic.id;
+  }
+
+  return undefined;
+}
+
 // ==========================================
 // Message Operations
 // ==========================================
@@ -1115,14 +1383,18 @@ export function addMessage(
   role: 'user' | 'assistant',
   content: string,
   tokenUsage?: string | null,
+  referencedContexts?: string | null,
+  // 中文注释：功能名称「工具文件持久化」，用法是保存AI实际读取/写入的文件路径和网页URL，
+  // JSON字符串数组格式，使会话切换后上下文统计仍能显示文件/网页信息
+  toolFiles?: string | null,
 ): Message {
   const db = getDb();
   const id = crypto.randomBytes(16).toString('hex');
   const now = new Date().toISOString().replace('T', ' ').split('.')[0];
 
   db.prepare(
-    'INSERT INTO messages (id, session_id, role, content, created_at, token_usage) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, sessionId, role, content, now, tokenUsage || null);
+    'INSERT INTO messages (id, session_id, role, content, created_at, token_usage, referenced_contexts, tool_files) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, sessionId, role, content, now, tokenUsage || null, referencedContexts || null, toolFiles || null);
 
   updateSessionTimestamp(sessionId);
 
@@ -1188,6 +1460,136 @@ export function clearSessionMessages(sessionId: string): void {
   db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
   // Reset SDK session ID so next message starts fresh
   db.prepare('UPDATE chat_sessions SET sdk_session_id = ? WHERE id = ?').run('', sessionId);
+}
+
+// ==========================================
+// Session History Search (codepilot_session_search tool)
+// ==========================================
+
+export interface SessionSearchResult {
+  messageId: string;
+  sessionId: string;
+  sessionTitle: string;
+  role: 'user' | 'assistant';
+  createdAt: string;
+  /** Snippet extracted from content with query context (up to ~200 chars). */
+  snippet: string;
+  /** Derived message type for search UI icons/filtering. */
+  contentType: 'user' | 'assistant' | 'tool';
+}
+
+/**
+ * Full-text search across message history.
+ *
+ * Uses SQL LIKE for portability (no FTS5 dependency). Matches are case-insensitive
+ * via LIKE's default behavior with ASCII text. For CJK queries the match is exact
+ * byte-sequence substring — good enough for v1.
+ *
+ * Results are ordered by created_at DESC (most recent first) and joined with
+ * chat_sessions to include session titles. Heartbeat ACK messages are excluded
+ * from results when the schema has that column.
+ *
+ * @param query Search term. Wildcards `_` and `%` are treated as literals.
+ * @param options.sessionId Optional filter to a specific session.
+ * @param options.limit Max results (default 5).
+ */
+export function searchMessages(
+  query: string,
+  options: { sessionId?: string; limit?: number } = {},
+): SessionSearchResult[] {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(options.limit ?? 5, 100));
+
+  if (!query || query.trim() === '') return [];
+
+  // Escape LIKE wildcards in the user query so they're treated as literals.
+  const escapedQuery = query.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  const pattern = `%${escapedQuery}%`;
+
+  let hasAckColumn = false;
+  try {
+    const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
+    hasAckColumn = cols.some(c => c.name === 'is_heartbeat_ack');
+  } catch { /* ignore — assume no ack column */ }
+
+  const ackFilter = hasAckColumn ? ' AND (m.is_heartbeat_ack = 0 OR m.is_heartbeat_ack IS NULL)' : '';
+
+  let sql = `
+    SELECT
+      m.id AS messageId,
+      m.session_id AS sessionId,
+      COALESCE(s.title, '(untitled)') AS sessionTitle,
+      m.role AS role,
+      m.created_at AS createdAt,
+      m.content AS content
+    FROM messages m
+    LEFT JOIN chat_sessions s ON s.id = m.session_id
+    WHERE m.content LIKE ? ESCAPE '\\'${ackFilter}
+  `;
+  const params: unknown[] = [pattern];
+
+  if (options.sessionId) {
+    sql += ' AND m.session_id = ?';
+    params.push(options.sessionId);
+  }
+
+  sql += ' ORDER BY m.created_at DESC LIMIT ?';
+  params.push(limit);
+
+  const rows = db.prepare(sql).all(...params) as Array<{
+    messageId: string;
+    sessionId: string;
+    sessionTitle: string;
+    role: 'user' | 'assistant';
+    createdAt: string;
+    content: string;
+  }>;
+
+  // Build snippet around the first match position in each row.
+  const lowerQuery = query.toLowerCase();
+  return rows.map(row => ({
+    messageId: row.messageId,
+    sessionId: row.sessionId,
+    sessionTitle: row.sessionTitle,
+    role: row.role,
+    createdAt: row.createdAt,
+    snippet: buildSnippet(row.content, lowerQuery),
+    contentType: deriveContentType(row.role, row.content),
+  }));
+}
+
+function deriveContentType(role: 'user' | 'assistant', content: string): 'user' | 'assistant' | 'tool' {
+  if (role === 'user') return 'user';
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      if (parsed.some((b: unknown) => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_use')) {
+        return 'tool';
+      }
+    }
+  } catch {
+    // fallback to plain text assistant
+  }
+  return 'assistant';
+}
+
+/** Extract a ~140-char snippet with the match near the front so it survives single-line truncation in UI lists. */
+function buildSnippet(content: string, lowerQuery: string): string {
+  if (!content) return '';
+  const lowerContent = content.toLowerCase();
+  const idx = lowerContent.indexOf(lowerQuery);
+  if (idx === -1) {
+    // Fall back to the first 200 chars — happens when content is a JSON blob
+    // and the query matches bytes inside quoted strings.
+    return content.length > 200 ? content.slice(0, 200) + '…' : content;
+  }
+  const LEADING = 28;
+  const TAIL = 100;
+  const start = Math.max(0, idx - LEADING);
+  const end = Math.min(content.length, idx + lowerQuery.length + TAIL);
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < content.length ? '…' : '';
+  return prefix + content.slice(start, end) + suffix;
 }
 
 // ==========================================
@@ -1292,6 +1694,7 @@ export function syncSdkTasks(
     switch (s) {
       case 'completed': return 'completed';
       case 'in_progress': return 'in_progress';
+      case 'failed': return 'failed';
       case 'pending': return 'pending';
       default: return 'pending';
     }
@@ -2036,6 +2439,31 @@ export function getPermissionRequest(id: string): {
   return db.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id) as ReturnType<typeof getPermissionRequest>;
 }
 
+export function getLatestPendingPermissionRequestBySession(sessionId: string): {
+  id: string;
+  session_id: string;
+  sdk_session_id: string;
+  tool_name: string;
+  tool_input: string;
+  decision_reason: string;
+  status: string;
+  updated_permissions: string;
+  updated_input: string | null;
+  message: string;
+  created_at: string;
+  expires_at: string;
+  resolved_at: string | null;
+} | undefined {
+  const db = getDb();
+  return db.prepare(
+    `SELECT *
+     FROM permission_requests
+     WHERE session_id = ? AND status = 'pending'
+     ORDER BY created_at DESC
+     LIMIT 1`
+  ).get(sessionId) as ReturnType<typeof getLatestPendingPermissionRequestBySession>;
+}
+
 // ==========================================
 // Bridge: Channel Binding Operations
 // ==========================================
@@ -2047,7 +2475,7 @@ export function getChannelBinding(channelType: ChannelType, chatId: string): Cha
   ).get(channelType, chatId) as {
     id: string; channel_type: string; chat_id: string; codepilot_session_id: string;
     sdk_session_id: string; working_directory: string; model: string; mode: string;
-    active: number; created_at: string; updated_at: string;
+    provider_id: string; active: number; created_at: string; updated_at: string;
   } | undefined;
   if (!row) return undefined;
   return {
@@ -2059,6 +2487,7 @@ export function getChannelBinding(channelType: ChannelType, chatId: string): Cha
     workingDirectory: row.working_directory,
     model: row.model,
     mode: row.mode as 'code' | 'plan' | 'ask',
+    providerId: row.provider_id || undefined,
     active: row.active === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -2073,6 +2502,7 @@ export function upsertChannelBinding(params: {
   workingDirectory?: string;
   model?: string;
   mode?: 'code' | 'plan' | 'ask';
+  providerId?: string;
 }): ChannelBinding {
   const db = getDb();
   const now = new Date().toISOString().replace('T', ' ').split('.')[0];
@@ -2080,7 +2510,7 @@ export function upsertChannelBinding(params: {
 
   if (existing) {
     db.prepare(
-      `UPDATE channel_bindings SET codepilot_session_id = ?, sdk_session_id = ?, working_directory = ?, model = ?, mode = ?, updated_at = ?
+      `UPDATE channel_bindings SET codepilot_session_id = ?, sdk_session_id = ?, working_directory = ?, model = ?, mode = ?, provider_id = ?, updated_at = ?
        WHERE channel_type = ? AND chat_id = ?`
     ).run(
       params.codepilotSessionId,
@@ -2088,6 +2518,7 @@ export function upsertChannelBinding(params: {
       params.workingDirectory ?? existing.workingDirectory,
       params.model ?? existing.model,
       params.mode ?? existing.mode,
+      params.providerId ?? existing.providerId ?? '',
       now,
       params.channelType,
       params.chatId,
@@ -2095,8 +2526,8 @@ export function upsertChannelBinding(params: {
   } else {
     const id = crypto.randomBytes(16).toString('hex');
     db.prepare(
-      `INSERT INTO channel_bindings (id, channel_type, chat_id, codepilot_session_id, sdk_session_id, working_directory, model, mode, active, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+      `INSERT INTO channel_bindings (id, channel_type, chat_id, codepilot_session_id, sdk_session_id, working_directory, model, mode, provider_id, active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
     ).run(
       id,
       params.channelType,
@@ -2106,6 +2537,7 @@ export function upsertChannelBinding(params: {
       params.workingDirectory || '',
       params.model || '',
       params.mode || 'code',
+      params.providerId || '',
       now,
       now,
     );
@@ -2119,7 +2551,7 @@ export function listChannelBindings(channelType?: ChannelType): ChannelBinding[]
   let rows: Array<{
     id: string; channel_type: string; chat_id: string; codepilot_session_id: string;
     sdk_session_id: string; working_directory: string; model: string; mode: string;
-    active: number; created_at: string; updated_at: string;
+    provider_id: string; active: number; created_at: string; updated_at: string;
   }>;
 
   if (channelType) {
@@ -2137,6 +2569,7 @@ export function listChannelBindings(channelType?: ChannelType): ChannelBinding[]
     workingDirectory: row.working_directory,
     model: row.model,
     mode: row.mode as 'code' | 'plan' | 'ask',
+    providerId: row.provider_id || undefined,
     active: row.active === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -2145,7 +2578,7 @@ export function listChannelBindings(channelType?: ChannelType): ChannelBinding[]
 
 export function updateChannelBinding(
   id: string,
-  updates: Partial<Pick<ChannelBinding, 'sdkSessionId' | 'workingDirectory' | 'model' | 'mode' | 'active'>>,
+  updates: Partial<Pick<ChannelBinding, 'sdkSessionId' | 'workingDirectory' | 'model' | 'mode' | 'providerId' | 'active'>>,
 ): void {
   const db = getDb();
   const now = new Date().toISOString().replace('T', ' ').split('.')[0];
@@ -2156,6 +2589,7 @@ export function updateChannelBinding(
   if (updates.workingDirectory !== undefined) { sets.push('working_directory = ?'); values.push(updates.workingDirectory); }
   if (updates.model !== undefined) { sets.push('model = ?'); values.push(updates.model); }
   if (updates.mode !== undefined) { sets.push('mode = ?'); values.push(updates.mode); }
+  if (updates.providerId !== undefined) { sets.push('provider_id = ?'); values.push(updates.providerId); }
   if (updates.active !== undefined) { sets.push('active = ?'); values.push(updates.active ? 1 : 0); }
 
   values.push(id);
@@ -2620,28 +3054,62 @@ export function bulkUpsertCliToolDescriptions(entries: Array<{ toolId: string; z
 export function createScheduledTask(task: Omit<ScheduledTask, 'id' | 'created_at' | 'updated_at'>): ScheduledTask {
   const db = getDb();
   const id = crypto.randomBytes(8).toString('hex');
-  db.prepare(`INSERT INTO scheduled_tasks (id, name, prompt, schedule_type, schedule_value, next_run, status, priority, notify_on_complete, session_id, working_directory, consecutive_errors) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
-    id, task.name, task.prompt, task.schedule_type, task.schedule_value, task.next_run, task.status || 'active', task.priority || 'normal', task.notify_on_complete ?? 1, task.session_id || null, task.working_directory || null
+  db.prepare(`INSERT INTO scheduled_tasks (id, name, prompt, schedule_type, schedule_value, next_run, status, priority, notify_on_complete, session_id, working_directory, consecutive_errors, group_id, group_name, notification_channels, session_binding, tool_authorization, active_hours_start, active_hours_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`).run(
+    id, task.name, task.prompt, task.schedule_type, task.schedule_value, task.next_run, task.status || 'active', task.priority || 'normal', task.notify_on_complete ?? 1, task.session_id || null, task.working_directory || null, task.group_id || null, task.group_name || null,
+    JSON.stringify(task.notification_channels || ['toast']),
+    task.session_binding ? JSON.stringify(task.session_binding) : null,
+    task.tool_authorization ? JSON.stringify(task.tool_authorization) : null,
+    task.active_hours_start || null,
+    task.active_hours_end || null
   );
   return getScheduledTask(id)!;
 }
 
+function parseTaskFromDb(row: Record<string, unknown>): ScheduledTask {
+  return {
+    ...row,
+    notification_channels: row.notification_channels ? JSON.parse(row.notification_channels as string) : ['toast'],
+    session_binding: row.session_binding ? JSON.parse(row.session_binding as string) : undefined,
+    tool_authorization: row.tool_authorization ? JSON.parse(row.tool_authorization as string) : undefined,
+  } as ScheduledTask;
+}
+
 export function getScheduledTask(id: string): ScheduledTask | undefined {
   const db = getDb();
-  return db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as ScheduledTask | undefined;
+  const row = db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  return row ? parseTaskFromDb(row) : undefined;
 }
 
 export function listScheduledTasks(opts?: { status?: string }): ScheduledTask[] {
   const db = getDb();
-  if (opts?.status) {
-    return db.prepare('SELECT * FROM scheduled_tasks WHERE status = ? ORDER BY next_run ASC').all(opts.status) as ScheduledTask[];
-  }
-  return db.prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC').all() as ScheduledTask[];
+  const rows = opts?.status
+    ? db.prepare('SELECT * FROM scheduled_tasks WHERE status = ? ORDER BY next_run ASC').all(opts.status) as Record<string, unknown>[]
+    : db.prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC').all() as Record<string, unknown>[];
+  return rows.map(parseTaskFromDb);
 }
 
-export function getDueTasks(): ScheduledTask[] {
+export function getDueTasks(nowLocalStr?: string): ScheduledTask[] {
   const db = getDb();
-  return db.prepare("SELECT * FROM scheduled_tasks WHERE next_run <= datetime('now') AND status = 'active' AND (last_status IS NULL OR last_status != 'running')").all() as ScheduledTask[];
+  // 使用本地时间字符串比较，避免 UTC/本地时间混乱问题
+  // nowLocalStr 格式: "YYYY-MM-DD HH:mm:ss"
+  const nowStr = nowLocalStr || formatNowLocal();
+  const rows = db.prepare("SELECT * FROM scheduled_tasks WHERE next_run <= ? AND status = 'active' AND (last_status IS NULL OR last_status != 'running')").all(nowStr) as Record<string, unknown>[];
+  return rows.map(parseTaskFromDb);
+}
+
+/**
+ * 获取当前本地时间字符串，格式：YYYY-MM-DD HH:mm:ss
+ * 不使用 UTC，确保与数据库中存储的 next_run 格式一致
+ */
+function formatNowLocal(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const mo = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const h = String(now.getHours()).padStart(2, '0');
+  const mi = String(now.getMinutes()).padStart(2, '0');
+  const s = String(now.getSeconds()).padStart(2, '0');
+  return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
 }
 
 export function updateScheduledTask(id: string, updates: Partial<ScheduledTask>): void {
@@ -2650,8 +3118,13 @@ export function updateScheduledTask(id: string, updates: Partial<ScheduledTask>)
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(updates)) {
     if (key === 'id' || key === 'created_at') continue;
-    fields.push(`${key} = ?`);
-    values.push(value);
+    if (key === 'notification_channels' || key === 'session_binding' || key === 'tool_authorization') {
+      fields.push(`${key} = ?`);
+      values.push(value ? JSON.stringify(value) : null);
+    } else {
+      fields.push(`${key} = ?`);
+      values.push(value);
+    }
   }
   if (fields.length === 0) return;
   fields.push("updated_at = datetime('now')");
@@ -2667,10 +3140,150 @@ export function insertTaskRunLog(log: { task_id: string; status: string; result?
   );
 }
 
+export interface TaskRunLog {
+  id: string;
+  task_id: string;
+  status: string;
+  result?: string;
+  error?: string;
+  duration_ms?: number;
+  created_at: string;
+}
+
+export function getTaskRunLogs(taskId: string, limit = 20): TaskRunLog[] {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM task_run_logs WHERE task_id = ? ORDER BY created_at DESC LIMIT ?'
+  ).all(taskId, limit) as TaskRunLog[];
+}
+
 export function deleteScheduledTask(id: string): boolean {
   const db = getDb();
   const result = db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
   return result.changes > 0;
+}
+
+// ==========================================
+// Custom Rule Operations
+// ==========================================
+
+export function getAllCustomRules(): CustomRule[] {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM custom_rules ORDER BY created_at DESC').all() as Array<Record<string, unknown>>;
+  return rows.map(r => ({ ...r, enabled: r.enabled === 1 } as unknown as CustomRule));
+}
+
+export function getCustomRule(id: string): CustomRule | undefined {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM custom_rules WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  if (!row) return undefined;
+  return { ...row, enabled: row.enabled === 1 } as unknown as CustomRule;
+}
+
+export function createCustomRule(data: Omit<CustomRule, 'id' | 'created_at' | 'updated_at'>): CustomRule {
+  const db = getDb();
+  const id = crypto.randomBytes(16).toString('hex');
+  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+
+  db.prepare(
+    'INSERT INTO custom_rules (id, type, name, content, enabled, project_ids, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, data.type, data.name, data.content, data.enabled ? 1 : 0, data.project_ids || '[]', now, now);
+
+  return getCustomRule(id)!;
+}
+
+export function updateCustomRule(id: string, updates: Partial<CustomRule>): CustomRule | undefined {
+  const db = getDb();
+  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+  const existing = getCustomRule(id);
+  if (!existing) return undefined;
+
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (['id', 'created_at', 'updated_at'].includes(key)) continue;
+    fields.push(`${key} = ?`);
+    if (key === 'enabled') {
+      values.push(value ? 1 : 0);
+    } else {
+      values.push(value);
+    }
+  }
+
+  if (fields.length > 0) {
+    fields.push('updated_at = ?');
+    values.push(now);
+    values.push(id);
+    db.prepare(`UPDATE custom_rules SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  return getCustomRule(id);
+}
+
+export function deleteCustomRule(id: string): boolean {
+  const db = getDb();
+  const result = db.prepare('DELETE FROM custom_rules WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+// ==========================================
+// Background Job Operations
+// ==========================================
+
+export function createBackgroundJob(params: {
+  id: string;
+  sessionId: string;
+  toolName: string;
+  toolInput: string;
+}): BackgroundJob {
+  const db = getDb();
+  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+  db.prepare(
+    'INSERT INTO background_jobs (id, session_id, tool_name, tool_input, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(params.id, params.sessionId, params.toolName, params.toolInput, 'running', now, now);
+  return getBackgroundJob(params.id)!;
+}
+
+export function getBackgroundJob(id: string): BackgroundJob | undefined {
+  const db = getDb();
+  return db.prepare('SELECT * FROM background_jobs WHERE id = ?').get(id) as BackgroundJob | undefined;
+}
+
+export function updateBackgroundJob(id: string, updates: {
+  status?: BackgroundJobStatus;
+  output?: string;
+  error?: string;
+}): void {
+  const db = getDb();
+  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+  const fields: string[] = ['updated_at = ?'];
+  const values: unknown[] = [now];
+
+  if (updates.status) {
+    fields.push('status = ?');
+    values.push(updates.status);
+    if (['completed', 'failed', 'timeout'].includes(updates.status)) {
+      fields.push('completed_at = ?');
+      values.push(now);
+    }
+  }
+  if (updates.output !== undefined) {
+    fields.push('output = ?');
+    values.push(updates.output);
+  }
+  if (updates.error !== undefined) {
+    fields.push('error = ?');
+    values.push(updates.error);
+  }
+
+  values.push(id);
+  db.prepare(`UPDATE background_jobs SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function listBackgroundJobs(sessionId: string): BackgroundJob[] {
+  const db = getDb();
+  return db.prepare('SELECT * FROM background_jobs WHERE session_id = ? ORDER BY created_at DESC').all(sessionId) as BackgroundJob[];
 }
 
 export function closeDb(): void {

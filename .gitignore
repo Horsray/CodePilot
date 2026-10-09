@@ -50,6 +50,9 @@ next-env.d.ts
 # test artifacts
 /playwright-report/
 /test-results/
+# Playwright visual regression snapshots are machine-specific (suffix is
+# darwin/linux/etc) and regenerate on demand — don't commit them.
+src/__tests__/e2e/*-snapshots/
 
 # user uploads (runtime data)
 .codepilot-uploads/
@@ -64,3 +67,10 @@ apps/site/node_modules/
 
 # claude code session data
 .claude/
+
+# Personal skills and learnings (not for distribution)
+.agents/skills/
+.learnings/
+
+# Playwright / CDP 调试产物（MCP 自动生成）
+.playwright-mcp/

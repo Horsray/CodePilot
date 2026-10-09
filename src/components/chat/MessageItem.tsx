@@ -1,18 +1,18 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
-import type { Message, TokenUsage, FileAttachment, MediaBlock } from '@/types';
+import type { Message, TokenUsage, FileAttachment, MediaBlock, SubAgentInfo } from '@/types';
 import {
   Message as AIMessage,
   MessageContent,
   MessageResponse,
 } from '@/components/ai-elements/message';
-import { ToolActionsGroup } from '@/components/ai-elements/tool-actions-group';
+import { ToolActionsGroup, CompletionBar, extractDiff } from '@/components/ai-elements/tool-actions-group';
 import { MediaPreview } from './MediaPreview';
+import { SubAgentStatusBar } from './SubAgentStatusBar';
 import { Button } from "@/components/ui/button";
-import { Copy, Check, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple } from "@/components/ui/icon";
+import { Copy, Check, CheckCircle, CaretDown, CaretUp, CaretRight, NotePencil, PushPin, DownloadSimple, ArrowsCounterClockwise, XCircle, PauseCircle } from "@/components/ui/icon";
 import { FileAttachmentDisplay } from './FileAttachmentDisplay';
 import { ImageGenConfirmation } from './ImageGenConfirmation';
 import { ImageGenCard } from './ImageGenCard';
@@ -22,12 +22,17 @@ import { buildReferenceImages } from '@/lib/image-ref-store';
 import { SPECIES_IMAGE_URL, EGG_IMAGE_URL, RARITY_BG_GRADIENT, type Species, type Rarity } from '@/lib/buddy';
 import { parseDBDate } from '@/lib/utils';
 import { usePanel } from '@/hooks/usePanel';
-import type { PlannerOutput } from '@/types';
+import { extractTimelineStepsFromBlocks } from '@/lib/agent-timeline';
+import { useProcessCollapseEnabled } from '@/hooks/useProcessCollapse';
+import { ReferencedContexts } from '@/components/chat/ReferencedContexts';
+import { McpStatusChip } from '@/components/chat/McpStatusChip';
+import type { PlannerOutput, MessageContentBlock } from '@/types';
 
 interface ImageGenRequest {
   prompt: string;
   aspectRatio: string;
   resolution: string;
+  model?: string;
   referenceImages?: string[];
   useLastGenerated?: boolean;
 }
@@ -57,6 +62,7 @@ function parseImageGenRequest(text: string): { beforeText: string; request: Imag
         prompt: String(json.prompt || ''),
         aspectRatio: String(json.aspectRatio || '1:1'),
         resolution: String(json.resolution || '1K'),
+        model: json.model ? String(json.model) : undefined,
         referenceImages: Array.isArray(json.referenceImages) ? json.referenceImages : undefined,
         useLastGenerated: json.useLastGenerated === true,
       },
@@ -74,7 +80,6 @@ interface ImageGenResultData {
   aspectRatio?: string;
   resolution?: string;
   model?: string;
-  providerName?: string;
   images?: Array<{ mimeType: string; localPath?: string; data?: string }>;
   error?: string;
 }
@@ -95,7 +100,6 @@ function parseImageGenResult(text: string): { beforeText: string; result: ImageG
         aspectRatio: json.aspectRatio,
         resolution: json.resolution,
         model: json.model,
-        providerName: json.providerName,
         images: Array.isArray(json.images) ? json.images : undefined,
         error: json.error,
       },
@@ -325,6 +329,7 @@ function extractTruncatedWidget(fenceBody: string): ShowWidgetData | null {
 interface MessageItemProps {
   message: Message;
   sessionId?: string;
+  rewindUserMessageId?: string;
   /** Whether this is an assistant workspace project */
   isAssistantProject?: boolean;
   /** Assistant name for avatar */
@@ -534,75 +539,244 @@ const COLLAPSE_HEIGHT = 300;
 // Diff summary — shows modified files after assistant turn
 // ---------------------------------------------------------------------------
 
-function DiffSummary({ files }: { files: Array<{ path: string; name: string }> }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mt-1">
-      <button
-        type="button"
-        onClick={() => setOpen(prev => !prev)}
-        className="flex items-center gap-1.5 text-[11px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-      >
-        <CaretRight
-          size={10}
-          className={cn("shrink-0 transition-transform duration-200", open && "rotate-90")}
-        />
-        <span>Modified {files.length} file{files.length > 1 ? 's' : ''}</span>
-      </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{ overflow: 'hidden' }}
-          >
-            <div className="ml-3 mt-0.5 space-y-0.5">
-              {files.map(f => (
-                <div key={f.path} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground/40">
-                  <NotePencil size={10} className="shrink-0" />
-                  <span className="truncate" title={f.path}>{f.name}</span>
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}m ${secs}s`;
 }
 
-export const MessageItem = memo(function MessageItem({ message, sessionId, isAssistantProject, assistantName }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, sessionId, rewindUserMessageId, isAssistantProject, assistantName }: MessageItemProps) {
   const isUser = message.role === 'user';
 
   // Collapse/expand state for long user messages (hooks must be called unconditionally)
   const [isExpanded, setIsExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  // 中文注释：功能名称「交付折叠」的总开关（设置 → 外观，默认开启）
+  const processCollapseEnabled = useProcessCollapseEnabled();
 
+  const referencedFiles = useMemo(() => {
+    if (!message.referenced_contexts) return [];
+    try {
+      return JSON.parse(message.referenced_contexts) as string[];
+    } catch {
+      return [];
+    }
+  }, [message.referenced_contexts]);
 
-  // Memoize expensive parsing: parseToolBlocks + pairTools
-  const { text, pairedTools, thinking } = useMemo(() => {
+  // Use blocks directly for sequential rendering instead of grouping
+  const contentBlocks = useMemo<MessageContentBlock[]>(() => {
+    try {
+      const parsed = JSON.parse(message.content);
+      if (Array.isArray(parsed)) return parsed as MessageContentBlock[];
+    } catch {
+      // Not JSON
+    }
+    // Fallback to legacy parsing if not JSON array
     const { text, tools, thinking } = parseToolBlocks(message.content);
-    const pairedTools = pairTools(tools);
-    return { text, pairedTools, thinking };
+    const blocks: MessageContentBlock[] = [];
+    if (thinking) blocks.push({ type: 'thinking', thinking });
+    if (text) blocks.push({ type: 'text', text });
+    tools.forEach(t => {
+      if (t.type === 'tool_use') {
+        if (t.id && t.name) {
+          blocks.push({ type: 'tool_use', id: t.id, name: t.name, input: t.input });
+        }
+      } else if (t.id && typeof t.content === 'string') {
+        blocks.push({ type: 'tool_result', tool_use_id: t.id, content: t.content, is_error: t.is_error, media: t.media });
+      }
+    });
+    return blocks;
   }, [message.content]);
 
-  // Memoize file attachment parsing
+  const timelineSteps = useMemo(() => {
+    return isUser ? [] : extractTimelineStepsFromBlocks(contentBlocks);
+  }, [contentBlocks, isUser]);
+
+  const timelineCompletionInfo = useMemo(() => {
+    if (isUser || timelineSteps.length === 0) return null;
+    const changedFiles = timelineSteps.flatMap((step) => (step.fileChanges || []).map((change, index) => ({
+      tool: {
+        id: `${step.id}-${index}`,
+        name: change.operation === 'create' ? 'write' : 'edit',
+        input: { path: change.path },
+        result: undefined,
+        isError: false,
+      },
+      diff: {
+        filename: change.fileName,
+        fullPath: change.path,
+        mode: change.operation,
+        added: change.addedLines,
+        removed: change.removedLines,
+        beforeLines: change.beforeText ? change.beforeText.replace(/\r\n/g, '\n').split('\n').slice(0, 1000) : [],
+        afterLines: change.afterText ? change.afterText.replace(/\r\n/g, '\n').split('\n').slice(0, 1000) : [],
+        moreB: Math.max(0, (change.beforeText ? change.beforeText.replace(/\r\n/g, '\n').split('\n').length : 0) - 1000),
+        moreA: Math.max(0, (change.afterText ? change.afterText.replace(/\r\n/g, '\n').split('\n').length : 0) - 1000),
+      },
+    })));
+
+    // Merge duplicate file edit statistics
+    const mergedFiles = new Map<string, typeof changedFiles[0]>();
+    changedFiles.forEach((item) => {
+      const path = item.diff.fullPath;
+      if (mergedFiles.has(path)) {
+        const existing = mergedFiles.get(path)!;
+        existing.diff.added += item.diff.added;
+        existing.diff.removed += item.diff.removed;
+      } else {
+        mergedFiles.set(path, { tool: item.tool, diff: { ...item.diff } });
+      }
+    });
+    
+    const finalChangedFiles = Array.from(mergedFiles.values());
+    const errCount = timelineSteps.filter((step) => step.status === 'failed' || step.error).length;
+    return finalChangedFiles.length > 0 ? { errCount, changedFiles: finalChangedFiles } : null;
+  }, [isUser, timelineSteps]);
+
+  const taskCompletionInfo = useMemo(() => {
+    if (isUser || timelineSteps.length === 0) return null;
+    try {
+      // Determine task status by checking for chat-error text blocks in message content
+      let status: 'completed' | 'interrupted' | 'failed' = 'completed';
+      try {
+        const blocks = JSON.parse(message.content) as MessageContentBlock[];
+        for (const block of blocks) {
+          if (block.type === 'text' && 'text' in block) {
+            if ((block.text as string).includes('模型上游中断，本轮任务未完成')) {
+              status = 'interrupted';
+              break;
+            }
+            if ((block.text as string).includes('任务已由用户手动中断')) {
+              status = 'interrupted';
+              break;
+            }
+            const chatErrorMatch = (block.text as string).match(/```chat-error\n(\{.*?\})\n```/s);
+            if (chatErrorMatch) {
+              try {
+                const errPayload = JSON.parse(chatErrorMatch[1]);
+                if (errPayload.raw === 'Task stopped by user') {
+                  status = 'interrupted';
+                } else {
+                  status = 'failed';
+                }
+              } catch {
+                status = 'failed';
+              }
+              break;
+            }
+          }
+        }
+      } catch {
+        // content parse failed, assume completed
+      }
+
+      // If the backend has recorded duration_sec in token_usage, use it
+      const usageStr = message.token_usage;
+      if (usageStr) {
+        const usageObj = JSON.parse(usageStr);
+        if (typeof usageObj.duration_sec === 'number' && usageObj.duration_sec >= 0) {
+          return { durationSec: usageObj.duration_sec, status };
+        }
+      }
+
+      // Fallback for older messages
+      const endStr = (message as any).updated_at || message.created_at;
+      const start = parseDBDate(message.created_at).getTime();
+      const end = parseDBDate(endStr).getTime();
+      const durationSec = Math.max(0, Math.floor((end - start) / 1000));
+      return { durationSec, status };
+    } catch {
+      return null;
+    }
+  }, [isUser, message, timelineSteps.length]);
+
+  // Memoize expensive parsing: parseToolBlocks + pairTools
+  const { pairedTools, thinking } = useMemo(() => {
+    const { tools, thinking } = parseToolBlocks(message.content);
+    const pairedTools = pairTools(tools);
+    return { pairedTools, thinking };
+  }, [message.content]);
+
+  // Compute completion summary for assistant messages
+  const completionInfo = useMemo(() => {
+    if (isUser || pairedTools.length === 0) return null;
+    const mappedTools = pairedTools.map((tool, i) => ({
+      id: `hist-${i}`,
+      name: tool.name,
+      input: tool.input,
+      result: tool.result,
+      isError: tool.isError,
+      media: tool.media,
+    }));
+    const errCount = mappedTools.filter(t => t.isError).length;
+    const changedFiles = mappedTools
+      .map(t => ({ tool: t as any, diff: extractDiff(t as any) }))
+      .filter((x): x is { tool: any; diff: NonNullable<ReturnType<typeof extractDiff>> } => x.diff !== null);
+    
+    // Merge duplicate file edit statistics
+    const mergedFiles = new Map<string, typeof changedFiles[0]>();
+    changedFiles.forEach((item) => {
+      const path = item.diff.fullPath;
+      if (mergedFiles.has(path)) {
+        const existing = mergedFiles.get(path)!;
+        existing.diff.added += item.diff.added;
+        existing.diff.removed += item.diff.removed;
+      } else {
+        mergedFiles.set(path, { tool: item.tool, diff: { ...item.diff } });
+      }
+    });
+
+    const finalChangedFiles = Array.from(mergedFiles.values());
+    return finalChangedFiles.length > 0 || errCount > 0 ? { errCount, changedFiles: finalChangedFiles } : null;
+  }, [isUser, pairedTools]);
+
+  // Memoize file attachment parsing for the FIRST text block of a user message
   const { files, displayText } = useMemo(() => {
     if (isUser) {
-      const { files, text: textWithoutFiles } = parseMessageFiles(text);
+      const firstText = contentBlocks.find(b => b.type === 'text')?.text || '';
+      const { files, text: textWithoutFiles } = parseMessageFiles(firstText);
       return { files, displayText: textWithoutFiles };
     }
-    return { files: [] as FileAttachment[], displayText: text };
-  }, [text, isUser]);
+    
+    const textBlocks = contentBlocks.filter((block, i): block is Extract<MessageContentBlock, { type: 'text' }> => {
+      if (block.type !== 'text') return false;
+      // 仅保留后续没有工具调用（tool_use 或 tool_result）的文本作为最终结论
+      const hasSubsequentTool = contentBlocks.slice(i + 1).some(b => b.type === 'tool_use' || b.type === 'tool_result');
+      return !hasSubsequentTool;
+    });
+    let finalOutputText = textBlocks.map(b => b.text).join('\n');
+    
+    // Always strip soft-heartbeat marker before rendering text blocks
+    finalOutputText = finalOutputText.replace(/\s*<!--\s*heartbeat-done\s*-->\s*/g, '').trim();
+    
+    return { files: [] as FileAttachment[], displayText: finalOutputText };
+  }, [contentBlocks, isUser]);
 
   useEffect(() => {
     if (isUser && contentRef.current) {
       setIsOverflowing(contentRef.current.scrollHeight > COLLAPSE_HEIGHT);
     }
   }, [isUser, displayText]);
+
+  /**
+   * 中文注释：功能名称「交付折叠」——**任务彻底完成之后**才把过程块收起来。
+   *
+   * 这里是这条规则唯一的落地点：流式期间 StreamingMessage 全程 flat 铺开（步骤可见），
+   * 消息落定、由本组件接管之后，才以「已交付」的收起态呈现，用户点一下可随时展开回看。
+   *
+   * - 正常交付：有最终结论 → 收起
+   * - 被中断（无结论）：不收起，让用户还能看到跑到哪儿了
+   *
+   * 注意 ToolActionsGroup 本身只在「有工具/步骤」时才渲染，所以这里不必再判有没有过程。
+   */
+  const processCollapseConfig = useMemo(() => {
+    if (!processCollapseEnabled) return undefined;
+    return {
+      delivered: displayText.trim().length > 0,
+    };
+  }, [processCollapseEnabled, displayText]);
 
   // Memoize token usage JSON parsing
   const tokenUsage = useMemo<TokenUsage | null>(() => {
@@ -619,13 +793,99 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, isAss
     return null;
   }
 
+  // Handle temporary compacting message styling
+  const isCompactingMsg = !isUser && message.content === '上下文压缩中...';
+
   const timestamp = parseDBDate(message.created_at).toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
   });
 
+  const fullTimestamp = parseDBDate(message.created_at).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).replace(/\//g, '.').replace(/,/g, '｜');
+
+  const subAgents = useMemo(() => {
+    if (isUser) return null;
+    try {
+      const parsed = JSON.parse(message.content);
+      if (Array.isArray(parsed)) {
+        const subAgentsBlock = parsed.find(b => b.type === 'sub_agents');
+        if (subAgentsBlock?.subAgents?.length) return subAgentsBlock.subAgents;
+
+        // 中文注释：功能名称「子Agent回退提取」，用法是当消息中没有sub_agents块时，
+        // 从Agent/Team tool_use和tool_result对中提取子Agent信息，确保会话切换后卡片仍能渲染
+        const isAgenticTool = (name: string) => {
+          const lower = name.toLowerCase();
+          return lower === 'agent' || lower === 'team' || lower === 'task';
+        };
+        const toolUseBlocks = parsed.filter(b => b.type === 'tool_use' && isAgenticTool(b.name));
+        if (toolUseBlocks.length > 0) {
+          const toolResultMap = new Map<string, { content: string; isError?: boolean }>();
+          parsed.filter(b => b.type === 'tool_result').forEach(b => {
+            if (b.tool_use_id) toolResultMap.set(b.tool_use_id, { content: b.content || '', isError: b.is_error });
+          });
+          return toolUseBlocks.map((block, i) => {
+            const input = block.input || {};
+            const result = toolResultMap.get(block.id);
+            // 中文注释：功能名称「Agent输入解析」，用法是同时兼容Agent/Team与原生Task工具，
+            // 优先使用agent/subagent_type/name字段，避免回退到block.id产生乱码或丢失Explore等身份
+            const agentId = input.agentId || input.agent_id || input.agent || input.subagent_type || input.task_type || 'general';
+            const prompt = input.prompt || input.task || input.description || '';
+            const displayName = input.displayName || input.display_name || input.name || agentId;
+            // 中文注释：功能名称「空智能体过滤」，用法是跳过没有prompt的Agent工具调用，
+            // 避免产生无任务的空智能体卡片
+            if (!prompt.trim()) return null;
+            const report = result && !result.isError
+              ? (typeof result.content === 'string' ? result.content.slice(0, 500) : String(result.content).slice(0, 500))
+              : undefined;
+            const error = result?.isError
+              ? (typeof result.content === 'string' ? result.content.slice(0, 500) : String(result.content).slice(0, 500))
+              : undefined;
+            return {
+              id: `subagent-${agentId}-${i}`,
+              name: agentId,
+              displayName,
+              prompt,
+              model: input.model,
+              source: 'sdk_agent_tool',
+              status: result ? (result.isError ? 'error' : 'completed') : 'running' as const,
+              report,
+              error,
+              startedAt: Date.now() - (toolUseBlocks.length - i) * 1000,
+              ...(result ? { completedAt: Date.now() - (toolUseBlocks.length - i - 1) * 1000 } : {}),
+            };
+          }).filter(Boolean) as SubAgentInfo[];
+        }
+      }
+    } catch {
+      // not JSON
+    }
+    return null;
+  }, [message.content, isUser]);
+
+  // 子Agent状态条使用 SubAgentStatusBar，不再过滤 agent/team 工具，全部交给时间线渲染
+  const timelineTools = pairedTools;
+
   const showAssistantAvatar = !isUser && isAssistantProject;
   const buddyInfo = isAssistantProject ? (globalThis as Record<string, unknown>).__codepilot_buddy_info__ as { emoji?: string; species?: string; rarity?: string } | undefined : undefined;
+
+  if (isCompactingMsg) {
+    return (
+      <div className="flex items-center gap-3 py-2 px-1 text-[13px] text-violet-500 font-medium justify-center border-y border-border/40 my-4">
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500"></span>
+        </span>
+        上下文压缩中...
+      </div>
+    );
+  }
 
   return (
     <div className={showAssistantAvatar ? 'flex gap-2.5 items-start' : ''}>
@@ -640,26 +900,45 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, isAss
           : <img src={EGG_IMAGE_URL} alt="egg" width={28} height={28} className="mt-0.5 shrink-0" />
       )}
       <div className="flex-1 min-w-0">
-    <AIMessage from={isUser ? 'user' : 'assistant'}>
-      <MessageContent>
-        {/* File attachments for user messages */}
-        {isUser && files.length > 0 && (
+    <div className="flex flex-col gap-2 relative group w-full">
+      {/* File attachments for user messages (outside the bubble) */}
+      {isUser && files.length > 0 && (
+        <div className="flex justify-end pr-2.5">
           <FileAttachmentDisplay files={files} />
-        )}
+        </div>
+      )}
+      <AIMessage from={isUser ? 'user' : 'assistant'}>
+        <MessageContent>
+          {/* Referenced Contexts (Rule tags) + MCP 状态徽标（并排，右侧为 MCP） */}
+          {!isUser && (
+            <div className="flex items-center gap-2">
+              {referencedFiles.length > 0 && (
+                <ReferencedContexts files={referencedFiles} isStreaming={false} />
+              )}
+              <McpStatusChip sessionId={sessionId} className="mb-3" />
+            </div>
+          )}
 
-        {/* Tool calls + thinking for assistant messages — single collapsible group */}
-        {!isUser && (pairedTools.length > 0 || thinking) && (
-          <ToolActionsGroup
-            tools={pairedTools.map((tool, i) => ({
-              id: `hist-${i}`,
-              name: tool.name,
-              input: tool.input,
-              result: tool.result,
-              isError: tool.isError,
-              media: tool.media,
-            }))}
-            thinkingContent={thinking}
-          />
+        {/* Render the timeline (tools and thoughts interleaved) */}
+        {!isUser && (timelineTools.length > 0 || timelineSteps.length > 0) && (
+          <>
+            <ToolActionsGroup
+              tools={timelineTools.map((tool, i) => ({
+                id: `hist-${i}`,
+                name: tool.name,
+                input: tool.input,
+                result: tool.result,
+                isError: tool.isError,
+                media: tool.media,
+              }))}
+              steps={timelineSteps}
+              sessionId={sessionId}
+              rewindUserMessageId={rewindUserMessageId}
+              flat={!processCollapseEnabled}
+              processCollapse={processCollapseConfig}
+              hideSubAgents={false}
+            />
+          </>
         )}
 
         {/* Media from tool results — rendered outside tool group so images stay visible */}
@@ -667,6 +946,11 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, isAss
           const allMedia = pairedTools.flatMap(t => t.media || []);
           return allMedia.length > 0 ? <MediaPreview media={allMedia} /> : null;
         })()}
+
+        {/* 子Agent状态条 - 会话切换后从消息内容中恢复 */}
+        {!isUser && subAgents && subAgents.length > 0 && (
+          <SubAgentStatusBar subAgents={subAgents} />
+        )}
 
         {/* Text content */}
         {displayText && (
@@ -707,35 +991,71 @@ export const MessageItem = memo(function MessageItem({ message, sessionId, isAss
                 </Button>
               )}
             </div>
-          ) : <AssistantContent displayText={displayText} messageId={message.id} sessionId={sessionId} />
+          ) : (
+            <AssistantContent displayText={displayText} messageId={message.id} sessionId={sessionId} />
+          )
+        )}
+
+
+
+        {!isUser && taskCompletionInfo && (
+          <div className="flex items-center gap-2 mt-3 mb-2 text-[12px] text-muted-foreground">
+            {taskCompletionInfo.status === 'completed' && (
+              <div className="flex items-center gap-1.5 text-emerald-500 font-medium">
+                <CheckCircle size={14} weight="fill" />
+                <span>任务完成</span>
+              </div>
+            )}
+            {taskCompletionInfo.status === 'interrupted' && (
+              <div className="flex items-center gap-1.5 text-amber-500 font-medium">
+                <PauseCircle size={14} weight="fill" />
+                <span>任务中断</span>
+              </div>
+            )}
+            {taskCompletionInfo.status === 'failed' && (
+              <div className="flex items-center gap-1.5 text-red-500 font-medium">
+                <XCircle size={14} weight="fill" />
+                <span>任务异常</span>
+              </div>
+            )}
+            <span className="text-border">|</span>
+            <span>任务耗时 {formatDuration(taskCompletionInfo.durationSec)}</span>
+          </div>
+        )}
+
+        {/* Completion Bar rendered only once at the end of the message */}
+        {!isUser && timelineSteps.length === 0 && completionInfo && completionInfo.changedFiles.length > 0 && (
+          <CompletionBar
+            changedFiles={completionInfo.changedFiles}
+            errCount={completionInfo.errCount}
+            sessionId={sessionId}
+            rewindId={rewindUserMessageId}
+          />
+        )}
+        {!isUser && timelineSteps.length > 0 && timelineCompletionInfo && (
+          <CompletionBar
+            changedFiles={timelineCompletionInfo.changedFiles}
+            errCount={timelineCompletionInfo.errCount}
+            sessionId={sessionId}
+            rewindId={rewindUserMessageId}
+          />
         )}
       </MessageContent>
 
-      {/* Diff summary for assistant messages with file modifications */}
-      {!isUser && (() => {
-        const WRITE_TOOLS = new Set(['write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'notebookedit', 'notebook_edit']);
-        const modifiedFiles = pairedTools
-          .filter(t => WRITE_TOOLS.has(t.name.toLowerCase()) && !t.isError)
-          .map(t => {
-            const inp = t.input as Record<string, unknown> | undefined;
-            const filePath = (inp?.file_path || inp?.path || inp?.filePath || '') as string;
-            const parts = filePath.split('/');
-            return { path: filePath, name: parts[parts.length - 1] || filePath };
-          })
-          .filter(f => f.path);
-        if (modifiedFiles.length === 0) return null;
-        // Deduplicate by path
-        const unique = [...new Map(modifiedFiles.map(f => [f.path, f])).values()];
-        return <DiffSummary files={unique} />;
-      })()}
-
       {/* Footer with copy, timestamp and token usage */}
       <div className={`flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${isUser ? 'justify-end' : ''}`}>
-        {!isUser && <span className="text-xs text-muted-foreground/50">{timestamp}</span>}
+        {!isUser && <span className="text-xs text-muted-foreground/50">{fullTimestamp}</span>}
         {!isUser && tokenUsage && <TokenUsageDisplay usage={tokenUsage} />}
-        {displayText && <CopyButton text={displayText} />}
+        {isUser && (
+          <span className="group text-xs text-muted-foreground/50 cursor-default">
+            <span className="group-hover:hidden">{timestamp}</span>
+            <span className="hidden group-hover:inline">{fullTimestamp}</span>
+          </span>
+        )}
+        {isUser && displayText && <CopyButton text={displayText} />}
       </div>
     </AIMessage>
+      </div>
       </div>
     </div>
   );
@@ -797,6 +1117,20 @@ function PinnableWidget({ widgetCode, title }: {
   );
 }
 
+function parseChatError(text: string): { beforeText: string; error: { explain: string; raw: string }; afterText: string } | null {
+  const regex = /```chat-error\s*\n?([\s\S]*?)\n?\s*```/;
+  const match = text.match(regex);
+  if (!match) return null;
+  try {
+    const json = JSON.parse(match[1]);
+    const beforeText = text.slice(0, match.index).trim();
+    const afterText = text.slice((match.index || 0) + match[0].length).trim();
+    return { beforeText, error: json, afterText };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Memoized assistant message content — avoids re-running parseBatchPlan / parseImageGenResult /
  * parseImageGenRequest on every render when only unrelated props change.
@@ -829,10 +1163,44 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
       );
     }
 
+    const chatErrorResult = parseChatError(displayText);
+    if (chatErrorResult) {
+      const handleRetry = () => {
+        window.dispatchEvent(new CustomEvent('chat-retry', { detail: { messageId } }));
+      };
+      return (
+        <>
+          {chatErrorResult.beforeText && <MessageResponse>{chatErrorResult.beforeText}</MessageResponse>}
+          <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/30 p-3 mt-2 mb-2">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-medium text-status-error-foreground">{chatErrorResult.error.explain}</p>
+                <button
+                  onClick={handleRetry}
+                  className="shrink-0 text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 hover:underline flex items-center gap-1"
+                >
+                  <ArrowsCounterClockwise size={12} />
+                  重新发起请求
+                </button>
+              </div>
+              <div className="text-xs text-muted-foreground bg-black/5 dark:bg-white/5 p-2 rounded max-h-32 overflow-y-auto whitespace-pre-wrap font-mono">
+                {chatErrorResult.error.raw}
+              </div>
+            </div>
+          </div>
+          {chatErrorResult.afterText && <MessageResponse>{chatErrorResult.afterText}</MessageResponse>}
+        </>
+      );
+    }
+
     // Try image-gen-result first (new direct-call format)
     const genResult = parseImageGenResult(displayText);
     if (genResult) {
       const { result } = genResult;
+      const handleRetry = () => {
+        window.dispatchEvent(new CustomEvent('chat-retry', { detail: { messageId } }));
+      };
+
       if (result.status === 'generating') {
         return (
           <>
@@ -850,28 +1218,27 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
           <>
             {genResult.beforeText && <MessageResponse>{genResult.beforeText}</MessageResponse>}
             <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/30 p-3">
-              <p className="text-sm text-status-error-foreground">{result.error || 'Image generation failed'}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm text-status-error-foreground flex-1">{result.error || 'Image generation failed'}</p>
+                <button
+                  onClick={handleRetry}
+                  className="shrink-0 text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 hover:underline flex items-center gap-1"
+                >
+                  <ArrowsCounterClockwise size={12} />
+                  点击重试
+                </button>
+              </div>
             </div>
             {genResult.afterText && <MessageResponse>{genResult.afterText}</MessageResponse>}
           </>
         );
       }
       if (result.status === 'completed' && result.images && result.images.length > 0) {
+        // 不在这里渲染 ImageGenCard — ImageGenConfirmation 已在流式阶段渲染了正确的预览图。
+        // DB 中只存了 mimeType + localPath（无 base64），在这里重新渲染会导致缩略图裂开。
         return (
           <>
             {genResult.beforeText && <MessageResponse>{genResult.beforeText}</MessageResponse>}
-            <ImageGenCard
-              images={result.images.map(img => ({
-                data: img.data || '',
-                mimeType: img.mimeType,
-                localPath: img.localPath,
-              }))}
-              prompt={result.prompt}
-              aspectRatio={result.aspectRatio}
-              imageSize={result.resolution}
-              model={result.model}
-              providerName={result.providerName}
-            />
             {genResult.afterText && <MessageResponse>{genResult.afterText}</MessageResponse>}
           </>
         );
@@ -896,6 +1263,7 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
             initialPrompt={parsed.request.prompt}
             initialAspectRatio={parsed.request.aspectRatio}
             initialResolution={parsed.request.resolution}
+            initialModel={parsed.request.model}
             rawRequestBlock={parsed.rawBlock}
             referenceImages={refs.length > 0 ? refs : undefined}
           />
@@ -908,6 +1276,7 @@ const AssistantContent = memo(function AssistantContent({ displayText, messageId
       .replace(/```image-gen-result[\s\S]*?```/g, '')
       .replace(/```batch-plan[\s\S]*?```/g, '')
       .replace(/```show-widget[\s\S]*?(```|$)/g, '')
+      .replace(/```chat-error[\s\S]*?(```|$)/g, '')
       .trim();
     return stripped ? <MessageResponse>{stripped}</MessageResponse> : null;
   }, [displayText, messageId, sessionId]);

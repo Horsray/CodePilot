@@ -5,7 +5,6 @@ import { HardDrives } from "@/components/ui/icon";
 import type { ApiProvider } from "@/types";
 import { VENDOR_PRESETS } from "@/lib/provider-catalog";
 import type { VendorPreset } from "@/lib/provider-catalog";
-import { isOfficialGeminiImageProvider } from "@/lib/image-provider-utils";
 import Anthropic from "@lobehub/icons/es/Anthropic";
 import OpenRouter from "@lobehub/icons/es/OpenRouter";
 import Zhipu from "@lobehub/icons/es/Zhipu";
@@ -19,6 +18,8 @@ import Volcengine from "@lobehub/icons/es/Volcengine";
 import Bailian from "@lobehub/icons/es/Bailian";
 import XiaomiMiMo from "@lobehub/icons/es/XiaomiMiMo";
 import Ollama from "@lobehub/icons/es/Ollama";
+import OpenAI from "@lobehub/icons/es/OpenAI";
+import DeepSeek from "@lobehub/icons/es/DeepSeek";
 
 // ---------------------------------------------------------------------------
 // Brand icon resolver
@@ -42,6 +43,8 @@ export function getProviderIcon(name: string, baseUrl: string): ReactNode {
   if (url.includes("xiaomimimo") || lower.includes("mimo") || lower.includes("小米"))
     return <XiaomiMiMo size={18} />;
   if (url.includes("11434") || lower.includes("ollama")) return <Ollama size={18} />;
+  if (url.includes("api.openai.com") || lower.includes("openai") || lower.includes("gpt image")) return <OpenAI size={18} />;
+  if (url.includes("deepseek") || lower.includes("deepseek")) return <DeepSeek size={18} />;
   if (lower.includes("bedrock")) return <Bedrock size={18} />;
   if (lower.includes("vertex") || lower.includes("google")) return <Google size={18} />;
   if (lower.includes("aws")) return <Aws size={18} />;
@@ -68,6 +71,8 @@ export interface QuickPreset {
   extra_env: string;
   fields: ("name" | "api_key" | "base_url" | "extra_env" | "model_names" | "model_mapping")[];
   category?: "chat" | "media";
+  /** Fixed media transport declared by the preset (written into options_json) */
+  mediaProtocol?: VendorPreset['mediaProtocol'];
   /** Provider meta info from catalog (for user guidance) */
   meta?: VendorPreset['meta'];
 }
@@ -87,6 +92,8 @@ function resolveIcon(iconKey: string): ReactNode {
     bailian: <Bailian size={18} />,
     'xiaomi-mimo': <XiaomiMiMo size={18} />,
     ollama: <Ollama size={18} />,
+    openai: <OpenAI size={18} />,
+    deepseek: <DeepSeek size={18} />,
     server: <HardDrives size={18} className="text-muted-foreground" />,
   };
   return ICON_MAP[iconKey] || <HardDrives size={18} className="text-muted-foreground" />;
@@ -104,6 +111,11 @@ function toQuickPreset(vp: VendorPreset): QuickPreset {
       : vp.protocol === 'bedrock' ? 'bedrock'
       : vp.protocol === 'vertex' ? 'vertex'
       : vp.protocol === 'gemini-image' ? 'gemini-image'
+      : vp.protocol === 'openai-image' ? 'openai-image'
+      // 中文注释：openai-compatible 必须保留自身类型 —— 表单会按 provider_type 反推 protocol，
+      // 若这里落到 'anthropic'，保存时 openai-compatible 协议会被覆盖，导致中转站走 Anthropic
+      // 格式请求（/v1/messages）而失败。
+      : vp.protocol === 'openai-compatible' ? 'openai-compatible'
       : 'anthropic',
     protocol: vp.protocol,
     authStyle: vp.authStyle,
@@ -111,6 +123,7 @@ function toQuickPreset(vp: VendorPreset): QuickPreset {
     extra_env: JSON.stringify(vp.defaultEnvOverrides),
     fields: vp.fields as QuickPreset['fields'],
     category: vp.category,
+    mediaProtocol: vp.mediaProtocol,
     meta: vp.meta,
   };
 }
@@ -129,6 +142,15 @@ export const GEMINI_IMAGE_MODELS = [
 
 export const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 
+export const OPENAI_IMAGE_MODELS = [
+  { value: 'gpt-image-2', label: 'GPT Image 2' },
+  { value: 'gpt-image-1.5', label: 'GPT Image 1.5' },
+  { value: 'gpt-image-1', label: 'GPT Image 1' },
+  { value: 'gpt-image-1-mini', label: 'GPT Image 1 Mini' },
+];
+
+export const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2';
+
 export function getGeminiImageModel(provider: ApiProvider): string {
   try {
     const env = JSON.parse(provider.extra_env || '{}');
@@ -138,33 +160,62 @@ export function getGeminiImageModel(provider: ApiProvider): string {
   }
 }
 
+export function getOpenAIImageModel(provider: ApiProvider): string {
+  try {
+    const env = JSON.parse(provider.extra_env || '{}');
+    return env.OPENAI_IMAGE_MODEL || DEFAULT_OPENAI_IMAGE_MODEL;
+  } catch {
+    return DEFAULT_OPENAI_IMAGE_MODEL;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Preset matcher — find which quick preset a provider was created from
 // ---------------------------------------------------------------------------
 
 export function findMatchingPreset(provider: ApiProvider): QuickPreset | undefined {
-  // Exact base_url match (most specific)
+  // custom-media (通用中转平台) — detect by name OR by _custom_models in env_overrides_json.
+  // Name-based match covers the common case; _custom_models check covers renamed providers.
+  const customMediaPreset = QUICK_PRESETS.find(p => p.key === "custom-media");
+  if (customMediaPreset) {
+    if (provider.name === "通用中转平台" || provider.name === "Custom media relay provider") {
+      return customMediaPreset;
+    }
+    // Fallback: provider has structured custom models → it was created as custom-media
+    try {
+      const envOv = JSON.parse(provider.env_overrides_json || '{}');
+      if (envOv._custom_models) return customMediaPreset;
+    } catch { /* ignore */ }
+  }
+  // Exact base_url match (most specific). Restrict to the same category — a
+  // relay like BananaRouter exposes both a chat preset and an image preset on
+  // the same base_url, and matching across categories would open the image
+  // provider in the chat edit form (and vice versa).
+  const isMediaProvider = provider.provider_type === "gemini-image" || provider.provider_type === "openai-image";
   if (provider.base_url) {
-    const match = QUICK_PRESETS.find(p => p.base_url && p.base_url === provider.base_url);
+    const match = QUICK_PRESETS.find(
+      p => p.base_url && p.base_url === provider.base_url && (p.category === "media") === isMediaProvider,
+    );
     if (match) return match;
   }
-  // Type-based fallback for known types
-  if (provider.provider_type === "bedrock") return QUICK_PRESETS.find(p => p.key === "bedrock");
-  if (provider.provider_type === "vertex") return QUICK_PRESETS.find(p => p.key === "vertex");
-  if (provider.provider_type === "openrouter") return QUICK_PRESETS.find(p => p.key === "openrouter");
+  // Media providers: official vs third-party share provider_type; tie-break
+  // by whether the stored base_url is the official one. Anything else goes to
+  // the third-party preset so the edit dialog exposes the base_url field.
   if (provider.provider_type === "gemini-image") {
-    return QUICK_PRESETS.find(p => p.key === (
-      isOfficialGeminiImageProvider(provider) ? "gemini-image" : "custom-media"
-    ));
+    const official = QUICK_PRESETS.find(p => p.key === "gemini-image");
+    if (official && provider.base_url && provider.base_url !== official.base_url) {
+      return QUICK_PRESETS.find(p => p.key === "gemini-image-thirdparty");
+    }
+    return official;
   }
-  if (provider.provider_type === "anthropic" && provider.base_url === "https://api.anthropic.com") {
-    return QUICK_PRESETS.find(p => p.key === "anthropic-official");
+  if (provider.provider_type === "openai-image") {
+    const official = QUICK_PRESETS.find(p => p.key === "openai-image");
+    if (official && provider.base_url && provider.base_url !== official.base_url) {
+      return QUICK_PRESETS.find(p => p.key === "openai-image-thirdparty");
+    }
+    return official;
   }
-  // Anthropic-type with custom base_url → anthropic-thirdparty
-  if (provider.provider_type === "anthropic" && provider.base_url) {
-    return QUICK_PRESETS.find(p => p.key === "anthropic-thirdparty");
-  }
-  // Custom providers no longer have a matching preset (OpenAI-compatible removed).
-  // They are deleted during DB migration; any survivors use the generic edit form.
+  // Deleted chat presets (anthropic/bedrock/vertex/openrouter/glm/kimi/...) no
+  // longer match — legacy survivors use the generic edit form.
   return undefined;
 }

@@ -26,8 +26,8 @@ export function FileAttachmentDisplay({ files }: FileAttachmentDisplayProps) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
-  const imageFiles = files.filter((f) => isImageFile(f.type) && fileUrl(f));
-  const otherFiles = files.filter((f) => !isImageFile(f.type) || !fileUrl(f));
+  const imageFiles = files.filter((f) => isImageFile(f.type) || isImageFile(f.name));
+  const otherFiles = files.filter((f) => !imageFiles.includes(f));
 
   const lightboxImages = imageFiles.map((f) => ({
     src: fileUrl(f),

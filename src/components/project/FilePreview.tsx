@@ -7,16 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useTheme } from "next-themes";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
-import { useThemeFamily } from "@/lib/theme/context";
-import { resolveCodeTheme, resolveHljsStyle } from "@/lib/theme/code-themes";
+import { resolveHljsStyle } from "@/lib/theme/code-themes";
 import { usePanel } from "@/hooks/usePanel";
 
+// 中文注释：多主题家族已移除，代码高亮固定使用默认亮/暗配色。
 function useFilePreviewCodeTheme() {
   const { resolvedTheme } = useTheme();
-  const { family, families } = useThemeFamily();
   const isDark = resolvedTheme === "dark";
-  const codeTheme = resolveCodeTheme(families, family);
-  return resolveHljsStyle(codeTheme, isDark);
+  return resolveHljsStyle(undefined, isDark);
 }
 import { useTranslation } from "@/hooks/useTranslation";
 import type { FilePreview as FilePreviewType } from "@/types";

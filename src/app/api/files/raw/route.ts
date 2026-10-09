@@ -162,6 +162,7 @@ export async function GET(request: NextRequest) {
   return new Response(buffer, {
     headers: {
       'Content-Type': contentType,
+      'Content-Length': String(buffer.length),
       'Content-Disposition': `inline; filename="${path.basename(resolved)}"`,
     },
   });

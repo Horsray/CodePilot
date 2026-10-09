@@ -27,7 +27,14 @@ export function EffortSelectorDropdown({
   const effortMenuRef = useRef<HTMLDivElement>(null);
   const [effortMenuOpen, setEffortMenuOpen] = useState(false);
 
-  const levels = supportedEffortLevels || ['low', 'medium', 'high', 'max'];
+  // The dropdown always surfaces an 'auto' option first. When selected, the
+  // caller interprets it as "no explicit effort" and sends undefined to the
+  // backend, letting Claude Code's per-model default apply (xhigh for Opus
+  // 4.7, high for Sonnet, etc.). Without this, the button could display
+  // a specific level (e.g. 'High') while the request actually sent
+  // undefined, which user-visibly lied about what was being paid for.
+  const baseLevels = supportedEffortLevels || ['low', 'medium', 'high', 'xhigh', 'max'];
+  const levels = ['auto', ...baseLevels];
 
   // Close effort menu on outside click
   useEffect(() => {

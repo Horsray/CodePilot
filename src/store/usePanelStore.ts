@@ -1,0 +1,218 @@
+"use client";
+
+import { create } from "zustand";
+import type { PreviewViewMode, WorkspaceTab, BottomPanelTab, OpenBrowserTabOptions } from "@/hooks/usePanel";
+
+interface PanelStore {
+  chatListOpen: boolean;
+  setChatListOpen: (open: boolean) => void;
+  fileTreeOpen: boolean;
+  setFileTreeOpen: (open: boolean) => void;
+  gitPanelOpen: boolean;
+  setGitPanelOpen: (open: boolean) => void;
+  previewOpen: boolean;
+  setPreviewOpen: (open: boolean) => void;
+  terminalOpen: boolean;
+  setTerminalOpen: (open: boolean) => void;
+  dashboardPanelOpen: boolean;
+  setDashboardPanelOpen: (open: boolean) => void;
+  assistantPanelOpen: boolean;
+  setAssistantPanelOpen: (open: boolean) => void;
+  browserPanelOpen: boolean;
+  setBrowserPanelOpen: (open: boolean) => void;
+  isAssistantWorkspace: boolean;
+  setIsAssistantWorkspace: (is: boolean) => void;
+  bottomPanelOpen: boolean;
+  setBottomPanelOpen: (open: boolean) => void;
+  bottomPanelTab: BottomPanelTab;
+  setBottomPanelTab: (tab: BottomPanelTab) => void;
+  workspaceTabs: WorkspaceTab[];
+  activeWorkspaceTabId: string | null;
+  setActiveWorkspaceTabId: (id: string | null) => void;
+  openPreviewTab: (path: string, defaultViewMode: (path: string) => PreviewViewMode) => void;
+  openBrowserTab: (url: string, title?: string, options?: OpenBrowserTabOptions) => void;
+  openTerminalTab: (terminalId?: string, title?: string) => void;
+  updateWorkspaceTab: (id: string, updates: Partial<WorkspaceTab>) => void;
+  closeWorkspaceTab: (id: string) => void;
+  currentWorktreeLabel: string;
+  setCurrentWorktreeLabel: (label: string) => void;
+  workingDirectory: string;
+  setWorkingDirectory: (dir: string) => void;
+  sessionId: string;
+  setSessionId: (id: string) => void;
+  sessionTitle: string;
+  setSessionTitle: (title: string) => void;
+  streamingSessionId: string;
+  setStreamingSessionId: (id: string) => void;
+  pendingApprovalSessionId: string;
+  setPendingApprovalSessionId: (id: string) => void;
+  activeStreamingSessions: Set<string>;
+  setActiveStreamingSessions: (sessions: Set<string>) => void;
+  pendingApprovalSessionIds: Set<string>;
+  setPendingApprovalSessionIds: (ids: Set<string>) => void;
+  previewFile: string | null;
+  setPreviewFile: (path: string | null, defaultViewMode: (path: string) => PreviewViewMode) => void;
+  previewViewMode: PreviewViewMode;
+  setPreviewViewMode: (mode: PreviewViewMode) => void;
+}
+
+export const usePanelStore = create<PanelStore>((set, get) => {
+  // 中文注释：右侧面板互斥集合——打开任一面板时把其余全部关闭。
+  // 此前互斥只在 PanelToolbar 按钮的 closeOthers 里做，程序化入口
+  // （会话加载开文件树、终端自动打开、ChatList 开浏览器等）
+  // 各自直接 setXxx(true)，两个 flag 同时为 true 时 PanelZone 把两个
+  // flex-1 面板上下堆叠渲染。互斥下沉到 store 后，所有入口自动生效。
+  // 注意：previewOpen 不在集合内——工作区标签预览渲染在主区域
+  // （activeWorkspaceTab），点文件树里的文件要保留树本身；
+  // 右侧面板内的预览由 setPreviewFile(非空) 触发互斥。
+  const CLOSED_PANELS = {
+    fileTreeOpen: false,
+    gitPanelOpen: false,
+    dashboardPanelOpen: false,
+    assistantPanelOpen: false,
+    browserPanelOpen: false,
+    bottomPanelOpen: false,
+  };
+
+  return {
+  chatListOpen: false,
+  setChatListOpen: (open) => set({ chatListOpen: open }),
+  fileTreeOpen: false,
+  setFileTreeOpen: (open) => set(open ? { ...CLOSED_PANELS, fileTreeOpen: true } : { fileTreeOpen: false }),
+  gitPanelOpen: false,
+  setGitPanelOpen: (open) => set(open ? { ...CLOSED_PANELS, gitPanelOpen: true } : { gitPanelOpen: false }),
+  previewOpen: false,
+  setPreviewOpen: (open) => set({ previewOpen: open }),
+  terminalOpen: false,
+  setTerminalOpen: (open) => set({ terminalOpen: open }),
+  dashboardPanelOpen: true,
+  setDashboardPanelOpen: (open) => set(open ? { ...CLOSED_PANELS, dashboardPanelOpen: true } : { dashboardPanelOpen: false }),
+  assistantPanelOpen: false,
+  setAssistantPanelOpen: (open) => set(open ? { ...CLOSED_PANELS, assistantPanelOpen: true } : { assistantPanelOpen: false }),
+  browserPanelOpen: false,
+  setBrowserPanelOpen: (open) => set(open ? { ...CLOSED_PANELS, browserPanelOpen: true } : { browserPanelOpen: false }),
+  isAssistantWorkspace: false,
+  setIsAssistantWorkspace: (is) => set({ isAssistantWorkspace: is }),
+  bottomPanelOpen: false,
+  setBottomPanelOpen: (open) => set(open ? { ...CLOSED_PANELS, bottomPanelOpen: true } : { bottomPanelOpen: false }),
+  bottomPanelTab: "console",
+  setBottomPanelTab: (tab) => set({ bottomPanelTab: tab }),
+  workspaceTabs: [],
+  activeWorkspaceTabId: null,
+  setActiveWorkspaceTabId: (id) => set({ activeWorkspaceTabId: id }),
+  openPreviewTab: (path, defaultViewMode) => {
+    const { workspaceTabs, previewOpen, setPreviewOpen } = get();
+    const existingTab = workspaceTabs.find((t) => t.filePath === path);
+    if (existingTab) {
+      set({ activeWorkspaceTabId: existingTab.id });
+    } else {
+      const newTab: WorkspaceTab = {
+        id: `preview-${Date.now()}`,
+        kind: "preview",
+        title: path.split("/").pop() || path,
+        closable: true,
+        filePath: path,
+      };
+      set({
+        workspaceTabs: [...workspaceTabs, newTab],
+        activeWorkspaceTabId: newTab.id,
+        previewViewMode: defaultViewMode(path),
+      });
+    }
+    if (!previewOpen) setPreviewOpen(true);
+  },
+  openBrowserTab: (url, title, options) => {
+    const { workspaceTabs, previewOpen, setPreviewOpen } = get();
+    const shouldCreateTab = options?.newTab !== false;
+    const existingTab = shouldCreateTab
+      ? workspaceTabs.find((t) => t.kind === "browser" && url && t.url === url)
+      : workspaceTabs.find((t) => t.kind === "browser");
+    if (existingTab && !shouldCreateTab) {
+      const newTabs = workspaceTabs.map(t => 
+        t.id === existingTab.id ? { ...t, url, title: title || t.title } : t
+      );
+      set({ workspaceTabs: newTabs, activeWorkspaceTabId: existingTab.id });
+    } else if (existingTab) {
+      set({ activeWorkspaceTabId: existingTab.id });
+    } else {
+      const newTab: WorkspaceTab = {
+        id: `browser-${Date.now()}`,
+        kind: "browser",
+        title: title || "新标签页",
+        closable: true,
+        url: url,
+      };
+      set({
+        workspaceTabs: [...workspaceTabs, newTab],
+        activeWorkspaceTabId: newTab.id,
+      });
+    }
+    if (!previewOpen) setPreviewOpen(true);
+  },
+  openTerminalTab: (terminalId, title) => {
+    const { workspaceTabs, previewOpen, setPreviewOpen } = get();
+    const newTab: WorkspaceTab = {
+      id: terminalId ? `terminal-${terminalId}` : `terminal-${Date.now()}`,
+      kind: "terminal",
+      title: title || "Terminal",
+      closable: true,
+      terminalId,
+    };
+    set({
+      workspaceTabs: [...workspaceTabs, newTab],
+      activeWorkspaceTabId: newTab.id,
+    });
+    if (!previewOpen) setPreviewOpen(true);
+  },
+  updateWorkspaceTab: (id, updates) => {
+    const { workspaceTabs } = get();
+    const existingTab = workspaceTabs.find((t) => t.id === id);
+    if (existingTab && Object.entries(updates).every(([key, value]) => existingTab[key as keyof WorkspaceTab] === value)) {
+      return;
+    }
+    set({
+      workspaceTabs: workspaceTabs.map(t => t.id === id ? { ...t, ...updates } : t)
+    });
+  },
+  closeWorkspaceTab: (id) => {
+    const { workspaceTabs, activeWorkspaceTabId } = get();
+    const newTabs = workspaceTabs.filter((t) => t.id !== id);
+    let newActiveId = activeWorkspaceTabId;
+    if (activeWorkspaceTabId === id) {
+      newActiveId = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null;
+    }
+    set({ workspaceTabs: newTabs, activeWorkspaceTabId: newActiveId });
+  },
+  currentWorktreeLabel: "",
+  setCurrentWorktreeLabel: (label) => set({ currentWorktreeLabel: label }),
+  workingDirectory: "",
+  setWorkingDirectory: (dir) => set({ workingDirectory: dir }),
+  sessionId: "",
+  setSessionId: (id) => set({ sessionId: id }),
+  sessionTitle: "",
+  setSessionTitle: (title) => set({ sessionTitle: title }),
+  streamingSessionId: "",
+  setStreamingSessionId: (id) => set({ streamingSessionId: id }),
+  pendingApprovalSessionId: "",
+  setPendingApprovalSessionId: (id) => set({ pendingApprovalSessionId: id }),
+  activeStreamingSessions: new Set(),
+  setActiveStreamingSessions: (sessions) => set({ activeStreamingSessions: sessions }),
+  pendingApprovalSessionIds: new Set(),
+  setPendingApprovalSessionIds: (ids) => set({ pendingApprovalSessionIds: ids }),
+  previewFile: null,
+  setPreviewFile: (path, defaultViewMode) => {
+    // 中文注释：右侧面板内的预览（引用上下文/知识库触发）也参与互斥——
+    // 打开时关闭其余面板；path 为 null 表示关闭预览，不影响其他面板。
+    set(path ? {
+      ...CLOSED_PANELS,
+      previewFile: path,
+      previewViewMode: defaultViewMode(path),
+    } : {
+      previewFile: null,
+      previewViewMode: "source",
+    });
+  },
+  previewViewMode: "source",
+  setPreviewViewMode: (mode) => set({ previewViewMode: mode }),
+  };
+});

@@ -10,10 +10,19 @@ export function useGitStatus(cwd: string) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const statusRef = useRef<GitStatus | null>(null);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const fetchStatus = useCallback(async () => {
     if (!cwd) return;
-    setLoading(true);
+    const isInitialLoad = statusRef.current === null;
+    // 中文注释：功能名称「Git 状态静默刷新」，用法是在已有状态时后台更新数据而不切回全局 loading，避免 Git 面板局部输入状态被卸载重置。
+    if (isInitialLoad) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const res = await fetch(`/api/git/status?cwd=${encodeURIComponent(cwd)}`);
@@ -26,7 +35,9 @@ export function useGitStatus(cwd: string) {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch status');
     } finally {
-      setLoading(false);
+      if (isInitialLoad) {
+        setLoading(false);
+      }
     }
   }, [cwd]);
 
@@ -34,6 +45,8 @@ export function useGitStatus(cwd: string) {
   useEffect(() => {
     if (!cwd) {
       setStatus(null);
+      statusRef.current = null;
+      setLoading(false);
       return;
     }
 

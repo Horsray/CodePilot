@@ -1,15 +1,31 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
+import { usePanelStore } from "@/store/usePanelStore";
 
 export type PanelContent = "files" | "tasks";
 
 export type PreviewViewMode = "source" | "rendered";
+export type BottomPanelTab = "console" | "terminal";
+export type WorkspaceTabKind = "preview" | "browser" | "terminal";
+export interface OpenBrowserTabOptions {
+  newTab?: boolean;
+}
 
-export type BottomPanelTab = "terminal" | "console";
+export interface WorkspaceTab {
+  id: string;
+  kind: WorkspaceTabKind;
+  title: string;
+  closable: boolean;
+  url?: string;
+  filePath?: string;
+  sessionId?: string;
+  terminalId?: string;
+}
 
 export interface PanelContextValue {
-  // --- New independent panel states ---
+  chatListOpen: boolean;
+  setChatListOpen: (open: boolean) => void;
   fileTreeOpen: boolean;
   setFileTreeOpen: (open: boolean) => void;
   gitPanelOpen: boolean;
@@ -22,32 +38,28 @@ export interface PanelContextValue {
   setDashboardPanelOpen: (open: boolean) => void;
   assistantPanelOpen: boolean;
   setAssistantPanelOpen: (open: boolean) => void;
+  browserPanelOpen: boolean;
+  setBrowserPanelOpen: (open: boolean) => void;
   isAssistantWorkspace: boolean;
   setIsAssistantWorkspace: (is: boolean) => void;
-
-  // --- Bottom panel (Terminal / Console) ---
   bottomPanelOpen: boolean;
   setBottomPanelOpen: (open: boolean) => void;
   bottomPanelTab: BottomPanelTab;
   setBottomPanelTab: (tab: BottomPanelTab) => void;
+  workspaceTabs: WorkspaceTab[];
+  activeWorkspaceTabId: string | null;
+  setActiveWorkspaceTabId: (id: string | null) => void;
+  openPreviewTab: (path: string) => void;
+  openBrowserTab: (url: string, title?: string, options?: OpenBrowserTabOptions) => void;
+  openTerminalTab: (terminalId?: string, title?: string) => void;
+  updateWorkspaceTab: (id: string, updates: Partial<WorkspaceTab>) => void;
+  closeWorkspaceTab: (id: string) => void;
 
-  // --- Main area view mode (chat vs browser) ---
-  mainViewMode: "chat" | "browser";
-  setMainViewMode: (mode: "chat" | "browser") => void;
-
-  // --- Browser tab (shown in main content area) ---
-  browserTabOpen: boolean;
-  setBrowserTabOpen: (open: boolean) => void;
-  browserUrl: string;
-  setBrowserUrl: (url: string) => void;
-
-  // --- Git summary (for top bar, derived — no setters) ---
   currentBranch: string;
   gitDirtyCount: number;
   currentWorktreeLabel: string;
   setCurrentWorktreeLabel: (label: string) => void;
 
-  // --- Preserved from old API ---
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   sessionId: string;
@@ -58,9 +70,7 @@ export interface PanelContextValue {
   setStreamingSessionId: (id: string) => void;
   pendingApprovalSessionId: string;
   setPendingApprovalSessionId: (id: string) => void;
-  /** All sessions with active streams (supports multi-session streaming) */
   activeStreamingSessions: Set<string>;
-  /** All sessions with pending permission approval */
   pendingApprovalSessionIds: Set<string>;
   previewFile: string | null;
   setPreviewFile: (path: string | null) => void;
@@ -70,10 +80,27 @@ export interface PanelContextValue {
 
 export const PanelContext = createContext<PanelContextValue | null>(null);
 
+const RENDERED_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
+
+export function defaultViewMode(filePath: string): PreviewViewMode {
+  const dot = filePath.lastIndexOf(".");
+  const ext = dot >= 0 ? filePath.slice(dot).toLowerCase() : "";
+  return RENDERED_EXTENSIONS.has(ext) ? "rendered" : "source";
+}
+
 export function usePanel(): PanelContextValue {
-  const ctx = useContext(PanelContext);
-  if (!ctx) {
-    throw new Error("usePanel must be used within a PanelProvider");
-  }
-  return ctx;
+  const context = useContext(PanelContext);
+  const store = usePanelStore();
+  const fallbackValue = useMemo(() => ({
+    ...store,
+    currentBranch: "",
+    gitDirtyCount: 0,
+    openPreviewTab: (path: string) => store.openPreviewTab(path, defaultViewMode),
+    openBrowserTab: store.openBrowserTab,
+    openTerminalTab: store.openTerminalTab,
+    updateWorkspaceTab: store.updateWorkspaceTab,
+    setPreviewFile: (path: string | null) => store.setPreviewFile(path, defaultViewMode),
+  }), [store]);
+
+  return context ?? fallbackValue;
 }

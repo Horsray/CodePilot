@@ -10,7 +10,6 @@
  */
 
 import { z } from 'zod';
-import { isOfficialGeminiImageProvider } from '@/lib/image-provider-utils';
 
 // ── Protocol types ──────────────────────────────────────────────
 
@@ -25,7 +24,9 @@ export type Protocol =
   | 'bedrock'             // AWS Bedrock (env-based auth, CLAUDE_CODE_USE_BEDROCK)
   | 'vertex'              // Google Vertex AI (env-based auth, CLAUDE_CODE_USE_VERTEX)
   | 'google'              // Google Generative AI (Gemini text)
-  | 'gemini-image';       // Google Gemini image generation
+  | 'gemini-image'        // Google Gemini image generation
+  | 'multi_head'
+  | 'openai-image';       // OpenAI GPT Image generation
 
 /**
  * How the provider authenticates: which env var to inject the API key into.
@@ -60,6 +61,14 @@ export interface CatalogModel {
     vision?: boolean;
     pdf?: boolean;
     contextWindow?: number;
+    /** Whether this model supports effort levels (reasoning effort) */
+    supportsEffort?: boolean;
+    /** Allowed effort levels for this model (Opus 4.7 adds 'xhigh') */
+    supportedEffortLevels?: ('low' | 'medium' | 'high' | 'xhigh' | 'max')[];
+    /** Whether this model supports adaptive thinking */
+    supportsAdaptiveThinking?: boolean;
+    /** Whether this model supports a user-facing thinking toggle (e.g. Deepseek) */
+    supportsThinkingToggle?: boolean;
   };
 }
 
@@ -75,6 +84,21 @@ export interface RoleModels {
   sonnet?: string;
   opus?: string;
 }
+
+const MODEL_CONTEXT = {
+  QWEN_1M: 1_000_000,
+  QWEN_CODER_NEXT: 262_144,
+  KIMI_K2_5: 262_144,
+  GLM_5: 202_752,
+  GLM_4_7: 169_984,
+  MINIMAX_M3: 1_000_000,      // M3: 1M context (512K guaranteed minimum)
+  MINIMAX_M2_7: 204_800,
+  MINIMAX_M2_5: 196_608,
+  MIMO_V2_6: 1_048_576,       // V2.6 series: 1M context, 128K max output
+  MIMO_V2_5_PRO: 1_048_576,
+  MIMO_V2_5: 1_048_576,
+  DEEPSEEK_V4: 1_000_000,
+} as const;
 
 // ── Vendor preset definition ────────────────────────────────────
 
@@ -100,9 +124,17 @@ export interface VendorPreset {
   /** Default role models mapping */
   defaultRoleModels?: RoleModels;
   /** Which fields the quick-connect form shows */
-  fields: ('name' | 'api_key' | 'base_url' | 'env_overrides' | 'model_names')[];
+  fields: ('name' | 'api_key' | 'base_url' | 'env_overrides' | 'model_names' | 'model_mapping')[];
   /** Category: chat (default) or media */
   category?: 'chat' | 'media';
+  /**
+   * Transport for media presets. `'openai-images'` means the relay implements
+   * the standard OpenAI Images API (`/v1/images/generations` +
+   * `/v1/images/edits`) — `image-generator.ts` routes those through the OpenAI
+   * SDK rather than the legacy `/v1/chat/completions` relay shim.
+   * Omit for chat presets and for custom/chat-style image relays.
+   */
+  mediaProtocol?: 'custom-image' | 'openai-images';
   /** Icon key for UI */
   iconKey: string;
   /**
@@ -146,7 +178,7 @@ export const PresetSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   descriptionZh: z.string(),
-  protocol: z.enum(['anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image']),
+  protocol: z.enum(['anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image', 'multi_head', 'openai-image']),
   authStyle: z.enum(['api_key', 'auth_token', 'env_only', 'custom_header']),
   baseUrl: z.string(),
   defaultEnvOverrides: z.record(z.string(), z.string()),
@@ -161,12 +193,17 @@ export const PresetSchema = z.object({
       vision: z.boolean().optional(),
       pdf: z.boolean().optional(),
       contextWindow: z.number().optional(),
+      supportsEffort: z.boolean().optional(),
+      supportedEffortLevels: z.array(z.enum(['low', 'medium', 'high', 'xhigh', 'max'])).optional(),
+      supportsAdaptiveThinking: z.boolean().optional(),
+      supportsThinkingToggle: z.boolean().optional(),
     }).optional(),
   })),
   fields: z.array(z.string()),
   iconKey: z.string(),
   sdkProxyOnly: z.boolean().optional(),
   category: z.enum(['chat', 'media']).optional(),
+  mediaProtocol: z.enum(['custom-image', 'openai-images']).optional(),
   defaultRoleModels: z.record(z.string(), z.string()).optional(),
   meta: PresetMetaSchema.optional(),
 }).refine(data => {
@@ -187,170 +224,124 @@ export const PresetSchema = z.object({
 
 // ── Default Anthropic models ────────────────────────────────────
 
+// Shared Anthropic catalog used by non-first-party providers
+// (anthropic-thirdparty, openrouter, ollama, litellm) and the generic
+// protocol fallback. Intentionally alias-only: third-party providers
+// often require their own upstream model names (OpenRouter goes through
+// the OpenAI SDK, LiteLLM expects user-configured names, etc.), and
+// forcing claude-opus-4-7 here would break those pass-through paths.
+// First-party Anthropic has its own catalog below.
 const ANTHROPIC_DEFAULT_MODELS: CatalogModel[] = [
-  { modelId: 'sonnet', displayName: 'Sonnet 4.6', role: 'sonnet' },
-  { modelId: 'opus', displayName: 'Opus 4.6', role: 'opus' },
-  { modelId: 'haiku', displayName: 'Haiku 4.5', role: 'haiku' },
+  {
+    modelId: 'sonnet',
+    displayName: 'Sonnet 4.6',
+    role: 'sonnet',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'opus',
+    displayName: 'Opus',
+    role: 'opus',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'haiku',
+    displayName: 'Haiku 4.5',
+    role: 'haiku',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    },
+  },
+];
+
+// First-party Anthropic API (anthropic-official preset) — pins opus to
+// the explicit upstream ID so resolved.upstreamModel carries a concrete
+// model name downstream. This unblocks the Opus 4.7 sanitizer regex
+// in claude-model-options.ts (which matches upstream IDs, not aliases)
+// and guarantees the native path doesn't forward the bare "opus"
+// alias to @ai-sdk/anthropic.
+const ANTHROPIC_FIRST_PARTY_MODELS: CatalogModel[] = [
+  {
+    modelId: 'sonnet',
+    displayName: 'Sonnet 4.6',
+    role: 'sonnet',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'opus',
+    upstreamModelId: 'claude-opus-4-7',
+    displayName: 'Opus 4.7',
+    role: 'opus',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'haiku',
+    displayName: 'Haiku 4.5',
+    role: 'haiku',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    },
+  },
+];
+
+// Bedrock / Vertex: per Claude Code docs, the `opus` alias still resolves
+// to Opus 4.6 on these platforms (unlike first-party Anthropic). Users who
+// want Opus 4.7 on Bedrock/Vertex must pass the full model name or set
+// ANTHROPIC_DEFAULT_OPUS_MODEL explicitly. We surface this in the label to
+// avoid promising 4.7 capabilities (xhigh) on an alias that actually runs 4.6.
+const BEDROCK_VERTEX_DEFAULT_MODELS: CatalogModel[] = [
+  {
+    modelId: 'sonnet',
+    displayName: 'Sonnet 4.6',
+    role: 'sonnet',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'opus',
+    displayName: 'Opus 4.6 (alias)',
+    role: 'opus',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+      supportsAdaptiveThinking: true,
+    },
+  },
+  {
+    modelId: 'haiku',
+    displayName: 'Haiku 4.5',
+    role: 'haiku',
+    capabilities: {
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
+    },
+  },
 ];
 
 // ── Vendor presets ──────────────────────────────────────────────
 
 export const VENDOR_PRESETS: VendorPreset[] = [
-  // ── Official Anthropic ──
-  {
-    key: 'anthropic-official',
-    name: 'Anthropic',
-    description: 'Official Anthropic API',
-    descriptionZh: 'Anthropic 官方 API',
-    protocol: 'anthropic',
-    authStyle: 'api_key',
-    baseUrl: 'https://api.anthropic.com',
-    defaultEnvOverrides: {},
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
-    fields: ['api_key'],
-    iconKey: 'anthropic',
-    meta: {
-      apiKeyUrl: 'https://platform.claude.com/settings/keys',
-      docsUrl: 'https://platform.claude.com/docs/en/api/overview',
-      billingModel: 'pay_as_you_go',
-    },
-  },
-
-  // ── Anthropic Third-party (generic) ──
-  {
-    key: 'anthropic-thirdparty',
-    name: 'Anthropic Third-party API',
-    description: 'Anthropic-compatible API — provide URL and Key',
-    descriptionZh: 'Anthropic 兼容第三方 API — 填写地址和密钥',
-    protocol: 'anthropic',
-    authStyle: 'api_key',
-    baseUrl: '',
-    defaultEnvOverrides: { ANTHROPIC_API_KEY: '' },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
-    fields: ['name', 'api_key', 'base_url', 'env_overrides', 'model_names'],
-    iconKey: 'anthropic',
-  },
-
-  // ── OpenRouter ──
-  {
-    key: 'openrouter',
-    name: 'OpenRouter',
-    description: 'Use OpenRouter to access multiple models',
-    descriptionZh: '通过 OpenRouter 访问多种模型',
-    protocol: 'openrouter',
-    authStyle: 'auth_token',
-    baseUrl: 'https://openrouter.ai/api',
-    defaultEnvOverrides: {},
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
-    fields: ['api_key'],
-    iconKey: 'openrouter',
-    meta: {
-      apiKeyUrl: 'https://openrouter.ai/workspaces/default/keys',
-      docsUrl: 'https://openrouter.ai/docs/guides/coding-agents/claude-code-integration',
-      billingModel: 'pay_as_you_go',
-    },
-  },
-
-  // ── Zhipu GLM (China) ──
-  {
-    key: 'glm-cn',
-    name: 'GLM (CN)',
-    description: 'Zhipu GLM Code Plan — China region',
-    descriptionZh: '智谱 GLM 编程套餐 — 中国区',
-    protocol: 'anthropic',
-    authStyle: 'auth_token',
-    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
-    defaultEnvOverrides: { API_TIMEOUT_MS: '3000000', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.5-air', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5-turbo', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.1' },
-    defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'sonnet', displayName: 'GLM-5-Turbo', role: 'sonnet' },
-      { modelId: 'opus', upstreamModelId: 'opus', displayName: 'GLM-5.1', role: 'opus' },
-      { modelId: 'haiku', upstreamModelId: 'haiku', displayName: 'GLM-4.5-Air', role: 'haiku' },
-    ],
-    fields: ['api_key'],
-    iconKey: 'zhipu',
-    sdkProxyOnly: true,
-    meta: {
-      apiKeyUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
-      docsUrl: 'https://docs.bigmodel.cn/cn/coding-plan/tool/claude',
-      billingModel: 'coding_plan',
-      notes: ['高峰时段（14:00-18:00 UTC+8）消耗 3 倍积分'],
-    },
-  },
-
-  // ── Zhipu GLM (Global) ──
-  {
-    key: 'glm-global',
-    name: 'GLM (Global)',
-    description: 'Zhipu GLM Code Plan — Global region',
-    descriptionZh: '智谱 GLM 编程套餐 — 国际区',
-    protocol: 'anthropic',
-    authStyle: 'auth_token',
-    baseUrl: 'https://api.z.ai/api/anthropic',
-    defaultEnvOverrides: { API_TIMEOUT_MS: '3000000', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.5-air', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5-turbo', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.1' },
-    defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'sonnet', displayName: 'GLM-5-Turbo', role: 'sonnet' },
-      { modelId: 'opus', upstreamModelId: 'opus', displayName: 'GLM-5.1', role: 'opus' },
-      { modelId: 'haiku', upstreamModelId: 'haiku', displayName: 'GLM-4.5-Air', role: 'haiku' },
-    ],
-    fields: ['api_key'],
-    iconKey: 'zhipu',
-    sdkProxyOnly: true,
-    meta: {
-      apiKeyUrl: 'https://z.ai/manage-apikey/apikey-list',
-      docsUrl: 'https://docs.z.ai/devpack/tool/claude',
-      billingModel: 'coding_plan',
-      notes: ['高峰时段（14:00-18:00 UTC+8）消耗 3 倍积分'],
-    },
-  },
-
-  // ── Kimi ──
-  {
-    key: 'kimi',
-    name: 'Kimi Coding Plan',
-    description: 'Kimi Coding Plan API',
-    descriptionZh: 'Kimi 编程计划 API',
-    protocol: 'anthropic',
-    authStyle: 'api_key',
-    baseUrl: 'https://api.kimi.com/coding/',
-    defaultEnvOverrides: { ENABLE_TOOL_SEARCH: 'false' },
-    defaultModels: [
-      { modelId: 'sonnet', displayName: 'Kimi K2.5', role: 'default' },
-    ],
-    fields: ['api_key'],
-    iconKey: 'kimi',
-    sdkProxyOnly: true,
-    meta: {
-      apiKeyUrl: 'https://www.kimi.com/code/console',
-      docsUrl: 'https://www.kimi.com/code/docs/more/third-party-agents.html',
-      billingModel: 'pay_as_you_go',
-      notes: [],
-    },
-  },
-
-  // ── Moonshot ──
-  {
-    key: 'moonshot',
-    name: 'Moonshot',
-    description: 'Moonshot AI API',
-    descriptionZh: '月之暗面 API',
-    protocol: 'anthropic',
-    authStyle: 'auth_token',
-    baseUrl: 'https://api.moonshot.cn/anthropic',
-    defaultEnvOverrides: { ENABLE_TOOL_SEARCH: 'false' },
-    defaultModels: [
-      { modelId: 'sonnet', displayName: 'Kimi K2.5', role: 'default' },
-    ],
-    fields: ['api_key'],
-    iconKey: 'moonshot',
-    sdkProxyOnly: true,
-    meta: {
-      apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys',
-      docsUrl: 'https://platform.moonshot.cn/docs/guide/agent-support',
-      billingModel: 'pay_as_you_go',
-      notes: ['建议设置每日消费上限，防止 agentic 循环快速消耗 token'],
-    },
-  },
-
   // ── MiniMax (China) ──
   {
     key: 'minimax-cn',
@@ -358,22 +349,22 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     description: 'MiniMax Code Plan — China region',
     descriptionZh: 'MiniMax 编程套餐 — 中国区',
     protocol: 'anthropic',
-    authStyle: 'api_key',
+    authStyle: 'auth_token',
     baseUrl: 'https://api.minimaxi.com/anthropic',
     defaultEnvOverrides: {
       API_TIMEOUT_MS: '3000000',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      { modelId: 'MiniMax-M3', upstreamModelId: 'MiniMax-M3', displayName: 'MiniMax-M3', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.MINIMAX_M3, vision: true } },
     ],
     defaultRoleModels: {
-      default: 'MiniMax-M2.7',
-      sonnet: 'MiniMax-M2.7',
-      opus: 'MiniMax-M2.7',
-      haiku: 'MiniMax-M2.7',
+      default: 'MiniMax-M3',
+      sonnet: 'MiniMax-M3',
+      opus: 'MiniMax-M3',
+      haiku: 'MiniMax-M3',
     },
-    fields: ['api_key'],
+    fields: ['api_key', 'model_names', 'model_mapping'],
     iconKey: 'minimax',
     sdkProxyOnly: true,
     meta: {
@@ -390,22 +381,22 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     description: 'MiniMax Code Plan — Global region',
     descriptionZh: 'MiniMax 编程套餐 — 国际区',
     protocol: 'anthropic',
-    authStyle: 'api_key',
+    authStyle: 'auth_token',
     baseUrl: 'https://api.minimax.io/anthropic',
     defaultEnvOverrides: {
       API_TIMEOUT_MS: '3000000',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      { modelId: 'MiniMax-M3', upstreamModelId: 'MiniMax-M3', displayName: 'MiniMax-M3', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.MINIMAX_M3, vision: true } },
     ],
     defaultRoleModels: {
-      default: 'MiniMax-M2.7',
-      sonnet: 'MiniMax-M2.7',
-      opus: 'MiniMax-M2.7',
-      haiku: 'MiniMax-M2.7',
+      default: 'MiniMax-M3',
+      sonnet: 'MiniMax-M3',
+      opus: 'MiniMax-M3',
+      haiku: 'MiniMax-M3',
     },
-    fields: ['api_key'],
+    fields: ['api_key', 'model_names', 'model_mapping'],
     iconKey: 'minimax',
     sdkProxyOnly: true,
     meta: {
@@ -415,25 +406,57 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
-  // ── Volcengine Ark ──
+  // ── DeepSeek ──
   {
-    key: 'volcengine',
-    name: 'Volcengine Ark',
-    description: 'Volcengine Ark Coding Plan — Doubao, GLM, DeepSeek, Kimi',
-    descriptionZh: '字节火山方舟 Coding Plan — 豆包、GLM、DeepSeek、Kimi',
+    key: 'deepseek',
+    name: 'DeepSeek',
+    description: 'DeepSeek Anthropic-compatible API — V4 Pro / V4 Flash',
+    descriptionZh: 'DeepSeek Anthropic 兼容 API — V4 Pro / V4 Flash',
     protocol: 'anthropic',
     authStyle: 'auth_token',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
-    defaultEnvOverrides: {},
-    defaultModels: [],  // User must specify model_names
-    fields: ['api_key', 'model_names'],
-    iconKey: 'volcengine',
-    sdkProxyOnly: true,
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    defaultEnvOverrides: {
+      CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-v4-pro',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+      CLAUDE_CODE_EFFORT_LEVEL: 'max',
+    },
+    defaultModels: [
+      { modelId: 'deepseek-v4-pro', upstreamModelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4, vision: false, supportsEffort: true, supportedEffortLevels: ['high', 'max'], supportsThinkingToggle: true } },
+      { modelId: 'deepseek-v4-flash', upstreamModelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', role: 'haiku', capabilities: { contextWindow: MODEL_CONTEXT.DEEPSEEK_V4, vision: true, supportsEffort: true, supportedEffortLevels: ['high', 'max'], supportsThinkingToggle: true } },
+    ],
+    defaultRoleModels: {
+      default: 'deepseek-v4-pro',
+      sonnet: 'deepseek-v4-pro',
+      opus: 'deepseek-v4-pro',
+      haiku: 'deepseek-v4-flash',
+    },
+    fields: ['api_key'],
+    iconKey: 'deepseek',
     meta: {
-      apiKeyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement',
-      docsUrl: 'https://www.volcengine.com/docs/82379/1928262',
-      billingModel: 'coding_plan',
-      notes: ['需先在控制台激活 Endpoint', 'API Key 为临时凭证'],
+      apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+      docsUrl: 'https://platform.deepseek.com/docs',
+      billingModel: 'pay_as_you_go',
+    },
+  },
+
+  // ── BananaRouter ──
+  {
+    key: 'bananarouter',
+    name: 'BananaRouter',
+    description: 'BananaRouter — OpenAI-compatible relay for chat and image generation',
+    descriptionZh: 'BananaRouter — OpenAI 兼容中转（聊天 + 生图）',
+    protocol: 'openai-compatible',
+    authStyle: 'api_key',
+    baseUrl: 'https://api.bananarouter.com/v1',
+    defaultEnvOverrides: {},
+    defaultModels: [],  // User must specify model_names — query via /v1/models
+    fields: ['api_key', 'base_url', 'model_names'],
+    iconKey: 'server',
+    meta: {
+      apiKeyUrl: 'https://api.bananarouter.com',
+      docsUrl: 'https://api.bananarouter.com',
+      billingModel: 'self_hosted',
     },
   },
 
@@ -441,22 +464,24 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   {
     key: 'xiaomi-mimo',
     name: 'Xiaomi MiMo',
-    description: 'Xiaomi MiMo Pay-as-you-go API — MiMo-V2-Pro',
-    descriptionZh: '小米 MiMo 按量付费 — MiMo-V2-Pro',
+    description: 'Xiaomi MiMo Pay-as-you-go API — MiMo-V2.6 series',
+    descriptionZh: '小米 MiMo 按量付费 — MiMo-V2.6 系列',
     protocol: 'anthropic',
     authStyle: 'auth_token',
     baseUrl: 'https://api.xiaomimimo.com/anthropic',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'mimo-v2-pro', displayName: 'MiMo-V2-Pro', role: 'default' },
+      { modelId: 'mimo-v2.6-pro', upstreamModelId: 'mimo-v2.6-pro', displayName: 'MiMo-V2.6-Pro', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.MIMO_V2_6, vision: true } },
+      { modelId: 'mimo-v2.6-flash', upstreamModelId: 'mimo-v2.6-flash', displayName: 'MiMo-V2.6-Flash', role: 'haiku', capabilities: { contextWindow: MODEL_CONTEXT.MIMO_V2_6, vision: true } },
+      { modelId: 'mimo-v2.6-pro-ultraspeed', upstreamModelId: 'mimo-v2.6-pro-ultraspeed', displayName: 'MiMo-V2.6-Pro-UltraSpeed', role: 'sonnet', capabilities: { contextWindow: MODEL_CONTEXT.MIMO_V2_6, vision: true } },
     ],
     defaultRoleModels: {
-      default: 'mimo-v2-pro',
-      sonnet: 'mimo-v2-pro',
-      opus: 'mimo-v2-pro',
-      haiku: 'mimo-v2-pro',
+      default: 'mimo-v2.6-pro',
+      sonnet: 'mimo-v2.6-pro',
+      opus: 'mimo-v2.6-pro',
+      haiku: 'mimo-v2.6-flash',
     },
-    fields: ['api_key'],
+    fields: ['api_key', 'base_url', 'model_names', 'model_mapping'],
     iconKey: 'xiaomi-mimo',
     sdkProxyOnly: true,
     meta: {
@@ -471,22 +496,24 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   {
     key: 'xiaomi-mimo-token-plan',
     name: 'Xiaomi MiMo Token Plan',
-    description: 'Xiaomi MiMo Token Plan subscription — MiMo-V2-Pro',
-    descriptionZh: '小米 MiMo Token Plan 订阅套餐 — MiMo-V2-Pro',
+    description: 'Xiaomi MiMo Token Plan subscription — MiMo-V2.6 series',
+    descriptionZh: '小米 MiMo Token Plan 订阅套餐 — MiMo-V2.6 系列',
     protocol: 'anthropic',
     authStyle: 'auth_token',
     baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'mimo-v2-pro', displayName: 'MiMo-V2-Pro', role: 'default' },
+      { modelId: 'mimo-v2.6-pro', upstreamModelId: 'mimo-v2.6-pro', displayName: 'MiMo-V2.6-Pro', role: 'default', capabilities: { contextWindow: MODEL_CONTEXT.MIMO_V2_6, vision: true } },
+      { modelId: 'mimo-v2.6-flash', upstreamModelId: 'mimo-v2.6-flash', displayName: 'MiMo-V2.6-Flash', role: 'haiku', capabilities: { contextWindow: MODEL_CONTEXT.MIMO_V2_6, vision: true } },
+      { modelId: 'mimo-v2.6-pro-ultraspeed', upstreamModelId: 'mimo-v2.6-pro-ultraspeed', displayName: 'MiMo-V2.6-Pro-UltraSpeed', role: 'sonnet', capabilities: { contextWindow: MODEL_CONTEXT.MIMO_V2_6, vision: true } },
     ],
     defaultRoleModels: {
-      default: 'mimo-v2-pro',
-      sonnet: 'mimo-v2-pro',
-      opus: 'mimo-v2-pro',
-      haiku: 'mimo-v2-pro',
+      default: 'mimo-v2.6-pro',
+      sonnet: 'mimo-v2.6-pro',
+      opus: 'mimo-v2.6-pro',
+      haiku: 'mimo-v2.6-flash',
     },
-    fields: ['api_key'],
+    fields: ['api_key', 'base_url', 'model_names', 'model_mapping'],
     iconKey: 'xiaomi-mimo',
     sdkProxyOnly: true,
     meta: {
@@ -494,104 +521,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       docsUrl: 'https://platform.xiaomimimo.com/#/docs/integration/claudecode',
       billingModel: 'token_plan',
       notes: [],
-    },
-  },
-
-  // ── Aliyun Bailian ──
-  {
-    key: 'bailian',
-    name: 'Aliyun Bailian',
-    description: 'Aliyun Bailian Coding Plan — Qwen, GLM, Kimi, MiniMax',
-    descriptionZh: '阿里云百炼 Coding Plan — 通义千问、GLM、Kimi、MiniMax',
-    protocol: 'anthropic',
-    authStyle: 'auth_token',
-    baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
-    defaultEnvOverrides: {},
-    defaultModels: [
-      { modelId: 'qwen3.5-plus', displayName: 'Qwen 3.5 Plus', role: 'default' },
-      { modelId: 'qwen3-coder-next', displayName: 'Qwen 3 Coder Next' },
-      { modelId: 'qwen3-coder-plus', displayName: 'Qwen 3 Coder Plus' },
-      { modelId: 'kimi-k2.5', displayName: 'Kimi K2.5' },
-      { modelId: 'glm-5', displayName: 'GLM-5' },
-      { modelId: 'glm-4.7', displayName: 'GLM-4.7' },
-      { modelId: 'MiniMax-M2.5', displayName: 'MiniMax-M2.5' },
-    ],
-    fields: ['api_key'],
-    iconKey: 'bailian',
-    sdkProxyOnly: true,
-    meta: {
-      apiKeyUrl: 'https://bailian.console.aliyun.com',
-      docsUrl: 'https://help.aliyun.com/zh/model-studio/coding-plan',
-      billingModel: 'coding_plan',
-      notes: ['必须使用 Coding Plan 专用 Key（以 sk-sp- 开头）', '普通 DashScope Key 无法使用', '禁止用于自动化脚本'],
-    },
-  },
-
-  // ── AWS Bedrock ──
-  {
-    key: 'bedrock',
-    name: 'AWS Bedrock',
-    description: 'Amazon Bedrock — requires AWS credentials',
-    descriptionZh: 'Amazon Bedrock — 需要 AWS 凭证',
-    protocol: 'bedrock',
-    authStyle: 'env_only',
-    baseUrl: '',
-    defaultEnvOverrides: {
-      CLAUDE_CODE_USE_BEDROCK: '1',
-      AWS_REGION: 'us-east-1',
-      CLAUDE_CODE_SKIP_BEDROCK_AUTH: '1',
-    },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
-    fields: ['env_overrides'],
-    iconKey: 'bedrock',
-    meta: {
-      apiKeyUrl: 'https://console.aws.amazon.com',
-      docsUrl: 'https://aws.amazon.com/cn/bedrock/anthropic/',
-      billingModel: 'pay_as_you_go',
-      notes: ['需在 AWS Console 订阅 Claude 模型'],
-    },
-  },
-
-  // ── Google Vertex AI ──
-  {
-    key: 'vertex',
-    name: 'Google Vertex',
-    description: 'Google Vertex AI — requires GCP credentials',
-    descriptionZh: 'Google Vertex AI — 需要 GCP 凭证',
-    protocol: 'vertex',
-    authStyle: 'env_only',
-    baseUrl: '',
-    defaultEnvOverrides: {
-      CLAUDE_CODE_USE_VERTEX: '1',
-      CLOUD_ML_REGION: 'us-east5',
-      CLAUDE_CODE_SKIP_VERTEX_AUTH: '1',
-    },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
-    fields: ['env_overrides'],
-    iconKey: 'google',
-    meta: {
-      docsUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude',
-      billingModel: 'pay_as_you_go',
-      notes: ['需启用 Vertex AI 并在 Model Garden 订阅 Claude 模型'],
-    },
-  },
-
-  // ── Custom Anthropic Compatible ──
-  {
-    key: 'custom-anthropic',
-    name: 'Custom Anthropic',
-    description: 'Custom Anthropic-compatible API — fully configurable',
-    descriptionZh: '自定义 Anthropic 兼容 API — 完全自定义配置',
-    protocol: 'anthropic',
-    authStyle: 'api_key',
-    baseUrl: '',
-    defaultEnvOverrides: {},
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
-    fields: ['name', 'api_key', 'base_url', 'model_names'],
-    iconKey: 'server',
-    sdkProxyOnly: true,
-    meta: {
-      billingModel: 'self_hosted',
     },
   },
 
@@ -620,19 +549,121 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     },
   },
 
-  // ── 通用中转平台 (Media) ──
+  // ── Google Gemini (Image) Third-party ──
+  // Same protocol & SDK as the official preset; only the base URL differs so
+  // users can route through a compatible proxy (e.g. custom relay, CN mirror).
   {
-    key: 'custom-media',
-    name: '通用中转平台',
-    description: 'Custom media中转平台 — 完全自定义配置',
-    descriptionZh: '通用中转平台 — 自定义 baseurl、apikey、model',
+    key: 'gemini-image-thirdparty',
+    name: 'Gemini Image Third-party',
+    description: 'Nano Banana via compatible proxy — provide URL and Key',
+    descriptionZh: 'Nano Banana 兼容第三方 API — 填写地址和密钥',
     protocol: 'gemini-image',
     authStyle: 'api_key',
     baseUrl: '',
     defaultEnvOverrides: { GEMINI_API_KEY: '' },
     defaultModels: [
-      { modelId: 'gemini-3.1-flash-image-preview', displayName: '默认模型' },
+      { modelId: 'gemini-3.1-flash-image-preview', displayName: 'Nano Banana 2' },
+      { modelId: 'gemini-3-pro-image-preview', displayName: 'Nano Banana Pro' },
+      { modelId: 'gemini-2.5-flash-image', displayName: 'Nano Banana' },
     ],
+    fields: ['name', 'api_key', 'base_url'],
+    category: 'media',
+    iconKey: 'google',
+  },
+
+  // ── OpenAI (Image) ──
+  {
+    key: 'openai-image',
+    name: 'OpenAI (Image)',
+    description: 'GPT Image 2 — AI image generation by OpenAI',
+    descriptionZh: 'GPT Image 2 — OpenAI AI 图片生成',
+    protocol: 'openai-image',
+    authStyle: 'api_key',
+    baseUrl: 'https://api.openai.com/v1',
+    defaultEnvOverrides: { OPENAI_API_KEY: '' },
+    defaultModels: [
+      { modelId: 'gpt-image-2', displayName: 'GPT Image 2' },
+      { modelId: 'gpt-image-1.5', displayName: 'GPT Image 1.5' },
+      { modelId: 'gpt-image-1', displayName: 'GPT Image 1' },
+      { modelId: 'gpt-image-1-mini', displayName: 'GPT Image 1 Mini' },
+    ],
+    fields: ['api_key'],
+    category: 'media',
+    iconKey: 'openai',
+    meta: {
+      apiKeyUrl: 'https://platform.openai.com/api-keys',
+      docsUrl: 'https://platform.openai.com/docs/guides/image-generation',
+      billingModel: 'pay_as_you_go',
+    },
+  },
+
+  // ── OpenAI (Image) Third-party ──
+  {
+    key: 'openai-image-thirdparty',
+    name: 'OpenAI Image Third-party',
+    description: 'GPT Image via compatible proxy — provide URL and Key',
+    descriptionZh: 'GPT Image 兼容第三方 API — 填写地址和密钥',
+    protocol: 'openai-image',
+    authStyle: 'api_key',
+    baseUrl: '',
+    defaultEnvOverrides: { OPENAI_API_KEY: '' },
+    defaultModels: [
+      { modelId: 'gpt-image-2', displayName: 'GPT Image 2' },
+      { modelId: 'gpt-image-1.5', displayName: 'GPT Image 1.5' },
+      { modelId: 'gpt-image-1', displayName: 'GPT Image 1' },
+      { modelId: 'gpt-image-1-mini', displayName: 'GPT Image 1 Mini' },
+    ],
+    fields: ['name', 'api_key', 'base_url'],
+    category: 'media',
+    iconKey: 'openai',
+  },
+
+  // ── BananaRouter (Image) ──
+  // Same relay as the chat `bananarouter` preset above, but for the GPT Image 2
+  // series. Unlike legacy image relays (e.g. 神马) that expose generation through
+  // /v1/chat/completions, BananaRouter speaks the standard OpenAI Images API —
+  // hence mediaProtocol: 'openai-images', which image-generator.ts routes via
+  // the OpenAI SDK. Default model is gpt-image-2.5-flare (speed-first tier);
+  // sunburst is the quality-first tier and gpt-image-2 the base model.
+  {
+    key: 'bananarouter-image',
+    name: 'BananaRouter (Image)',
+    description: 'BananaRouter — GPT Image 2 series via the OpenAI Images API',
+    descriptionZh: 'BananaRouter 生图 — GPT Image 2 系列（OpenAI Images API）',
+    protocol: 'openai-image',
+    authStyle: 'api_key',
+    baseUrl: 'https://api.bananarouter.com/v1',
+    defaultEnvOverrides: {
+      OPENAI_API_KEY: '',
+      OPENAI_IMAGE_MODEL: 'gpt-image-2.5-flare',
+    },
+    defaultModels: [
+      { modelId: 'gpt-image-2.5-flare', displayName: 'GPT Image 2.5 Flare' },
+      { modelId: 'gpt-image-2.5-sunburst', displayName: 'GPT Image 2.5 Sunburst' },
+      { modelId: 'gpt-image-2', displayName: 'GPT Image 2' },
+    ],
+    fields: ['name', 'api_key', 'base_url'],
+    category: 'media',
+    mediaProtocol: 'openai-images',
+    iconKey: 'server',
+    meta: {
+      apiKeyUrl: 'https://bananarouter.com',
+      docsUrl: 'https://bananarouter.com/docs/gpt-image-2',
+      billingModel: 'pay_as_you_go',
+    },
+  },
+
+  // ── Fork: 通用中转平台 (保留 fork 定制) ──
+  {
+    key: 'custom-media',
+    name: '通用中转平台',
+    description: 'Custom media relay provider',
+    descriptionZh: '通用中转平台 — 自定义 baseurl、apikey、model',
+    protocol: 'gemini-image',
+    authStyle: 'api_key',
+    baseUrl: '',
+    defaultEnvOverrides: { GEMINI_API_KEY: '' },
+    defaultModels: [],
     fields: ['name', 'api_key', 'base_url', 'model_names'],
     category: 'media',
     iconKey: 'server',
@@ -640,7 +671,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       billingModel: 'self_hosted',
     },
   },
-
 ];
 
 // ── Runtime preset validation (fails fast on invalid presets) ───
@@ -661,6 +691,43 @@ export function getPresetsByCategory(category: 'chat' | 'media' = 'chat'): Vendo
   return VENDOR_PRESETS.filter(p => (p.category || 'chat') === category);
 }
 
+/** All valid Protocol union values — used for raw-field validation. */
+export const VALID_PROTOCOLS = new Set<Protocol>([
+  'anthropic',
+  'openai-compatible',
+  'openrouter',
+  'bedrock',
+  'vertex',
+  'google',
+  'gemini-image',
+  'multi_head',
+  'openai-image',
+]);
+
+/** Type guard for raw protocol strings coming from API bodies or legacy DB. */
+export function isValidProtocol(value: unknown): value is Protocol {
+  return typeof value === 'string' && VALID_PROTOCOLS.has(value as Protocol);
+}
+
+/**
+ * Compute the effective protocol for a provider — prefer the raw protocol
+ * field if it's a known Protocol value, otherwise fall back to
+ * inferProtocolFromLegacy(provider_type, base_url). Use this everywhere
+ * a write path, resolver, or diagnostic needs the "real" protocol: raw
+ * provider.protocol can legitimately be '' on legacy rows, and the POST
+ * API can see body.protocol === undefined from older clients.
+ */
+export function getEffectiveProviderProtocol(
+  providerType: string,
+  protocol: string | undefined,
+  baseUrl: string,
+): Protocol {
+  if (protocol && VALID_PROTOCOLS.has(protocol as Protocol)) {
+    return protocol as Protocol;
+  }
+  return inferProtocolFromLegacy(providerType, baseUrl);
+}
+
 /**
  * Infer the protocol from a legacy provider_type.
  * Used during migration from the old system.
@@ -675,6 +742,9 @@ export function inferProtocolFromLegacy(
   if (providerType === 'bedrock') return 'bedrock';
   if (providerType === 'vertex') return 'vertex';
   if (providerType === 'gemini-image') return 'gemini-image';
+  if (providerType === 'openai-image') return 'openai-image';
+  if (providerType === 'generic-image') return 'gemini-image';
+  if (providerType === 'cc-switch') return 'anthropic';
 
   // For 'custom' type, check if the base_url matches a known Anthropic-compatible vendor
   if (providerType === 'custom') {
@@ -685,6 +755,9 @@ export function inferProtocolFromLegacy(
       'volces.com', 'volcengine.com',   // Volcengine
       'dashscope.aliyuncs.com',         // Bailian
       'xiaomimimo.com',                 // Xiaomi MiMo
+      'localhost:11434',                // Ollama
+      '127.0.0.1:8000',                // oLMX
+      'localhost:8000',                // oLMX
     ];
     const urlLower = baseUrl.toLowerCase();
     if (anthropicUrls.some(u => urlLower.includes(u))) {
@@ -727,9 +800,23 @@ export function inferAuthStyleFromLegacy(
  * providers that share the same host (e.g. dashscope OpenAI-compatible vs Bailian Anthropic).
  */
 export function findPresetForLegacy(baseUrl: string, providerType: string, protocol?: Protocol): VendorPreset | undefined {
-  // Exact base_url match (most specific)
+  // Exact base_url match (most specific). When a protocol is supplied, the
+  // match must agree with it — otherwise an openai-compatible chat provider
+  // configured with https://api.openai.com/v1 would land on the openai-image
+  // preset and inherit the GPT Image catalog for chat model selection.
+  // Fuzzy match (below) already applies this guard; the exact branch must
+  // too, now that multiple presets share the same canonical URL.
   if (baseUrl) {
-    const match = VENDOR_PRESETS.find(p => p.baseUrl === baseUrl);
+    // Protocol-aware exact match: when multiple presets share the same canonical URL
+    // (e.g. https://api.openai.com/v1 for both openai-compatible chat and openai-image),
+    // the protocol must agree to avoid cross-preset catalog pollution.
+    const normalizeBaseUrl = (value: string) => value.replace(/\/v1\/?$/i, '').replace(/\/+$/g, '').toLowerCase();
+    const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    const match = VENDOR_PRESETS.find(p => {
+      if (!p.baseUrl || normalizeBaseUrl(p.baseUrl) !== normalizedBaseUrl) return false;
+      if (protocol && p.protocol !== protocol) return false;
+      return true;
+    });
     if (match) return match;
 
     // Fuzzy match: legacy entries may have old URLs (e.g. minimaxi.com/anthropic
@@ -739,25 +826,26 @@ export function findPresetForLegacy(baseUrl: string, providerType: string, proto
       if (!p.baseUrl) return false;
       if (protocol && p.protocol !== protocol) return false;
       try {
-        const presetHost = new URL(p.baseUrl).hostname;
-        return urlLower.includes(presetHost);
+        const presetUrl = new URL(p.baseUrl);
+        return urlLower.includes(presetUrl.origin.toLowerCase()) || urlLower.includes(presetUrl.hostname.toLowerCase());
       } catch { return false; }
     });
     if (fuzzy) return fuzzy;
   }
 
-  // Type-based fallback
-  if (providerType === 'bedrock') return VENDOR_PRESETS.find(p => p.key === 'bedrock');
-  if (providerType === 'vertex') return VENDOR_PRESETS.find(p => p.key === 'vertex');
-  if (providerType === 'openrouter') return VENDOR_PRESETS.find(p => p.key === 'openrouter');
+  // Media provider fallbacks: prefer the third-party preset when baseUrl was
+  // provided but didn't match the official host (the exact-match branch above
+  // already returned the official preset when baseUrl === official).
   if (providerType === 'gemini-image') {
-    return VENDOR_PRESETS.find(p => p.key === (
-      isOfficialGeminiImageProvider({ base_url: baseUrl }) ? 'gemini-image' : 'custom-media'
-    ));
+    if (baseUrl) return VENDOR_PRESETS.find(p => p.key === 'gemini-image-thirdparty');
+    return VENDOR_PRESETS.find(p => p.key === 'gemini-image');
   }
-  if (providerType === 'anthropic' && baseUrl === 'https://api.anthropic.com') {
-    return VENDOR_PRESETS.find(p => p.key === 'anthropic-official');
+  if (providerType === 'openai-image') {
+    if (baseUrl) return VENDOR_PRESETS.find(p => p.key === 'openai-image-thirdparty');
+    return VENDOR_PRESETS.find(p => p.key === 'openai-image');
   }
+  // Fork: generic-image fallback
+  if (providerType === 'generic-image') return VENDOR_PRESETS.find(p => p.key === 'custom-media');
 
   return undefined;
 }
@@ -765,14 +853,27 @@ export function findPresetForLegacy(baseUrl: string, providerType: string, proto
 /**
  * Get the default models for a provider based on its catalog preset.
  * If the provider has a matching preset, returns the preset's defaultModels.
- * Otherwise returns the Anthropic default models.
+ * Otherwise returns a protocol-appropriate fallback catalog.
+ *
+ * @param providerType — legacy provider_type string from DB (e.g. 'anthropic',
+ *   'bedrock'). Used to disambiguate baseUrl='' cases: a legacy
+ *   anthropic-typed provider with an empty baseUrl migrated from older
+ *   settings is treated as the official Anthropic endpoint (first-party
+ *   catalog), not a generic third-party proxy.
  */
 export function getDefaultModelsForProvider(
   protocol: Protocol,
   baseUrl: string,
+  providerType?: string,
 ): CatalogModel[] {
-  // Try to find a preset by exact base_url
-  const preset = VENDOR_PRESETS.find(p => p.baseUrl && p.baseUrl === baseUrl);
+  // Try to find a preset by exact base_url. Protocol must agree — otherwise
+  // an openai-compatible chat provider configured with
+  // https://api.openai.com/v1 would match the openai-image preset and
+  // inherit the GPT Image catalog for chat model selection.
+  const normalizeBaseUrl = (value: string) => value.replace(/\/v1\/?$/i, '').replace(/\/+$/g, '').toLowerCase();
+  const preset = VENDOR_PRESETS.find(
+    p => p.baseUrl && normalizeBaseUrl(p.baseUrl) === normalizeBaseUrl(baseUrl) && p.protocol === protocol,
+  );
   if (preset) {
     // Preset matched — return its models even if empty (e.g. Volcengine
     // requires users to specify their own model names, so defaultModels is []).
@@ -788,16 +889,46 @@ export function getDefaultModelsForProvider(
     const fuzzy = VENDOR_PRESETS.find(p => {
       if (!p.baseUrl || p.protocol !== protocol) return false;
       try {
-        const presetHost = new URL(p.baseUrl).hostname;
-        return urlLower.includes(presetHost);
+        const presetUrl = new URL(p.baseUrl);
+        return urlLower.includes(presetUrl.origin.toLowerCase()) || urlLower.includes(presetUrl.hostname.toLowerCase());
       } catch { return false; }
     });
     if (fuzzy) return fuzzy.defaultModels;
   }
 
-  // Protocol-based defaults (only when no preset matched)
-  if (protocol === 'anthropic' || protocol === 'openrouter' || protocol === 'bedrock' || protocol === 'vertex') {
+  // Legacy first-party Anthropic: migrated Default providers have
+  // provider_type='anthropic' with base_url=''. The native runtime
+  // treats them as the official @ai-sdk/anthropic endpoint, so they
+  // must resolve opus to the concrete claude-opus-4-7 upstream (same
+  // as the anthropic-official preset). Without this branch they'd
+  // fall through to the alias-only catalog and bypass the 4.7
+  // sanitizer, 1M context, and xhigh metadata.
+  if (protocol === 'anthropic' && !baseUrl && providerType === 'anthropic') {
+    return ANTHROPIC_FIRST_PARTY_MODELS;
+  }
+
+  // Protocol-based defaults (only when no preset matched).
+  // Bedrock/Vertex get the alias-only catalog with Opus 4.6 labels because
+  // their DB-backed provider has baseUrl='' and the preset match above
+  // never fires. Without this branch, they'd fall through to the shared
+  // Anthropic catalog and mis-resolve opus as first-party Opus 4.7.
+  if (protocol === 'bedrock' || protocol === 'vertex') {
+    return BEDROCK_VERTEX_DEFAULT_MODELS;
+  }
+  if (protocol === 'anthropic' || protocol === 'openrouter') {
     return ANTHROPIC_DEFAULT_MODELS;
+  }
+  // Media protocols: a third-party provider pointing at a custom proxy URL
+  // won't match an exact or fuzzy host, so fall back to the third-party
+  // preset's default catalog to surface the standard GPT Image / Nano Banana
+  // model list in the settings UI.
+  if (protocol === 'gemini-image') {
+    const p = VENDOR_PRESETS.find(x => x.key === 'gemini-image-thirdparty');
+    return p?.defaultModels ?? [];
+  }
+  if (protocol === 'openai-image') {
+    const p = VENDOR_PRESETS.find(x => x.key === 'openai-image-thirdparty');
+    return p?.defaultModels ?? [];
   }
 
   return [];

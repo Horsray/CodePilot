@@ -1,0 +1,10 @@
+--- src/lib/mcp-tool-adapter.ts
++++ src/lib/mcp-tool-adapter.ts
+@@ -51,6 +51,8 @@
+       // MCP callTool returns { content: [...], isError?: boolean }
+       if (result && typeof result === 'object' && 'content' in result) {
+         const mcpResult = result as { content: Array<{ type: string; text?: string }>; isError?: boolean };
++        console.log(`[MCP Tool Adapter] ${mcpTool.qualifiedName} raw content:`, JSON.stringify(mcpResult.content).substring(0, 200));
+         
+         // If there's an explicit error flag, wrap it so the agent loop knows
+         if (mcpResult.isError) {

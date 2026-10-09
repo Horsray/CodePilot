@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"npx tsx test-email-template.ts 2>&1 && rm test-email-template.ts\",\"timeout\":30000,\"description\":\"Test trimmed logo email template\"}",
+  "error": "Exit code 1\n\nnode:internal/modules/run_main:107\n    triggerUncaughtException(\n    ^\nError [ERR_MODULE_NOT_FOUND]: Cannot find module '/Users/horsray/Documents/codepilot/CodePilot/public/email-assets/test-email-template.ts' imported from /Users/horsray/Documents/codepilot/CodePilot/public/email-assets/\n    at finalizeResolution (node:internal/modules/esm/resolve:274:11)\n    at moduleResolve (node:internal/modules/esm/resolve:864:10)\n    at defaultResolve (node:internal/modules/esm/resolve:990:11)...",
+  "timestamp": "2026-05-02T19:35:20.198Z",
+  "retry_count": 2
+}

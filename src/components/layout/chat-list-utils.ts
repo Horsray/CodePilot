@@ -4,6 +4,27 @@ import type { TranslationKey } from "@/i18n";
 
 const COLLAPSED_PROJECTS_KEY = "codepilot:collapsed-projects";
 export const COLLAPSED_INITIALIZED_KEY = "codepilot:collapsed-initialized";
+const UNREAD_COMPLETIONS_KEY = "codepilot:unread-completions";
+
+/** 中文注释：任务完成但用户尚未查看的会话 id 集合 —— 驱动左侧列表的蓝色指示灯。 */
+export function loadUnreadCompletions(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = localStorage.getItem(UNREAD_COMPLETIONS_KEY);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    // ignore
+  }
+  return new Set();
+}
+
+export function saveUnreadCompletions(ids: Set<string>) {
+  try {
+    localStorage.setItem(UNREAD_COMPLETIONS_KEY, JSON.stringify([...ids]));
+  } catch {
+    // ignore
+  }
+}
 
 export function loadCollapsedProjects(): Set<string> {
   if (typeof window === 'undefined') return new Set();

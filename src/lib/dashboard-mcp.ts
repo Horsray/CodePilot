@@ -119,11 +119,20 @@ export function createDashboardMcpServer(sessionId?: string, workingDirectory?: 
 
           const summary = widgets.map((w, i) => {
             const ds = w.dataSource;
-            const sourceInfo = ds.type === 'file' ? (ds.paths.join(', ') || 'none')
-              : ds.type === 'mcp_tool' ? `MCP: ${ds.serverName}/${ds.toolName}`
-              : ds.type === 'cli' ? `CLI: ${ds.command}`
-              : 'unknown';
-            return `${i + 1}. [${w.id}] "${w.title}"\n   Data: ${w.dataContract}\n   Source (${ds.type}): ${sourceInfo}\n   Updated: ${w.updatedAt}`;
+            let sourceInfo: string;
+            if (!ds) {
+              sourceInfo = 'none (legacy widget)';
+            } else if (ds.type === 'file') {
+              sourceInfo = ds.paths.join(', ') || 'none';
+            } else if (ds.type === 'mcp_tool') {
+              sourceInfo = `MCP: ${ds.serverName}/${ds.toolName}`;
+            } else if (ds.type === 'cli') {
+              sourceInfo = `CLI: ${ds.command}`;
+            } else {
+              sourceInfo = 'unknown';
+            }
+            const dsType = ds?.type ?? 'unknown';
+            return `${i + 1}. [${w.id}] "${w.title}"\n   Data: ${w.dataContract || 'N/A'}\n   Source (${dsType}): ${sourceInfo}\n   Updated: ${w.updatedAt || 'N/A'}`;
           }).join('\n\n');
 
           return {
@@ -151,6 +160,12 @@ export function createDashboardMcpServer(sessionId?: string, workingDirectory?: 
           }
 
           const ds = widget.dataSource;
+
+          if (!ds) {
+            return {
+              content: [{ type: 'text' as const, text: `Widget "${widget.title}" has no data source configured. Please re-pin it with a data source.` }],
+            };
+          }
 
           // ── MCP tool data source: can't call directly, tell the model to do it
           if (ds.type === 'mcp_tool') {

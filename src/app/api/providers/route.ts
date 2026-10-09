@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllProviders, createProvider, getSetting } from '@/lib/db';
+import { getEffectiveProviderProtocol, isValidProtocol } from '@/lib/provider-catalog';
 import type { ProviderResponse, ErrorResponse, CreateProviderRequest, ApiProvider } from '@/types';
-import { readCCSwitchConfig, readCCSwitchClaudeSettings } from '@/lib/cc-switch';
+import { readCCSwitchClaudeSettings } from '@/lib/cc-switch';
 
 function maskApiKey(provider: ApiProvider): ApiProvider {
   let maskedKey = provider.api_key;
@@ -35,39 +36,22 @@ function detectEnvVars(): Record<string, string> {
   return detected;
 }
 
+function allowsEmptyBaseUrl(body: Pick<CreateProviderRequest, 'provider_type' | 'name'>): boolean {
+  const providerType = (body.provider_type || '').trim().toLowerCase();
+  const name = (body.name || '').trim().toLowerCase();
+  return providerType === 'cc-switch' || name === 'cc switch' || name === 'cc-switch';
+}
+
 export async function GET() {
   try {
     const providers = getAllProviders().map(maskApiKey);
     const envDetected = detectEnvVars();
-    const ccSwitchEnabled = getSetting('cc_switch_enabled') === 'true';
-    
-    let ccSwitchModels: Record<string, unknown> = {};
-    if (ccSwitchEnabled) {
-      const ccConfig = readCCSwitchConfig();
-      const ccSettings = readCCSwitchClaudeSettings();
-      
-      // Convert to UI-friendly format
-      if (ccSettings && typeof ccSettings === 'object' && 'models' in ccSettings) {
-        const settings = ccSettings as { baseUrl: string; apiKey: string; models: string[]; currentModel: string };
-        ccSwitchModels = {};
-        for (const modelName of settings.models) {
-          ccSwitchModels[modelName] = {
-            ANTHROPIC_BASE_URL: settings.baseUrl,
-            ANTHROPIC_AUTH_TOKEN: settings.apiKey,
-            ANTHROPIC_MODEL: modelName,
-          };
-        }
-      } else if (ccConfig) {
-        ccSwitchModels = ccConfig as Record<string, unknown>;
-      }
-    }
-    
+    const ccSwitchResolved = readCCSwitchClaudeSettings();
     return NextResponse.json({
       providers,
       env_detected: envDetected,
       default_provider_id: getSetting('default_provider_id') || '',
-      cc_switch_enabled: ccSwitchEnabled,
-      cc_switch_models: ccSwitchModels,
+      cc_switch_resolved: ccSwitchResolved,
     });
   } catch (error) {
     return NextResponse.json<ErrorResponse>(
@@ -84,6 +68,72 @@ export async function POST(request: NextRequest) {
     if (!body.name) {
       return NextResponse.json<ErrorResponse>(
         { error: 'Missing required field: name' },
+        { status: 400 }
+      );
+    }
+
+    // Reject raw protocol strings we don't recognize — otherwise a stray
+    // 'random-garbage' protocol would survive in the DB, bypass the legacy
+    // inference path in resolver/models, and mis-route capability metadata.
+    // Undefined/empty is fine: getEffectiveProviderProtocol() will infer
+    // from provider_type below.
+    if (body.protocol !== undefined && body.protocol !== '' && !isValidProtocol(body.protocol)) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: `Unknown protocol '${body.protocol}'. Supported protocols: ${[...[...new Set([
+            'anthropic', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'google', 'gemini-image', 'openai-image',
+          ])]].join(', ')}.`,
+          code: 'INVALID_PROTOCOL',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Anthropic-protocol providers must declare a base URL. Empty base_url
+    // has an ambiguous meaning (legacy "Default" providers migrated from
+    // older settings vs third-party presets that forgot to fill the URL),
+    // and the latter would silently get promoted to first-party catalog +
+    // routed to api.anthropic.com by the native SDK. Require explicit URL
+    // on the write path so third-party configurations don't leak there.
+    // Users wanting official Anthropic must pass 'https://api.anthropic.com'.
+    //
+    // Use effective protocol (raw → inferred) because body.protocol is
+    // optional; older clients or raw-API callers can post
+    // { provider_type: 'anthropic', base_url: '' } without protocol and
+    // still land in the same ambiguous state.
+    const effectiveProtocol = getEffectiveProviderProtocol(
+      body.provider_type ?? '',
+      body.protocol,
+      body.base_url ?? '',
+    );
+    if (effectiveProtocol === 'anthropic' && !body.base_url?.trim() && !allowsEmptyBaseUrl(body)) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: 'Anthropic-protocol providers must specify a base URL (use https://api.anthropic.com for the official API, or your third-party endpoint)',
+          code: 'ANTHROPIC_BASE_URL_REQUIRED',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Third-party media providers (openai-image, gemini-image) have the same
+    // ambiguity: the official preset fills baseUrl client-side, but the
+    // third-party preset ships empty and relies on the user to type a URL.
+    // If that field is left blank, provider-resolver falls back to the
+    // official endpoint — so a "third-party" row silently generates against
+    // api.openai.com / generativelanguage.googleapis.com. Mirror the
+    // Anthropic guard so the wrong service can't be saved.
+    if (
+      (effectiveProtocol === 'openai-image' || effectiveProtocol === 'gemini-image')
+      && !body.base_url?.trim()
+    ) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: effectiveProtocol === 'openai-image'
+            ? 'OpenAI Image providers must specify a base URL (use https://api.openai.com/v1 for the official API, or your third-party endpoint)'
+            : 'Gemini Image providers must specify a base URL (use https://generativelanguage.googleapis.com/v1beta for the official API, or your third-party endpoint)',
+          code: 'MEDIA_BASE_URL_REQUIRED',
+        },
         { status: 400 }
       );
     }

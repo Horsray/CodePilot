@@ -3,12 +3,12 @@ import * as gitService from '@/lib/git/service';
 
 export async function POST(req: NextRequest) {
   try {
-    const { cwd, branch } = await req.json();
+    const { cwd, branch, create } = await req.json();
     if (!cwd || !branch) {
       return NextResponse.json({ error: 'cwd and branch are required' }, { status: 400 });
     }
 
-    await gitService.checkout(cwd, branch);
+    await gitService.checkout(cwd, branch, Boolean(create));
     return NextResponse.json({ success: true });
   } catch (err) {
     return NextResponse.json(

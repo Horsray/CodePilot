@@ -31,11 +31,16 @@ interface ProjectGroupHeaderProps {
   isCollapsed: boolean;
   isFolderHovered: boolean;
   isWorkspace: boolean;
+  /** 项目内有会话正在运行（仅在折叠状态下用于显示活动指示器） */
+  hasRunningSession?: boolean;
+  /** 项目内有已完成但尚未查看的会话，折叠时显示蓝色指示灯。 */
+  hasUnreadCompletion?: boolean;
   onToggle: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
   onCreateSession: (e: React.MouseEvent) => void;
   onRemoveProject?: (workingDirectory: string) => void;
+  onToggleProjectSelection?: (workingDirectory: string) => void;
   assistantName?: string;
   assistantMemoryCount?: number;
   lastHeartbeatDate?: string;
@@ -44,17 +49,34 @@ interface ProjectGroupHeaderProps {
   buddySpecies?: string;
 }
 
+/**
+ * 折叠项目活动指示器 — 对齐 cc-haha 的 CollapsedProjectActivityIndicator：
+ * 文件夹收起时，若其中有任务在跑，在文件夹右侧显示一个闪烁的绿点
+ * （外层呼吸光晕 + 内层实心点带辉光），提示"收起里也有活在跑"。
+ */
+function CollapsedProjectActivityIndicator({ title }: { title: string }) {
+  return (
+    <span className="relative mr-0.5 flex h-1.5 w-1.5 shrink-0" title={title} aria-label={title}>
+      <span className="absolute inset-0 animate-pulse-dot rounded-full bg-status-success/40" />
+      <span className="relative h-1.5 w-1.5 rounded-full bg-status-success shadow-[0_0_5px_var(--status-success)]" />
+    </span>
+  );
+}
+
 export function ProjectGroupHeader({
   workingDirectory,
   displayName,
   isCollapsed,
   isFolderHovered,
   isWorkspace,
+  hasRunningSession = false,
+  hasUnreadCompletion = false,
   onToggle,
   onMouseEnter,
   onMouseLeave,
   onCreateSession,
   onRemoveProject,
+  onToggleProjectSelection,
   assistantName,
   assistantMemoryCount,
   lastHeartbeatDate,
@@ -64,7 +86,16 @@ export function ProjectGroupHeader({
 }: ProjectGroupHeaderProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
   const showActions = isFolderHovered || menuOpen;
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenuPosition({ x: e.clientX, y: e.clientY });
+    setContextMenuOpen(true);
+  };
 
   const actionButtons = workingDirectory !== "" && (
     <div className={cn(
@@ -160,6 +191,8 @@ export function ProjectGroupHeader({
         onClick={onToggle}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
+        onContextMenu={handleContextMenu}
+        
       >
         {buddySpecies ? (
           <img
@@ -185,35 +218,102 @@ export function ProjectGroupHeader({
             / {folderName}
           </span>
         </div>
+        {isCollapsed && hasRunningSession && (
+          <CollapsedProjectActivityIndicator title={t('chatList.projectRunning' as TranslationKey)} />
+        )}
+        {isCollapsed && hasUnreadCompletion && (
+          <span
+            role="img"
+            className="mr-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-status-info shadow-[0_0_5px_var(--status-info)]"
+            title={t('chatList.projectCompletedUnread')}
+            aria-label={t('chatList.projectCompletedUnread')}
+          />
+        )}
         {actionButtons}
       </div>
     );
   }
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-1 rounded-md px-2 py-1 cursor-pointer select-none transition-colors",
-        "hover:bg-accent/50"
-      )}
-      onClick={onToggle}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-    >
-      {isCollapsed ? (
-        <CaretRight size={14} className="shrink-0 text-muted-foreground" />
-      ) : (
-        <CaretDown size={14} className="shrink-0 text-muted-foreground" />
-      )}
-      {isCollapsed ? (
-        <Folder size={16} className="shrink-0 text-muted-foreground" />
-      ) : (
-        <FolderOpen size={16} className="shrink-0 text-muted-foreground" />
-      )}
-      <span className="flex-1 truncate text-[13px] font-medium text-sidebar-foreground">
-        {displayName}
-      </span>
-      {actionButtons}
+    <div className="relative">
+      <div
+        className={cn(
+          "flex items-center gap-1 rounded-md px-2 py-1 cursor-pointer select-none transition-colors",
+          "hover:bg-accent/50"
+        )}
+        onClick={onToggle}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+        onContextMenu={handleContextMenu}
+        
+      >
+        {isCollapsed ? (
+          <CaretRight size={14} className="shrink-0 text-muted-foreground" />
+        ) : (
+          <CaretDown size={14} className="shrink-0 text-muted-foreground" />
+        )}
+        {isCollapsed ? (
+          <Folder size={16} className="shrink-0 text-muted-foreground" />
+        ) : (
+          <FolderOpen size={16} className="shrink-0 text-muted-foreground" />
+        )}
+        <span className="flex-1 truncate text-[13px] font-medium text-sidebar-foreground">
+          {displayName}
+        </span>
+        {isCollapsed && hasRunningSession && (
+          <CollapsedProjectActivityIndicator title={t('chatList.projectRunning' as TranslationKey)} />
+        )}
+        {isCollapsed && hasUnreadCompletion && (
+          <span
+            role="img"
+            className="mr-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-status-info shadow-[0_0_5px_var(--status-info)]"
+            title={t('chatList.projectCompletedUnread')}
+            aria-label={t('chatList.projectCompletedUnread')}
+          />
+        )}
+        {actionButtons}
+      </div>
+      
+      {/* Context Menu */}
+      <DropdownMenu open={contextMenuOpen} onOpenChange={setContextMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <div 
+            className="fixed top-0 left-0 w-1 h-1 opacity-0"
+            style={{ top: contextMenuPosition.y, left: contextMenuPosition.x }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-[160px]">
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            if (onToggleProjectSelection) {
+              onToggleProjectSelection(workingDirectory);
+            }
+          }}>
+            <span>选择项目会话</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            window.dispatchEvent(new CustomEvent('select-all-sessions'));
+          }}>
+            <span>全选会话</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => {
+            setContextMenuOpen(false);
+            window.dispatchEvent(new CustomEvent('cancel-selection'));
+          }}>
+            <span>放弃修改</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onClick={() => {
+            setContextMenuOpen(false);
+            if (onRemoveProject) {
+              onRemoveProject(workingDirectory);
+            }
+          }}>
+            <span>删除项目</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

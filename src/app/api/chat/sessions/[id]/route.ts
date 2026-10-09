@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { deleteSession, getSession, updateSessionWorkingDirectory, updateSessionTitle, updateSessionMode, updateSessionModel, updateSessionProviderId, clearSessionMessages, updateSdkSessionId, updateSessionPermissionProfile } from '@/lib/db';
+import { deleteSession, getSession, updateSessionWorkingDirectory, updateSessionTitle, updateSessionMode, updateSessionModel, updateSessionProviderId, clearSessionMessages, updateSdkSessionId, updateSessionPermissionProfile, updateSessionTeamMode, updateSessionOrchestrationTier, updateSessionOrchestrationProfileId } from '@/lib/db';
 import { autoApprovePendingForSession } from '@/lib/bridge/permission-broker';
 
 export async function GET(
@@ -40,6 +40,22 @@ export async function PATCH(
     }
     if (body.mode) {
       updateSessionMode(id, body.mode);
+    }
+    if (body.team_mode) {
+      if (body.team_mode !== 'off' && body.team_mode !== 'on' && body.team_mode !== 'auto') {
+        return Response.json({ error: 'team_mode must be "off", "on", or "auto"' }, { status: 400 });
+      }
+      updateSessionTeamMode(id, body.team_mode);
+    }
+    // 中文注释：功能名称「更新会话编排层级」，用法是在用户切换 single/multi 后持久化选择。
+    if (body.orchestration_tier !== undefined) {
+      if (body.orchestration_tier !== 'single' && body.orchestration_tier !== 'multi') {
+        return Response.json({ error: 'orchestration_tier must be "single" or "multi"' }, { status: 400 });
+      }
+      updateSessionOrchestrationTier(id, body.orchestration_tier);
+    }
+    if (body.orchestration_profile_id !== undefined) {
+      updateSessionOrchestrationProfileId(id, body.orchestration_profile_id || '');
     }
     // Track whether provider or model actually changed — if so, the old
     // sdk_session_id is stale and must be cleared to prevent resume failures
@@ -87,6 +103,11 @@ export async function PATCH(
     }
     if (body.clear_messages) {
       clearSessionMessages(id);
+      // Clear SDK session so next message doesn't waste time on resume
+      try {
+        const { closeSession } = await import('@/lib/cli-session-pool');
+        closeSession(id);
+      } catch { /* best effort */ }
     }
 
     const updated = getSession(id);
@@ -109,6 +130,13 @@ export async function DELETE(
     }
 
     deleteSession(id);
+
+    // Clean up SDK session pool entry
+    try {
+      const { closeSession } = await import('@/lib/cli-session-pool');
+      closeSession(id);
+    } catch { /* best effort */ }
+
     return Response.json({ success: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to delete session';

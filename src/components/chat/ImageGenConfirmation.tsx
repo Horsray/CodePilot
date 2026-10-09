@@ -1,28 +1,33 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ImageGenCard } from './ImageGenCard';
+import { PaintBrush } from '@/components/ui/icon';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePanel } from '@/hooks/usePanel';
+import { useProviderModels } from '@/hooks/useProviderModels';
 import type { TranslationKey } from '@/i18n';
 import type { ReferenceImage } from '@/types';
 import type { ImageGenResult } from '@/hooks/useImageGen';
-import {
-  getConfiguredImageModelNames,
-  getMediaRelayProtocol,
-  getMediaRelayTargetSummary,
-  isOfficialGeminiImageProvider,
-} from '@/lib/image-provider-utils';
+
+/** What the active-image endpoint returns when a usable media provider is set. */
+interface ActiveImageInfo {
+  providerName?: string;
+  providerType?: 'gemini-image' | 'openai-image';
+  model?: string;
+  modelLabel?: string;
+  stale: boolean;
+}
 
 const ASPECT_RATIOS = [
-  '1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '21:9',
+  'auto', '1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '21:9',
 ] as const;
 
 const RESOLUTIONS = ['1K', '2K', '4K'] as const;
+const COUNTS = [1, 2, 3, 4] as const;
 
 interface ImageGenConfirmationProps {
   messageId?: string;
@@ -30,6 +35,7 @@ interface ImageGenConfirmationProps {
   initialPrompt: string;
   initialAspectRatio: string;
   initialResolution: string;
+  initialModel?: string;
   /** The original raw ```image-gen-request...``` block — used for exact DB matching */
   rawRequestBlock?: string;
   referenceImages?: ReferenceImage[];
@@ -37,175 +43,115 @@ interface ImageGenConfirmationProps {
 
 type Status = 'idle' | 'generating' | 'completed' | 'error';
 
-interface MediaProviderOption {
-  id: string;
-  name: string;
-  providerType: string;
-  protocol: string;
-  baseUrl: string;
-  envOverridesJson: string;
-  roleModelsJson: string;
-  extraEnv: string;
-  optionsJson: string;
-}
-
-const LAST_IMAGE_PROVIDER_KEY = 'codepilot:last-image-provider-id';
-const LAST_IMAGE_MODEL_KEY_PREFIX = 'codepilot:last-image-model:';
-
-function isMediaProvider(provider: { provider_type: string; protocol: string; api_key: string }): boolean {
-  return !!provider.api_key && (
-    provider.protocol === 'gemini-image' ||
-    provider.provider_type === 'gemini-image' ||
-    provider.provider_type === 'generic-image'
-  );
-}
-
-function describeProvider(option: MediaProviderOption): string {
-  const url = option.baseUrl.toLowerCase();
-  return url.includes('generativelanguage.googleapis.com') || !url
-    ? 'Google Gemini'
-    : option.name;
-}
-
 export function ImageGenConfirmation({
   messageId,
   sessionId: sessionIdProp,
   initialPrompt,
   initialAspectRatio,
   initialResolution,
+  initialModel,
   rawRequestBlock,
   referenceImages,
 }: ImageGenConfirmationProps) {
   const { t } = useTranslation();
-  const isZh = t('nav.chats' as TranslationKey) === '对话';
+  const isZh = t('nav.chats') === '对话';
   const { sessionId: panelSessionId } = usePanel();
   const sessionId = sessionIdProp || panelSessionId;
+  const { providerGroups } = useProviderModels(undefined, undefined, true);
+
   const [prompt, setPrompt] = useState(initialPrompt);
   const [aspectRatio, setAspectRatio] = useState(
     ASPECT_RATIOS.includes(initialAspectRatio as typeof ASPECT_RATIOS[number])
       ? initialAspectRatio
-      : '1:1'
+      : 'auto'
   );
   const [resolution, setResolution] = useState(
     RESOLUTIONS.includes(initialResolution as typeof RESOLUTIONS[number])
       ? initialResolution
-      : '1K'
+      : '4K'
   );
+
+  // Flatten models for easy selection
+  const allImageModels = providerGroups.flatMap(g => g.models.map(m => ({
+    providerId: g.provider_id,
+    providerName: g.provider_name,
+    providerType: g.provider_type,
+    modelId: m.value,
+    label: m.label,
+  })));
+
+  const [selectedModel, setSelectedModel] = useState<{ providerId: string; modelId: string } | null>(() => {
+    if (initialModel) {
+      // Find matching model in groups
+      for (const g of providerGroups) {
+        const m = g.models.find(m => m.value === initialModel);
+        if (m) return { providerId: g.provider_id, modelId: m.value };
+      }
+    }
+    return null;
+  });
+
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<ImageGenResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [providerOptions, setProviderOptions] = useState<MediaProviderOption[]>([]);
-  const [selectedProviderId, setSelectedProviderId] = useState('');
-  const [providersLoading, setProvidersLoading] = useState(true);
+
+  // Count: how many images to generate in parallel
+  // 0 or 1 reference images → user chooses (1-4)
+  // Multiple reference images → locked to reference count (1:1 mapping)
+  const refCount = referenceImages?.length || 0;
+  const countLocked = refCount > 1;
+  const [count, setCount] = useState(() => (countLocked ? refCount : 1));
+  // Which provider + model the backend will use. We surface this in the card
+  // header so the user can see whether Gemini / GPT Image (official or
+  // third-party) is about to run before clicking Generate. Populated from
+  // /api/providers/active-image and refreshed on `provider-changed`.
+  const [activeInfo, setActiveInfo] = useState<ActiveImageInfo | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setProvidersLoading(true);
-
-    fetch('/api/providers')
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
-        if (cancelled) return;
-        const options: MediaProviderOption[] = Array.isArray(data?.providers)
-          ? data.providers
-            .filter(isMediaProvider)
-            .map((provider: {
-              id: string;
-              name: string;
-              provider_type: string;
-              protocol: string;
-              base_url: string;
-              env_overrides_json?: string;
-              role_models_json?: string;
-              extra_env?: string;
-              options_json?: string;
-            }) => ({
-              id: provider.id,
-              name: provider.name,
-              providerType: provider.provider_type,
-              protocol: provider.protocol,
-              baseUrl: provider.base_url || '',
-              envOverridesJson: provider.env_overrides_json || '',
-              roleModelsJson: provider.role_models_json || '',
-              extraEnv: provider.extra_env || '',
-              optionsJson: provider.options_json || '',
-            }))
-          : [];
-        setProviderOptions(options);
-
-        const saved = typeof window !== 'undefined' ? window.localStorage.getItem(LAST_IMAGE_PROVIDER_KEY) : null;
-        const initial = (saved && options.some(option => option.id === saved))
-          ? saved
-          : options[0]?.id || '';
-        setSelectedProviderId(initial);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setProviderOptions([]);
-          setSelectedProviderId('');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setProvidersLoading(false);
-      });
-
+    const load = () => {
+      fetch('/api/providers/active-image')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!cancelled && data) setActiveInfo(data);
+        })
+        .catch(() => {});
+    };
+    load();
+    const handler = () => load();
+    window.addEventListener('provider-changed', handler);
     return () => {
       cancelled = true;
+      window.removeEventListener('provider-changed', handler);
     };
   }, []);
 
-  const selectedProvider = providerOptions.find(option => option.id === selectedProviderId);
-  const providerModelOptions = useMemo(
-    () => selectedProvider
-      ? getConfiguredImageModelNames({
-        base_url: selectedProvider.baseUrl,
-        env_overrides_json: selectedProvider.envOverridesJson,
-        role_models_json: selectedProvider.roleModelsJson,
-        extra_env: selectedProvider.extraEnv,
-      })
-      : [],
-    [selectedProvider]
-  );
-  const showModelSelector = !!selectedProvider
-    && !isOfficialGeminiImageProvider({ base_url: selectedProvider.baseUrl })
-    && providerModelOptions.length > 0;
-  const [selectedModel, setSelectedModel] = useState('');
-
-  const handleProviderChange = useCallback((value: string) => {
-    setSelectedProviderId(value);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(LAST_IMAGE_PROVIDER_KEY, value);
-    }
-  }, []);
-
+  // Update selectedModel when providerGroups or activeInfo load
   useEffect(() => {
-    if (!selectedProvider) {
-      setSelectedModel('');
-      return;
+    if (!selectedModel && allImageModels.length > 0) {
+      // 1. Try initialModel from AI code block
+      if (initialModel) {
+        for (const g of providerGroups) {
+          const m = g.models.find(m => m.value === initialModel);
+          if (m) {
+            setSelectedModel({ providerId: g.provider_id, modelId: m.value });
+            return;
+          }
+        }
+      }
+      // 2. Try active provider's configured default model
+      if (activeInfo?.model) {
+        const match = allImageModels.find(m => m.modelId === activeInfo.model);
+        if (match) {
+          setSelectedModel({ providerId: match.providerId, modelId: match.modelId });
+          return;
+        }
+      }
+      // 3. Fallback to first available
+      setSelectedModel({ providerId: allImageModels[0].providerId, modelId: allImageModels[0].modelId });
     }
-
-    if (isOfficialGeminiImageProvider({ base_url: selectedProvider.baseUrl })) {
-      setSelectedModel('');
-      return;
-    }
-
-    const saved = typeof window !== 'undefined'
-      ? window.localStorage.getItem(`${LAST_IMAGE_MODEL_KEY_PREFIX}${selectedProvider.id}`)
-      : null;
-    const initialModel = (saved && providerModelOptions.includes(saved))
-      ? saved
-      : providerModelOptions[0] || '';
-    setSelectedModel(initialModel);
-  }, [providerModelOptions, selectedProvider]);
-
-  const handleModelChange = useCallback((value: string) => {
-    setSelectedModel(value);
-    if (selectedProvider && typeof window !== 'undefined') {
-      window.localStorage.setItem(`${LAST_IMAGE_MODEL_KEY_PREFIX}${selectedProvider.id}`, value);
-    }
-  }, [selectedProvider]);
-
+  }, [providerGroups, selectedModel, initialModel, allImageModels, activeInfo?.model]);
   const handleStop = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort();
@@ -225,16 +171,20 @@ export function ImageGenConfirmation({
       const refData = referenceImages?.filter(r => r.data).map(r => ({ mimeType: r.mimeType, data: r.data! }));
       const refPaths = referenceImages?.filter(r => r.localPath).map(r => r.localPath!);
 
+      // "auto" → don't send aspectRatio, let backend decide
+      const resolvedAspectRatio = aspectRatio === 'auto' ? undefined : aspectRatio;
+
       const res = await fetch('/api/media/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          ...(showModelSelector && selectedModel ? { model: selectedModel } : {}),
-          aspectRatio,
+          ...(resolvedAspectRatio ? { aspectRatio: resolvedAspectRatio } : {}),
           imageSize: resolution,
-          ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
+          count,
           sessionId,
+          providerId: selectedModel?.providerId,
+          model: selectedModel?.modelId,
           ...(refData && refData.length > 0
             ? { referenceImages: refData }
             : {}),
@@ -251,14 +201,14 @@ export function ImageGenConfirmation({
       }
 
       const data = await res.json();
-      const genResult: ImageGenResult = {
+      const genResult: ImageGenResult & { model?: string } = {
         id: data.id,
         text: data.text,
-        model: data.model,
-        providerId: data.providerId,
-        providerName: data.providerName,
-        providerLabel: data.providerLabel,
         images: data.images || [],
+        // The generate endpoint echoes the resolved model id — carry it into
+        // the completed card so the badge reflects the *actual* model that
+        // ran (may differ from activeInfo if the user toggled mid-request).
+        model: data.model,
       };
 
       if (genResult.images.length > 0) {
@@ -274,8 +224,6 @@ export function ImageGenConfirmation({
             prompt,
             aspectRatio,
             resolution,
-            model: genResult.model,
-            providerName: genResult.providerName || selectedProvider?.name,
             images: genResult.images.map(img => ({
               mimeType: img.mimeType,
               localPath: img.localPath,
@@ -333,7 +281,7 @@ export function ImageGenConfirmation({
     } finally {
       abortRef.current = null;
     }
-  }, [prompt, selectedModel, showModelSelector, aspectRatio, resolution, selectedProviderId, selectedProvider?.name, initialPrompt, sessionId, messageId, referenceImages]);
+  }, [prompt, aspectRatio, resolution, count, initialPrompt, sessionId, messageId, referenceImages, selectedModel, rawRequestBlock]);
 
   const handleRegenerate = useCallback(() => {
     setResult(null);
@@ -342,6 +290,14 @@ export function ImageGenConfirmation({
 
   // ── Completed: show result only ──
   if (status === 'completed' && result && result.images.length > 0) {
+    // Prefer the model the backend actually ran; fall back to the label we
+    // fetched for the active provider if the generate endpoint didn't echo
+    // the model (older clients) or if the user's active provider has a
+    // friendlier label than the raw id (e.g. "GPT Image 2" vs "gpt-image-2").
+    const resultModel = (result as ImageGenResult & { model?: string }).model;
+    const displayModel = resultModel && activeInfo?.model === resultModel && activeInfo?.modelLabel
+      ? activeInfo.modelLabel
+      : resultModel || activeInfo?.modelLabel;
     return (
       <div className="my-2">
         <ImageGenCard
@@ -349,8 +305,7 @@ export function ImageGenConfirmation({
           prompt={prompt}
           aspectRatio={aspectRatio}
           imageSize={resolution}
-          model={result.model}
-          providerName={result.providerName}
+          model={displayModel}
           onRegenerate={handleRegenerate}
           referenceImages={referenceImages?.filter(r => r.data).map(r => ({ mimeType: r.mimeType, data: r.data! }))}
         />
@@ -362,8 +317,43 @@ export function ImageGenConfirmation({
   return (
     <div className="rounded-lg border border-border/50 bg-card overflow-hidden my-2">
       {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/30 bg-muted/30">
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-border/30 bg-muted/30">
         <span className="text-sm font-medium">{t('imageGen.confirmTitle' as TranslationKey)}</span>
+        {/* Active-model badge. Three possible states:
+              • Healthy active provider → show `<ModelLabel> · <ProviderName>`
+              • Stored active is stale (key cleared / type changed / deleted)
+                → muted warning chip pointing the user at Settings
+              • No active set at all (fresh install) → muted hint
+            The endpoint already computes the modelLabel + stale flag; we
+            just map them to the three UI variants here. */}
+        {activeInfo && !activeInfo.stale && activeInfo.providerName ? (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground max-w-[55%] min-w-0"
+            title={activeInfo.providerName}
+          >
+            <PaintBrush size={12} className="shrink-0" />
+            <span className="truncate text-foreground/80">
+              {activeInfo.providerName}
+            </span>
+          </span>
+        ) : activeInfo?.stale ? (
+          <a
+            href="/settings#providers"
+            className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 hover:underline"
+            title={t('imageGen.activeProviderStaleHint' as TranslationKey)}
+          >
+            <PaintBrush size={12} className="shrink-0" />
+            <span>{t('imageGen.activeProviderStale' as TranslationKey)}</span>
+          </a>
+        ) : activeInfo ? (
+          <a
+            href="/settings#providers"
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+          >
+            <PaintBrush size={12} className="shrink-0" />
+            <span>{t('imageGen.noActiveProvider' as TranslationKey)}</span>
+          </a>
+        ) : null}
       </div>
 
       <div className="p-4 space-y-3">
@@ -407,71 +397,30 @@ export function ImageGenConfirmation({
           />
         </div>
 
-        <div>
-          <label className="text-xs font-medium text-muted-foreground mb-1 block">
-            {t('imageGen.provider' as TranslationKey)}
-          </label>
-          <Select
-            value={selectedProviderId}
-            onValueChange={handleProviderChange}
-            disabled={status === 'generating' || providersLoading || providerOptions.length === 0}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder={t('imageGen.providerLoading' as TranslationKey)} />
-            </SelectTrigger>
-            <SelectContent>
-              {providerOptions.map(option => (
-                <SelectItem key={option.id} value={option.id}>
-                  {describeProvider(option)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-              {selectedProvider && (
-            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-              <p>
-                {t('imageGen.providerTarget' as TranslationKey)}: {isOfficialGeminiImageProvider({ base_url: selectedProvider.baseUrl })
-                  ? 'Google Gemini API'
-                  : getMediaRelayTargetSummary({
-                    base_url: selectedProvider.baseUrl,
-                    options_json: selectedProvider.optionsJson,
-                  })}
-              </p>
-              {!isOfficialGeminiImageProvider({ base_url: selectedProvider.baseUrl }) && (
-                <p>
-                  {t('imageGen.provider' as TranslationKey)} {isZh ? '协议' : 'Protocol'}: {getMediaRelayProtocol({
-                    base_url: selectedProvider.baseUrl,
-                    options_json: selectedProvider.optionsJson,
-                  }) === 'openai-images'
-                    ? 'OpenAI Images API'
-                    : (isZh ? '自定义图片接口' : 'Custom Image API')}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-
-        {showModelSelector && (
+        {/* Model Selection */}
+        {allImageModels.length > 0 && (
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+            <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
               {t('imageGen.model' as TranslationKey)}
             </label>
-            <Select
-              value={selectedModel}
-              onValueChange={handleModelChange}
-              disabled={status === 'generating'}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder={t('imageGen.model' as TranslationKey)} />
-              </SelectTrigger>
-              <SelectContent>
-                {providerModelOptions.map(model => (
-                  <SelectItem key={model} value={model}>
-                    {model}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex flex-wrap gap-1.5">
+              {allImageModels.map((m) => (
+                <Button
+                  key={`${m.providerId}-${m.modelId}`}
+                  variant="outline"
+                  size="xs"
+                  disabled={status === 'generating'}
+                  onClick={() => setSelectedModel({ providerId: m.providerId, modelId: m.modelId })}
+                  className={cn(
+                    selectedModel?.providerId === m.providerId && selectedModel?.modelId === m.modelId
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                  )}
+                >
+                  {m.label}{m.providerName ? ` (${m.providerName})` : ''}
+                </Button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -494,7 +443,7 @@ export function ImageGenConfirmation({
                     : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-foreground/30'
                 )}
               >
-                {ratio}
+                {ratio === 'auto' ? (isZh ? '自动' : 'Auto') : ratio}
               </Button>
             ))}
           </div>
@@ -525,16 +474,46 @@ export function ImageGenConfirmation({
           </div>
         </div>
 
+        {/* Count selector — hidden when multiple reference images (locked to 1:1 mapping) */}
+        {!countLocked && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
+              {isZh ? '数量' : 'Count'}
+            </label>
+            <div className="flex items-center gap-1.5">
+              {COUNTS.map((n) => (
+                <Button
+                  key={n}
+                  variant="outline"
+                  size="xs"
+                  disabled={status === 'generating'}
+                  onClick={() => setCount(n)}
+                  className={cn(
+                    count === n
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                  )}
+                >
+                  {n}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Generate button */}
         {status === 'idle' && (
           <div className="pt-1">
             <Button
               onClick={handleGenerate}
-              disabled={!prompt.trim() || !selectedProviderId || (showModelSelector && !selectedModel)}
+              disabled={!prompt.trim()}
               size="sm"
               className="gap-1.5"
             >
-              {t('imageGen.generateButton' as TranslationKey)}
+              {count > 1
+                ? (isZh ? `生成 ${count} 张图` : `Generate ${count} Images`)
+                : t('imageGen.generateButton' as TranslationKey)
+              }
             </Button>
           </div>
         )}
@@ -546,7 +525,10 @@ export function ImageGenConfirmation({
               <div className="flex items-center gap-2">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                 <span className="text-sm text-muted-foreground">
-                  {t('imageGen.generatingStatus' as TranslationKey)}
+                  {count > 1
+                    ? (isZh ? `生成中 (${count} 张)` : `Generating (${count} images)`)
+                    : t('imageGen.generatingStatus' as TranslationKey)
+                  }
                 </span>
               </div>
               <Button onClick={handleStop} variant="outline" size="sm">
@@ -564,12 +546,6 @@ export function ImageGenConfirmation({
               {t('imageGen.retryButton' as TranslationKey)}
             </Button>
           </div>
-        )}
-
-        {!providersLoading && providerOptions.length === 0 && (
-          <p className="text-sm text-status-error-foreground">
-            {t('imageGen.noProviderConfigured' as TranslationKey)}
-          </p>
         )}
       </div>
     </div>

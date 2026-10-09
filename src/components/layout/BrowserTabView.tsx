@@ -1,23 +1,24 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { usePanel } from "@/hooks/usePanel";
+
+interface BrowserTabViewProps {
+  initialUrl?: string;
+  onMetaChange?: (meta: { title?: string; url?: string }) => void;
+}
 
 const BuiltinBrowser = dynamic(
   () => import("@/components/browser/BuiltinBrowser").then((m) => ({ default: m.BuiltinBrowser })),
   { ssr: false }
 );
 
-/**
- * BrowserTabView — renders the browser as the main content area.
- * Tab switching is handled by UnifiedTopBar.
- */
-export function BrowserTabView() {
-  const { browserUrl } = usePanel();
-
+export function BrowserTabView({ initialUrl, onMetaChange }: BrowserTabViewProps) {
   return (
     <div className="flex flex-col h-full w-full">
-      <BuiltinBrowser initialUrl={browserUrl} />
+      <BuiltinBrowser
+        initialUrl={initialUrl}
+        onMetaChange={onMetaChange}
+      />
     </div>
   );
 }

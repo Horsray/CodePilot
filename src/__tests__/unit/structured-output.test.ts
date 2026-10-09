@@ -1,138 +1,103 @@
 /**
- * Unit tests for structured output route logic.
+ * Unit tests for structured output extraction logic.
  *
- * Tests verify that:
- * 1. structured_output from SDKResultSuccess is preferred over text fallback
- * 2. Text fallback is used when structured_output is absent
- * 3. Raw text is returned when JSON.parse fails on fallback
+ * The structured route now uses Vercel AI SDK's generateText({ output: Output.object() })
+ * which returns result.output directly. These tests verify the extraction/fallback logic
+ * that handles both the native structured output path and the text fallback path.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-// Simulate the extraction logic from the structured route
-// (We can't import Next.js route handlers directly in node:test,
-//  so we test the core logic inline.)
-
-function extractStructuredResult(messages: Array<{ type: string; subtype?: string; structured_output?: unknown; result?: string; message?: unknown }>) {
-  let structuredOutput: unknown = undefined;
-  let resultText = '';
-
-  for (const message of messages) {
-    if (message.type === 'result' && message.subtype === 'success') {
-      if (message.structured_output !== undefined) {
-        structuredOutput = message.structured_output;
-      }
-      if (message.result) {
-        resultText = message.result;
-      }
-    } else if (message.type === 'assistant') {
-      const msg = message.message as { content?: Array<{ type: string; text?: string }> } | string;
-      if (typeof msg === 'string') {
-        resultText += msg;
-      } else if (msg && Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block.type === 'text' && block.text) {
-            resultText += block.text;
-          }
-        }
-      }
-    }
+/**
+ * Simulate the extraction logic from the new structured route.
+ * The route tries result.output first (AI SDK native structured output),
+ * then falls back to parsing result.text as JSON.
+ */
+function extractStructuredOutput(result: {
+  output?: unknown;
+  text?: string;
+}): { result: unknown; source: string } {
+  // Primary path: AI SDK's structured output
+  if (result.output !== undefined && result.output !== null) {
+    return { result: result.output, source: 'structured_output' };
   }
 
-  // Prefer structured_output
-  if (structuredOutput !== undefined) {
-    return { result: structuredOutput, source: 'structured_output' };
-  }
-
-  // Fallback: try JSON parse
-  if (resultText) {
+  // Fallback: parse text as JSON
+  if (result.text) {
     try {
-      return { result: JSON.parse(resultText), source: 'text_parsed' };
+      return { result: JSON.parse(result.text), source: 'text_parsed' };
     } catch {
-      return { result: resultText, source: 'text_raw' };
+      return { result: result.text, source: 'text_raw' };
     }
   }
 
   return { result: null, source: 'empty' };
 }
 
-describe('structured output extraction', () => {
-  it('prefers structured_output from SDK result', () => {
-    const messages = [
-      {
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: '{"name":"from text"}' }] },
-      },
-      {
-        type: 'result',
-        subtype: 'success',
-        structured_output: { name: 'from structured' },
-        result: '{"name":"from text"}',
-      },
-    ];
+describe('structured output extraction (AI SDK native)', () => {
+  it('prefers result.output from AI SDK generateText', () => {
+    const result = {
+      output: { name: 'from structured', score: 95 },
+      text: '{"name":"from text"}',
+    };
 
-    const out = extractStructuredResult(messages);
+    const out = extractStructuredOutput(result);
     assert.equal(out.source, 'structured_output');
-    assert.deepEqual(out.result, { name: 'from structured' });
+    assert.deepEqual(out.result, { name: 'from structured', score: 95 });
   });
 
-  it('falls back to text parsing when structured_output is absent', () => {
-    const messages = [
-      {
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: '{"fallback":true}' }] },
-      },
-      {
-        type: 'result',
-        subtype: 'success',
-        result: '',
-      },
-    ];
+  it('falls back to text parsing when output is absent', () => {
+    const result = {
+      output: undefined,
+      text: '{"fallback":true,"count":3}',
+    };
 
-    const out = extractStructuredResult(messages);
+    const out = extractStructuredOutput(result);
     assert.equal(out.source, 'text_parsed');
-    assert.deepEqual(out.result, { fallback: true });
+    assert.deepEqual(out.result, { fallback: true, count: 3 });
   });
 
   it('returns raw text when JSON parse fails', () => {
-    const messages = [
-      {
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: 'not valid json' }] },
-      },
-      {
-        type: 'result',
-        subtype: 'success',
-      },
-    ];
+    const result = {
+      output: undefined,
+      text: 'The answer is not valid JSON',
+    };
 
-    const out = extractStructuredResult(messages);
+    const out = extractStructuredOutput(result);
     assert.equal(out.source, 'text_raw');
-    assert.equal(out.result, 'not valid json');
+    assert.equal(out.result, 'The answer is not valid JSON');
   });
 
-  it('returns null when no content at all', () => {
-    const messages = [
-      { type: 'result', subtype: 'success' },
-    ];
+  it('returns null when both output and text are absent', () => {
+    const result = {};
 
-    const out = extractStructuredResult(messages);
+    const out = extractStructuredOutput(result);
     assert.equal(out.source, 'empty');
     assert.equal(out.result, null);
   });
 
-  it('handles structured_output that is a primitive (e.g. number)', () => {
-    const messages = [
-      {
-        type: 'result',
-        subtype: 'success',
-        structured_output: 42,
-      },
-    ];
+  it('handles structured output that is a primitive', () => {
+    const result = { output: 42 };
 
-    const out = extractStructuredResult(messages);
+    const out = extractStructuredOutput(result);
     assert.equal(out.source, 'structured_output');
     assert.equal(out.result, 42);
+  });
+
+  it('handles structured output that is an array', () => {
+    const result = { output: [{ id: 1 }, { id: 2 }] };
+
+    const out = extractStructuredOutput(result);
+    assert.equal(out.source, 'structured_output');
+    assert.deepEqual(out.result, [{ id: 1 }, { id: 2 }]);
+  });
+
+  it('treats null output as absent and falls back to text', () => {
+    const result = { output: null, text: '{"from":"text"}' };
+
+    const out = extractStructuredOutput(result);
+    assert.equal(out.source, 'text_parsed');
+    assert.deepEqual(out.result, { from: 'text' });
   });
 });

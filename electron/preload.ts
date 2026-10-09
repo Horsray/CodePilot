@@ -1,5 +1,5 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   versions: {
@@ -8,8 +8,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     chrome: process.versions.chrome,
     platform: process.platform,
   },
+  // Resolve a dropped/selected File's real filesystem path. Electron 32+ removed
+  // the renderer-side `File.path`, so consumers must ask via webUtils.
+  fs: {
+    getPathForFile: (file: File): string => {
+      try {
+        return webUtils.getPathForFile(file) || '';
+      } catch {
+        return '';
+      }
+    },
+  },
   shell: {
     openPath: (folderPath: string) => ipcRenderer.invoke('shell:open-path', folderPath),
+    // 中文注释：用系统默认浏览器打开 URL（OAuth 授权页必须在系统浏览器中完成，
+    // Electron 内嵌窗口会被 OpenAI 的安全检测拦截或行为异常）
+    openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
   },
   dialog: {
     openFolder: (options?: { defaultPath?: string; title?: string }) =>
@@ -37,11 +51,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportPng: (html: string, width: number, isDark: boolean) =>
       ipcRenderer.invoke('widget:export-png', { html, width, isDark }),
   },
+  artifact: {
+    // Phase 3 long-shot export: render HTML in a hidden BrowserWindow and
+    // capture a full-page PNG via CDP captureBeyondViewport. Returns a
+    // discriminated result — callers pattern-match on `.error` vs `.base64`.
+    exportLongShot: (params: {
+      html: string;
+      width: number;
+      pixelRatio?: number;
+      outPath?: string;
+      maxHeightPx?: number;
+      timeoutMs?: number;
+    }) => ipcRenderer.invoke('artifact:export-long-shot', params),
+  },
   terminal: {
     create: (opts: { id: string; cwd: string; cols: number; rows: number }) =>
       ipcRenderer.invoke('terminal:create', opts),
     write: (id: string, data: string) =>
-      ipcRenderer.invoke('terminal:write', { id, data }),
+      ipcRenderer.send('terminal:write', { id, data }),
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
     kill: (id: string) =>

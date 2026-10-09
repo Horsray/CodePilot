@@ -12,7 +12,18 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { ChatSession } from '../../types';
+
+// Isolate the DB before any module reads it. assembleContext pulls settings
+// (generative_ui_enabled, assistant_workspace_path, ...) from the real DB at
+// ~/.codepilot/codepilot.db otherwise, so assertions would depend on whatever
+// the developer happens to have configured locally. Must run before importing
+// lib/db, since it resolves its path at module load time.
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepilot-context-assembler-db-'));
+process.env.CLAUDE_GUI_DATA_DIR = dataDir;
 
 function makeSession(overrides: Partial<ChatSession> = {}): ChatSession {
   return {
@@ -64,6 +75,25 @@ describe('assembleContext', () => {
     assert.equal(result.generativeUIEnabled, false);
   });
 
+  it('desktop with generative_ui_enabled=false: does not enable generativeUI', async () => {
+    const { setSetting } = await import('../../lib/db');
+    const { assembleContext } = await import('../../lib/context-assembler');
+    setSetting('generative_ui_enabled', 'false');
+    try {
+      const result = await assembleContext({
+        session: makeSession(),
+        entryPoint: 'desktop',
+        userPrompt: 'hello',
+      });
+
+      assert.equal(result.generativeUIEnabled, false);
+      assert.ok(!result.systemPrompt?.includes('show-widget'));
+    } finally {
+      // '' is treated as "not disabled" by the assembler, restoring the default
+      setSetting('generative_ui_enabled', '');
+    }
+  });
+
   it('includes systemPromptAppend when provided', async () => {
     const { assembleContext } = await import('../../lib/context-assembler');
     const result = await assembleContext({
@@ -113,5 +143,30 @@ describe('assembleContext', () => {
     });
 
     assert.ok(result.systemPrompt?.includes('<<SESSION>>'));
+  });
+
+  it('does not duplicate the OMC priority prefix inside assembled prompt', async () => {
+    const { assembleContext } = await import('../../lib/context-assembler');
+    const result = await assembleContext({
+      session: makeSession(),
+      entryPoint: 'desktop',
+      userPrompt: '检查 OMC 行为',
+      omcPluginEnabled: true,
+    });
+
+    assert.doesNotMatch(result.systemPrompt || '', /## IMPORTANT: Multi-Agent Orchestration Priority/);
+  });
+
+  it('injects a strong empty-todo reminder for complex-work bootstrap', async () => {
+    const { assembleContext } = await import('../../lib/context-assembler');
+    const result = await assembleContext({
+      session: makeSession(),
+      entryPoint: 'desktop',
+      userPrompt: '调查这个复杂回归并修改代码',
+    });
+
+    assert.match(result.systemPrompt || '', /current Todo list is empty/i);
+    assert.match(result.systemPrompt || '', /create a TodoWrite list before starting work/i);
+    assert.match(result.systemPrompt || '', /you may explore the codebase or dispatch research agents/i);
   });
 });

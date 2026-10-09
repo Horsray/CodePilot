@@ -20,10 +20,15 @@ export async function register() {
           release: `codepilot@${process.env.NEXT_PUBLIC_APP_VERSION}`,
           tracesSampleRate: 0,
           ignoreErrors: [
+            // Aborts — user/client cancellation, not bugs
             'AbortError',
             'Operation aborted',
             'The operation was aborted',
             'signal is aborted',
+            // Electron renderer doesn't implement window.prompt — known and handled with PromptDialog
+            'prompt() is not supported',
+            // Browser quirk: not a real error but Chromium reports it
+            'ResizeObserver loop',
           ],
           beforeSend(event) {
             // Strip auth headers
@@ -52,6 +57,7 @@ export async function register() {
     // Start the task scheduler so persisted tasks resume on cold boot
     // (previously only started as a side effect of /api/chat)
     const { ensureSchedulerRunning } = await import('@/lib/task-scheduler');
+    console.log('[instrumentation] Initializing task scheduler...');
     ensureSchedulerRunning();
   }
 }

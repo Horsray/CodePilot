@@ -1,18 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { TooltipProvider } from "@/components/ui/tooltip";
 // NavRail removed — navigation merged into ChatListPanel
 import { ChatListPanel } from "./ChatListPanel";
-import { ResizeHandle } from "./ResizeHandle";
-import { UpdateDialog } from "./UpdateDialog";
-import { UpdateBanner } from "./UpdateBanner";
+import { FeatureAnnouncementDialog } from "./FeatureAnnouncementDialog";
+// UpdateDialog / UpdateBanner 已停用：fork 不发版、不与上游整合，移除整段渲染以彻底关闭更新提示。
 import { UnifiedTopBar } from "./UnifiedTopBar";
 import { PanelZone } from "./PanelZone";
-import { FileTreePanel } from "./panels/FileTreePanel";
-import { RightPanelZone } from "./RightPanelZone";
-import { PanelContext, type PreviewViewMode } from "@/hooks/usePanel";
+import { usePanelStore } from "@/store/usePanelStore";
+import { PanelContext, type PreviewViewMode, type WorkspaceTab } from "@/hooks/usePanel";
 import { UpdateContext } from "@/hooks/useUpdate";
 import { useUpdateChecker } from "@/hooks/useUpdateChecker";
 import { ImageGenContext, useImageGenState } from "@/hooks/useImageGen";
@@ -26,8 +25,10 @@ import { useGitStatus } from "@/hooks/useGitStatus";
 import { SetupCenter } from '@/components/setup/SetupCenter';
 import { Toaster } from '@/components/ui/toast';
 import { useNotificationPoll } from '@/hooks/useNotificationPoll';
-import { BottomPanelContainer } from './BottomPanelContainer';
-import { BrowserTabView } from './BrowserTabView';
+import { useGlobalSearchShortcut } from '@/hooks/useGlobalSearchShortcut';
+import { GlobalSearchDialog } from './GlobalSearchDialog';
+
+const PreviewPanel = dynamic(() => import("./panels/PreviewPanel").then(m => ({ default: m.PreviewPanel })), { ssr: false });
 
 const SPLIT_SESSIONS_KEY = "codepilot:split-sessions";
 const SPLIT_ACTIVE_COLUMN_KEY = "codepilot:split-active-column";
@@ -58,8 +59,6 @@ function loadActiveColumn(): string {
 }
 
 const EMPTY_SET = new Set<string>();
-const CHATLIST_MIN = 180;
-const CHATLIST_MAX = 300;
 
 /** Extensions that default to "rendered" view mode */
 const RENDERED_EXTENSIONS = new Set([".md", ".mdx", ".html", ".htm"]);
@@ -70,15 +69,22 @@ function defaultViewMode(filePath: string): PreviewViewMode {
   return RENDERED_EXTENSIONS.has(ext) ? "rendered" : "source";
 }
 
+
 const LG_BREAKPOINT = 1024;
+
+import { BrowserTabView } from "@/components/layout/BrowserTabView";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
-  const [chatListOpenRaw, setChatListOpenRaw] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupInitialCard, setSetupInitialCard] = useState<'claude' | 'provider' | 'project' | undefined>();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const store = usePanelStore();
+  const { chatListOpen, setChatListOpen: setChatListOpenRaw } = store;
+
+  useGlobalSearchShortcut(() => setSearchOpen(true));
 
   // Poll server-side notification queue and display as toasts
   useNotificationPoll();
@@ -106,84 +112,109 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('open-setup-center', handler);
   }, []);
 
-  // Sync with viewport after hydration to avoid SSR mismatch
-  /* eslint-disable react-hooks/set-state-in-effect */
+  // Listen for open-browser-panel events
   useEffect(() => {
-    setChatListOpenRaw(window.matchMedia(`(min-width: ${LG_BREAKPOINT}px)`).matches);
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
+    const handleOpenBrowser = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const { url, title, newTab } = customEvent.detail || {};
+      if (url) {
+        store.openBrowserTab(url, title, { newTab: newTab !== false });
+      }
+    };
+    window.addEventListener("action:open-browser-panel", handleOpenBrowser);
+    window.addEventListener("browser-navigate", handleOpenBrowser);
+    return () => {
+      window.removeEventListener("action:open-browser-panel", handleOpenBrowser);
+      window.removeEventListener("browser-navigate", handleOpenBrowser);
+    };
+  }, [store]);
 
-  // Panel width state with localStorage persistence
-  const [chatListWidth, setChatListWidth] = useState(240);
+  useEffect(() => {
+    const handleOpenTerminal = (event: Event) => {
+      store.setBottomPanelTab("terminal");
+      store.setBottomPanelOpen(true);
+      setTimeout(() => window.dispatchEvent(new CustomEvent('action:focus-terminal')), 50);
+    };
+    window.addEventListener("action:open-terminal-panel", handleOpenTerminal);
+    return () => window.removeEventListener("action:open-terminal-panel", handleOpenTerminal);
+  }, [store]);
+
+  // Hash bridge: error messages render `[Open Settings](/settings#providers)`
+  // markdown links as fallback when the frontend cannot directly dispatch the
+  // open-setup-center event (e.g. rendering inside the SSE text stream). When
+  // such a link is clicked the hash changes to `#providers`, and we surface
+  // the SetupCenter Provider card here.
+  useEffect(() => {
+    const maybeOpenFromHash = () => {
+      if (typeof window === 'undefined') return;
+      if (window.location.hash === '#providers') {
+        setSetupInitialCard('provider');
+        setSetupOpen(true);
+        // Clear the hash so a second navigation to /#providers fires again.
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    };
+    maybeOpenFromHash();
+    window.addEventListener('hashchange', maybeOpenFromHash);
+    return () => window.removeEventListener('hashchange', maybeOpenFromHash);
+  }, []);
+
+  // Listen for sidebar quick-button events (dispatched from UnifiedTopBar when sidebar collapsed)
+  useEffect(() => {
+    const handleNewChat = async () => {
+      // 中文注释：侧边栏收起时新建会话 — 先展开侧边栏再创建
+      setChatListOpenRaw(true);
+      // Give the sidebar time to mount before dispatching
+      setTimeout(() => window.dispatchEvent(new CustomEvent('chatlist-new-chat')), 50);
+    };
+    const handleOpenBrowser = () => {
+      setChatListOpenRaw(true);
+      store.openBrowserTab('', '新标签页');
+    };
+    window.addEventListener('chatlist-new-chat-trigger', handleNewChat);
+    window.addEventListener('chatlist-open-browser', handleOpenBrowser);
+    return () => {
+      window.removeEventListener('chatlist-new-chat-trigger', handleNewChat);
+      window.removeEventListener('chatlist-open-browser', handleOpenBrowser);
+    };
+  }, [store, setChatListOpenRaw]);
+
+  // Listen for open-global-search events from ChatListPanel
+  useEffect(() => {
+    const handler = () => {
+      setChatListOpenRaw(true);
+      setSearchOpen(true);
+    };
+    window.addEventListener('open-global-search', handler);
+    return () => window.removeEventListener('open-global-search', handler);
+  }, [setChatListOpenRaw]);
+
+  // Sync with viewport after hydration to avoid SSR mismatch
+  useEffect(() => {
+    // 中文注释：首屏挂载后按视口同步聊天列表开关，避免 SSR 与客户端宽度不一致。
+    setChatListOpenRaw(window.matchMedia(`(min-width: ${LG_BREAKPOINT}px)`).matches);
+  }, [setChatListOpenRaw]);
+
+  // Panel width state with localStorage persistence (for floating ChatListPanel)
+  const [chatListWidth, setChatListWidth] = useState(270);
 
   // Restore persisted width after hydration
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const saved = localStorage.getItem("codepilot_chatlist_width");
     if (saved) setChatListWidth(parseInt(saved));
   }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  const handleChatListResize = useCallback((delta: number) => {
-    setChatListWidth((w) => Math.min(CHATLIST_MAX, Math.max(CHATLIST_MIN, w + delta)));
-  }, []);
-  const handleChatListResizeEnd = useCallback(() => {
-    setChatListWidth((w) => {
-      localStorage.setItem("codepilot_chatlist_width", String(w));
-      return w;
-    });
-  }, []);
 
   // Panel state — chatListOpen is no longer gated by route (sidebar always visible)
-  const isChatRoute = pathname.startsWith("/chat/") || pathname === "/chat";
-  const chatListOpen = chatListOpenRaw;
+  const isChatRoute = pathname === "/chat" || pathname.startsWith("/chat/");
 
-  const setChatListOpen = useCallback((open: boolean) => {
-    setChatListOpenRaw(open);
-  }, []);
 
   // --- New independent panel states ---
-  const [fileTreeOpen, setFileTreeOpen] = useState(false);
-  const [gitPanelOpen, setGitPanelOpen] = useState(false);
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [dashboardPanelOpen, setDashboardPanelOpen] = useState(false);
-  const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
-  const [isAssistantWorkspace, setIsAssistantWorkspace] = useState(false);
-
-  // --- Bottom panel (Terminal / Console) ---
-  const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
-  const [bottomPanelTab, setBottomPanelTab] = useState<import("@/hooks/usePanel").BottomPanelTab>("terminal");
-
-  // --- Main area view mode (chat vs browser) ---
-  const [mainViewMode, setMainViewMode] = useState<"chat" | "browser">("chat");
-
-  // --- Browser tab (shown in main content area) ---
-  const [browserTabOpen, setBrowserTabOpen] = useState(false);
-  const [browserUrl, setBrowserUrl] = useState("");
-
-  // --- Git summary (derived from polling hook, no setState needed) ---
-  const [currentWorktreeLabel, setCurrentWorktreeLabel] = useState("");
-
-  const [workingDirectory, setWorkingDirectory] = useState("");
-  const [sessionId, setSessionId] = useState("");
-  const [sessionTitle, setSessionTitle] = useState("");
-  const [streamingSessionId, setStreamingSessionId] = useState("");
-  const [pendingApprovalSessionId, setPendingApprovalSessionId] = useState("");
-
-  const { status: gitStatusFromHook } = useGitStatus(workingDirectory);
-  const currentBranch = gitStatusFromHook?.branch ?? "";
-  const gitDirtyCount = gitStatusFromHook?.changedFiles.filter(f => f.status !== 'untracked').length ?? 0;
-
-  // --- Multi-session stream tracking (driven by stream-session-manager) ---
-  const [activeStreamingSessions, setActiveStreamingSessions] = useState<Set<string>>(EMPTY_SET);
-  const [pendingApprovalSessionIds, setPendingApprovalSessionIds] = useState<Set<string>>(EMPTY_SET);
 
   // Listen for global stream events from stream-session-manager
   useEffect(() => {
     const handler = () => {
       const activeIds = getActiveSessionIds();
-      setActiveStreamingSessions(activeIds.length > 0 ? new Set(activeIds) : EMPTY_SET);
+      store.setActiveStreamingSessions(activeIds.length > 0 ? new Set(activeIds) : EMPTY_SET);
 
       const approvals = new Set<string>();
       for (const sid of activeIds) {
@@ -192,17 +223,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           approvals.add(sid);
         }
       }
-      setPendingApprovalSessionIds(approvals.size > 0 ? approvals : EMPTY_SET);
+      store.setPendingApprovalSessionIds(approvals.size > 0 ? approvals : EMPTY_SET);
     };
     window.addEventListener('stream-session-event', handler);
     return () => window.removeEventListener('stream-session-event', handler);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.setActiveStreamingSessions, store.setPendingApprovalSessionIds]);
 
   // --- Split-screen state ---
   const [splitSessions, setSplitSessions] = useState<SplitSession[]>(() => loadSplitSessions());
   const [activeColumnId, setActiveColumnIdRaw] = useState<string>(() => loadActiveColumn());
   const isSplitActive = splitSessions.length >= 2;
-  const isChatDetailRoute = pathname.startsWith("/chat/") || isSplitActive;
 
   // Persist split sessions to localStorage
   useEffect(() => {
@@ -231,14 +262,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       if (prev.some((s) => s.sessionId === session.sessionId)) return prev;
 
       if (prev.length < 2) {
-        const currentSessionId = sessionId;
+        const currentSessionId = store.sessionId;
         if (currentSessionId && currentSessionId !== session.sessionId) {
           const currentSession: SplitSession = {
             sessionId: currentSessionId,
-            title: sessionTitle || "New Conversation",
-            workingDirectory: workingDirectory || "",
+            title: store.sessionTitle || "New Conversation",
+            workingDirectory: store.workingDirectory || "",
             projectName: "",
-            mode: "code",
+            mode: store.isAssistantWorkspace ? "architect" : "code",
           };
           const hasCurrentAlready = prev.some((s) => s.sessionId === currentSessionId);
           const next = hasCurrentAlready ? [...prev, session] : [...prev, currentSession, session];
@@ -251,7 +282,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setActiveColumnIdRaw(session.sessionId);
       return next;
     });
-  }, [sessionId, sessionTitle, workingDirectory]);
+  }, [store.sessionId, store.sessionTitle, store.workingDirectory, store.isAssistantWorkspace]);
 
   const pendingNavigateRef = useRef<string | null>(null);
 
@@ -302,7 +333,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isSplitActive && !pathname.startsWith("/chat")) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // 中文注释：离开聊天路由时清空分栏状态，避免旧会话残留在工作区。
       setSplitSessions([]);
       setActiveColumnIdRaw("");
     }
@@ -322,76 +353,36 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     [splitSessions, activeColumnId, isSplitActive, addToSplit, removeFromSplit, setActiveColumn, exitSplit, isInSplit]
   );
 
-  // --- Main view mode control functions ---
-  const switchToBrowser = useCallback((url?: string) => {
-    if (url) {
-      setBrowserUrl(url);
-      setBrowserTabOpen(true);
-    }
-    setMainViewMode("browser");
-  }, []);
-
-  const switchToChat = useCallback(() => {
-    setMainViewMode("chat");
-    // Optionally close browser
-    // setBrowserTabOpen(false);
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.mode === "chat" || detail?.mode === "browser") {
-        setMainViewMode(detail.mode);
-      }
-    };
-    window.addEventListener("main-view-switch", handler);
-    return () => window.removeEventListener("main-view-switch", handler);
-  }, []);
-
   // Warn before closing window/tab while any session is streaming
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.mode === "chat" || detail?.mode === "browser") {
-        setMainViewMode(detail.mode);
-      }
-    };
-    window.addEventListener("main-view-switch", handler);
-    return () => window.removeEventListener("main-view-switch", handler);
-  }, []);
-
-  // Warn before closing window/tab while any session is streaming
-  useEffect(() => {
-    if (activeStreamingSessions.size === 0) return;
+    if (store.activeStreamingSessions.size === 0) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [activeStreamingSessions]);
-
-  // --- Doc Preview state ---
-  const [previewFile, setPreviewFileRaw] = useState<string | null>(null);
-  const [previewViewMode, setPreviewViewMode] = useState<PreviewViewMode>("source");
-
-  const setPreviewFile = useCallback((path: string | null) => {
-    setPreviewFileRaw(path);
-    if (path) {
-      setPreviewViewMode(defaultViewMode(path));
-      setPreviewOpen(true);
-    } else {
-      setPreviewOpen(false);
-    }
-  }, []);
+  }, [store.activeStreamingSessions]);
 
   // Reset doc preview and panels when navigating between pages/sessions
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    setPreviewFileRaw(null);
-    setPreviewOpen(false);
-  }, [pathname]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+    // 中文注释：切换页面或会话时重置预览面板，防止沿用上一页的文件上下文。
+    store.setPreviewFile(null, defaultViewMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, store.setPreviewFile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled && (isChatRoute || isSplitActive)) {
+        store.setActiveWorkspaceTabId(null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, store.sessionId, isChatRoute, isSplitActive, store.setActiveWorkspaceTabId]);
 
   // Keep chat list state in sync when resizing across the breakpoint
   useEffect(() => {
@@ -402,144 +393,75 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
 
-  // --- Skip-permissions indicator ---
-  const [skipPermissionsActive, setSkipPermissionsActive] = useState(false);
+  // --- Git Status ---
+  // 中文注释：获取当前工作目录的 Git 状态，用于更新面板上下文的当前分支和变更文件数。
+  const { status: gitStatus } = useGitStatus(store.workingDirectory || "");
 
-  useEffect(() => {
-    let cancelled = false;
-    const doFetch = async () => {
-      try {
-        const res = await fetch("/api/settings/app");
-        if (res.ok && !cancelled) {
-          const data = await res.json();
-          setSkipPermissionsActive(data.settings?.dangerously_skip_permissions === "true");
-        }
-      } catch { /* ignore */ }
-    };
-    doFetch();
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") doFetch();
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    window.addEventListener("focus", doFetch);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", handleVisibility);
-      window.removeEventListener("focus", doFetch);
-    };
-  }, []);
 
-  // --- Update checker (native Electron + browser fallback) ---
+  // --- Update checker ---
+  // useUpdateChecker 在本 fork 已退化为纯 no-op（不发请求、不弹窗、不定时）。
+  // 调用仍然保留，以便未来需要重新启用更新检查时只需要改 hook 内部，无需改这里。
   const updateContextValue = useUpdateChecker();
+
+  const activeWorkspaceTab = useMemo(
+    () => store.workspaceTabs.find((t: WorkspaceTab) => t.id === store.activeWorkspaceTabId) || null,
+    [store.workspaceTabs, store.activeWorkspaceTabId]
+  );
 
   const panelContextValue = useMemo(
     () => ({
-      // --- Independent panels ---
-      fileTreeOpen,
-      setFileTreeOpen,
-      gitPanelOpen,
-      setGitPanelOpen,
-      previewOpen,
-      setPreviewOpen,
-      terminalOpen,
-      setTerminalOpen,
-      dashboardPanelOpen,
-      setDashboardPanelOpen,
-      assistantPanelOpen,
-      setAssistantPanelOpen,
-      isAssistantWorkspace,
-      setIsAssistantWorkspace,
-
-      // --- Bottom panel (Terminal / Console) ---
-      bottomPanelOpen,
-      setBottomPanelOpen,
-      bottomPanelTab,
-      setBottomPanelTab,
-
-      // --- Browser tab (shown in main content area) ---
-      browserTabOpen,
-      setBrowserTabOpen,
-      browserUrl,
-      setBrowserUrl,
-
-      // --- Main area view mode (chat vs browser) ---
-      mainViewMode,
-      setMainViewMode,
-
-      // --- Git summary (for top bar, derived — no setters) ---
-      currentBranch,
-      gitDirtyCount,
-      currentWorktreeLabel,
-      setCurrentWorktreeLabel,
-
-      // --- Preserved from old API (workspace) ---
-      workingDirectory,
-      setWorkingDirectory,
-      sessionId,
-      setSessionId,
-      sessionTitle,
-      setSessionTitle,
-      streamingSessionId,
-      setStreamingSessionId,
-      pendingApprovalSessionId,
-      setPendingApprovalSessionId,
-
-      // --- Multi-session streaming & approvals ---
-      activeStreamingSessions,
-      pendingApprovalSessionIds,
-
-      // --- Document preview ---
-      previewFile,
-      setPreviewFile,
-      previewViewMode,
-      setPreviewViewMode,
+      chatListOpen: store.chatListOpen,
+      setChatListOpen: store.setChatListOpen,
+      fileTreeOpen: store.fileTreeOpen,
+      setFileTreeOpen: store.setFileTreeOpen,
+      gitPanelOpen: store.gitPanelOpen,
+      setGitPanelOpen: store.setGitPanelOpen,
+      previewOpen: store.previewOpen,
+      setPreviewOpen: store.setPreviewOpen,
+      terminalOpen: store.terminalOpen,
+      setTerminalOpen: store.setTerminalOpen,
+      dashboardPanelOpen: store.dashboardPanelOpen,
+      setDashboardPanelOpen: store.setDashboardPanelOpen,
+      assistantPanelOpen: store.assistantPanelOpen,
+      setAssistantPanelOpen: store.setAssistantPanelOpen,
+      browserPanelOpen: store.browserPanelOpen,
+      setBrowserPanelOpen: store.setBrowserPanelOpen,
+      isAssistantWorkspace: store.isAssistantWorkspace,
+      setIsAssistantWorkspace: store.setIsAssistantWorkspace,
+      currentBranch: gitStatus?.branch || "",
+      gitDirtyCount: gitStatus?.changedFiles?.length || 0,
+      currentWorktreeLabel: store.currentWorktreeLabel,
+      setCurrentWorktreeLabel: store.setCurrentWorktreeLabel,
+      workingDirectory: store.workingDirectory,
+      setWorkingDirectory: store.setWorkingDirectory,
+      sessionId: store.sessionId,
+      setSessionId: store.setSessionId,
+      sessionTitle: store.sessionTitle,
+      setSessionTitle: store.setSessionTitle,
+      streamingSessionId: store.streamingSessionId,
+      setStreamingSessionId: store.setStreamingSessionId,
+      pendingApprovalSessionId: store.pendingApprovalSessionId,
+      setPendingApprovalSessionId: store.setPendingApprovalSessionId,
+      activeStreamingSessions: store.activeStreamingSessions,
+      pendingApprovalSessionIds: store.pendingApprovalSessionIds,
+      previewFile: store.previewFile,
+      setPreviewFile: (p: string | null) => store.setPreviewFile(p, defaultViewMode),
+      previewViewMode: store.previewViewMode,
+      setPreviewViewMode: store.setPreviewViewMode,
+      bottomPanelOpen: store.bottomPanelOpen,
+      setBottomPanelOpen: store.setBottomPanelOpen,
+      bottomPanelTab: store.bottomPanelTab,
+      setBottomPanelTab: store.setBottomPanelTab,
+      workspaceTabs: store.workspaceTabs,
+      activeWorkspaceTabId: store.activeWorkspaceTabId,
+      setActiveWorkspaceTabId: store.setActiveWorkspaceTabId,
+      openPreviewTab: (p: string) => store.openPreviewTab(p, defaultViewMode),
+      openBrowserTab: store.openBrowserTab,
+      openTerminalTab: store.openTerminalTab,
+      updateWorkspaceTab: store.updateWorkspaceTab,
+      closeWorkspaceTab: store.closeWorkspaceTab,
     }),
-    [
-      fileTreeOpen,
-      setFileTreeOpen,
-      gitPanelOpen,
-      setGitPanelOpen,
-      previewOpen,
-      setPreviewOpen,
-      terminalOpen,
-      setTerminalOpen,
-      dashboardPanelOpen,
-      setDashboardPanelOpen,
-      assistantPanelOpen,
-      setAssistantPanelOpen,
-      isAssistantWorkspace,
-      setIsAssistantWorkspace,
-      bottomPanelOpen,
-      setBottomPanelOpen,
-      bottomPanelTab,
-      setBottomPanelTab,
-      browserTabOpen,
-      setBrowserTabOpen,
-      browserUrl,
-      setBrowserUrl,
-      mainViewMode,
-      setMainViewMode,
-      currentBranch,
-      gitDirtyCount,
-      currentWorktreeLabel,
-      setCurrentWorktreeLabel,
-      workingDirectory,
-      setWorkingDirectory,
-      sessionId,
-      setSessionId,
-      sessionTitle,
-      setSessionTitle,
-      streamingSessionId,
-      setStreamingSessionId,
-      pendingApprovalSessionId,
-      setPendingApprovalSessionId,
-      activeStreamingSessions,
-      pendingApprovalSessionIds,
-      previewFile,
-      setPreviewFile,
-      previewViewMode,
-      setPreviewViewMode,
-    ]
+    [store, gitStatus?.branch, gitStatus?.changedFiles?.length]
   );
 
   const imageGenValue = useImageGenState();
@@ -553,57 +475,77 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <ImageGenContext.Provider value={imageGenValue}>
         <BatchImageGenContext.Provider value={batchImageGenValue}>
         <TooltipProvider delayDuration={300}>
-          <div className="flex h-screen overflow-hidden">
+          <div className="flex h-screen overflow-hidden relative">
+            {/* 中文注释：移植 cc-haha 布局 — 侧边栏改为停靠式（参与 flex 排布，不再悬浮覆盖主内容） */}
             <ErrorBoundary>
               <ChatListPanel
                 open={chatListOpen}
                 width={chatListWidth}
-                hasUpdate={updateContextValue.updateInfo?.updateAvailable ?? false}
-                readyToInstall={updateContextValue.updateInfo?.readyToInstall ?? false}
+                onToggle={() => setChatListOpenRaw(!chatListOpen)}
               />
             </ErrorBoundary>
-            {chatListOpen && (
-              <ResizeHandle side="left" onResize={handleChatListResize} onResizeEnd={handleChatListResizeEnd} />
-            )}
-            {/* Left Panel Zone - File Tree */}
-            {isChatDetailRoute && fileTreeOpen && mainViewMode === "chat" && (
-              <>
-                <div className="flex h-full shrink-0 border-r border-border/40 overflow-hidden w-64">
-                  <FileTreePanel />
+            {/* 中文注释：主内容区与右侧面板并排，整体留出页面底色边距（cc-haha 卡片式布局：
+                圆角白卡 + 细边框 + 柔和阴影浮在 #e7ecf4 页面上） */}
+            <div className="flex min-w-0 flex-1 gap-1.5 overflow-hidden py-2 pr-2">
+              <div className="flex min-w-[380px] flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-[0_4px_24px_rgba(0,0,0,0.04)]">
+                <UnifiedTopBar />
+                {/* 中文注释：TabBar 与内容之间的 1px 分隔线（cc-haha 同款：50% 透明度 + 极淡投影） */}
+                <div className="h-px shrink-0 bg-border opacity-50 shadow-[0_1px_2px_rgba(0,0,0,0.04)]" />
+                <div className="flex flex-1 min-h-0 overflow-hidden">
+                  <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                    <main className="relative flex-1 overflow-hidden">
+                      {isChatRoute || isSplitActive ? (
+                        activeWorkspaceTab ? (
+                          <div className="absolute inset-0 min-h-0">
+                            {activeWorkspaceTab.kind === "preview" && activeWorkspaceTab.filePath ? (
+                              <PreviewPanel
+                                standalone
+                                filePath={activeWorkspaceTab.filePath}
+                                onClose={() => store.closeWorkspaceTab(activeWorkspaceTab.id)}
+                              />
+                            ) : activeWorkspaceTab.kind === "browser" ? (
+                              <BrowserTabView
+                                initialUrl={activeWorkspaceTab.url}
+                                onMetaChange={(meta) => {
+                                  store.updateWorkspaceTab(activeWorkspaceTab.id, {
+                                    title: meta.title || "新标签页",
+                                    url: meta.url || activeWorkspaceTab.url
+                                  });
+                                }}
+                              />
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="absolute inset-0 min-h-0">
+                            {isSplitActive ? (
+                              <SplitChatContainer />
+                            ) : (
+                              <ErrorBoundary>{children}</ErrorBoundary>
+                            )}
+                          </div>
+                        )
+                      ) : (
+                        <ErrorBoundary>{children}</ErrorBoundary>
+                      )}
+                    </main>
+                  </div>
                 </div>
-                <ResizeHandle side="right" onResize={() => {}} onResizeEnd={() => {}} />
-              </>
-            )}
-            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-              <UnifiedTopBar />
-              <UpdateBanner />
-              <div className="flex flex-1 min-h-0 overflow-hidden">
-                <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-                  <main className="relative flex-1 overflow-hidden">
-                    {mainViewMode === "browser" && browserTabOpen ? (
-                      <BrowserTabView />
-                    ) : isSplitActive ? (
-                      <SplitChatContainer />
-                    ) : (
-                      <ErrorBoundary>{children}</ErrorBoundary>
-                    )}
-                  </main>
-                  <BottomPanelContainer />
-                </div>
-                {isChatDetailRoute && mainViewMode === "chat" && <RightPanelZone />}
               </div>
+              {/* 中文注释：右侧面板改为常驻挂载（终端/控制台要保活 PTY），无面板时内部 display:none */}
+              <PanelZone />
             </div>
           </div>
-          <UpdateDialog />
+          <FeatureAnnouncementDialog />
           <Toaster />
+          <GlobalSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
           {setupOpen && (
             <SetupCenter
               onClose={() => setSetupOpen(false)}
               initialCard={setupInitialCard}
             />
           )}
-          </TooltipProvider>
-          </BatchImageGenContext.Provider>
+        </TooltipProvider>
+        </BatchImageGenContext.Provider>
         </ImageGenContext.Provider>
         </SplitContext.Provider>
       </PanelContext.Provider>
