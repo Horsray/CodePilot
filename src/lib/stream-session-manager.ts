@@ -64,11 +64,17 @@ interface ActiveStream {
   toolResultsArray: ToolResultInfo[];
   toolOutputAccumulated: string;
   /** 中文注释：各在跑工具最近一次的「Running 工具… (Ns)」进度文案（toolUseId → 文案，
-   * Map 插入序即上报顺序）。tool_result 到达时删除对应项：还有别的工具在跑就回退显示
-   * 最新的那条，全跑完则清空。此前只设不清，长工具（尤其等待人工作答的
-   * AskUserQuestion）完成后状态栏会一直停在「Running …(Ns)」，并因 statusText 优先级
-   * 最高而盖住后续的「生成中/总结中」，看起来像界面卡死。 */
+   * Map 插入序即上报顺序）。tool_result 到达时删除对应项：还有别的工具在跑就切到最新的
+   * 那条，否则把当前文案保留给保留期定时器 —— 既不能瞬间消失（否则每条进度一闪而过、
+   * 看不清在干嘛），也不能残留到本轮结束（长工具尤其 AskUserQuestion 完成后状态栏会一直
+   * 停在「Running …(Ns)」，并因 statusText 优先级最高而盖住「生成中/总结中」，看起来像卡死）。 */
   toolProgressTexts: Map<string, string>;
+  /** 中文注释：功能名称「进度文案兜底重置定时器」，用法是工具完成后为仍在展示的
+   * 「Running 工具…」文案起算保留期；期间任何新状态刷新都会作废它（配合
+   * statusTextVersion 判定），超时仍无新刷新才把文案重置为兜底文案。 */
+  statusTextResetTimer: ReturnType<typeof setTimeout> | null;
+  /** 状态文案版本号：每次状态刷新增 1，兜底定时器只重置「写入后从未被替换过」的那条文案。 */
+  statusTextVersion: number;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
   isIdleTimeout: boolean;
   /** 中文注释：功能名称「后台任务挂起期豁免」，用法是服务端在等待 run_in_background 的
@@ -122,6 +128,11 @@ const LISTENERS_KEY = '__streamSessionListeners__' as const;
 const STREAM_IDLE_TIMEOUT_MS = 330_000;
 const STREAM_THINKING_IDLE_TIMEOUT_MS = 600_000; // 中文注释：深度思考阶段允许更长的空闲超时（10分钟）
 const GC_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+/** 中文注释：功能名称「工具进度文案保留时长」，用法是「Running 工具…(Ns)」这类进度文案
+ * 在最后一次刷新（含工具完成）后继续展示的时长 —— 工具一完成就清空会让每条进度一闪而过、
+ * 看不清当前在干嘛；保留期内任何新状态刷新都会替换它，超时仍无刷新才重置为兜底文案
+ * （生成中/总结中）。测试可用 CODEPILOT_STATUS_TEXT_HOLD_MS 压缩等待。 */
+const DEFAULT_STATUS_TEXT_HOLD_MS = 30_000;
 
 function getStreamsMap(): Map<string, ActiveStream> {
   if (!(globalThis as Record<string, unknown>)[GLOBAL_KEY]) {
@@ -228,6 +239,11 @@ function cleanupTimers(stream: ActiveStream) {
     clearTimeout(stream.revealTimer);
     stream.revealTimer = null;
   }
+  // 中文注释：清理进度文案的兜底重置定时器，避免流结束后它再动快照。
+  if (stream.statusTextResetTimer) {
+    clearTimeout(stream.statusTextResetTimer);
+    stream.statusTextResetTimer = null;
+  }
   // Clear all tracked ad-hoc timeouts
   for (const t of stream.pendingTimers) {
     clearTimeout(t);
@@ -242,6 +258,45 @@ function streamTimeout(stream: ActiveStream, fn: () => void, ms: number): void {
     fn();
   }, ms);
   stream.pendingTimers.add(id);
+}
+
+/** 进度文案保留时长（环境变量仅用于测试压缩等待）。 */
+function statusTextHoldMs(): number {
+  const raw = typeof process !== 'undefined' ? process.env?.CODEPILOT_STATUS_TEXT_HOLD_MS : undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STATUS_TEXT_HOLD_MS;
+}
+
+/** 中文注释：状态文案被新刷新替换 —— 版本号 +1 并作废上一轮「保留期」的兜底重置。 */
+function markStatusTextRefreshed(stream: ActiveStream): void {
+  stream.statusTextVersion += 1;
+  if (stream.statusTextResetTimer) {
+    clearTimeout(stream.statusTextResetTimer);
+    stream.statusTextResetTimer = null;
+  }
+}
+
+/**
+ * 中文注释：功能名称「进度文案延迟重置」，用法是工具完成后不立刻清空状态栏文案：
+ * 先保留展示（让用户看得清刚才在跑什么），直到下一个状态刷新把它替换掉；
+ * 只有保留期内始终没有新刷新，才重置为兜底文案（生成中/总结中）。
+ * 仅对「Running 工具…」生效 —— 其它状态文案（CLI 整理上下文等）生命周期不同，不在此列。
+ */
+function holdStatusTextUntilNextRefresh(stream: ActiveStream): void {
+  markStatusTextRefreshed(stream);
+  const held = stream.snapshot.statusText;
+  if (!held || !held.startsWith('Running ')) return;
+  const version = stream.statusTextVersion;
+  const timer = setTimeout(() => {
+    stream.pendingTimers.delete(timer);
+    if (stream.statusTextResetTimer === timer) stream.statusTextResetTimer = null;
+    // 保留期内已被新状态替换（版本变化）或已由别处清空 => 不再重置
+    if (stream.statusTextVersion !== version || stream.snapshot.statusText !== held) return;
+    stream.snapshot = { ...stream.snapshot, statusText: undefined };
+    emit(stream, 'snapshot-updated');
+  }, statusTextHoldMs());
+  stream.statusTextResetTimer = timer;
+  stream.pendingTimers.add(timer);
 }
 
 // ==========================================
@@ -340,6 +395,8 @@ export function startStream(params: StartStreamParams): void {
     toolResultsArray: [],
     toolOutputAccumulated: '',
     toolProgressTexts: new Map(),
+    statusTextResetTimer: null,
+    statusTextVersion: 0,
     toolTimeoutInfo: null,
     isIdleTimeout: false,
     backgroundHold: false,
@@ -687,15 +744,15 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       onToolResult: (res) => {
         markActive();
         stream.toolOutputAccumulated = '';
-        // 中文注释：工具完成 → 从进度表中移除。若状态栏当前展示的就是这条「Running …」，
-        // 回退到仍在跑的工具的最新进度，都没有则清空 —— 让状态栏接着显示
-        // 「生成中/总结中」，而不是把工具进度文案残留到本轮结束。
-        if (stream.toolProgressTexts.delete(res.tool_use_id)) {
-          const fallback = [...stream.toolProgressTexts.values()].pop();
-          if (stream.snapshot.statusText?.startsWith('Running ') && stream.snapshot.statusText !== fallback) {
-            stream.snapshot = { ...stream.snapshot, statusText: fallback };
-          }
+        // 中文注释：工具完成 → 从进度表中移除已完成项。文案不立即清空（瞬间消失会让每条
+        // 进度一闪而过、看不清在干嘛）：还有别的工具在跑就切到它最新一条进度；否则保留当前
+        // 文案，交给保留期定时器 —— 下一个状态刷新会替换它，保留期满仍无刷新才重置。
+        stream.toolProgressTexts.delete(res.tool_use_id);
+        const fallbackProgress = [...stream.toolProgressTexts.values()].pop();
+        if (fallbackProgress && stream.snapshot.statusText?.startsWith('Running ')) {
+          stream.snapshot = { ...stream.snapshot, statusText: fallbackProgress };
         }
+        holdStatusTextUntilNextRefresh(stream);
         const existingIdx = stream.toolResultsArray.findIndex(r => r.tool_use_id === res.tool_use_id);
         if (existingIdx >= 0) {
           const next = [...stream.toolResultsArray];
@@ -716,6 +773,8 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onToolProgress: (toolName, elapsed, toolUseId) => {
         markActive();
+        // 新进度上报 = 一次状态刷新：作废上一轮的保留期定时器，重新起算。
+        markStatusTextRefreshed(stream);
         const statusText = `Running ${toolName}... (${elapsed}s)`;
         if (toolUseId) {
           // 中文注释：重新 set 让该项排到 Map 末尾 —— 最近上报的工具就是此刻该展示的。
@@ -739,6 +798,8 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         markActive();
         console.log('[stream-session-manager] onContextCompressing:', data);
         if (data.source === 'cli') {
+          // 新状态刷新：作废进度文案的保留期定时器（它即将被下面这条替换）。
+          markStatusTextRefreshed(stream);
           stream.snapshot = { ...stream.snapshot, statusText: 'CLI 正在整理上下文，当前会话不会中断…' };
           emit(stream, 'snapshot-updated');
         }
@@ -762,6 +823,7 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
         }
         // Show the compression message briefly in the status bar
         if (data.message) {
+          markStatusTextRefreshed(stream);
           stream.snapshot = { ...stream.snapshot, statusText: data.message };
           emit(stream, 'snapshot-updated');
           streamTimeout(stream, () => {
@@ -807,6 +869,8 @@ async function runStream(stream: ActiveStream, params: StartStreamParams): Promi
       },
       onStatus: (text) => {
         markActive();
+        // 任意状态刷新都会替换当前文案：作废可能挂着的保留期定时器。
+        markStatusTextRefreshed(stream);
         if (text === 'context_compressing_retry') {
           // Show a brief status while PTL auto-retry is in progress
           stream.snapshot = { ...stream.snapshot, statusText: 'Compressing context...' };
@@ -1592,6 +1656,8 @@ export function seedSnapshotPatch(
     toolResultsArray: [],
     toolOutputAccumulated: '',
     toolProgressTexts: new Map(),
+    statusTextResetTimer: null,
+    statusTextVersion: 0,
     toolTimeoutInfo: null,
     isIdleTimeout: false,
     backgroundHold: false,
